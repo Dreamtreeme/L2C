@@ -64,12 +64,13 @@ class LLMEngine:
         response = self._client.chat(
             model=OLLAMA_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            options={"num_predict": LLM_NUM_PREDICT, "temperature": LLM_TEMPERATURE},
+            options={"temperature": LLM_TEMPERATURE},
         )
         
         elapsed = time.time() - t0
-        output = response["message"]["content"]
+        output = response.get("message", {}).get("content", "")
         logger.info(f"[LLMEngine] 정제 완료 ({elapsed:.1f}s)")
+        logger.debug(f"LLM 원본 응답: {output[:300]}")
         
         parsed = self._parse_json(output)
         return self._validate(parsed)
