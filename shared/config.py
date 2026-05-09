@@ -23,6 +23,8 @@ for d in (SCREENSHOTS_DIR, JSON_DIR, LOGS_DIR, DB_PATH.parent):
     d.mkdir(parents=True, exist_ok=True)
 
 # ── 캡처 파라미터 (Playwright) ──────────────────────────────────────────
+PLAYWRIGHT_HEADLESS = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+PLAYWRIGHT_TIMEOUT_MS = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "30000"))
 CHROME_WINDOW_WIDTH = int(os.getenv("CHROME_WINDOW_WIDTH", "1024"))
 CHROME_WINDOW_HEIGHT = int(os.getenv("CHROME_WINDOW_HEIGHT", "768"))
 PAGE_LOAD_WAIT_SEC = float(os.getenv("PAGE_LOAD_WAIT_SEC", "4"))

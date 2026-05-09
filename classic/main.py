@@ -90,8 +90,7 @@ def _phase(name: str):
 
 def cmd_extract(args: argparse.Namespace) -> int:
     """풀 파이프라인: Playwright 브라우저 캡처 → Vision LLM → DB."""
-    from classic.automation.capture import capture_full_page
-    from classic.extractor.llm_engine import LLMEngine
+    from classic.automation.capture import capture_and_extract_dom
 
     logger.info(f"▶ extract URL={args.url} model={args.model or 'default'}")
     db = Database(DB_PATH)
@@ -108,15 +107,11 @@ def cmd_extract(args: argparse.Namespace) -> int:
     t0 = time.time()
 
     try:
-        with _phase("[1/2] Playwright 페이지 캡처"):
-            screenshot_path = capture_full_page(url=args.url, save_name=slug)
+        with _phase("[1/1] Playwright DOM 추출 및 캡처"):
+            screenshot_path, data = capture_and_extract_dom(url=args.url, save_name=slug)
 
-        with _phase(f"[2/2] Vision LLM ({args.model or 'default'}) JSON 정제"):
-            if args.model:
-                from shared import config
-                config.OLLAMA_MODEL = args.model
-                logger.info(f"모델 override → {args.model}")
-            data = LLMEngine().extract(screenshot_path)
+        # VLM 대신 DOM 데이터를 그대로 사용 (필요시 정제 로직 추가 가능)
+        logger.info(f"DOM에서 데이터 추출 완료: {data.get('company_name')} - {data.get('position')}")
 
         json_path = JSON_DIR / f"{slug}.json"
         json_path.write_text(

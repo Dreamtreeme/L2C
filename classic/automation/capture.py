@@ -16,25 +16,38 @@ from shared.config import (
     CHROME_WINDOW_HEIGHT,
     CHROME_WINDOW_WIDTH,
     PAGE_LOAD_WAIT_SEC,
+    PLAYWRIGHT_HEADLESS,
     SCREENSHOTS_DIR,
 )
 
 logger = logging.getLogger(__name__)
 
-def capture_full_page(url: str, save_name: str | None = None) -> Path:
+def capture_and_extract_dom(url: str, save_name: str | None = None) -> tuple[Path, dict]:
     from zoneinfo import ZoneInfo
-    """URL에 접속하여 Playwright로 핵심 영역 스크린샷을 찍습니다."""
-    logger.info(f"[capture_full_page] URL={url}")
+    """
+    URL에 접속하여:
+    1. 전체 스크린샷 캡처
+    2. 주요 섹션의 DOM Bounding Box를 기반으로 텍스트 추출
+    """
+    logger.info(f"[capture_and_extract_dom] URL={url}")
     
     if save_name is None:
         kst_now = datetime.now(ZoneInfo("Asia/Seoul"))
-        save_name = f"capture_{kst_now.strftime('%Y%m%d_%H%M%S')}"
+        save_name = f"classic_{kst_now.strftime('%Y%m%d_%H%M%S')}"
     out_path = SCREENSHOTS_DIR / f"{save_name}.png"
 
+    dom_data = {
+        "company_name": None,
+        "position": None,
+        "main_tasks": [],
+        "requirements": [],
+        "preferred": [],
+        "benefits": []
+    }
+
     with sync_playwright() as p:
-        # 봇 탐지 우회를 위해 headless=False 적용
         browser = p.chromium.launch(
-            headless=False,
+            headless=PLAYWRIGHT_HEADLESS,
             args=["--disable-blink-features=AutomationControlled"]
         )
         context = browser.new_context(
@@ -43,63 +56,64 @@ def capture_full_page(url: str, save_name: str | None = None) -> Path:
         )
         page = context.new_page()
         
-        logger.info("페이지 로딩 중...")
         try:
             page.goto(url, wait_until="networkidle", timeout=15000)
-        except Exception as e:
-            logger.warning(f"네트워크 안정화 대기 시간 초과(무시하고 진행): {e}")
-        
-        # 추가 대기 (비동기 렌더링 완료)
-        time.sleep(PAGE_LOAD_WAIT_SEC)
-        
-        # --- 핵심 영역 좌표 탐색 (Zero-Cost OCR) ---
-        logger.info("핵심 영역 좌표 탐색 중...")
-        
-        # '더보기' 버튼이 있다면 먼저 클릭해야 할 수도 있음.
-        # Wanted의 경우 상세 내용을 숨겨두는 버튼이 있다면 눌러줘야 전체 Y 좌표를 알 수 있음.
-        try:
+            time.sleep(PAGE_LOAD_WAIT_SEC)
+
+            # 1. '더보기' 클릭
             more_btn = page.get_by_text("상세 정보 더 보기", exact=False).first
-            if more_btn.is_visible(timeout=1000):
+            if more_btn.is_visible(timeout=2000):
                 more_btn.click()
-                time.sleep(0.5)
-                logger.info("'상세 정보 더 보기' 버튼 클릭 완료")
-        except Exception:
-            pass
+                time.sleep(1.0)
 
-        # 시작 y는 무조건 0부터 시작하여 상단 네비게이션, 회사명, 포지션, 경력 정보가 잘리지 않게 함
-        end_y = 0
-        for keyword in ["태그", "근무지역", "마감일", "채용 전형", "혜택 및 복지"]:
-            try:
-                # 페이지 맨 아래쪽에서 찾는 것이 정확하므로 역순으로 탐색하거나 마지막 요소를 사용
-                locs = page.get_by_text(keyword, exact=False).all()
-                if locs:
-                    # 보통 본문 아래쪽에 위치한 섹션을 찾음
-                    last_loc = locs[-1]
-                    box = last_loc.bounding_box()
-                    # 헤더 영역(약 200px)보다 아래에 있는 진짜 본문 끝을 찾아야 함
-                    if box and box["y"] > 200:
-                        end_y = box["y"] + box["height"] + 200 # 아래쪽 여백 200px
-                        logger.info(f"종료 키워드 '{keyword}' 찾음: y={box['y']}")
-                        break
-            except Exception:
-                continue
+            # 2. DOM Bounding Box 기반 데이터 추출 (고전적 방식)
+            # 회사명 및 포지션 (Wanted 기준 특정 셀렉터 활용 가능하나, 범용성을 위해 텍스트 탐색)
+            dom_data["company_name"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h4").first)
+            dom_data["position"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h2").first)
 
-        # 좌표 기반 크롭 캡처 (클립 영역 지정)
-        if end_y > 200:
-            clip_region = {
-                "x": 0,
-                "y": 0, # 무조건 0부터 캡처
-                "width": CHROME_WINDOW_WIDTH,
-                "height": end_y
+            # 섹션별 키워드 매핑
+            sections = {
+                "주요업무": "main_tasks",
+                "자격요건": "requirements",
+                "우대사항": "preferred",
+                "혜택 및 복지": "benefits"
             }
-            logger.info(f"핵심 영역 크롭 캡처 진행 중... clip={clip_region}")
-            page.screenshot(path=str(out_path), clip=clip_region, full_page=False)
-        else:
-            # 실패 시 다운샘플링 휴리스틱 크롭 혹은 풀페이지
-            logger.warning("종료 키워드 좌표를 찾지 못했습니다. 전체 페이지 캡처로 대체합니다.")
+
+            for keyword, key in sections.items():
+                try:
+                    # 키워드 헤더를 찾음
+                    header = page.get_by_text(keyword, exact=True).first
+                    if header.is_visible():
+                        # 헤더 부모의 다음 형제 요소에서 텍스트 추출 (고전적 스크래핑 전략)
+                        text = page.evaluate("""
+                            (keyword) => {
+                                const el = Array.from(document.querySelectorAll('*')).find(e => e.textContent.trim() === keyword);
+                                if (el && el.parentElement) {
+                                    const next = el.parentElement.nextElementSibling;
+                                    return next ? next.innerText : null;
+                                }
+                                return null;
+                            }
+                        """, keyword)
+                        if text:
+                            dom_data[key] = [line.strip() for line in text.split('\n') if line.strip()]
+                except Exception as e:
+                    logger.debug(f"DOM 추출 실패 ({keyword}): {e}")
+
+            # 3. 전체 스크린샷 저장
             page.screenshot(path=str(out_path), full_page=True)
-            
-        browser.close()
+
+        except Exception as e:
+            logger.error(f"DOM 추출 중 오류 발생: {e}")
+        finally:
+            browser.close()
         
-    logger.info(f"스크린샷 저장 완료: {out_path}")
-    return out_path
+    return out_path, dom_data
+
+def _get_inner_text_safe(locator) -> str | None:
+    try:
+        if locator.is_visible():
+            return locator.inner_text().strip()
+    except:
+        pass
+    return None
