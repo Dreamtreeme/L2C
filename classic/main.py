@@ -17,7 +17,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from shared.config import DB_PATH, JSON_DIR, LOGS_DIR
+from shared.config import DB_PATH, JSON_DIR, LOGS_DIR, OLLAMA_MODEL
 from shared.db import Database
 from zoneinfo import ZoneInfo
 
@@ -107,11 +107,26 @@ def cmd_extract(args: argparse.Namespace) -> int:
     t0 = time.time()
 
     try:
-        with _phase("[1/1] Playwright DOM 추출 및 캡처"):
-            screenshot_path, data = capture_and_extract_dom(url=args.url, save_name=slug)
+        with _phase("[1/2] Playwright DOM 추출 및 캡처"):
+            screenshot_path, dom_raw = capture_and_extract_dom(url=args.url, save_name=slug)
 
-        # VLM 대신 DOM 데이터를 그대로 사용 (필요시 정제 로직 추가 가능)
-        logger.info(f"DOM에서 데이터 추출 완료: {data.get('company_name')} - {data.get('position')}")
+        with _phase(f"[2/2] LLM 텍스트 정제 ({args.model or OLLAMA_MODEL})"):
+            from classic.extractor.llm_engine import LLMEngine
+            if args.model:
+                from shared import config
+                config.OLLAMA_MODEL = args.model
+            
+            # DOM에서 가져온 텍스트 전문을 LLM에 전달
+            full_text = dom_raw.get("full_text", "")
+            data = LLMEngine().extract_from_text(full_text)
+            
+            # 메타데이터 보완 (LLM이 놓쳤을 경우 대비)
+            if not data.get("company_name"):
+                data["company_name"] = dom_raw.get("company_name")
+            if not data.get("position"):
+                data["position"] = dom_raw.get("position")
+            
+        logger.info(f"데이터 정제 완료: {data.get('company_name')} - {data.get('position')}")
 
         json_path = JSON_DIR / f"{slug}.json"
         json_path.write_text(
@@ -123,7 +138,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
         job_id = db.upsert(
             url=args.url,
             data=data,
-            screenshot_path=str(screenshot_path),
+            screenshot_path=str(screenshot_path) if screenshot_path else None,
             ocr_text_path=None,
         )
 
@@ -192,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ext = sub.add_parser("extract", help="URL에서 공고 추출", parents=[common])
     p_ext.add_argument("url", help="원티드 채용공고 URL (https://www.wanted.co.kr/wd/...)")
     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")
+    p_ext.add_argument("--model", help="이번 실행에만 사용할 Ollama 모델명")
     p_ext.set_defaults(func=cmd_extract)
 
     p_list = sub.add_parser("list", help="추출 이력 조회", parents=[common])

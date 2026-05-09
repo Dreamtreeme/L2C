@@ -18,7 +18,6 @@ from shared.config import (
     PAGE_LOAD_WAIT_SEC,
     PLAYWRIGHT_HEADLESS,
     PLAYWRIGHT_TIMEOUT_MS,
-    SCREENSHOTS_DIR,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +34,6 @@ def capture_and_extract_dom(url: str, save_name: str | None = None) -> tuple[Pat
     if save_name is None:
         kst_now = datetime.now(ZoneInfo("Asia/Seoul"))
         save_name = f"classic_{kst_now.strftime('%Y%m%d_%H%M%S')}"
-    out_path = SCREENSHOTS_DIR / f"{save_name}.png"
 
     dom_data = {
         "company_name": None,
@@ -106,15 +104,11 @@ def capture_and_extract_dom(url: str, save_name: str | None = None) -> tuple[Pat
             dom_data["company_name"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h4, h4").first)
             dom_data["position"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h2, h2").first)
 
-            # 3. 전체 스크린샷 저장
-            page.screenshot(path=str(out_path), full_page=True)
-
         except Exception as e:
             logger.error(f"DOM 추출 중 오류 발생: {e}")
         finally:
             browser.close()
-        
-    return out_path, dom_data
+    return None, dom_data
 
 def _get_inner_text_safe(locator) -> str | None:
     try:
