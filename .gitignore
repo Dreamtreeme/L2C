@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# 환경 변수
+.env
+.env.local
+
+# 데이터
+data/screenshots/
+data/json/
+data/*.db
+output/
+logs/
+
+# 모델
+*.gguf
+*.safetensors
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 캐시
+.cache/
+.pytest_cache/
+
+# 단, 샘플은 커밋
+!data/samples/
