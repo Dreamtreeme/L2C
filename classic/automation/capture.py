@@ -82,12 +82,16 @@ def capture_and_extract_dom(url: str, save_name: str | None = None) -> tuple[Pat
                 logger.debug(f"더보기 버튼 클릭 실패 또는 불필요: {e}")
 
             # 2. 본문 텍스트 통째로 추출 (Wanted 본문 컨테이너 타겟팅)
-            # 원티드 본문의 주요 클래스 또는 범용 본문 영역 탐색
-            content_locator = page.locator("div.JobDescription_JobDescription__b9_L3, section.JobDescription_JobDescription__...").first
+            # 원티드 본문의 실제 클래스명 반영 및 범용 셀렉터
+            content_locator = page.locator("div.JobDescription_JobDescription__b9_L3, .JobDescription_JobDescription__b9_L3, section.job-description").first
             
             if not content_locator.is_visible():
-                # 백업: 본문으로 추정되는 가장 큰 섹션 탐색
+                # 백업: 본문으로 추정되는 가장 큰 섹션 탐색 (주요업무 키워드 포함 섹션)
                 content_locator = page.locator("section").filter(has_text="주요업무").first
+            
+            if not content_locator.is_visible():
+                # 최종 백업: 본문 전체
+                content_locator = page.locator("article, main").first
             
             full_text = _get_inner_text_safe(content_locator)
             
@@ -98,9 +102,9 @@ def capture_and_extract_dom(url: str, save_name: str | None = None) -> tuple[Pat
                 logger.warning("본문 텍스트를 찾지 못했습니다.")
                 dom_data["full_text"] = ""
 
-            # 기존 필드들에 대해서도 간단히 추출 (선택 사항)
-            dom_data["company_name"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h4").first) or _get_inner_text_safe(page.locator("h4").first)
-            dom_data["position"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h2").first) or _get_inner_text_safe(page.locator("h2").first)
+            # 기본 메타데이터 추출
+            dom_data["company_name"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h4, h4").first)
+            dom_data["position"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h2, h2").first)
 
             # 3. 전체 스크린샷 저장
             page.screenshot(path=str(out_path), full_page=True)
