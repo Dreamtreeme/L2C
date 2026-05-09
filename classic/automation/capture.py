@@ -17,6 +17,7 @@ from shared.config import (
     CHROME_WINDOW_WIDTH,
     PAGE_LOAD_WAIT_SEC,
     PLAYWRIGHT_HEADLESS,
+    PLAYWRIGHT_TIMEOUT_MS,
     SCREENSHOTS_DIR,
 )
 
@@ -39,10 +40,7 @@ def capture_and_extract_dom(url: str, save_name: str | None = None) -> tuple[Pat
     dom_data = {
         "company_name": None,
         "position": None,
-        "main_tasks": [],
-        "requirements": [],
-        "preferred": [],
-        "benefits": []
+        "full_text": None
     }
 
     with sync_playwright() as p:
@@ -57,48 +55,52 @@ def capture_and_extract_dom(url: str, save_name: str | None = None) -> tuple[Pat
         page = context.new_page()
         
         try:
-            page.goto(url, wait_until="networkidle", timeout=15000)
+            # 1. 페이지 접속 (타임아웃 완화 및 대기 전략 변경)
+            logger.info(f"페이지 접속 시도 중... (timeout={PLAYWRIGHT_TIMEOUT_MS}ms)")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_TIMEOUT_MS)
+            except Exception as e:
+                logger.warning(f"페이지 로딩 중 타임아웃 발생 (무시하고 진행): {e}")
+
+            # 필수 요소가 나타날 때까지 대기 (최대 10초)
+            try:
+                page.wait_for_selector("section.JobHeader_className__W_7n9", timeout=10000)
+            except:
+                logger.warning("필수 섹션 로딩 대기 시간 초과")
+
             time.sleep(PAGE_LOAD_WAIT_SEC)
 
-            # 1. '더보기' 클릭
-            more_btn = page.get_by_text("상세 정보 더 보기", exact=False).first
-            if more_btn.is_visible(timeout=2000):
-                more_btn.click()
-                time.sleep(1.0)
+            # 2. '더보기' 클릭
+            try:
+                # 텍스트 기반으로 더보기 버튼 탐색
+                more_btn = page.get_by_text("상세 정보 더 보기", exact=False).first
+                if more_btn.is_visible(timeout=3000):
+                    more_btn.click()
+                    time.sleep(1.0)
+                    logger.info("'상세 정보 더 보기' 버튼 클릭 완료")
+            except Exception as e:
+                logger.debug(f"더보기 버튼 클릭 실패 또는 불필요: {e}")
 
-            # 2. DOM Bounding Box 기반 데이터 추출 (고전적 방식)
-            # 회사명 및 포지션 (Wanted 기준 특정 셀렉터 활용 가능하나, 범용성을 위해 텍스트 탐색)
-            dom_data["company_name"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h4").first)
-            dom_data["position"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h2").first)
+            # 2. 본문 텍스트 통째로 추출 (Wanted 본문 컨테이너 타겟팅)
+            # 원티드 본문의 주요 클래스 또는 범용 본문 영역 탐색
+            content_locator = page.locator("div.JobDescription_JobDescription__b9_L3, section.JobDescription_JobDescription__...").first
+            
+            if not content_locator.is_visible():
+                # 백업: 본문으로 추정되는 가장 큰 섹션 탐색
+                content_locator = page.locator("section").filter(has_text="주요업무").first
+            
+            full_text = _get_inner_text_safe(content_locator)
+            
+            if full_text:
+                logger.info(f"본문 텍스트 추출 완료 ({len(full_text)}자)")
+                dom_data["full_text"] = full_text
+            else:
+                logger.warning("본문 텍스트를 찾지 못했습니다.")
+                dom_data["full_text"] = ""
 
-            # 섹션별 키워드 매핑
-            sections = {
-                "주요업무": "main_tasks",
-                "자격요건": "requirements",
-                "우대사항": "preferred",
-                "혜택 및 복지": "benefits"
-            }
-
-            for keyword, key in sections.items():
-                try:
-                    # 키워드 헤더를 찾음
-                    header = page.get_by_text(keyword, exact=True).first
-                    if header.is_visible():
-                        # 헤더 부모의 다음 형제 요소에서 텍스트 추출 (고전적 스크래핑 전략)
-                        text = page.evaluate("""
-                            (keyword) => {
-                                const el = Array.from(document.querySelectorAll('*')).find(e => e.textContent.trim() === keyword);
-                                if (el && el.parentElement) {
-                                    const next = el.parentElement.nextElementSibling;
-                                    return next ? next.innerText : null;
-                                }
-                                return null;
-                            }
-                        """, keyword)
-                        if text:
-                            dom_data[key] = [line.strip() for line in text.split('\n') if line.strip()]
-                except Exception as e:
-                    logger.debug(f"DOM 추출 실패 ({keyword}): {e}")
+            # 기존 필드들에 대해서도 간단히 추출 (선택 사항)
+            dom_data["company_name"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h4").first) or _get_inner_text_safe(page.locator("h4").first)
+            dom_data["position"] = _get_inner_text_safe(page.locator("section.JobHeader_className__W_7n9 h2").first) or _get_inner_text_safe(page.locator("h2").first)
 
             # 3. 전체 스크린샷 저장
             page.screenshot(path=str(out_path), full_page=True)

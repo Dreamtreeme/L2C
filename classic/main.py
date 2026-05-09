@@ -1,8 +1,8 @@
 """
-Wanted JD to JSON — CLI 엔트리포인트 (Playwright + Vision LLM).
+Wanted JD Text Extractor — CLI 엔트리포인트 (Playwright 기반).
 
 서브커맨드:
-  extract <url>   원티드 채용공고 URL을 받아 풀 파이프라인 실행
+  extract <url>   원티드 채용공고 URL을 받아 텍스트 추출 실행
   list            DB에 저장된 최근 추출 이력
   show <id|url>   특정 공고 상세
 """
@@ -89,10 +89,10 @@ def _phase(name: str):
 
 
 def cmd_extract(args: argparse.Namespace) -> int:
-    """풀 파이프라인: Playwright 브라우저 캡처 → Vision LLM → DB."""
+    """Playwright 브라우저를 통한 텍스트 추출 및 캡처."""
     from classic.automation.capture import capture_and_extract_dom
 
-    logger.info(f"▶ extract URL={args.url} model={args.model or 'default'}")
+    logger.info(f"▶ extract URL={args.url}")
     db = Database(DB_PATH)
 
     if not args.force and db.exists(args.url):
@@ -183,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="autoserch",
-        description="원티드 채용공고를 Vision LLM으로 JSON 추출",
+        description="원티드 채용공고를 Playwright로 텍스트 추출",
         parents=[common],
     )
 
@@ -192,7 +192,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_ext = sub.add_parser("extract", help="URL에서 공고 추출", parents=[common])
     p_ext.add_argument("url", help="원티드 채용공고 URL (https://www.wanted.co.kr/wd/...)")
     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")
-    p_ext.add_argument("--model", help="이번 실행에만 사용할 Ollama 모델명")
     p_ext.set_defaults(func=cmd_extract)
 
     p_list = sub.add_parser("list", help="추출 이력 조회", parents=[common])
