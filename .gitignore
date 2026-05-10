@@ -11,9 +11,7 @@ venv/
 .env.local
 
 # 데이터
-data/screenshots/
-data/json/
-data/*.db
+data/
 output/
 logs/
 
