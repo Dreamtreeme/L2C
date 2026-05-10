@@ -67,11 +67,28 @@ def _setup_logging(verbose: bool, log_file: Path | None = None) -> Path:
 
 
 def _slug_from_url(url: str) -> str:
+    """URL에서 파일명용 슬러그를 만든다.
+
+    형식: <adapter_name>_<job_id>_<YYYYMMDD_HHMMSS>
+      - adapter_name: URL을 매칭하는 사이트 어댑터 이름 (없으면 'unknown')
+      - job_id: URL에서 가장 긴 5자리 이상 숫자열. 없으면 'unknown'
+    """
     import re
-    m = re.search(r"/wd/(\d+)", url)
-    job_id = m.group(1) if m else "unknown"
+    from classic.automation.sites import resolve_adapter
+
+    try:
+        site_name = resolve_adapter(url).name
+    except ValueError:
+        site_name = "unknown"
+
+    # URL 안의 5자리 이상 숫자열 중 가장 긴 것을 잡 ID로 추정.
+    # 잡코리아 ?Oem_Code=C1&...&listno=2&sc=630&...49105168 같은 케이스에서
+    # 가장 긴 49105168이 잡 ID일 확률이 가장 큼.
+    candidates = re.findall(r"\d{5,}", url)
+    job_id = max(candidates, key=len) if candidates else "unknown"
+
     kst_now = datetime.now(ZoneInfo("Asia/Seoul"))
-    return f"wanted_{job_id}_{kst_now.strftime('%Y%m%d_%H%M%S')}"
+    return f"{site_name}_{job_id}_{kst_now.strftime('%Y%m%d_%H%M%S')}"
 
 
 def _phase(name: str):
