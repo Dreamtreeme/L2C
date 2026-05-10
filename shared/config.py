@@ -31,6 +31,7 @@ PAGE_LOAD_WAIT_SEC = float(os.getenv("PAGE_LOAD_WAIT_SEC", "4"))
 # ── LLM (Ollama) ───────────────────────────────────────────
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b") # 성능 향상을 위해 모델 크기 증가
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+WORKNET_API_KEY = os.getenv("WORKNET_API_KEY", "") # 워크넷 오픈 API 인증키
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_NUM_PREDICT = int(os.getenv("LLM_NUM_PREDICT", "2048"))
 
