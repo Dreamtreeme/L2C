@@ -10,7 +10,7 @@ from .wanted import WantedAdapter
 from .jobkorea import JobKoreaAdapter
 from .saramin import SaraminAdapter
 from .worknet import WorknetAdapter
-from .programmers import ProgrammersAdapter
+from .rocketpunch import RocketpunchAdapter
 
 # 디스패처가 순서대로 matches()를 호출하므로,
 # 더 구체적인 어댑터를 위에 두는 게 안전합니다.
@@ -19,7 +19,7 @@ ADAPTERS: list[SiteAdapter] = [
     JobKoreaAdapter(),
     SaraminAdapter(),
     WorknetAdapter(),
-    ProgrammersAdapter(),
+    RocketpunchAdapter(),
 ]
 
 
@@ -40,7 +40,7 @@ __all__ = [
     "JobKoreaAdapter",
     "SaraminAdapter",
     "WorknetAdapter",
-    "ProgrammersAdapter",
+    "RocketpunchAdapter",
     "ADAPTERS",
     "resolve_adapter",
 ]
