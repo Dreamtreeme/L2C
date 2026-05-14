@@ -61,9 +61,15 @@ class LLMEngine:
         logger.info(f"[LLMEngine] 텍스트 정제 시작 (모델: {OLLAMA_MODEL})")
         t0 = time.time()
         
+        # format="json"으로 Ollama JSON 모드 강제.
+        # 토큰 디코딩 단계에서 유효한 JSON만 나오도록 제약을 걸어,
+        # 모델이 마크다운 요약 모드로 빠지는 것을 방지한다.
+        # (로켓펀치 첫 실행에서 Qwen3:8b가 프롬프트의 JSON 규칙을 무시하고
+        #  '### 회사 소개' 같은 마크다운으로 응답해 모든 필드가 null이 된 케이스 대응)
         response = self._client.chat(
             model=OLLAMA_MODEL,
             messages=[{"role": "user", "content": prompt}],
+            format="json",
             options={"temperature": LLM_TEMPERATURE},
         )
         
