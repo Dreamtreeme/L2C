@@ -57,10 +57,17 @@ class LLMEngine:
             return {}
 
         prompt = EXTRACTION_PROMPT.format(text=text)
-        
+
+        # Qwen3 thinking 모드 비활성화 토큰.
+        # user message 끝에 /no_think를 두면 Qwen3가 <think>...</think> 추론
+        # 단계를 건너뛰고 바로 답한다. 로켓펀치 케이스에서 thinking + JSON 모드
+        # 결합으로 응답이 170초까지 걸리고 모든 필드가 null로 빠진 적이 있어서
+        # 안정성·속도 양쪽을 위해 끔.
+        prompt += "\n\n/no_think"
+
         logger.info(f"[LLMEngine] 텍스트 정제 시작 (모델: {OLLAMA_MODEL})")
         t0 = time.time()
-        
+
         # format="json"으로 Ollama JSON 모드 강제.
         # 토큰 디코딩 단계에서 유효한 JSON만 나오도록 제약을 걸어,
         # 모델이 마크다운 요약 모드로 빠지는 것을 방지한다.
@@ -102,11 +109,47 @@ class LLMEngine:
             logger.error(f"JSON 파싱 실패: {e}\n원본 텍스트 일부: {text[:300]}")
             return {}
 
-    @staticmethod
-    def _validate(data: dict) -> dict:
+    # 스키마의 단일 string vs list 필드 분류 (LLM이 혼동하는 케이스를 흡수)
+    _STRING_FIELDS = frozenset({
+        "company_name", "position", "job_category", "experience_level",
+        "education", "employment_type", "location", "deadline", "salary",
+    })
+    _LIST_FIELDS = frozenset({
+        "tech_stack", "main_tasks", "requirements", "preferred", "benefits",
+    })
+
+    @classmethod
+    def _normalize_types(cls, data: dict) -> dict:
+        """LLM 출력의 타입 불일치를 스키마에 맞춰 강제 normalize.
+
+        - String 필드가 list로 오면 ", ".join(...)
+          예: experience_level=['신입', '미들', '시니어'] → '신입, 미들, 시니어'
+        - List 필드가 string으로 오면 쉼표/세미콜론으로 split 후 list화
+          예: tech_stack='Java, Spring' → ['Java', 'Spring']
+
+        DB에는 string은 그대로, list는 JSON 직렬화돼 들어가야 하므로
+        타입이 어긋나면 sqlite InterfaceError로 파이프라인이 죽는다.
+        """
+        for f in cls._STRING_FIELDS:
+            v = data.get(f)
+            if isinstance(v, list):
+                joined = ", ".join(str(x).strip() for x in v if str(x).strip())
+                data[f] = joined or None
+
+        for f in cls._LIST_FIELDS:
+            v = data.get(f)
+            if isinstance(v, str):
+                parts = [s.strip() for s in re.split(r"[,;]\s*", v) if s.strip()]
+                data[f] = parts
+
+        return data
+
+    @classmethod
+    def _validate(cls, data: dict) -> dict:
+        normalized = cls._normalize_types(data)
         try:
             # 스키마에 맞춰 검증 및 정제
-            return JobPosting(**data).model_dump()
+            return JobPosting(**normalized).model_dump()
         except Exception as e:
             logger.warning(f"스키마 검증 경고: {e}")
-            return data
+            return normalized
