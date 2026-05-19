@@ -34,7 +34,7 @@ class WaitStable:
             logger.exception("Failed to capture memory image for stabilization check", error=str(e))
             raise
 
-    def wait(self, max_wait_sec: float = 5.0, check_interval_sec: float = 0.5, threshold_percent: float = 1.0) -> bool:
+    def wait(self, max_wait_sec: float = 5.0, check_interval_sec: float = 0.2, threshold_percent: float = 1.0) -> bool:
         """
         화면 렌더링이 완료될 때까지 대기합니다.
         연속된 두 프레임의 픽셀 변화율 평균이 threshold_percent 이하가 되면 안정화된 것으로 판단합니다.
