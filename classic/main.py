@@ -21,7 +21,7 @@ from shared.config import DB_PATH, JSON_DIR, LOGS_DIR, OLLAMA_MODEL
 from shared.db import Database
 from zoneinfo import ZoneInfo
 
-logger = logging.getLogger("autoserch")
+logger = logging.getLogger("l2c.classic")
 
 class KSTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -214,15 +214,24 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("-v", "--verbose", action="store_true", help="콘솔에 DEBUG 로그까지 출력")
 
     parser = argparse.ArgumentParser(
-        prog="autoserch",
-        description="원티드 채용공고를 Playwright로 텍스트 추출",
+        prog="l2c-classic",
+        description=(
+            "L2C Classic — 5개 채용 사이트(원티드·잡코리아·사람인·워크넷·로켓펀치)"
+            "에서 공고를 Playwright로 추출하고 LLM으로 정형화"
+        ),
         parents=[common],
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_ext = sub.add_parser("extract", help="URL에서 공고 추출", parents=[common])
-    p_ext.add_argument("url", help="원티드 채용공고 URL (https://www.wanted.co.kr/wd/...)")
+    p_ext.add_argument(
+        "url",
+        help=(
+            "채용공고 URL "
+            "(지원: 원티드 · 잡코리아 · 사람인 · 워크넷/고용24 · 로켓펀치)"
+        ),
+    )
     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")
     p_ext.add_argument("--model", help="이번 실행에만 사용할 Ollama 모델명")
     p_ext.set_defaults(func=cmd_extract)
