@@ -22,13 +22,15 @@ def main():
     
     # 초기 상태 구성
     initial_state = {
-        "goal": "원티드 사이트에서 데이터 분석가 신입 공고를 검색하고 정보를 모아줘.",
+        "goal": "현재 바탕화면입니다. 원티드 사이트에 접속하여 로그인한 뒤, '데이터 분석가' 채용 공고를 검색해 주세요.",
+        "ui_context": "",
         "action_history": [],
         "recent_images": [],
         "current_markers": [],
         "error_count": 0,
         "is_finished": False,
-        "collected_data": []
+        "collected_data": [],
+        "last_action_result": None
     }
     
     logger.info("--- WORKFLOW START ---", goal=initial_state["goal"])
@@ -36,7 +38,7 @@ def main():
     # LangGraph 실행 (스트리밍 방식으로 노드별 진행 상황 모니터링)
     # 현재 OmniParser가 Mock 상태이므로, 에이전트가 "검색창"을 보고 어떻게 행동하는지 테스트합니다.
     try:
-        for output in app.stream(initial_state, {"recursion_limit": 10}):
+        for output in app.stream(initial_state, {"recursion_limit": 30}):
             for key, value in output.items():
                 logger.info(f"Node [{key}] completed.")
                 

@@ -30,8 +30,8 @@ def build_graph():
     workflow.add_node("action", action_node)
     
     # 3. 엣지 연결 (흐름 정의)
-    # 시작 시 perception으로 이동
-    workflow.add_edge(START, "perception")
+    # 시작 시 reasoning으로 이동하여 필요시 브라우저부터 켜도록 유도
+    workflow.add_edge(START, "reasoning")
     
     # perception 완료 후 reasoning으로 이동
     workflow.add_edge("perception", "reasoning")

@@ -30,3 +30,6 @@ class GraphState(TypedDict):
     
     # 수집 완료된 데이터
     collected_data: List[Any]
+
+    # 가장 최근 LLM의 판단 결과 저장 (AIMessage 객체 등)
+    last_action_result: Any
