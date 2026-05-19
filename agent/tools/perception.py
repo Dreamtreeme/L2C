@@ -35,6 +35,12 @@ class PerceptionEngine:
                 continue
                 
             if any(k in win.title for k in keywords):
+                # 브라우저를 맨 앞으로 가져오기 (포커스 활성화)
+                try:
+                    win.activate()
+                except Exception as e:
+                    logger.debug("Failed to activate window (bring to front)", error=str(e))
+                    
                 # Windows 10/11의 DWM(Desktop Window Manager)은 
                 # 창 주변의 투명한 그림자 영역(약 8px)까지 창 크기로 인식합니다.
                 # 배경이 찍히는 것을 막기 위해 이 보이지 않는 테두리를 잘라냅니다.
