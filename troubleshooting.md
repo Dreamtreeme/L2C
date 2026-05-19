@@ -17,6 +17,10 @@
 * **원인**: `commander.py` 프롬프트에 자동 로그인 상태 분기 처리 지침과 구글 간편 로그인 우선순위 정책이 누락되어 있었음.
 * **해결**: [commander.py](file:///c:/Users/psg/Desktop/L2C/agent/prompts/commander.py)의 시스템 프롬프트를 수정하여 에이전트가 로그인 상태를 감지하도록 가이드라인을 보강하고, 구글 로그인 버튼 및 기등록 이메일 요소를 클릭하는 상세 자율 행동 트랙을 구성함.
 
+### [관련 참조 리소스]
+* **수정 반영된 지휘자 프롬프트**: [commander.py](file:///c:/Users/psg/Desktop/L2C/agent/prompts/commander.py)
+* **전체 실행 내역 및 대화 로그**: [transcript.jsonl](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/.system_generated/logs/transcript.jsonl)
+
 ---
 
 ## 2. Ollama JSON 포맷 응답 붕괴 및 무한 개행 루프
@@ -35,6 +39,12 @@
   1. Ollama 호출 파라미터에서 `"format": "json"` 옵션을 해제하여 모델의 생성 자유도를 보장하되, 출력 텍스트 내 마크다운 코드블록 안에 JSON 데이터를 안전하게 담도록 프롬프트를 조정함.
   2. 단순 정규식 파서 대신 문자열 내 중괄호 `{`와 `}`의 열고 닫힘을 스택(Stack)으로 계측하여 온전한 JSON 객체만 발라내는 **Stack-based Parser**를 `perception.py`에 이식함.
   3. [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)에 동일 액션 연속 반복 3회 감지 시 에이전트를 안전하게 중단 및 탈출시키는 **Loop Detection & Recursion Limit** 로직을 적용함.
+
+### [관련 참조 리소스]
+* **Ollama 포맷 재현 테스트 코드**: [test_ollama_format.py](file:///c:/Users/psg/Desktop/L2C/agent/tests/test_ollama_format.py)
+* **Ollama 원시 JSON 붕괴 로그**: [raw_ollama_resp.json](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/raw_ollama_resp.json)
+* **스택 기반 파서 디버깅 스크립트**: [debug_ollama_output.py](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/debug_ollama_output.py)
+* **루프 방지가 탑재된 그래프 노드**: [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)
 
 ---
 
@@ -56,6 +66,12 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
   - 이로 인해 돋보기 좌표 오차가 `(1444, 227)`로 1~3px 오차 내 명중에 성공하며 물리 제어 안전성이 극적으로 향상됨.
   - 로컬 Ollama 구동 시에는 정확도 방어선으로 해상도를 **`1024px`**로 늘리는 Fallback 브랜치 방안을 구축함.
 
+### [관련 참조 리소스]
+* **모니터 비율 및 배율 오프셋 보정 디버거**: [debug_coords.py](file:///c:/Users/psg/Desktop/L2C/agent/tests/debug_coords.py)
+* **해상도 및 DPI 스케일 검증 도구**: [inspect_dpi.py](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/inspect_dpi.py)
+* **Gemini perception API 개별 검증 스크립트**: [test_gemini_perception.py](file:///c:/Users/psg/Desktop/L2C/agent/tests/test_gemini_perception.py)
+* **1024px Fallback 및 캡처 스케일링 핵심 파일**: [perception.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/perception.py)
+
 ---
 
 ## 4. UI 요소 추출 개수 제한(8개)으로 인한 검색 결과 인지 누락
@@ -66,6 +82,10 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 ### [로그 분석 및 해결 조치]
 * **원인**: 에이전트가 확보한 마지막 UI Context를 분석한 결과, 상단 GNB 바의 메뉴들(채용, 이력서, 이벤트 등)만 검출되고 본문의 검색된 채용 카드 요소들은 전혀 검출 목록에 존재하지 않았음. 이는 VLM 프롬프트에 정의되어 있던 **최대 검출 개수 제한(8개)**으로 인해 GNB에 밀려 본문 카드가 리스트에서 누락된 것이었음.
 * **해결**: `perception.py` 내 VLM API 호출 시 최대 검출 요소(Max Elements)를 **`25개`**로 상향하여 본문 채용공고 리스트를 확보함. 지휘자(Gemini)가 검색 결과를 시각적으로 인지할 수 있게 되어 다음 단계에서 즉시 `finish_task`를 선언하고 최종 E2E 성공 처리함.
+
+### [관련 참조 리소스]
+* **Gemini UI 다중 요소 추출 테스트**: [test_gemini_full.py](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/test_gemini_full.py)
+* **Max Elements 조절 함수가 포함된 인식 도구**: [perception.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/perception.py)
 
 ---
 
@@ -80,6 +100,11 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 * **가설 1 (768px 하향 리사이징)**: 속도 단축을 꾀했으나 **46.64초**로 단축 효과가 전혀 없었으며, 화질 저하로 인해 로그인 버튼 클릭 지점이 타깃 좌측으로 356px 빗나가고 GNB 좌표가 뒤틀리는 등 정확도 저하가 심각해 **기각(Rejected)** 처리함.
 * **가설 2 (num_ctx 2048 축소를 통한 GPU 연산 강제)**: VRAM 점유율을 낮춰 CPU 오프레딩을 예방하려 했으나 **54.81초**로 오히려 늘어남.
 * **근본 원인 식별**: 현재 윈도우 환경 Ollama(llama.cpp 백엔드) 상에서 Qwen2.5-VL 모델을 돌릴 때 비주얼 엔코더의 Attention 연산 시 **Flash Attention 2 가속이 작동하지 않아** 이미지 토큰 프리필(Prefill) 병목에 고정 40초 이상의 하드웨어 부하가 발생함.
+
+### [관련 참조 리소스]
+* **7B 최적화 시뮬레이션 제어 코드**: [simulate_local_limit.py](file:///c:/Users/psg/Desktop/L2C/agent/tests/simulate_local_limit.py)
+* **가설 1 (768px) 실행 결과 로그**: [task-830.log](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/.system_generated/tasks/task-830.log)
+* **가설 2 (num_ctx 2048) 실행 결과 로그**: [task-850.log](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/.system_generated/tasks/task-850.log)
 
 ---
 
