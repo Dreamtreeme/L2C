@@ -17,8 +17,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / os.getenv("DB_PATH", "data/jobs.db")
 JSON_DIR = BASE_DIR / os.getenv("JSON_OUTPUT_DIR", "data/json")
 LOGS_DIR = BASE_DIR / os.getenv("LOG_DIR", "logs")
+SCREENSHOT_DIR = BASE_DIR / os.getenv("SCREENSHOT_DIR", "data/screenshots")
 
-for d in (JSON_DIR, LOGS_DIR, DB_PATH.parent):
+for d in (JSON_DIR, LOGS_DIR, SCREENSHOT_DIR, DB_PATH.parent):
     d.mkdir(parents=True, exist_ok=True)
 
 # ── 캡처 파라미터 (Playwright) ──────────────────────────────────────────
