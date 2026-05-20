@@ -12,16 +12,20 @@ from agent.utils.logger import logger
 from shared.config import SCREENSHOT_DIR
 
 
+from agent.tools.som_engine import SomEngine
+
+
 class PerceptionEngine:
     """
     모니터 화면을 인식하고 분석하는 Perception 엔진입니다.
-    mss를 이용한 고속 화면 캡처 및 (추후) OmniParser 연동을 담당합니다.
+    mss를 이용한 고속 화면 캡처 및 OmniParser 연동을 담당합니다.
     """
 
     def __init__(self):
         self.screenshot_dir = SCREENSHOT_DIR
         self.sct = mss.mss()
-        logger.info("PerceptionEngine initialized", screenshot_dir=str(self.screenshot_dir))
+        self.som_engine = SomEngine()
+        logger.info("PerceptionEngine initialized with SomEngine", screenshot_dir=str(self.screenshot_dir))
 
     def _get_browser_region(self) -> Optional[Dict[str, int]]:
         """
@@ -102,10 +106,12 @@ class PerceptionEngine:
 
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """
-        캡처된 이미지를 로컬 Ollama (Qwen2.5-VL)에 전송하여 UI 요소를 파싱합니다.
+        Set-of-Marks (SoM) 기반의 UI 분석 엔진입니다.
+        로컬 YOLOv8 및 EasyOCR로 마킹 이미지를 생성한 뒤 VLM(Gemini/Ollama)을 호출하여
+        각 마커 ID의 서비스 상 용도를 캡셔닝하고 물리 좌표와 맵핑하여 반환합니다.
         
         Args:
-            image_path: 파싱할 이미지 파일의 경로
+            image_path: 원본 스크린샷 이미지 경로
             
         Returns:
             UI 마커의 ID, 텍스트, 바운딩 박스(bbox) 목록을 담은 딕셔너리
@@ -118,49 +124,69 @@ class PerceptionEngine:
             logger.error("Image file not found for UI analysis", image_path=str(image_path))
             raise FileNotFoundError(f"Image not found: {image_path}")
 
-        # ----------------------------------------------------
-        # 1. Gemini 3.5 Flash를 이용한 고정밀 분석 시도 (권장)
-        # ----------------------------------------------------
-        api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
-            try:
-                logger.info("Analyzing UI elements via Gemini 3.5 Flash (High Accuracy)")
-                with Image.open(image_path) as img:
-                    width, height = img.size
+        # 1. 로컬 SoM 엔진 실행 (마킹 이미지 합성 및 좌표 추출)
+        try:
+            marked_filename = f"marked_{image_path.name}"
+            marked_path, marker_coords, marker_bboxes = self.som_engine.process_image(
+                image_path, 
+                output_filename=marked_filename
+            )
+        except Exception as som_err:
+            logger.error("Local SoM processing failed", error=str(som_err))
+            return {"markers": [], "original_image": str(image_path)}
+
+        # 2. 마킹된 이미지 로드 및 리사이징 (VLM 최적화)
+        try:
+            with Image.open(marked_path) as img:
+                width, height = img.size
+                max_dim = 1024
+                if width > max_dim or height > max_dim:
+                    ratio = max_dim / max(width, height)
+                    new_w = int(width * ratio)
+                    new_h = int(height * ratio)
+                    resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
                     
-                    # Gemini 업로드 속도 및 비용 최적화를 위한 최대 1024px 리사이징
-                    max_dim = 1024
-                    if width > max_dim or height > max_dim:
-                        ratio = max_dim / max(width, height)
-                        new_w = int(width * ratio)
-                        new_h = int(height * ratio)
-                        resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                        
-                        from io import BytesIO
-                        buffered = BytesIO()
-                        resized_img.save(buffered, format="PNG")
-                        img_bytes = buffered.getvalue()
-                    else:
-                        with open(image_path, "rb") as f:
-                            img_bytes = f.read()
+                    from io import BytesIO
+                    buffered = BytesIO()
+                    resized_img.save(buffered, format="PNG")
+                    img_bytes = buffered.getvalue()
+                else:
+                    with open(marked_path, "rb") as f:
+                        img_bytes = f.read()
+            base64_image = base64.b64encode(img_bytes).decode("utf-8")
+        except Exception as img_err:
+            logger.error("Failed to load and resize marked image", error=str(img_err))
+            return {"markers": [], "original_image": str(image_path)}
 
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
-                prompt = """
-Analyze this UI screenshot of a Korean website. Extract at most 25 most important clickable elements (buttons, inputs, tabs, search/login buttons, job listing cards, search results).
+        # 3. VLM 프롬프트 작성 (ID 매핑 요청)
+        prompt = """
+Analyze this UI screenshot of a Korean website, which has numbered markers on it (like [0], [1], [2], ...).
+Describe the clickable/interactable elements that correspond to each visible marker number.
+Focus on identifying what each marker ID represents (e.g., "검색창", "구글 로그인", "데이터 분석가 채용 공고", "돋보기 아이콘").
+Only include markers that you can clearly see and identify.
+
 You MUST return a single JSON object with the key "elements".
-
 Each object in the "elements" array must have:
-- "id": integer (start from 0)
-- "text": visible text or description of the icon/button (e.g. "검색창", "돋보기", "채용공고 타이틀")
-- "bbox": [xmin, ymin, xmax, ymax] representing the bounding box, normalized to 0-1000 scale. Note the order: xmin, ymin, xmax, ymax (0-1000).
+- "id": integer corresponding to the marker number in the image
+- "text": name or description of the element (e.g. "구글 로그인 버튼")
 
 Example output format:
 {
   "elements": [
-    {"id": 0, "text": "검색창", "bbox": [350, 50, 450, 100]}
+    {"id": 0, "text": "검색창 입력란"},
+    {"id": 1, "text": "회원가입 버튼"}
   ]
 }
 """
+
+        elements = []
+        api_key = os.getenv("GEMINI_API_KEY")
+
+        # 4. Gemini 3.5 Flash 호출 시도
+        if api_key:
+            try:
+                logger.info("Captioning UI elements via Gemini 3.5 Flash SoM...")
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
                 payload = {
                     "contents": [{
                         "parts": [
@@ -168,7 +194,7 @@ Example output format:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(img_bytes).decode("utf-8")
+                                    "data": base64_image
                                 }
                             }
                         ]
@@ -185,168 +211,81 @@ Example output format:
                 text = resp_json["candidates"][0]["content"]["parts"][0]["text"].strip()
                 
                 data = json.loads(text)
-                raw_markers = data.get("elements", [])
-                
-                markers = []
-                for m in raw_markers:
-                    if isinstance(m, dict) and "bbox" in m and len(m["bbox"]) == 4:
-                        xmin, ymin, xmax, ymax = m["bbox"]
-                        
-                        px_xmin = int(xmin * width / 1000.0)
-                        px_ymin = int(ymin * height / 1000.0)
-                        px_xmax = int(xmax * width / 1000.0)
-                        px_ymax = int(ymax * height / 1000.0)
-                        
-                        # 화면 영역 아웃클리핑 차단
-                        px_xmin = max(0, min(width - 1, px_xmin))
-                        px_ymin = max(0, min(height - 1, px_ymin))
-                        px_xmax = max(0, min(width - 1, px_xmax))
-                        px_ymax = max(0, min(height - 1, px_ymax))
-                        
-                        markers.append({
-                            "id": m.get("id", len(markers)),
-                            "text": m.get("text", "Unknown"),
-                            "bbox": [px_xmin, px_ymin, px_xmax, px_ymax]
-                        })
-                        
-                logger.info("Gemini UI analysis completed successfully", markers_count=len(markers))
-                return {
-                    "markers": markers,
-                    "original_image": str(image_path)
-                }
+                elements = data.get("elements", [])
+                logger.info("Gemini SoM captioning completed successfully", elements_count=len(elements))
             except Exception as gemini_err:
-                logger.warning("Gemini UI analysis failed, falling back to local Ollama", error=str(gemini_err))
+                logger.warning("Gemini SoM captioning failed, falling back to local Ollama", error=str(gemini_err))
 
-        # ----------------------------------------------------
-        # 2. 로컬 Ollama (Qwen2.5-VL)를 이용한 Fallback 분석
-        # ----------------------------------------------------
-        logger.info("Analyzing UI elements via local Ollama (Fallback)", image_path=str(image_path))
-        try:
-            with Image.open(image_path) as img:
-                width, height = img.size
+        # 5. 로컬 Ollama (Qwen2.5-VL) Fallback 호출 시도
+        if not elements:
+            logger.info("Captioning UI elements via local Ollama SoM (Fallback)...")
+            try:
+                model_name = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
+                response = requests.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": model_name,
+                        "prompt": prompt,
+                        "images": [base64_image],
+                        "stream": False,
+                        "options": {
+                            "num_ctx": 4096,
+                            "num_predict": 1024,
+                            "temperature": 0.1
+                        }
+                    },
+                    timeout=120
+                )
+                response.raise_for_status()
+                response.encoding = 'utf-8'
                 
-                # VRAM 부족 방지를 위한 1024px 리사이징
-                max_dim = 1024
-                if width > max_dim or height > max_dim:
-                    ratio = max_dim / max(width, height)
-                    new_w = int(width * ratio)
-                    new_h = int(height * ratio)
-                    resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                    
-                    from io import BytesIO
-                    buffered = BytesIO()
-                    resized_img.save(buffered, format="PNG")
-                    base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-                else:
-                    with open(image_path, "rb") as f:
-                        base64_image = base64.b64encode(f.read()).decode('utf-8')
+                resp_json = response.json()
+                result_text = resp_json.get("response", "").strip()
+                thinking_text = resp_json.get("thinking", "").strip()
+                parse_target = result_text if result_text else thinking_text
                 
-            prompt = """
-Analyze this UI screenshot of a Korean website. Extract at most 25 most important clickable elements (buttons, inputs, tabs, search/login buttons, job listing cards, search results).
-당신은 반드시 다음 형식의 JSON 객체 형태로 응답을 작성해야 합니다. 마크다운 코드블록(```json ... ```) 안에 담아서 출력해 주세요.
-
-{
-  "elements": [
-    {"id": 0, "text": "검색창", "bbox": [xmin, ymin, xmax, ymax]}
-  ]
-}
-Note: bbox should be normalized to 0-1000 scale. Note the order: xmin, ymin, xmax, ymax (0-1000).
-"""
-            model_name = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
-            logger.info(f"Calling Ollama with model: {model_name}")
-            response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": model_name,
-                    "prompt": prompt,
-                    "images": [base64_image],
-                    "stream": False,
-                    # "format": "json" <- 무한 개행 루프를 유발하므로 제거
-                    "options": {
-                        "num_ctx": 4096,
-                        "num_predict": 1024,
-                        "temperature": 0.1
-                    }
-                },
-                timeout=120
-            )
-            response.raise_for_status()
-            response.encoding = 'utf-8'
-            
-            resp_json = response.json()
-            result_text = resp_json.get("response", "").strip()
-            thinking_text = resp_json.get("thinking", "").strip()
-            
-            raw_markers = []
-            parse_target = result_text if result_text else thinking_text
-            
-            if parse_target:
-                try:
+                if parse_target:
                     clean_target = parse_target
                     if "```json" in clean_target:
                         clean_target = clean_target.split("```json")[1].split("```")[0].strip()
                     elif "```" in clean_target:
                         clean_target = clean_target.split("```")[1].split("```")[0].strip()
                     
-                    parsed = json.loads(clean_target)
-                    if isinstance(parsed, list):
-                        raw_markers = parsed
-                    elif isinstance(parsed, dict):
-                        if "elements" in parsed and isinstance(parsed["elements"], list):
-                            raw_markers = parsed["elements"]
-                except Exception:
-                    pass
-                
-                if not raw_markers:
-                    i = 0
-                    while i < len(parse_target):
-                        if parse_target[i] == '{':
-                            stack = 0
-                            for j in range(i, len(parse_target)):
-                                if parse_target[j] == '{':
-                                    stack += 1
-                                elif parse_target[j] == '}':
-                                    stack -= 1
-                                    if stack == 0:
-                                        candidate = parse_target[i:j+1]
-                                        try:
-                                            obj = json.loads(candidate)
-                                            if isinstance(obj, dict) and "bbox" in obj:
-                                                raw_markers.append(obj)
-                                        except Exception:
-                                            pass
-                                        i = j
-                                        break
-                        i += 1
-            
-            markers = []
-            if isinstance(raw_markers, list):
-                for m in raw_markers:
-                    if isinstance(m, dict) and "bbox" in m and len(m["bbox"]) == 4:
-                        xmin, ymin, xmax, ymax = m["bbox"]
-                        
-                        px_xmin = int(xmin * width / 1000.0)
-                        px_ymin = int(ymin * height / 1000.0)
-                        px_xmax = int(xmax * width / 1000.0)
-                        px_ymax = int(ymax * height / 1000.0)
-                        
-                        px_xmin = max(0, min(width - 1, px_xmin))
-                        px_ymin = max(0, min(height - 1, px_ymin))
-                        px_xmax = max(0, min(width - 1, px_xmax))
-                        px_ymax = max(0, min(height - 1, px_ymax))
-                        
-                        markers.append({
-                            "id": m.get("id", len(markers)),
-                            "text": m.get("text", "Unknown"),
-                            "bbox": [px_xmin, px_ymin, px_xmax, px_ymax]
-                        })
-                    
-            logger.info("Ollama UI analysis completed", markers_count=len(markers))
-            return {
-                "markers": markers,
-                "original_image": str(image_path)
-            }
-            
-        except Exception as e:
-            logger.error("Failed to analyze UI with Ollama", error=str(e))
-            return {"markers": [], "original_image": str(image_path)}
+                    try:
+                        parsed = json.loads(clean_target)
+                        if isinstance(parsed, dict) and "elements" in parsed:
+                            elements = parsed["elements"]
+                        elif isinstance(parsed, list):
+                            elements = parsed
+                    except Exception:
+                        pass
+                logger.info("Ollama SoM captioning completed", elements_count=len(elements))
+            except Exception as ollama_err:
+                logger.error("Failed to caption UI elements via Ollama", error=str(ollama_err))
+
+        # 6. 매핑 정보 병합 및 안전한 Fallback 매핑 (VLM 누락 마커 처리)
+        id_to_text = {}
+        if elements:
+            for elem in elements:
+                if isinstance(elem, dict) and "id" in elem:
+                    try:
+                        id_to_text[int(elem["id"])] = elem.get("text", "상호작용 가능한 요소")
+                    except ValueError:
+                        continue
+
+        markers = []
+        for marker_id, bbox in marker_bboxes.items():
+            # VLM이 식별하지 못한 마커라도 목록에 유지하여 에이전트가 조작할 수 있게 함
+            text = id_to_text.get(marker_id, "상호작용 가능한 요소 (미식별)")
+            markers.append({
+                "id": marker_id,
+                "text": text,
+                "bbox": bbox
+            })
+
+        logger.info("UI analysis pipeline complete", final_markers_count=len(markers))
+        return {
+            "markers": markers,
+            "original_image": str(image_path),
+            "marked_image": str(marked_path)
+        }

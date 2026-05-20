@@ -1,14 +1,16 @@
+import os
 import json
+import base64
 from typing import Dict, Any
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
 from agent.graph.state import GraphState
 from agent.tools.perception import PerceptionEngine
 from agent.tools.actions import ActionTools
-from agent.prompts.commander import commander_prompt
+from agent.prompts.commander import commander_prompt, COMMANDER_SYSTEM_PROMPT
 from agent.utils.logger import logger
 
 # 싱글톤으로 도구 유지
@@ -53,9 +55,10 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     # 화면 캡처
     image_path = perception.capture_screen()
     
-    # UI 분석 (현재 Mock)
+    # UI 분석
     analysis = perception.analyze_ui(image_path)
     markers = analysis.get("markers", [])
+    marked_image = analysis.get("marked_image", "")
     
     # LLM이 읽기 쉽게 문자열로 변환 (bbox 제외하고 텍스트만)
     ui_texts = [f"[id: {m['id']}] {m['text']}" for m in markers]
@@ -63,6 +66,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     
     return {
         "recent_images": [image_path],
+        "marked_image": marked_image,
         "current_markers": markers,
         "ui_context": ui_context
     }
@@ -114,14 +118,37 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
                     logger.error("Persistent loop detected. Increasing error count to terminate.")
                     error_increment = 1
                     
-    prompt = commander_prompt.format_prompt(
-        goal=state.get("goal", ""),
-        ui_context=ui_context + loop_warning,
-        action_history=json.dumps(action_history[-5:], ensure_ascii=False, indent=2) # 최근 5개만
-    )
+    system_prompt_text = COMMANDER_SYSTEM_PROMPT.format(goal=state.get("goal", ""))
+    human_prompt_text = f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n이전 행동 내역:\n{json.dumps(action_history[-5:], ensure_ascii=False, indent=2)}\n\n다음 행동을 결정하세요."
+    
+    # 마킹 이미지 로드 및 Base64 인코딩
+    marked_image_path = state.get("marked_image")
+    base64_image = ""
+    if marked_image_path and os.path.exists(marked_image_path):
+        try:
+            with open(marked_image_path, "rb") as f:
+                base64_image = base64.b64encode(f.read()).decode("utf-8")
+        except Exception as img_err:
+            logger.warning("Failed to read marked_image for reasoning node", error=str(img_err))
+            
+    if base64_image:
+        logger.info("Invoking reasoning node with multimodal SoM marked image...")
+        messages = [
+            SystemMessage(content=system_prompt_text),
+            HumanMessage(content=[
+                {"type": "text", "text": human_prompt_text},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+            ])
+        ]
+    else:
+        logger.info("Invoking reasoning node with text-only prompts...")
+        messages = [
+            SystemMessage(content=system_prompt_text),
+            HumanMessage(content=human_prompt_text)
+        ]
     
     # LLM 추론
-    response = llm_with_tools.invoke(prompt.to_messages())
+    response = llm_with_tools.invoke(messages)
     
     # 결과를 State에 임시 저장 및 에러 카운트 업데이트
     result = {"last_action_result": response}

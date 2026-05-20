@@ -22,6 +22,9 @@ class GraphState(TypedDict):
     # 최근 캡처된 이미지 경로들 (디버깅/기록용)
     recent_images: Annotated[List[Path], operator.add]
     
+    # 최근 마킹된 이미지 경로 (SoM VLM 추론용)
+    marked_image: str
+    
     # 에러가 발생한 횟수
     error_count: int
     
