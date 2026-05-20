@@ -177,13 +177,38 @@ def main():
     report.append("| 필드 항목 | Classic 원문 크기 (자수) | Agent 추출 크기 (자수) | 단어 자카드 유사도 (Jaccard) | 일치율 평가 |")
     report.append("| :--- | :---: | :---: | :---: | :--- |")
     
-    fields = ["company_name", "position", "main_tasks", "requirements", "preferred", "benefits"]
-    for field in fields:
-        classic_val = classic_data.get(field, "")
-        agent_val = agent_data.get(field, "")
+    field_mapping = {
+        "company_name": ["company_name", "회사명"],
+        "position": ["position", "직무명"],
+        "main_tasks": ["main_tasks", "주요업무"],
+        "requirements": ["requirements", "자격요건"],
+        "preferred": ["preferred", "우대사항"],
+        "benefits": ["benefits", "혜택", "혜택 및 복지"]
+    }
+    
+    # 임시 저장을 위한 값 딕셔너리
+    mapped_classic = {}
+    mapped_agent = {}
+    
+    for field, keys in field_mapping.items():
+        # Classic 데이터 매핑
+        c_val = ""
+        for k in keys:
+            if k in classic_data:
+                c_val = classic_data[k]
+                break
+        mapped_classic[field] = c_val
         
-        c_list = classic_val if isinstance(classic_val, list) else [str(classic_val)] if classic_val else []
-        a_list = agent_val if isinstance(agent_val, list) else [str(agent_val)] if agent_val else []
+        # Agent 데이터 매핑
+        a_val = ""
+        for k in keys:
+            if k in agent_data:
+                a_val = agent_data[k]
+                break
+        mapped_agent[field] = a_val
+        
+        c_list = c_val if isinstance(c_val, list) else [str(c_val)] if c_val else []
+        a_list = a_val if isinstance(a_val, list) else [str(a_val)] if a_val else []
         
         c_len = len(" ".join(c_list))
         a_len = len(" ".join(a_list))
@@ -193,17 +218,17 @@ def main():
         report.append(f"| {field} | {c_len}자 | {a_len}자 | {overlap:.2%} | {evaluation} |")
         
     report.append("\n## 2. 상세 텍스트 비교 (Side-by-Side)\n")
-    for field in fields:
+    for field in field_mapping.keys():
         report.append(f"### 📍 {field}\n")
         report.append("#### [Classic 원문]")
-        c_val = classic_data.get(field, "")
+        c_val = mapped_classic[field]
         if isinstance(c_val, list):
             for item in c_val:
                 report.append(f"- {item}")
         else:
             report.append(str(c_val) if c_val else "(없음)")
         report.append("\n#### [Agent 비전 판독]")
-        a_val = agent_data.get(field, "")
+        a_val = mapped_agent[field]
         if isinstance(a_val, list):
             for item in a_val:
                 report.append(f"- {item}")
