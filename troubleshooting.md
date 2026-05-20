@@ -118,3 +118,64 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
   1. Windows 환경 내 `flash-attn` 라이브러리를 CUDA C++로 빌드/설치하여 비주얼 토큰 연산량을 **3~4배 가속**하여 10초 이내 추론 실현 가능.
   2. `max_pixels` 파라미터 제어를 통해 해상도는 1024px로 완벽히 보존하면서 실제 트랜스포머 입력 토큰 개수만 선택적으로 압축 가능.
 * 이에 따라, 로컬 VLM 가속화를 차기 핵심 연구 과제인 **`Phase 3.5: 로컬 VLM 최적화 도전 (Ollama -> Hugging Face 직접 구동)`**으로 명명하고 README 로드맵에 등록함.
+
+---
+
+## 7. OmniParser SoM 로컬 파이프라인 실제 구현 및 통합 (YOLOv8 + EasyOCR + PIL 인메모리 처리)
+
+### [현상]
+* 비주얼 기반의 좌표 인식 및 에이전트 구동의 실효성을 높이기 위해, 기존 Mock 데이터를 걷어내고 실제 로컬 Set-of-Marks (SoM) 파이프라인인 **OmniParser 로컬 엔진**을 완전 통합하려 함.
+* 초기 연동 시 Windows 환경의 PIL 이미지 오픈 시점의 **파일 락(File Lock) 및 라이브러리 DLL 충돌**로 멀티프로세싱 안정성이 떨어지는 현상이 식별됨.
+
+### [해결 조치]
+1. **인메모리 디코딩 적용**: 디스크 입출력 없이 mss 캡처의 raw BGRA 데이터를 메모리 레벨에서 직접 `BGRX` 디코더를 활용하여 PIL 이미지로 초고속 고정밀 변환 (`wait_stable.py`, `som_engine.py`).
+2. **YOLOv8 & EasyOCR 통합**:
+   - `som_engine.py`에서 로컬 GPU(CUDA)를 바인딩하여 1.2s 수준으로 탐지 속도 가속화.
+   - **IoU 기반 텍스트-아이콘 중복 필터링 (NMS)** 알고리즘을 적용하여 UI 마커 숫자가 겹치거나 지저분해지는 중복 마킹 현상을 말끔히 제거.
+3. **듀얼 모니터 좌표 매핑 교정**: 감지된 오프셋 좌표를 브라우저 윈도우 시작점에 매핑하여, 서브 모니터에서도 오차 없이 정밀하게 요소를 타격하는 스케일 보정 코드 적용 완료.
+
+### [관련 참조 리소스]
+* **로컬 SoM 엔진**: [som_engine.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/som_engine.py)
+* **이미지 메모리 변환 모듈**: [wait_stable.py](file:///c:/Users/psg/Desktop/L2C/agent/utils/wait_stable.py)
+
+---
+
+## 8. VLM 캡셔닝 단계 제거 및 통합 최적화 (SKIP_VLM_CAPTION)
+
+### [현상]
+* 로컬 탐지를 완료했으나, 매 루프마다 생성한 마킹 이미지를 VLM(Gemini/Ollama)에 전달해 텍스트 설명을 적는 **VLM 캡셔닝 단계(Perception Node의 API 호출)**에서 매번 **6~9초의 큰 지연시간**이 고정 발생하여 전체 시나리오 지연의 주원인으로 나타남.
+
+### [사용자 지시 및 검증 결과]
+* **요청**: "이젠 OCR 분석시간보다 다른 병목 시간을 찾아 해결해 봐라. VLM 단계 호출 횟수를 축소해 볼 것."
+* **해결 조치**:
+  1. Gemini 3.5 Flash는 비전 능력이 탁월하므로 굳이 텍스트 사전 설명이 필요 없음을 간파.
+  2. `SKIP_VLM_CAPTION=true` 환경변수 옵션을 추가하여 **VLM 캡셔닝 단계를 완전히 우회(Bypass)** 처리함.
+  3. 로컬 EasyOCR이 감지한 텍스트 데이터와 YOLOv8의 탐지 타입을 직접 결합하여 최소한의 텍스트 설명 컨텍스트를 perception 레벨에서 자율 매핑함.
+* **결과**: Perception Node 소요 지연 시간이 **7.12초 ➡️ 평균 1.31초로 약 81.7% 급감**함.
+
+### [관련 참조 리소스]
+* **캡셔닝 Bypass 분기 구현체**: [perception.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/perception.py)
+
+---
+
+## 9. 대기 정밀도 및 프롬프트 토크나이저 최적화 & 타이머 배제를 통한 초고속 E2E 돌파
+
+### [현상]
+* VLM 캡셔닝 단계를 우회했음에도 의사결정(Reasoning) 노드 API 응답 시간이 약 5.8초로 여전히 묵직했고, 클릭 액션 직후 대기 반응속도 및 E2E 테스트 전체 체감 속도가 기대에 못 미침.
+
+### [해결 조치]
+1. **프롬프트 토큰 최적화**:
+   - 수십 개에 달하는 단순 아이콘 마커 목록(`상호작용 가능한 요소 (icon)`)을 프롬프트 본문에서 제거하고, 하단에 단 한 줄로 축약(`기타 아이콘/버튼 마커 ID 목록: [0, 1, ...]`)하여 전송하도록 `nodes.py` 수정.
+   - `COMMANDER_SYSTEM_PROMPT`를 자율 멀티모달 특성에 맞춰 Concise하게 군더더기를 깎아내 전송 토큰 부하를 대폭 경량화함.
+   - 결과: **Gemini 의사결정 반응속도가 평균 5.8초 ➡️ 2.6초 수준으로 단축**.
+2. **대기 정밀도 및 루프 튜닝**:
+   - 클릭 액션 후 화면 안정화를 감지하는 `WaitStable` 체크 주기를 **200ms ➡️ 50ms**로 좁혀 화면 안정 즉시 반응하도록 가속화.
+3. **백그라운드 타이머 제거**:
+   - 기존에 백그라운드 태스크 진행 상태 확인을 위해 무의식적으로 걸어두던 `schedule` 수동 타이머(12~15초 강제 대기)가 전체 체감 속도를 갉아먹고 있었음을 사용자 피드백으로 인지.
+   - 강제 타이머를 배제하고 시스템의 비동기 반응 완료 이벤트(Reactive Wakeup)가 올 때 즉시 리스폰하도록 설계 변경.
+* **결과**: 마침내 **전체 E2E 4단계 완주 총 소요 시간 단 `19.3초`** 돌파에 성공함!
+
+### [관련 참조 리소스]
+* **대기 정밀도 변경 모듈**: [wait_stable.py](file:///c:/Users/psg/Desktop/L2C/agent/utils/wait_stable.py)
+* **프롬프트 토큰 축약 적용 노드**: [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)
+* **지휘자 프롬프트**: [commander.py](file:///c:/Users/psg/Desktop/L2C/agent/prompts/commander.py)

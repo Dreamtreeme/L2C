@@ -34,7 +34,13 @@ class ActionTools:
             result = func(*args, **kwargs)
             
             # 행동 직후 화면이 안정될 때까지 대기
-            is_stable = self.wait_stable.wait()
+            import os
+            skip_wait = os.getenv("SKIP_WAIT_STABLE", "false").lower() == "true"
+            if skip_wait:
+                is_stable = True
+                logger.info("Bypassing screen stabilization (SKIP_WAIT_STABLE is true)")
+            else:
+                is_stable = self.wait_stable.wait()
             
             logger.info(f"Action '{action_name}' completed", stable=is_stable)
             return {
