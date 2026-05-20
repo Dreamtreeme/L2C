@@ -28,8 +28,8 @@ class WaitStable:
             else:
                 sct_img = self.perception.sct.grab(self.perception.sct.monitors[1])
                 
-            # mss의 raw RGB 바이트를 PIL Image로 변환
-            return Image.frombytes("RGB", sct_img.size, sct_img.rgb)
+            # mss의 raw BGRA 바이트를 BGRX 디코더로 PIL Image로 고속 변환
+            return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
         except Exception as e:
             logger.exception("Failed to capture memory image for stabilization check", error=str(e))
             raise

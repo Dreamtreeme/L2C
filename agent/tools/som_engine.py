@@ -78,22 +78,39 @@ class SomEngine:
         if not image_path.exists():
             raise FileNotFoundError(f"Image not found at: {image_path}")
 
-        logger.info("Starting visual UI parsing using YOLOv8 & EasyOCR...", image_path=str(image_path))
-        
         raw_boxes = []
+
+        # PIL 이미지 로드 및 리사이징 (EasyOCR & YOLOv8의 효율성을 위한 최적화)
+        try:
+            img = Image.open(image_path)
+        except Exception as load_err:
+            logger.error("Failed to load image for processing", error=str(load_err))
+            raise
+
+        original_w, original_h = img.size
+        max_dim = 1280
+        if original_w > max_dim or original_h > max_dim:
+            scale = max_dim / max(original_w, original_h)
+            inference_w = int(original_w * scale)
+            inference_h = int(original_h * scale)
+            # BILINEAR로 빠르게 리사이징
+            inference_img = img.resize((inference_w, inference_h), Image.Resampling.BILINEAR)
+            logger.debug("Resized image for local detection", scale=scale, original=(original_w, original_h), target=(inference_w, inference_h))
+        else:
+            scale = 1.0
+            inference_img = img
 
         # 1. EasyOCR 실행 (텍스트 영역 추출)
         try:
             import numpy as np
-            with Image.open(image_path) as pil_img:
-                img_gray = np.array(pil_img.convert('L'))
+            img_gray = np.array(inference_img.convert('L'))
             ocr_results = self.reader.readtext(img_gray)
             for bbox, text, conf in ocr_results:
                 if conf < 0.2:  # 낮은 신뢰도 패스
                     continue
-                # EasyOCR bbox format: [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
-                xs = [p[0] for p in bbox]
-                ys = [p[1] for p in bbox]
+                # Bounding Box의 각 좌표를 원래 스크린샷 크기로 복원
+                xs = [p[0] / scale for p in bbox]
+                ys = [p[1] / scale for p in bbox]
                 xmin, ymin = min(xs), min(ys)
                 xmax, ymax = max(xs), max(ys)
                 
@@ -110,15 +127,19 @@ class SomEngine:
 
         # 2. YOLOv8 실행 (아이콘/버튼 추출)
         try:
-            yolo_results = self.yolo_model(str(image_path), conf=0.15, verbose=False)
+            # 파일 경로 대신 PIL Image 객체를 전달하여 불필요한 디스크 I/O 제거
+            yolo_results = self.yolo_model(inference_img, conf=0.15, verbose=False)
             yolo_count = 0
             if yolo_results and len(yolo_results) > 0:
                 for box in yolo_results[0].boxes:
                     coords = box.xyxy[0].cpu().numpy().tolist()  # [xmin, ymin, xmax, ymax]
                     conf = float(box.conf.item())
                     
+                    # YOLOv8 검출 좌표를 원래 스크린샷 크기로 복원
+                    coords_scaled = [c / scale for c in coords]
+                    
                     raw_boxes.append({
-                        "bbox": coords,
+                        "bbox": coords_scaled,
                         "type": "icon",
                         "text": "icon",
                         "conf": conf
@@ -128,9 +149,7 @@ class SomEngine:
         except Exception as e:
             logger.error("YOLOv8 inference failed", error=str(e))
 
-        # PIL 이미지 로드는 추론이 완전히 끝난 후에 수행하여 Windows 파일 잠금 방지
-        img = Image.open(image_path)
-        width, height = img.size
+        width, height = original_w, original_h
 
         # 3. 비최대 억제 및 중복 병합 (NMS / Overlap Filter)
         # 영역 넓이 기준으로 내림차순 정렬 (큰 영역이 작은 중복 영역을 덮을 수 있게 함)
