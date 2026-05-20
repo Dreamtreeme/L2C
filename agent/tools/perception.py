@@ -133,7 +133,7 @@ class PerceptionEngine:
         # 1. 로컬 SoM 엔진 실행 (마킹 이미지 합성 및 좌표 추출)
         try:
             marked_filename = f"marked_{image_path.name}"
-            marked_path, marker_coords, marker_bboxes = self.som_engine.process_image(
+            marked_path, marker_coords, marker_bboxes, final_elements = self.som_engine.process_image(
                 image_path, 
                 output_filename=marked_filename
             )
@@ -141,36 +141,42 @@ class PerceptionEngine:
             logger.error("Local SoM processing failed", error=str(som_err))
             return {"markers": [], "original_image": str(image_path)}
 
-        # 2. 마킹된 이미지 로드 및 리사이징 (JPEG 압축 및 VLM 최적화)
-        try:
-            with Image.open(marked_path) as img:
-                width, height = img.size
-                max_dim = 1024
-                
-                # 필요 시 리사이징 진행
-                if width > max_dim or height > max_dim:
-                    ratio = max_dim / max(width, height)
-                    new_w = int(width * ratio)
-                    new_h = int(height * ratio)
-                    resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                else:
-                    resized_img = img.copy()
-                    
-                if resized_img.mode != "RGB":
-                    resized_img = resized_img.convert("RGB")
-                    
-                from io import BytesIO
-                buffered = BytesIO()
-                resized_img.save(buffered, format="JPEG", quality=80)
-                img_bytes = buffered.getvalue()
-                
-            base64_image = base64.b64encode(img_bytes).decode("utf-8")
-        except Exception as img_err:
-            logger.error("Failed to load and resize marked image", error=str(img_err))
-            return {"markers": [], "original_image": str(image_path)}
+        skip_vlm_caption = os.getenv("SKIP_VLM_CAPTION", "true").lower() == "true"
+        elements = []
 
-        # 3. VLM 프롬프트 작성 (ID 매핑 요청 - 토큰 길이 및 속도 최적화 버전)
-        prompt = """
+        if skip_vlm_caption:
+            logger.info("Bypassing VLM captioning node as SKIP_VLM_CAPTION is set to true.")
+        else:
+            # 2. 마킹된 이미지 로드 및 리사이징 (JPEG 압축 및 VLM 최적화)
+            try:
+                with Image.open(marked_path) as img:
+                    width, height = img.size
+                    max_dim = 1024
+                    
+                    # 필요 시 리사이징 진행
+                    if width > max_dim or height > max_dim:
+                        ratio = max_dim / max(width, height)
+                        new_w = int(width * ratio)
+                        new_h = int(height * ratio)
+                        resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    else:
+                        resized_img = img.copy()
+                        
+                    if resized_img.mode != "RGB":
+                        resized_img = resized_img.convert("RGB")
+                        
+                    from io import BytesIO
+                    buffered = BytesIO()
+                    resized_img.save(buffered, format="JPEG", quality=80)
+                    img_bytes = buffered.getvalue()
+                    
+                base64_image = base64.b64encode(img_bytes).decode("utf-8")
+            except Exception as img_err:
+                logger.error("Failed to load and resize marked image", error=str(img_err))
+                return {"markers": [], "original_image": str(image_path)}
+
+            # 3. VLM 프롬프트 작성 (ID 매핑 요청 - 토큰 길이 및 속도 최적화 버전)
+            prompt = """
 Analyze this UI screenshot of a Korean website, which has numbered markers on it (like [0], [1], [2], ...).
 Describe ONLY the most important clickable/interactable elements (e.g. GNB menu items, major buttons, input fields, search results, tabs).
 
@@ -193,103 +199,110 @@ Example output format:
 }
 """
 
-        elements = []
-        api_key = os.getenv("GEMINI_API_KEY")
+            api_key = os.getenv("GEMINI_API_KEY")
 
-        # 4. Gemini 3.5 Flash 호출 시도
-        if api_key:
-            try:
-                logger.info("Captioning UI elements via Gemini 3.5 Flash SoM...")
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
-                payload = {
-                    "contents": [{
-                        "parts": [
-                            {"text": prompt},
-                            {
-                                "inlineData": {
-                                    "mimeType": "image/jpeg",
-                                    "data": base64_image
+            # 4. Gemini 3.5 Flash 호출 시도
+            if api_key:
+                try:
+                    logger.info("Captioning UI elements via Gemini 3.5 Flash SoM...")
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
+                    payload = {
+                        "contents": [{
+                            "parts": [
+                                {"text": prompt},
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/jpeg",
+                                        "data": base64_image
+                                    }
                                 }
-                            }
-                        ]
-                    }],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "temperature": 0.1
-                    }
-                }
-                
-                response = requests.post(url, json=payload, timeout=30)
-                response.raise_for_status()
-                resp_json = response.json()
-                text = resp_json["candidates"][0]["content"]["parts"][0]["text"].strip()
-                
-                data = json.loads(text)
-                elements = data.get("elements", [])
-                logger.info("Gemini SoM captioning completed successfully", elements_count=len(elements))
-            except Exception as gemini_err:
-                logger.warning("Gemini SoM captioning failed, falling back to local Ollama", error=str(gemini_err))
-
-        # 5. 로컬 Ollama (Qwen2.5-VL) Fallback 호출 시도
-        if not elements:
-            logger.info("Captioning UI elements via local Ollama SoM (Fallback)...")
-            try:
-                model_name = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
-                response = requests.post(
-                    "http://localhost:11434/api/generate",
-                    json={
-                        "model": model_name,
-                        "prompt": prompt,
-                        "images": [base64_image],
-                        "stream": False,
-                        "options": {
-                            "num_ctx": 4096,
-                            "num_predict": 1024,
+                            ]
+                        }],
+                        "generationConfig": {
+                            "responseMimeType": "application/json",
                             "temperature": 0.1
                         }
-                    },
-                    timeout=120
-                )
-                response.raise_for_status()
-                response.encoding = 'utf-8'
-                
-                resp_json = response.json()
-                result_text = resp_json.get("response", "").strip()
-                thinking_text = resp_json.get("thinking", "").strip()
-                parse_target = result_text if result_text else thinking_text
-                
-                if parse_target:
-                    clean_target = parse_target
-                    if "```json" in clean_target:
-                        clean_target = clean_target.split("```json")[1].split("```")[0].strip()
-                    elif "```" in clean_target:
-                        clean_target = clean_target.split("```")[1].split("```")[0].strip()
+                    }
                     
-                    try:
-                        parsed = json.loads(clean_target)
-                        if isinstance(parsed, dict) and "elements" in parsed:
-                            elements = parsed["elements"]
-                        elif isinstance(parsed, list):
-                            elements = parsed
-                    except Exception:
-                        pass
-                logger.info("Ollama SoM captioning completed", elements_count=len(elements))
-            except Exception as ollama_err:
-                logger.error("Failed to caption UI elements via Ollama", error=str(ollama_err))
+                    response = requests.post(url, json=payload, timeout=30)
+                    response.raise_for_status()
+                    resp_json = response.json()
+                    text = resp_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    
+                    data = json.loads(text)
+                    elements = data.get("elements", [])
+                    logger.info("Gemini SoM captioning completed successfully", elements_count=len(elements))
+                except Exception as gemini_err:
+                    logger.warning("Gemini SoM captioning failed, falling back to local Ollama", error=str(gemini_err))
+
+            # 5. 로컬 Ollama (Qwen2.5-VL) Fallback 호출 시도
+            if not elements:
+                logger.info("Captioning UI elements via local Ollama SoM (Fallback)...")
+                try:
+                    model_name = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
+                    response = requests.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": model_name,
+                            "prompt": prompt,
+                            "images": [base64_image],
+                            "stream": False,
+                            "options": {
+                                "num_ctx": 4096,
+                                "num_predict": 1024,
+                                "temperature": 0.1
+                            }
+                        },
+                        timeout=120
+                    )
+                    response.raise_for_status()
+                    response.encoding = 'utf-8'
+                    
+                    resp_json = response.json()
+                    result_text = resp_json.get("response", "").strip()
+                    thinking_text = resp_json.get("thinking", "").strip()
+                    parse_target = result_text if result_text else thinking_text
+                    
+                    if parse_target:
+                        clean_target = parse_target
+                        if "```json" in clean_target:
+                            clean_target = clean_target.split("```json")[1].split("```")[0].strip()
+                        elif "```" in clean_target:
+                            clean_target = clean_target.split("```")[1].split("```")[0].strip()
+                        
+                        try:
+                            parsed = json.loads(clean_target)
+                            if isinstance(parsed, dict) and "elements" in parsed:
+                                elements = parsed["elements"]
+                            elif isinstance(parsed, list):
+                                elements = parsed
+                        except Exception:
+                            pass
+                    logger.info("Ollama SoM captioning completed", elements_count=len(elements))
+                except Exception as ollama_err:
+                    logger.error("Failed to caption UI elements via Ollama", error=str(ollama_err))
 
         # 6. 매핑 정보 병합 및 안전한 Fallback 매핑 (VLM 누락 마커 처리)
         id_to_text = {}
-        if elements:
-            for elem in elements:
-                if isinstance(elem, dict) and "id" in elem:
-                    try:
-                        id_to_text[int(elem["id"])] = elem.get("text", "상호작용 가능한 요소")
-                    except ValueError:
-                        continue
+        if skip_vlm_caption:
+            for marker_id, elem in enumerate(final_elements):
+                local_text = elem.get("text", "")
+                elem_type = elem.get("type", "element")
+                if elem_type == "text" and local_text:
+                    id_to_text[marker_id] = local_text
+                else:
+                    id_to_text[marker_id] = f"상호작용 가능한 요소 ({elem_type})"
+        else:
+            if elements:
+                for elem in elements:
+                    if isinstance(elem, dict) and "id" in elem:
+                        try:
+                            id_to_text[int(elem["id"])] = elem.get("text", "상호작용 가능한 요소")
+                        except ValueError:
+                            continue
 
         markers = []
         for marker_id, bbox in marker_bboxes.items():
-            # VLM이 식별하지 못한 마커라도 목록에 유지하여 에이전트가 조작할 수 있게 함
             text = id_to_text.get(marker_id, "상호작용 가능한 요소 (미식별)")
             markers.append({
                 "id": marker_id,

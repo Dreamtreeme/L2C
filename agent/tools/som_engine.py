@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 from PIL import Image, ImageDraw, ImageFont
 import torch
 
@@ -64,7 +64,7 @@ class SomEngine:
             return 0.0
         return (x_right - x_left) * (y_bottom - y_top)
 
-    def process_image(self, image_path: Path, output_filename: str = "marked_screen.png") -> Tuple[Path, Dict[int, List[int]]]:
+    def process_image(self, image_path: Path, output_filename: str = "marked_screen.png") -> Tuple[Path, Dict[int, List[int]], Dict[int, List[int]], List[Dict[str, Any]]]:
         """
         스크린샷 이미지를 분석하여 마킹된 이미지 파일과 좌표 테이블을 생성합니다.
 
@@ -241,4 +241,4 @@ class SomEngine:
             output_path=str(output_path),
             markers_count=len(marker_coords)
         )
-        return output_path, marker_coords, marker_bboxes
+        return output_path, marker_coords, marker_bboxes, final_elements
