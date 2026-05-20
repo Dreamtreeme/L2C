@@ -209,7 +209,13 @@ class SomEngine:
 
         # 마크가 완료된 스크린샷 이미지 저장
         output_path = image_path.parent / output_filename
-        marked_img.save(output_path)
+        if marked_img.mode != "RGB":
+            marked_img = marked_img.convert("RGB")
+            
+        if output_path.suffix.lower() in (".jpg", ".jpeg"):
+            marked_img.save(output_path, "JPEG", quality=85)
+        else:
+            marked_img.save(output_path)
         
         logger.info(
             "Set-of-Marks image synthesized and saved successfully",

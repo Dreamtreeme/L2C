@@ -73,7 +73,7 @@ class PerceptionEngine:
         """
         if not filename:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"screen_{timestamp}.png"
+            filename = f"screen_{timestamp}.jpg"
             
         output_path = self.screenshot_dir / filename
         
@@ -91,7 +91,13 @@ class PerceptionEngine:
                 sct_img = self.sct.grab(monitor)
                 logger.debug("Browser not found, captured full monitor", monitor=monitor)
                 
-            mss.tools.to_png(sct_img.rgb, sct_img.size, output=str(output_path))
+            # Convert to PIL Image and save as compressed JPEG
+            from PIL import Image
+            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+            if output_path.suffix.lower() in (".jpg", ".jpeg"):
+                img.save(str(output_path), "JPEG", quality=80)
+            else:
+                img.save(str(output_path))
             
             logger.info(
                 "Screen captured successfully", 
@@ -135,46 +141,54 @@ class PerceptionEngine:
             logger.error("Local SoM processing failed", error=str(som_err))
             return {"markers": [], "original_image": str(image_path)}
 
-        # 2. 마킹된 이미지 로드 및 리사이징 (VLM 최적화)
+        # 2. 마킹된 이미지 로드 및 리사이징 (JPEG 압축 및 VLM 최적화)
         try:
             with Image.open(marked_path) as img:
                 width, height = img.size
                 max_dim = 1024
+                
+                # 필요 시 리사이징 진행
                 if width > max_dim or height > max_dim:
                     ratio = max_dim / max(width, height)
                     new_w = int(width * ratio)
                     new_h = int(height * ratio)
                     resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                    
-                    from io import BytesIO
-                    buffered = BytesIO()
-                    resized_img.save(buffered, format="PNG")
-                    img_bytes = buffered.getvalue()
                 else:
-                    with open(marked_path, "rb") as f:
-                        img_bytes = f.read()
+                    resized_img = img.copy()
+                    
+                if resized_img.mode != "RGB":
+                    resized_img = resized_img.convert("RGB")
+                    
+                from io import BytesIO
+                buffered = BytesIO()
+                resized_img.save(buffered, format="JPEG", quality=80)
+                img_bytes = buffered.getvalue()
+                
             base64_image = base64.b64encode(img_bytes).decode("utf-8")
         except Exception as img_err:
             logger.error("Failed to load and resize marked image", error=str(img_err))
             return {"markers": [], "original_image": str(image_path)}
 
-        # 3. VLM 프롬프트 작성 (ID 매핑 요청)
+        # 3. VLM 프롬프트 작성 (ID 매핑 요청 - 토큰 길이 및 속도 최적화 버전)
         prompt = """
 Analyze this UI screenshot of a Korean website, which has numbered markers on it (like [0], [1], [2], ...).
-Describe the clickable/interactable elements that correspond to each visible marker number.
-Focus on identifying what each marker ID represents (e.g., "검색창", "구글 로그인", "데이터 분석가 채용 공고", "돋보기 아이콘").
-Only include markers that you can clearly see and identify.
+Describe ONLY the most important clickable/interactable elements (e.g. GNB menu items, major buttons, input fields, search results, tabs).
+
+Optimization rules:
+1. Focus ONLY on interactive/clickable elements. Ignore background static texts, tiny decorations, or unidentifiable symbols.
+2. Keep descriptions extremely short and concise (e.g., 2-4 words maximum, like "검색창", "구글 로그인", "데이터 분석가 채용").
+3. Limit the response to at most 35-40 of the most significant elements to keep it compact.
 
 You MUST return a single JSON object with the key "elements".
 Each object in the "elements" array must have:
 - "id": integer corresponding to the marker number in the image
-- "text": name or description of the element (e.g. "구글 로그인 버튼")
+- "text": short description of the element (e.g. "구글 로그인")
 
 Example output format:
 {
   "elements": [
-    {"id": 0, "text": "검색창 입력란"},
-    {"id": 1, "text": "회원가입 버튼"}
+    {"id": 0, "text": "검색창"},
+    {"id": 1, "text": "회원가입"}
   ]
 }
 """
@@ -193,7 +207,7 @@ Example output format:
                             {"text": prompt},
                             {
                                 "inlineData": {
-                                    "mimeType": "image/png",
+                                    "mimeType": "image/jpeg",
                                     "data": base64_image
                                 }
                             }
