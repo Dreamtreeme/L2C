@@ -103,6 +103,7 @@ def main():
         "error_count": 0,
         "is_finished": False,
         "collected_data": [],
+        "extracted_jd": {},
         "last_action_result": None
     }
     
@@ -112,7 +113,7 @@ def main():
         os.environ["SKIP_VLM_CAPTION"] = "true"
         os.environ["SKIP_WAIT_STABLE"] = "true"
         
-        for output in app.stream(initial_state, {"recursion_limit": 20}):
+        for output in app.stream(initial_state, {"recursion_limit": 30}):
             for key, value in output.items():
                 if key == "action":
                     if "is_finished" in value and value["is_finished"]:

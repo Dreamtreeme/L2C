@@ -34,6 +34,7 @@ def main():
         "error_count": 0,
         "is_finished": False,
         "collected_data": [],
+        "extracted_jd": {},
         "last_action_result": None
     }
     

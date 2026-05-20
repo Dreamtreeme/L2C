@@ -34,5 +34,8 @@ class GraphState(TypedDict):
     # 수집 완료된 데이터
     collected_data: List[Any]
 
+    # 현재까지 누적 수집된 채용공고 정보 (스크롤 간 정보 보존용)
+    extracted_jd: Dict[str, Any]
+
     # 가장 최근 LLM의 판단 결과 저장 (AIMessage 객체 등)
     last_action_result: Any

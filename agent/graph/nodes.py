@@ -44,6 +44,10 @@ class get_credentials(BaseModel):
     """특정 사이트(예: 'wanted')의 ID/PW를 보안 저장소에서 가져와 반환합니다. 로그인 폼이 보일 때 호출하세요."""
     site: str = Field(..., description="자격 증명을 가져올 사이트 식별자 (예: 'wanted')")
 
+class update_extracted_info(BaseModel):
+    """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 누적 업데이트합니다. 스크롤하면서 새로운 정보를 찾을 때마다 이 도구를 호출하여 정보를 보존해 두세요. (예: {'회사명': '로이드케이', '주요업무': ['A', 'B']} 형태의 JSON 문자열)"""
+    data_json: str = Field(..., description="업데이트할 정보 키-값 딕셔너리의 JSON 문자열")
+
 class finish_task(BaseModel):
     """작업을 완료하고 최종 데이터를 반환합니다."""
     result: str = Field(..., description="최종 완료 요약 또는 결과 데이터")
@@ -100,6 +104,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         press_key,
         open_browser,
         get_credentials,
+        update_extracted_info,
         finish_task
     ])
     
@@ -133,7 +138,14 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
                     error_increment = 1
                     
     system_prompt_text = COMMANDER_SYSTEM_PROMPT.format(goal=state.get("goal", ""))
-    human_prompt_text = f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n이전 행동 내역:\n{json.dumps(action_history[-5:], ensure_ascii=False, indent=2)}\n\n다음 행동을 결정하세요."
+    extracted_jd = state.get("extracted_jd", {})
+    human_prompt_text = (
+        f"현재까지 누적 수집된 정보:\n{json.dumps(extracted_jd, ensure_ascii=False, indent=2)}\n\n"
+        f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
+        f"이전 행동 내역:\n{json.dumps(action_history[-5:], ensure_ascii=False, indent=2)}\n\n"
+        f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
+        f"화면이 잘려 더 내려가야 한다면 scroll을, 모든 정보가 누적 완료되어 수집이 완전히 끝났다면 finish_task를 부르세요."
+    )
     
     # 마킹 이미지 로드 및 Base64 인코딩
     marked_image_path = state.get("marked_image")
@@ -207,6 +219,25 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             result = action_tools.open_browser(args["url"])
         elif action_name == "get_credentials":
             result = action_tools.get_credentials(args["site"])
+        elif action_name == "update_extracted_info":
+            current_jd = dict(state.get("extracted_jd", {}))
+            try:
+                new_data = json.loads(args["data_json"])
+                current_jd.update(new_data)
+                result_str = f"Extracted data updated with: {new_data}"
+            except Exception as e:
+                result_str = f"Failed to parse data_json: {e}"
+            
+            result = {
+                "action": "update_extracted_info",
+                "status": "success" if "Failed" not in result_str else "error",
+                "result": result_str,
+                "args": args
+            }
+            return {
+                "action_history": [result],
+                "extracted_jd": current_jd
+            }
         elif action_name == "finish_task":
             result = action_tools.finish_task(args["result"])
             result["args"] = args
