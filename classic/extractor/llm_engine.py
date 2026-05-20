@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import logging
 import re
@@ -26,8 +27,12 @@ logger = logging.getLogger(__name__)
 
 class LLMEngine:
     def __init__(self):
-        self._client = ollama.Client(host=OLLAMA_HOST)
-        self._ensure_model(OLLAMA_MODEL)
+        self.use_gemini = bool(os.getenv("GEMINI_API_KEY"))
+        if not self.use_gemini:
+            self._client = ollama.Client(host=OLLAMA_HOST)
+            self._ensure_model(OLLAMA_MODEL)
+        else:
+            logger.info("GEMINI_API_KEY detected. LLMEngine will use Gemini 3.5 Flash.")
 
     def _ensure_model(self, model_name: str):
         try:
@@ -57,6 +62,29 @@ class LLMEngine:
             return {}
 
         prompt = EXTRACTION_PROMPT.format(text=text)
+
+        if getattr(self, "use_gemini", False):
+            logger.info("[LLMEngine] 텍스트 정제 시작 (모델: gemini-3.5-flash)")
+            t0 = time.time()
+            try:
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=LLM_TEMPERATURE)
+                response = llm.invoke(prompt)
+                output = response.content
+                if isinstance(output, list):
+                    output = "\n".join(item if isinstance(item, str) else item.get("text", "") if isinstance(item, dict) else str(item) for item in output)
+                elapsed = time.time() - t0
+                logger.info(f"[LLMEngine] Gemini 정제 완료 ({elapsed:.1f}s)")
+                logger.debug(f"LLM 원본 응답: {output[:300]}")
+                parsed = self._parse_json(output)
+                return self._validate(parsed)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                logger.warning(f"Gemini extraction failed: {e}. Falling back to Ollama.")
+                self.use_gemini = False
+                self._client = ollama.Client(host=OLLAMA_HOST)
+                self._ensure_model(OLLAMA_MODEL)
 
         # Qwen3 thinking 모드 비활성화 토큰.
         # user message 끝에 /no_think를 두면 Qwen3가 <think>...</think> 추론

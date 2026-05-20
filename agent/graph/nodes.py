@@ -1,7 +1,8 @@
 import os
 import json
 import base64
-from typing import Dict, Any
+import time
+from typing import Dict, Any, List, Optional
 
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -30,7 +31,6 @@ class type_in_marker(BaseModel):
 class scroll(BaseModel):
     """화면을 스크롤합니다."""
     direction: str = Field("down", description="스크롤 방향 ('down' 또는 'up')")
-    clicks: int = Field(500, description="스크롤 양 (숫자)")
 
 class press_key(BaseModel):
     """엔터, ESC 등 특수키를 누릅니다."""
@@ -48,21 +48,50 @@ class update_extracted_info(BaseModel):
     """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 누적 업데이트합니다. 스크롤하면서 새로운 정보를 찾을 때마다 이 도구를 호출하여 정보를 보존해 두세요. (예: {'회사명': '로이드케이', '주요업무': ['A', 'B']} 형태의 JSON 문자열)"""
     data_json: str = Field(..., description="업데이트할 정보 키-값 딕셔너리의 JSON 문자열")
 
+class go_back(BaseModel):
+    """브라우저의 뒤로가기(이전 페이지 이동) 기능을 실행합니다. Alt + Left Arrow 단축키를 시뮬레이션합니다."""
+    pass
+
+class update_plan_progress(BaseModel):
+    """현재 실행 중인 계획 단계를 업데이트하거나 필요시 계획을 수정합니다."""
+    current_step: int = Field(..., description="수행 중인 계획 단계 인덱스 (0-indexed)")
+    plan: Optional[List[str]] = Field(None, description="수정된 계획 단계 목록 (필요한 경우)")
+
 class finish_task(BaseModel):
     """작업을 완료하고 최종 데이터를 반환합니다."""
     result: str = Field(..., description="최종 완료 요약 또는 결과 데이터")
 
+
 def perception_node(state: GraphState) -> Dict[str, Any]:
     """화면을 캡처하고 마커를 파싱하여 상태를 업데이트합니다."""
+    start_time = time.time()
     logger.info("Executing Perception Node")
     
     # 화면 캡처
     image_path = perception.capture_screen()
     
-    # UI 분석
     analysis = perception.analyze_ui(image_path)
     markers = analysis.get("markers", [])
     marked_image = analysis.get("marked_image", "")
+    
+    # 우측 스크롤바 영역 마커 필터링 (우측 끝 35픽셀 이내 제거)
+    from PIL import Image
+    try:
+        with Image.open(image_path) as img:
+            img_width, _ = img.size
+    except Exception as e:
+        logger.error(f"Failed to open screenshot to get dimensions: {e}")
+        img_width = 1929
+        
+    filtered_markers = []
+    for m in markers:
+        bbox = m.get("bbox", [0, 0, 0, 0])
+        x_center = (bbox[0] + bbox[2]) // 2
+        if x_center >= img_width - 65:
+            logger.info(f"Filtering out scrollbar marker: ID {m.get('id')}, bbox {bbox}, text {m.get('text')}")
+            continue
+        filtered_markers.append(m)
+    markers = filtered_markers
     
     # 텍스트가 있는 요소와 없는 요소를 구분하여 프롬프트 토큰 최적화 (지연 시간 절감)
     text_elements = []
@@ -82,31 +111,37 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     if not ui_context:
         ui_context = "발견된 UI 마커 없음"
     
+    elapsed = time.time() - start_time
+    logger.info(f"Perception Node completed in {elapsed:.2f} seconds")
     return {
         "recent_images": [image_path],
         "marked_image": marked_image,
         "current_markers": markers,
-        "ui_context": ui_context
+        "ui_context": ui_context,
+        "step_durations": [{"node": "perception", "duration": elapsed}]
     }
+
+
+# 글로벌 모델 초기화로 커넥션 풀링 유지 (TCP/SSL 핸드셰이크 레이턴시 절감)
+llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
+llm_with_tools = llm.bind_tools([
+    click_marker,
+    type_in_marker,
+    scroll,
+    press_key,
+    open_browser,
+    get_credentials,
+    update_extracted_info,
+    go_back,
+    update_plan_progress,
+    finish_task
+])
+
 
 def reasoning_node(state: GraphState) -> Dict[str, Any]:
     """Gemini Flash를 호출하여 다음 행동을 결정합니다."""
+    start_time = time.time()
     logger.info("Executing Reasoning Node")
-    
-    # 모델 초기화 (API 키는 환경변수 GEMINI_API_KEY 또는 GOOGLE_API_KEY에서 자동 로드됨)
-    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
-    
-    # Pydantic 클래스 직접 바인딩 (LangChain Google GenAI 규격 준수)
-    llm_with_tools = llm.bind_tools([
-        click_marker,
-        type_in_marker,
-        scroll,
-        press_key,
-        open_browser,
-        get_credentials,
-        update_extracted_info,
-        finish_task
-    ])
     
     # 루프 감지 로직
     action_history = state.get("action_history", [])
@@ -137,25 +172,53 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
                     logger.error("Persistent loop detected. Increasing error count to terminate.")
                     error_increment = 1
                     
+    plan = state.get("plan", [])
+    current_plan_step = state.get("current_plan_step", 0)
+    plan_context = ""
+    if plan:
+        plan_context = "현재 수립된 세부 계획 단계:\n"
+        for i, step in enumerate(plan):
+            marker = "➡️" if i == current_plan_step else " "
+            plan_context += f"  {marker} {i+1}. {step}\n"
+        plan_context += f"(현재 단계: {current_plan_step + 1}번째 소목표 실행 중)\n\n"
+
     system_prompt_text = COMMANDER_SYSTEM_PROMPT.format(goal=state.get("goal", ""))
     extracted_jd = state.get("extracted_jd", {})
     human_prompt_text = (
+        f"{plan_context}"
         f"현재까지 누적 수집된 정보:\n{json.dumps(extracted_jd, ensure_ascii=False, indent=2)}\n\n"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"이전 행동 내역:\n{json.dumps(action_history[-5:], ensure_ascii=False, indent=2)}\n\n"
         f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
-        f"화면이 잘려 더 내려가야 한다면 scroll을, 모든 정보가 누적 완료되어 수집이 완전히 끝났다면 finish_task를 부르세요."
+        f"계획 단계 전환이 일어났다면 update_plan_progress를 함께 체이닝 호출하여 계획 진행률을 반영하십시오."
     )
     
-    # 마킹 이미지 로드 및 Base64 인코딩
+    # 마킹 이미지 로드 및 Base64 인코딩 (VLM 리사이징 & JPEG 압축 최적화)
     marked_image_path = state.get("marked_image")
     base64_image = ""
     if marked_image_path and os.path.exists(marked_image_path):
         try:
-            with open(marked_image_path, "rb") as f:
-                base64_image = base64.b64encode(f.read()).decode("utf-8")
+            from PIL import Image
+            from io import BytesIO
+            with Image.open(marked_image_path) as img:
+                # VLM 최적화를 위해 최대 해상도를 1024px로 축소 (Gemini 3.5 Flash 권장 사양)
+                width, height = img.size
+                max_dim = 1024
+                if width > max_dim or height > max_dim:
+                    ratio = max_dim / max(width, height)
+                    new_w = int(width * ratio)
+                    new_h = int(height * ratio)
+                    # 고품질 LANCZOS 대신 속도가 빠른 BILINEAR로 고속 리사이징
+                    img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+                
+                # PNG 대신 압축률이 높은 JPEG(퀄리티 70)로 변환하여 페이로드 크기 75% 이상 감축
+                buffered = BytesIO()
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(buffered, format="JPEG", quality=70)
+                base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
         except Exception as img_err:
-            logger.warning("Failed to read marked_image for reasoning node", error=str(img_err))
+            logger.warning("Failed to read/resize marked_image for reasoning node", error=str(img_err))
             
     if base64_image:
         logger.info("Invoking reasoning node with multimodal SoM marked image...")
@@ -163,7 +226,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
             SystemMessage(content=system_prompt_text),
             HumanMessage(content=[
                 {"type": "text", "text": human_prompt_text},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
             ])
         ]
     else:
@@ -176,28 +239,46 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
     # LLM 추론
     response = llm_with_tools.invoke(messages)
     
+    elapsed = time.time() - start_time
+    logger.info(f"Reasoning Node completed in {elapsed:.2f} seconds")
+    
     # 결과를 State에 임시 저장 및 에러 카운트 업데이트
-    result = {"last_action_result": response}
+    result = {
+        "last_action_result": response,
+        "step_durations": [{"node": "reasoning", "duration": elapsed}]
+    }
     if error_increment > 0:
         result["error_count"] = state.get("error_count", 0) + error_increment
         
     return result
 
+
 def action_node(state: GraphState) -> Dict[str, Any]:
-    """Reasoning Node가 선택한 도구를 실제로 실행합니다."""
-    logger.info("Executing Action Node")
+    """Reasoning Node가 선택한 도구(들)를 순차적으로 실행(Action Chaining)합니다."""
+    start_time = time.time()
+    logger.info("Executing Action Node (with potential Action Chaining)")
     
     ai_msg: AIMessage = state.get("last_action_result")
     
+    if ai_msg and hasattr(ai_msg, "content") and ai_msg.content:
+        logger.info(f"LLM Thoughts: {ai_msg.content}")
+        
     if not ai_msg or not hasattr(ai_msg, "tool_calls") or not ai_msg.tool_calls:
         logger.warning("LLM did not return a tool call.")
-        return {"action_history": [{"action": "none", "status": "error", "error": "No tool call", "args": {}}]}
+        elapsed = time.time() - start_time
+        return {
+            "action_history": [{"action": "none", "status": "error", "error": "No tool call", "args": {}}],
+            "step_durations": [{"node": "action", "duration": elapsed}]
+        }
         
-    tool_call = ai_msg.tool_calls[0]
-    action_name = tool_call["name"]
-    args = tool_call["args"]
-    
-    logger.info(f"LLM decided to call: {action_name} with args: {args}")
+    new_actions = []
+    current_jd = dict(state.get("extracted_jd", {}))
+    is_finished = state.get("is_finished", False)
+    collected_data = list(state.get("collected_data", []))
+    error_count = state.get("error_count", 0)
+    step_durations = []
+    current_plan_step = state.get("current_plan_step", 0)
+    current_plan = list(state.get("plan", []))
     
     # 헬퍼 함수: marker_id -> bbox 매핑
     def get_bbox(marker_id: int):
@@ -205,51 +286,91 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             if m["id"] == marker_id:
                 return m["bbox"]
         raise ValueError(f"Marker ID {marker_id} not found in current screen.")
-    
-    try:
-        if action_name == "click_marker":
-            result = action_tools.click_marker(get_bbox(args["marker_id"]))
-        elif action_name == "type_in_marker":
-            result = action_tools.type_in_marker(get_bbox(args["marker_id"]), args["text"])
-        elif action_name == "scroll":
-            result = action_tools.scroll(direction=args.get("direction", "down"), clicks=args.get("clicks", 500))
-        elif action_name == "press_key":
-            result = action_tools.press_key(args["key"])
-        elif action_name == "open_browser":
-            result = action_tools.open_browser(args["url"])
-        elif action_name == "get_credentials":
-            result = action_tools.get_credentials(args["site"])
-        elif action_name == "update_extracted_info":
-            current_jd = dict(state.get("extracted_jd", {}))
-            try:
-                new_data = json.loads(args["data_json"])
-                current_jd.update(new_data)
-                result_str = f"Extracted data updated with: {new_data}"
-            except Exception as e:
-                result_str = f"Failed to parse data_json: {e}"
-            
-            result = {
-                "action": "update_extracted_info",
-                "status": "success" if "Failed" not in result_str else "error",
-                "result": result_str,
-                "args": args
-            }
-            return {
-                "action_history": [result],
-                "extracted_jd": current_jd
-            }
-        elif action_name == "finish_task":
-            result = action_tools.finish_task(args["result"])
+        
+    for idx, tool_call in enumerate(ai_msg.tool_calls):
+        action_name = tool_call["name"]
+        args = tool_call["args"]
+        
+        logger.info(f"LLM decided to call (chained {idx+1}/{len(ai_msg.tool_calls)}): {action_name} with args: {args}")
+        step_start = time.time()
+        
+        try:
+            if action_name == "click_marker":
+                result = action_tools.click_marker(get_bbox(args["marker_id"]))
+            elif action_name == "type_in_marker":
+                result = action_tools.type_in_marker(get_bbox(args["marker_id"]), args["text"])
+            elif action_name == "scroll":
+                result = action_tools.scroll(direction=args.get("direction", "down"))
+            elif action_name == "press_key":
+                result = action_tools.press_key(args["key"])
+            elif action_name == "open_browser":
+                result = action_tools.open_browser(args["url"])
+            elif action_name == "get_credentials":
+                result = action_tools.get_credentials(args["site"])
+            elif action_name == "go_back":
+                result = action_tools.go_back()
+            elif action_name == "update_plan_progress":
+                current_plan_step = args["current_step"]
+                if args.get("plan") is not None:
+                    current_plan = args["plan"]
+                result = {
+                    "action": "update_plan_progress",
+                    "status": "success",
+                    "result": f"Plan progress updated. Current step index: {current_plan_step}",
+                    "args": args
+                }
+            elif action_name == "update_extracted_info":
+                try:
+                    new_data = json.loads(args["data_json"])
+                    current_jd.update(new_data)
+                    result_str = f"Extracted data updated with: {new_data}"
+                except Exception as e:
+                    result_str = f"Failed to parse data_json: {e}"
+                
+                result = {
+                    "action": "update_extracted_info",
+                    "status": "success" if "Failed" not in result_str else "error",
+                    "result": result_str,
+                    "args": args
+                }
+            elif action_name == "finish_task":
+                result = action_tools.finish_task(args["result"])
+                result["args"] = args
+                is_finished = True
+                collected_data.append(args["result"])
+            else:
+                raise ValueError(f"Unknown tool: {action_name}")
+                
             result["args"] = args
-            return {"action_history": [result], "is_finished": True, "collected_data": [args["result"]]}
-        else:
-            raise ValueError(f"Unknown tool: {action_name}")
+            new_actions.append(result)
             
-        result["args"] = args
-        return {"action_history": [result]}
-    except Exception as e:
-        logger.error(f"Failed to execute action {action_name}", error=str(e))
-        return {
-            "action_history": [{"action": action_name, "status": "error", "error": str(e), "args": args}], 
-            "error_count": state.get("error_count", 0) + 1
-        }
+            step_elapsed = time.time() - step_start
+            step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
+            logger.info(f"Action Node [{action_name}] completed in {step_elapsed:.2f} seconds")
+            
+            if is_finished:
+                break
+                
+        except Exception as e:
+            logger.error(f"Failed to execute action {action_name}", error=str(e))
+            step_elapsed = time.time() - step_start
+            new_actions.append({"action": action_name, "status": "error", "error": str(e), "args": args})
+            error_count += 1
+            step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
+            # 에러 발생 시 도구 체인 중단
+            break
+            
+    # 전체 완료 로그
+    total_elapsed = time.time() - start_time
+    logger.info(f"Action Node completed all chained tools in {total_elapsed:.2f} seconds")
+    
+    return {
+        "action_history": new_actions,
+        "extracted_jd": current_jd,
+        "is_finished": is_finished,
+        "collected_data": collected_data,
+        "error_count": error_count,
+        "step_durations": step_durations,
+        "plan": current_plan,
+        "current_plan_step": current_plan_step
+    }

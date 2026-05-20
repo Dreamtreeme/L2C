@@ -25,10 +25,8 @@ class SomEngine:
         logger.info("Loading local YOLOv8 OmniParser model...", model_path=str(self.model_path))
         self.yolo_model = YOLO(str(self.model_path))
         
-        # 2. EasyOCR 로딩 (한국어, 영어 지원)
-        logger.info("Initializing EasyOCR with CUDA support...")
-        import easyocr
-        self.reader = easyocr.Reader(['ko', 'en'], gpu=torch.cuda.is_available())
+        # 2. PaddleOCR 로딩 알림 (서브프로세스 격리 구동)
+        logger.info("SomEngine will invoke PaddleOCR (GPU/Isolated Subprocess) for text detection.")
         logger.info("SomEngine initialization complete.")
 
     def _ensure_model_downloaded(self):
@@ -100,30 +98,49 @@ class SomEngine:
             scale = 1.0
             inference_img = img
 
-        # 1. EasyOCR 실행 (텍스트 영역 추출)
+        # 1. PaddleOCR 실행 (서브프로세스 격리 구동)
         try:
-            import numpy as np
-            img_gray = np.array(inference_img.convert('L'))
-            ocr_results = self.reader.readtext(img_gray)
-            for bbox, text, conf in ocr_results:
-                if conf < 0.2:  # 낮은 신뢰도 패스
+            import subprocess
+            import json
+            import sys
+            
+            runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
+            logger.debug("Invoking PaddleOCR runner", script=str(runner_script), image=str(image_path))
+            
+            res = subprocess.run(
+                [sys.executable, str(runner_script), str(image_path)],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            
+            output_str = res.stdout.strip()
+            marker = "__OCR_JSON_START__"
+            if marker in output_str:
+                json_str = output_str.split(marker)[-1].strip()
+                ocr_results = json.loads(json_str) if json_str else []
+            else:
+                logger.warning("OCR JSON marker not found in output", output=output_str)
+                ocr_results = []
+            for item in ocr_results:
+                text = item["text"]
+                conf = item["confidence"]
+                bbox = item["bbox"]  # [xmin, ymin, xmax, ymax]
+                
+                if conf < 0.2:
                     continue
-                # Bounding Box의 각 좌표를 원래 스크린샷 크기로 복원
-                xs = [p[0] / scale for p in bbox]
-                ys = [p[1] / scale for p in bbox]
-                xmin, ymin = min(xs), min(ys)
-                xmax, ymax = max(xs), max(ys)
                 
                 raw_boxes.append({
-                    "bbox": [float(xmin), float(ymin), float(xmax), float(ymax)],
+                    "bbox": bbox,
                     "type": "text",
                     "text": text,
-                    "conf": float(conf)
+                    "conf": conf
                 })
-            logger.debug("EasyOCR element detection complete", count=len(ocr_results))
+            logger.debug("PaddleOCR element detection complete", count=len(ocr_results))
         except Exception as e:
             import traceback
-            logger.error("EasyOCR inference failed", error=str(e), traceback=traceback.format_exc())
+            logger.error("PaddleOCR inference failed", error=str(e), traceback=traceback.format_exc())
 
         # 2. YOLOv8 실행 (아이콘/버튼 추출)
         try:

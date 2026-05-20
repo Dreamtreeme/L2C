@@ -30,7 +30,7 @@ class WantedAdapter(SiteAdapter):
         # 1. 필수 요소가 나타날 때까지 대기 (최대 10초)
         try:
             page.wait_for_selector(
-                "section.JobHeader_className__W_7n9", timeout=10000
+                "section.JobHeader_className__W_7n9, section.JobContent_descriptionWrapper__RMlfm, article.JobDescription_JobDescription__s2Keo", timeout=10000
             )
         except Exception:
             logger.warning("[wanted] 필수 섹션 로딩 대기 시간 초과")
@@ -47,6 +47,8 @@ class WantedAdapter(SiteAdapter):
 
         # 3. 본문 컨테이너 (사이트 특정 클래스 → 키워드 → 시맨틱 폴백)
         content_locator = page.locator(
+            "section.JobContent_descriptionWrapper__RMlfm, "
+            "article.JobDescription_JobDescription__s2Keo, "
             "div.JobDescription_JobDescription__b9_L3, "
             ".JobDescription_JobDescription__b9_L3, "
             "section.job-description"
@@ -69,10 +71,10 @@ class WantedAdapter(SiteAdapter):
 
         # 4. 메타 (LLM이 놓쳤을 때 폴백용)
         dom_data["company_name"] = get_inner_text_safe(
-            page.locator("section.JobHeader_className__W_7n9 h4, h4").first
+            page.locator("section.JobHeader_className__W_7n9 h4, h4, .CompanyInfo_CompanyInfo__name__sBeI6, strong.CompanyInfo_CompanyInfo__name__sBeI6").first
         )
         dom_data["position"] = get_inner_text_safe(
-            page.locator("section.JobHeader_className__W_7n9 h2, h2").first
+            page.locator("section.JobHeader_className__W_7n9 h2, h2, h2.wds-16rl0sf").first
         )
 
         return dom_data

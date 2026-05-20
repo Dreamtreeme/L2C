@@ -39,3 +39,9 @@ class GraphState(TypedDict):
 
     # 가장 최근 LLM의 판단 결과 저장 (AIMessage 객체 등)
     last_action_result: Any
+
+    # 대목표 아래 소목표 계획 목록
+    plan: List[str]
+
+    # 현재 실행 중인 계획 단계 인덱스
+    current_plan_step: int

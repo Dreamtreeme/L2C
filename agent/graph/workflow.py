@@ -30,7 +30,7 @@ def build_graph():
     workflow.add_node("action", action_node)
     
     # 3. 엣지 연결 (흐름 정의)
-    # 시작 시 reasoning으로 이동하여 필요시 브라우저부터 켜도록 유도
+    # 시작 시 빈 계획 상태로 reasoning 노드로 진입하여 동적 계획 수립 유도
     workflow.add_edge(START, "reasoning")
     
     # perception 완료 후 reasoning으로 이동

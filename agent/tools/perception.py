@@ -25,6 +25,9 @@ class PerceptionEngine:
         self.screenshot_dir = SCREENSHOT_DIR
         self.sct = mss.mss()
         self.som_engine = SomEngine()
+        self.scale_x = 1.0
+        self.scale_y = 1.0
+        self.last_region = None
         logger.info("PerceptionEngine initialized with SomEngine", screenshot_dir=str(self.screenshot_dir))
 
     def _get_browser_region(self) -> Optional[Dict[str, int]]:
@@ -84,11 +87,22 @@ class PerceptionEngine:
             if region:
                 # 브라우저만 캡처
                 sct_img = self.sct.grab(region)
-                logger.debug("Captured browser window only", region=region)
+                self.scale_x = sct_img.width / region["width"]
+                self.scale_y = sct_img.height / region["height"]
+                self.last_region = region
+                logger.debug("Captured browser window only", region=region, scale_x=self.scale_x, scale_y=self.scale_y)
             else:
                 # 브라우저를 못 찾으면 모니터 1번 (주 모니터) 전체 캡처
                 monitor = self.sct.monitors[1]
                 sct_img = self.sct.grab(monitor)
+                self.scale_x = 1.0
+                self.scale_y = 1.0
+                self.last_region = {
+                    "top": monitor["top"],
+                    "left": monitor["left"],
+                    "width": monitor["width"],
+                    "height": monitor["height"]
+                }
                 logger.debug("Browser not found, captured full monitor", monitor=monitor)
                 
             # Convert to PIL Image and save as compressed JPEG

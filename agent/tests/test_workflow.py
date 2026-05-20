@@ -35,22 +35,38 @@ def main():
         "is_finished": False,
         "collected_data": [],
         "extracted_jd": {},
-        "last_action_result": None
+        "last_action_result": None,
+        "plan": [],
+        "current_plan_step": 0
     }
+    
+    import time
     
     logger.info("--- WORKFLOW START ---", goal=initial_state["goal"])
     
-    # LangGraph 실행 (스트리밍 방식으로 노드별 진행 상황 모니터링)
-    # 현재 OmniParser가 Mock 상태이므로, 에이전트가 "검색창"을 보고 어떻게 행동하는지 테스트합니다.
+    step_logs = []
+    last_time = time.time()
+    total_start = last_time
+    
     try:
-        for output in app.stream(initial_state, {"recursion_limit": 30}):
+        # LangGraph 실행 (스트리밍 방식으로 노드별 진행 상황 모니터링, 재귀 한도 150)
+        for output in app.stream(initial_state, {"recursion_limit": 150}):
             for key, value in output.items():
-                logger.info(f"Node [{key}] completed.")
+                now = time.time()
+                elapsed = now - last_time
+                last_time = now
+                
+                step_logs.append({
+                    "node": key,
+                    "duration": elapsed,
+                    "timestamp": now - total_start
+                })
+                logger.info(f"Node [{key}] completed in {elapsed:.2f}s (Total: {now - total_start:.2f}s)")
                 
                 # Perception 노드 결과
                 if key == "perception":
                     logger.info("Perception extracted UI context:")
-                    print(value.get("ui_context", ""))
+                    logger.info(value.get("ui_context", ""))
                     
                 # Action 노드 결과
                 if key == "action":
@@ -60,7 +76,16 @@ def main():
                         
     except Exception as e:
         logger.error("Workflow failed with exception", error=str(e))
-                
+        
+    print("\n" + "="*70)
+    print("                E2E WORKFLOW STEP DURATION REPORT")
+    print("="*70)
+    print(f"{'Step #':<8}{'Node Name':<15}{'Duration (s)':<15}{'Cumulative (s)':<15}")
+    print("-"*70)
+    for idx, log in enumerate(step_logs, 1):
+        print(f"{idx:<8}{log['node']:<15}{log['duration']:>11.2f}s  {log['timestamp']:>12.2f}s")
+    print("="*70 + "\n")
+    
     logger.info("--- WORKFLOW END ---")
     
 if __name__ == "__main__":

@@ -70,8 +70,15 @@ class ActionTools:
         x_center_relative = (bbox[0] + bbox[2]) // 2
         y_center_relative = (bbox[1] + bbox[3]) // 2
         
-        x_absolute = region["left"] + x_center_relative
-        y_absolute = region["top"] + y_center_relative
+        # 고해상도 DPI 화면 대응을 위한 논리 좌표 -> 물리 좌표 스케일링 적용
+        scale_x = getattr(self.perception, "scale_x", 1.0)
+        scale_y = getattr(self.perception, "scale_y", 1.0)
+        
+        x_absolute = int(region["left"] * scale_x) + x_center_relative
+        y_absolute = int(region["top"] * scale_y) + y_center_relative
+        
+        logger.info(f"DPI scaled absolute coords: logical_left={region['left']}, scale_x={scale_x:.2f}, relative_x={x_center_relative} => absolute_x={x_absolute}")
+        logger.info(f"DPI scaled absolute coords: logical_top={region['top']}, scale_y={scale_y:.2f}, relative_y={y_center_relative} => absolute_y={y_absolute}")
         
         return x_absolute, y_absolute
 
@@ -79,23 +86,7 @@ class ActionTools:
         """마커(UI 요소)의 중앙을 클릭합니다."""
         def _click():
             x, y = self._get_absolute_coords(bbox)
-            
-            # 브라우저 창 활성화 여부 확인
-            try:
-                active_win = gw.getActiveWindow()
-                keywords = ["Chrome", "Edge", "Whale", "크롬", "엣지", "웨일"]
-                is_browser_active = active_win and any(k in active_win.title for k in keywords)
-            except Exception:
-                is_browser_active = False
-                
             pyautogui.moveTo(x, y, duration=0.2)
-            
-            # 활성화되어 있지 않다면 1차 포커스용 클릭 실행 후 약간 대기
-            if not is_browser_active:
-                logger.info("Browser window not active, performing focus click first")
-                pyautogui.click()
-                time.sleep(0.15)
-                
             pyautogui.click()
             return f"Clicked at ({x}, {y})"
             
@@ -105,23 +96,7 @@ class ActionTools:
         """마커를 클릭한 후, 기존 텍스트를 지우고 pyperclip을 통해 안전하게 한글/영문 텍스트를 붙여넣습니다."""
         def _type():
             x, y = self._get_absolute_coords(bbox)
-            
-            # 브라우저 창 활성화 여부 확인
-            try:
-                active_win = gw.getActiveWindow()
-                keywords = ["Chrome", "Edge", "Whale", "크롬", "엣지", "웨일"]
-                is_browser_active = active_win and any(k in active_win.title for k in keywords)
-            except Exception:
-                is_browser_active = False
-                
             pyautogui.moveTo(x, y, duration=0.2)
-            
-            # 활성화되어 있지 않다면 1차 포커스용 클릭 실행 후 약간 대기
-            if not is_browser_active:
-                logger.info("Browser window not active, performing focus click first")
-                pyautogui.click()
-                time.sleep(0.15)
-                
             pyautogui.click()
             time.sleep(0.1)
             
@@ -145,13 +120,20 @@ class ActionTools:
             
         return self._execute_with_wait("type_in_marker", _type)
 
-    def scroll(self, direction: str = "down", clicks: int = 500) -> Dict[str, Any]:
+    def scroll(self, direction: str = "down") -> Dict[str, Any]:
         """화면을 스크롤합니다."""
         def _scroll():
-            # 양수는 위로, 음수는 아래로 스크롤 (Windows 기준)
-            amount = -clicks if direction == "down" else clicks
-            pyautogui.scroll(amount)
-            return f"Scrolled {direction} by {clicks} clicks"
+            # 활성 창(브라우저)의 중앙을 클릭하여 포커스 확보
+            win = gw.getActiveWindow()
+            if win:
+                pyautogui.click(win.left + win.width // 2, win.top + win.height // 2)
+                time.sleep(0.1)
+                
+            key_to_press = "pagedown" if direction == "down" else "pageup"
+            pyautogui.press(key_to_press)
+            logger.info(f"Pressed {key_to_press} for scrolling {direction}")
+            
+            return f"Scrolled {direction} via {key_to_press}"
             
         return self._execute_with_wait("scroll", _scroll)
         
@@ -201,6 +183,14 @@ class ActionTools:
                 "action": "get_credentials",
                 "error": str(e)
             }
+
+    def go_back(self) -> Dict[str, Any]:
+        """브라우저의 뒤로가기 동작을 수행합니다 (Alt + Left Arrow)."""
+        def _back():
+            pyautogui.hotkey('alt', 'left')
+            return "Navigated back using Alt + Left Arrow shortcut"
+            
+        return self._execute_with_wait("go_back", _back)
 
     def finish_task(self, final_data: Any) -> Dict[str, Any]:
         """작업을 완료하고 데이터를 반환합니다."""

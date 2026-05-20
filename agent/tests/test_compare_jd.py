@@ -104,16 +104,18 @@ def main():
         "is_finished": False,
         "collected_data": [],
         "extracted_jd": {},
-        "last_action_result": None
+        "last_action_result": None,
+        "plan": [],
+        "current_plan_step": 0
     }
     
     agent_data = {}
     try:
         # VLM 캡셔닝 바이패스 환경변수 설정 확인
         os.environ["SKIP_VLM_CAPTION"] = "true"
-        os.environ["SKIP_WAIT_STABLE"] = "true"
+        os.environ["SKIP_WAIT_STABLE"] = "false"
         
-        for output in app.stream(initial_state, {"recursion_limit": 30}):
+        for output in app.stream(initial_state, {"recursion_limit": 100}):
             for key, value in output.items():
                 if key == "action":
                     if "is_finished" in value and value["is_finished"]:
