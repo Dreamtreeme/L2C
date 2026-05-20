@@ -60,9 +60,23 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     markers = analysis.get("markers", [])
     marked_image = analysis.get("marked_image", "")
     
-    # LLM이 읽기 쉽게 문자열로 변환 (bbox 제외하고 텍스트만)
-    ui_texts = [f"[id: {m['id']}] {m['text']}" for m in markers]
-    ui_context = "\n".join(ui_texts) if ui_texts else "발견된 UI 마커 없음"
+    # 텍스트가 있는 요소와 없는 요소를 구분하여 프롬프트 토큰 최적화 (지연 시간 절감)
+    text_elements = []
+    icon_ids = []
+    for m in markers:
+        text = m['text']
+        if text.startswith("상호작용 가능한 요소 (") or text == "상호작용 가능한 요소":
+            icon_ids.append(m['id'])
+        else:
+            text_elements.append(f"[id: {m['id']}] {text}")
+            
+    ui_context = ""
+    if text_elements:
+        ui_context += "식별된 텍스트 요소:\n" + "\n".join(text_elements) + "\n"
+    if icon_ids:
+        ui_context += f"기타 아이콘/버튼 마커 ID 목록: {icon_ids}"
+    if not ui_context:
+        ui_context = "발견된 UI 마커 없음"
     
     return {
         "recent_images": [image_path],
