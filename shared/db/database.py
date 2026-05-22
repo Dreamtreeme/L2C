@@ -37,12 +37,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     raw_json        TEXT,
     screenshot_path TEXT,
     ocr_text_path   TEXT,
+    source_platform TEXT,
+    raw_ocr_text    TEXT,
+    content_hash    TEXT UNIQUE,
+    experience_min  INTEGER,
+    experience_max  INTEGER,
+    experience_text TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_name);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash);
 """
 
 
@@ -66,7 +73,31 @@ class Database:
     def _init_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
-        logger.debug("schema 확인/생성 완료")
+            
+            # 마이그레이션 지원: 기존 테이블에 신규 컬럼이 없을 경우 동적 추가
+            cursor = conn.execute("PRAGMA table_info(jobs)")
+            columns = [row["name"] for row in cursor.fetchall()]
+            
+            new_cols = {
+                "source_platform": "TEXT",
+                "raw_ocr_text": "TEXT",
+                "content_hash": "TEXT UNIQUE",
+                "experience_min": "INTEGER",
+                "experience_max": "INTEGER",
+                "experience_text": "TEXT",
+            }
+            for col, col_type in new_cols.items():
+                if col not in columns:
+                    try:
+                        conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
+                        logger.info(f"마이그레이션: jobs 테이블에 컬럼 '{col}' 추가 완료")
+                    except sqlite3.OperationalError as e:
+                        logger.debug(f"컬럼 '{col}' 추가 건너뜀: {e}")
+            
+            # content_hash UNIQUE 인덱스 생성 보장
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash)")
+            
+        logger.debug("schema 확인/생성 및 마이그레이션 완료")
 
     def exists(self, url: str) -> bool:
         with self._conn() as conn:
@@ -99,6 +130,12 @@ class Database:
             "requirements": json.dumps(data.get("requirements") or [], ensure_ascii=False),
             "preferred": json.dumps(data.get("preferred") or [], ensure_ascii=False),
             "benefits": json.dumps(data.get("benefits") or [], ensure_ascii=False),
+            "source_platform": data.get("source_platform"),
+            "raw_ocr_text": data.get("raw_ocr_text"),
+            "content_hash": data.get("content_hash"),
+            "experience_min": data.get("experience_min", 0),
+            "experience_max": data.get("experience_max", 99),
+            "experience_text": data.get("experience_text", "경력 무관"),
             "raw_json": json.dumps(data, ensure_ascii=False),
             "screenshot_path": screenshot_path,
             "ocr_text_path": ocr_text_path,
@@ -106,11 +143,21 @@ class Database:
         }
 
         with self._conn() as conn:
-            existing = conn.execute("SELECT id FROM jobs WHERE url = ?", (url,)).fetchone()
+            existing = None
+            if payload.get("content_hash"):
+                existing = conn.execute(
+                    "SELECT id FROM jobs WHERE url = ? OR content_hash = ?",
+                    (url, payload["content_hash"]),
+                ).fetchone()
+            else:
+                existing = conn.execute(
+                    "SELECT id FROM jobs WHERE url = ?", (url,)
+                ).fetchone()
+
             if existing:
                 cols = ", ".join(f"{k} = :{k}" for k in payload.keys())
-                conn.execute(f"UPDATE jobs SET {cols} WHERE url = :url", payload)
-                logger.info(f"DB UPDATE id={existing['id']} url={url}")
+                conn.execute(f"UPDATE jobs SET {cols} WHERE id = {existing['id']}", payload)
+                logger.info(f"DB UPDATE id={existing['id']} url={url} (hash={payload.get('content_hash')})")
                 return existing["id"]
 
             payload["created_at"] = now

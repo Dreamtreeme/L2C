@@ -17,6 +17,9 @@ class JobPosting(BaseModel):
     position: Optional[str] = Field(
         None, description="포지션/직무명"
     )
+    url: Optional[str] = Field(
+        None, description="공고 상세 URL"
+    )
     job_category: Optional[str] = Field(
         None, description="직군/카테고리"
     )
@@ -53,6 +56,24 @@ class JobPosting(BaseModel):
     salary: Optional[str] = Field(
         None, description="연봉 정보"
     )
+    source_platform: Optional[str] = Field(
+        None, description="수집 출처 플랫폼 (예: 'Wanted')"
+    )
+    raw_ocr_text: Optional[str] = Field(
+        None, description="전처리 전 원천 OCR/SoM 텍스트 전체 백업"
+    )
+    content_hash: Optional[str] = Field(
+        None, description="회사명+직무명+자격요건 해시값 (SHA256)"
+    )
+    experience_min: Optional[int] = Field(
+        0, description="최소 경력 년수"
+    )
+    experience_max: Optional[int] = Field(
+        99, description="최대 경력 년수"
+    )
+    experience_text: Optional[str] = Field(
+        "경력 무관", description="경력 정보 원문"
+    )
 
     class Config:
         json_schema_extra = {
@@ -70,6 +91,12 @@ class JobPosting(BaseModel):
                 "requirements": ["Java/Kotlin 3년 이상", "REST API 설계 경험"],
                 "preferred": ["금융 도메인 경험", "MSA 경험"],
                 "benefits": ["스톡옵션", "자기개발비 지원", "유연근무"],
-                "salary": "회사 내규에 따름 (협의)"
+                "salary": "회사 내규에 따름 (협의)",
+                "source_platform": "Wanted",
+                "raw_ocr_text": "원문 OCR 텍스트...",
+                "content_hash": "a1b2c3d4...",
+                "experience_min": 3,
+                "experience_max": 99,
+                "experience_text": "3년 이상"
             }
         }
