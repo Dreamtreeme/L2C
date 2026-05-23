@@ -21,3 +21,17 @@ langgraph>=0.0.60
 langchain-core>=0.2.0
 langchain-google-genai>=1.0.6
 langsmith>=0.1.0
+
+# ===== Phase 3.5 & 6: Vision & OCR (SoM Engine) =====
+ultralytics>=8.0.0
+huggingface-hub>=0.19.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+pygetwindow>=0.0.9
+
+# [주의] Windows CUDA DLL 기호 충돌을 우회하기 위해 PaddleOCR은 서브프로세스로 격리 구동됩니다.
+# 본인의 실행 환경(GPU/CPU)에 맞추어 아래 라이브러리들을 설치해 주십시오.
+# paddlepaddle-gpu>=2.5.0 (또는 CPU 전용 paddlepaddle>=2.5.0)
+# paddleocr>=2.7.0
+# easyocr>=1.7.1
+
