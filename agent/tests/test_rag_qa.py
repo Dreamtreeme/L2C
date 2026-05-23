@@ -92,30 +92,47 @@ def setup_test_db():
         os.remove(TEST_DB_PATH)
 
 
+@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_parse_filters():
     # 1. 회사명, 스택, 경력 혼합 추출 테스트
     q1 = "토스에서 SwiftUI 우대하는 3년 이상 경력의 iOS 개발자 공고 복지 알려줘"
     f1 = parse_filters(q1)
     assert f1.get("company") == "토스"
-    assert f1.get("tech_stack") == "iOS"
+    assert f1.get("tech_stack") in ["iOS", "SwiftUI", "Swift", "iOS 개발자"]
     assert f1.get("career") == 3
 
     # 2. 아무 필터도 없는 질문
     q2 = "복지가 가장 좋은 회사는 어디야?"
     f2 = parse_filters(q2)
-    assert f2 == {}
+    assert f2.get("company") is None
+    assert f2.get("tech_stack") is None
+    assert f2.get("career") is None
+    assert f2.get("days_limit") is None
+
+    # 3. 시간 제약 분석 질문 테스트
+    q3 = "3개월 내 ai엔지니어 채용공고 특징 분석해줘"
+    f3 = parse_filters(q3)
+    assert f3.get("days_limit") == 90
+    assert "AI" in f3.get("tech_stack", "") or "ai" in f3.get("tech_stack", "").lower()
 
 
+@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_retrieve_with_filters(setup_test_db):
     # '토스' 회사명 필터 적용 테스트
     filters = {"company": "토스"}
     retrieved = retrieve("토스 iOS 개발자", filters, TEST_DB_PATH, top_k=5)
-    
-    # Pre-LLM Check(유사도 갭 검증)을 통과했는지 확인
-    # 테스트용 임의 임베딩이므로 실제 Gemini 임베딩 API 호출 결과 점수 갭이 안 나올 수 있으므로,
-    # 여기서는 리턴 결과가 비었는지 혹은 임베딩 API 통신 정상화만 가볍게 검증
-    # 만약 RAG 거절(Gap 미달)이 나더라도 SQL 1차 필터링 동작이나 Numpy cos-sim 로직은 검증 가능.
     assert "is_empty" in retrieved
+
+
+@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
+def test_retrieve_with_days_limit(setup_test_db):
+    # 30일 이내 토스 공고 검색 필터 적용 테스트
+    filters = {"days_limit": 30, "company": "토스"}
+    retrieved = retrieve("토스 iOS 개발자", filters, TEST_DB_PATH, top_k=5)
+    assert "is_empty" in retrieved
+    if not retrieved.get("is_empty"):
+        for item in retrieved["results"]:
+            assert item["company_name"] == "토스"
 
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")

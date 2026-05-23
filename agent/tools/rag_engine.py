@@ -1,15 +1,28 @@
 import re
 import sqlite3
 import logging
+from datetime import datetime, timedelta
 import numpy as np
 from typing import Dict, List, Any, Tuple
 from pathlib import Path
+from pydantic import BaseModel, Field
+from typing import Optional
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from agent.utils.query_cache import EmbeddingLRUCache
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 embedding_cache = EmbeddingLRUCache(max_size=128)
+
+class QueryFilters(BaseModel):
+    company: Optional[str] = Field(None, description="질문에서 언급된 특정 기업/회사 이름 (예: '토스', '카카오', '로이드케이', '네이버')")
+    tech_stack: Optional[str] = Field(None, description="질문에서 요구하는 기술 스택이나 직무 키워드 (예: 'iOS', 'Android', 'AI', 'Python', 'Swift', 'Kotlin')")
+    career: Optional[int] = Field(None, description="질문에서 명시한 최소 경력 요구 연차 숫자 (예: '3년 이상' -> 3, '신입' -> 0)")
+    days_limit: Optional[int] = Field(None, description="질문에서 필터링을 요구하는 시간적 범위 제약 일수 (예: '3개월 내' -> 90, '최근 한 달' -> 30)")
+    semantic_query: str = Field(..., description="필터용 속성들을 제외하고, 순수 의미론적 임베딩 검색에 활용할 정제된 쿼리 스트링")
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     """두 벡터 간의 코사인 유사도를 계산합니다."""
@@ -22,42 +35,41 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 def parse_filters(query: str) -> Dict[str, Any]:
     """
-    자연어 쿼리에서 회사명, 모바일 기술 스택, 경력 연차를 정규식으로 안전하게 추출합니다.
-    매치되지 않은 속성은 포함되지 않으며, 빈 딕셔너리가 반환될 수 있습니다.
+    자연어 쿼리에서 회사명, 기술 스택, 경력 연차, 시간적 제약 조건을 LLM(Gemini 3.5 Flash)을 사용하여 구조화된 필터로 추출합니다.
     """
-    filters = {}
-    
-    # 1. 회사명 필터 추출
-    company_patterns = [
-        r"(토스|원티드랩|로이드케이|글로벌머니익스프레스|네이버|카카오|라인|쿠팡|배달의민족|우아한형제들|당근|야놀자)\s*(?:에서|공고|에\s*있는|채용|포지션|회사)?"
-    ]
-    for pattern in company_patterns:
-        match = re.search(pattern, query, re.IGNORECASE)
-        if match:
-            filters["company"] = match.group(1).strip()
-            break
-
-    # 2. 기술 스택 필터 추출 (모바일 전문 분야 매핑)
-    tech_patterns = [
-        r"\b(iOS|Swift|Android|Kotlin|Combine|RxSwift|Flutter|ReactNative|React\s*Native)\b"
-    ]
-    for pattern in tech_patterns:
-        match = re.search(pattern, query, re.IGNORECASE)
-        if match:
-            tech = match.group(1).replace(" ", "").strip()
-            filters["tech_stack"] = tech
-            break
-
-    # 3. 경력 필터 추출
-    career_match = re.search(r"(\d+)\s*(?:년\s*이상|년차|년\s*경력|년\s*이상\s*경력)", query)
-    if career_match:
-        filters["career"] = int(career_match.group(1))
-    elif "신입" in query:
-        filters["career"] = 0
-
-    if filters:
-        logger.debug(f"parse_filters successfully extracted: {filters}")
-    return filters
+    try:
+        llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
+        structured_llm = llm.with_structured_output(QueryFilters)
+        
+        prompt = (
+            f"사용자 질문: {query}\n\n"
+            f"위 질문에서 필터링 조건(회사명, 기술 스택, 경력 연차, 시간 범위)을 추출하고, "
+            f"임베딩 기반 검색에 사용될 핵심 의미 쿼리(semantic_query)를 필터링 키워드를 제거하여 정제한 상태로 작성해 주세요."
+        )
+        
+        result = structured_llm.invoke(prompt)
+        
+        filters = {}
+        if result:
+            if result.company:
+                filters["company"] = result.company.strip()
+            if result.tech_stack:
+                filters["tech_stack"] = result.tech_stack.strip()
+            if result.career is not None:
+                filters["career"] = result.career
+            if result.days_limit is not None:
+                filters["days_limit"] = result.days_limit
+            if result.semantic_query:
+                filters["semantic_query"] = result.semantic_query.strip()
+            else:
+                filters["semantic_query"] = query
+                
+        logger.info(f"LLM parsed filters: {filters}")
+        return filters
+    except Exception as e:
+        logger.error(f"Failed to parse filters using LLM: {e}")
+        # 오류 발생 시 빈 dict를 반환하여 전체 검색으로 정상 폴백 처리
+        return {}
 
 def retrieve(query: str, filters: Dict[str, Any], db_path: str | Path, top_k: int = 5) -> Dict[str, Any]:
     """
@@ -66,28 +78,33 @@ def retrieve(query: str, filters: Dict[str, Any], db_path: str | Path, top_k: in
     """
     # 1. 쿼리 임베딩 획득 (LRU 캐시 연동)
     db_path = Path(db_path)
-    cached_vector = embedding_cache.get(query)
+    
+    # filters에 semantic_query가 전달되었으면 임베딩 검색 쿼리로 사용, 없으면 query 사용
+    embed_query = filters.get("semantic_query", query) or query
+    
+    cached_vector = embedding_cache.get(embed_query)
     if cached_vector is not None:
         query_vector = np.array(cached_vector, dtype=np.float32)
     else:
         try:
             logger.info("Requesting embedding via text-embedding-004...")
             embeddings_model = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-            raw_vector = embeddings_model.embed_query(query)
+            raw_vector = embeddings_model.embed_query(embed_query)
             # 768차원 확인
             if len(raw_vector) != 768:
                 logger.error(f"Returned embedding dimension is {len(raw_vector)} instead of 768")
                 return {"is_empty": True, "results": []}
                 
-            embedding_cache.set(query, raw_vector)
+            embedding_cache.set(embed_query, raw_vector)
             query_vector = np.array(raw_vector, dtype=np.float32)
         except Exception as e:
             logger.error(f"Failed to generate embedding for query: {e}")
             return {"is_empty": True, "results": []}
 
     # 2. SQLite 1차 Hard Filter 조합 질의
+    # collected_at 대신 schema에 있는 created_at 사용
     sql = """
-    SELECT id, company_name, position, tech_stack, career_min, career_max, raw_ocr_text, url, collected_at, embedding 
+    SELECT id, company_name, position, tech_stack, career_min, career_max, raw_ocr_text, url, created_at, embedding 
     FROM jobs 
     WHERE 1=1
     """
@@ -108,6 +125,12 @@ def retrieve(query: str, filters: Dict[str, Any], db_path: str | Path, top_k: in
         sql += " AND career_min <= ? AND career_max >= ?"
         params.append(career_val)
         params.append(career_val)
+        
+    if "days_limit" in filters:
+        days_val = filters["days_limit"]
+        limit_date = (datetime.now() - timedelta(days=days_val)).isoformat(timespec="seconds")
+        sql += " AND created_at >= ?"
+        params.append(limit_date)
 
     try:
         conn = sqlite3.connect(db_path)
@@ -148,7 +171,7 @@ def retrieve(query: str, filters: Dict[str, Any], db_path: str | Path, top_k: in
                 "position": row["position"],
                 "raw_text": raw_text,
                 "url": row["url"],
-                "collected_at": row["collected_at"],
+                "collected_at": row["created_at"],
                 "score": score
             })
         except Exception as similarity_err:
