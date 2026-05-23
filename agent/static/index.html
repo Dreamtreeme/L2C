@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>L2C RAG Q&A Agent Portal</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Marked.js for Markdown Parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Lucide Icons for Modern UI -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&family=D2Coding&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0b0f19;
+        }
+        .header-title {
+            font-family: 'Outfit', sans-serif;
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #111827;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4b5563;
+        }
+        .code-font {
+            font-family: 'D2Coding', monospace;
+        }
+    </style>
+</head>
+<body class="h-full text-slate-100 flex flex-col overflow-hidden">
+
+    <!-- Top Navigation Header -->
+    <header class="bg-slate-900/60 border-b border-slate-800/80 backdrop-blur-md px-6 py-4 flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-orange-500/20">
+                <i data-lucide="cpu" class="text-white w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="header-title text-xl font-bold tracking-tight bg-gradient-to-r from-amber-400 via-orange-400 to-orange-500 bg-clip-text text-transparent">L2C RAG Agent</h1>
+                <p class="text-xs text-slate-400 font-medium">경력·기술 하이브리드 RAG Q&A 포털</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4 text-xs font-semibold text-slate-400">
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span> 로컬 SQLite 연결됨</span>
+        </div>
+    </header>
+
+    <!-- Main Section Split Layout -->
+    <main class="flex-1 flex overflow-hidden relative">
+
+        <!-- Left Chat Section (70% Default) -->
+        <section class="flex-1 flex flex-col bg-slate-950 overflow-hidden border-r border-slate-850">
+            <!-- Message List -->
+            <div id="chat-messages" class="flex-1 overflow-y-auto px-6 py-8 space-y-6">
+                <!-- Welcome Message -->
+                <div class="flex gap-4 max-w-3xl">
+                    <div class="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center shrink-0 border border-slate-700">
+                        <i data-lucide="bot" class="text-amber-500 w-5 h-5"></i>
+                    </div>
+                    <div class="bg-slate-900/80 border border-slate-800 px-4 py-3 rounded-2xl rounded-tl-none shadow-md space-y-2">
+                        <p class="text-sm text-slate-200 leading-relaxed font-medium">
+                            안녕하세요. 수집된 Wanted 채용 공고 데이터를 기반으로 답변하는 <strong>L2C RAG 에이전트</strong>입니다.
+                        </p>
+                        <p class="text-xs text-slate-400 leading-relaxed">
+                            질문 예시:<br>
+                            - "토스에서 SwiftUI를 우대하는 3년 경력의 iOS 개발자 공고 복지 혜택 알려줘"<br>
+                            - "카카오에서 Jetpack Compose 자격요건 필수인 Android 5년차 공고 복지 알려줘"
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Form Area -->
+            <div class="p-6 bg-slate-900/30 border-t border-slate-800/80 shrink-0">
+                <form id="chat-form" class="max-w-4xl mx-auto flex gap-3 relative">
+                    <input 
+                        type="text" 
+                        id="query-input" 
+                        autocomplete="off"
+                        placeholder="채용 공고에 대해 질문해보세요..." 
+                        class="flex-1 bg-slate-900 border border-slate-800 focus:border-orange-500/60 focus:ring-1 focus:ring-orange-500/50 rounded-2xl px-5 py-4 text-sm text-slate-100 placeholder-slate-500 outline-none transition-all duration-200 pr-14"
+                    >
+                    <button 
+                        type="submit" 
+                        id="submit-btn"
+                        class="absolute right-2 top-2 bottom-2 bg-gradient-to-tr from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white rounded-xl px-4 flex items-center justify-center transition-all duration-150 shadow-md shadow-orange-500/10 cursor-pointer"
+                    >
+                        <i data-lucide="send" class="w-5 h-5"></i>
+                    </button>
+                </form>
+                <p class="text-center text-[11px] text-slate-500 mt-3 font-medium">본 시스템은 SQLite 로컬 Cosine Similarity 연산 및 엄격한 인용 검증 필터로 환각을 방지합니다.</p>
+            </div>
+        </section>
+
+        <!-- Right Citation Sidebar Detail Panel (30% Default, Hidden when empty) -->
+        <section id="sidebar-panel" class="w-96 bg-slate-900/40 border-l border-slate-800/80 backdrop-blur-lg flex flex-col overflow-hidden translate-x-full transition-transform duration-300 ease-out absolute right-0 top-0 bottom-0 z-20 shadow-2xl md:relative md:translate-x-0 hidden">
+            <!-- Sidebar Header -->
+            <div class="px-5 py-4 border-b border-slate-800/80 flex items-center justify-between shrink-0">
+                <span class="flex items-center gap-2 text-sm font-semibold text-orange-400">
+                    <i data-lucide="bookmark" class="w-4 h-4"></i> 출처 원본 정보
+                </span>
+                <button onclick="closeSidebar()" class="text-slate-400 hover:text-white p-1 rounded transition-colors cursor-pointer">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            
+            <!-- Sidebar Body (Scrollable) -->
+            <div id="sidebar-content" class="flex-1 overflow-y-auto p-5 space-y-6">
+                <!-- Placeholder / Loading -->
+                <div id="sidebar-loader" class="h-full flex flex-col items-center justify-center text-slate-500 space-y-3">
+                    <i data-lucide="file-text" class="w-8 h-8 animate-pulse text-slate-600"></i>
+                    <p class="text-xs font-medium">답변 내의 인용구 배지를 클릭하여<br>해당 공고 원문을 조회해 보세요.</p>
+                </div>
+
+                <!-- Job Detail Data Bind Area -->
+                <div id="sidebar-detail" class="space-y-5 hidden">
+                    <div>
+                        <span id="job-company" class="text-xs bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded font-bold">회사명</span>
+                        <h3 id="job-position" class="text-lg font-bold text-slate-100 mt-2">포지션 정보</h3>
+                    </div>
+                    
+                    <div class="space-y-2 text-xs text-slate-400 bg-slate-900/60 border border-slate-850 p-3 rounded-xl">
+                        <div class="flex justify-between">
+                            <span>수집 플랫폼</span>
+                            <span id="job-platform" class="text-slate-200 font-semibold">Wanted</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span>수집 시각</span>
+                            <span id="job-collected" class="text-slate-200 font-semibold">2026-05-23</span>
+                        </div>
+                        <div class="flex justify-between items-center mt-2 pt-2 border-t border-slate-800">
+                            <span>공고 원본</span>
+                            <a id="job-url" href="#" target="_blank" class="text-amber-400 hover:underline flex items-center gap-1 font-semibold">
+                                바로가기 <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <span class="text-xs font-bold text-slate-400 flex items-center gap-1.5"><i data-lucide="align-left" class="w-3.5 h-3.5"></i> OCR 인식 텍스트 원문</span>
+                        <div class="bg-slate-950 border border-slate-900 p-4 rounded-xl overflow-x-auto max-h-[380px] overflow-y-auto">
+                            <pre id="job-text" class="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed code-font">본문내용</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Global JS Logic -->
+    <script>
+        // Lucide Icons Render
+        lucide.createIcons();
+
+        const chatMessages = document.getElementById('chat-messages');
+        const chatForm = document.getElementById('chat-form');
+        const queryInput = document.getElementById('query-input');
+        const submitBtn = document.getElementById('submit-btn');
+
+        const sidebarPanel = document.getElementById('sidebar-panel');
+        const sidebarLoader = document.getElementById('sidebar-loader');
+        const sidebarDetail = document.getElementById('sidebar-detail');
+
+        const jobCompany = document.getElementById('job-company');
+        const jobPosition = document.getElementById('job-position');
+        const jobPlatform = document.getElementById('job-platform');
+        const jobCollected = document.getElementById('job-collected');
+        const jobUrl = document.getElementById('job-url');
+        const jobText = document.getElementById('job-text');
+
+        // Citation token replace logic — MUST be run before Markdown Parsing
+        function replaceCitations(text) {
+            let processed = text.replace(/\[job_id:(\d+)\]/g, (match, id) => {
+                return `<button onclick="showJobDetail(${id})" class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/30 hover:bg-orange-500/25 ml-1 mr-1 transition-all duration-150 cursor-pointer shadow-sm shadow-orange-500/5">#출처:${id}</button>`;
+            });
+            // Replace invalid citations with stylized red text
+            processed = processed.replace(/\[출처 확인 불가\]/g, '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/30 leading-none">[출처 확인 불가]</span>');
+            return processed;
+        }
+
+        // Show/Hide sidebar detail sidebar panel
+        function closeSidebar() {
+            sidebarPanel.classList.add('hidden');
+        }
+
+        async function showJobDetail(jobId) {
+            sidebarPanel.classList.remove('hidden');
+            sidebarLoader.classList.remove('hidden');
+            sidebarDetail.classList.add('hidden');
+            
+            try {
+                const response = await fetch(`/api/jobs/${jobId}`);
+                const data = await response.json();
+                
+                if (data.error) {
+                    sidebarLoader.innerHTML = `<div class="text-center text-red-400 text-xs"><i data-lucide="alert-triangle" class="w-8 h-8 mx-auto mb-2"></i> ${data.error}</div>`;
+                    lucide.createIcons();
+                    return;
+                }
+                
+                // Bind detail views
+                jobCompany.textContent = data.company_name || '회사명 없음';
+                jobPosition.textContent = data.position || '포지션 정보 없음';
+                jobPlatform.textContent = 'Wanted';
+                jobCollected.textContent = data.collected_at ? data.collected_at.split('T')[0] : '-';
+                jobUrl.href = data.url;
+                jobText.textContent = data.raw_text;
+                
+                sidebarLoader.classList.add('hidden');
+                sidebarDetail.classList.remove('hidden');
+                lucide.createIcons();
+            } catch (err) {
+                console.error(err);
+                sidebarLoader.innerHTML = `<div class="text-center text-red-400 text-xs"><i data-lucide="alert-circle" class="w-8 h-8 mx-auto mb-2"></i> 데이터 로드 실패</div>`;
+                lucide.createIcons();
+            }
+        }
+
+        // Send streaming prompt query API
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const query = queryInput.value.trim();
+            if (!query) return;
+
+            // Clear Input
+            queryInput.value = '';
+            queryInput.disabled = true;
+            submitBtn.disabled = true;
+
+            // Add User Bubble
+            const userMsgId = 'msg-' + Date.now();
+            chatMessages.innerHTML += `
+                <div class="flex gap-4 max-w-3xl ml-auto justify-end">
+                    <div class="bg-gradient-to-tr from-amber-500 to-orange-600 text-white px-4 py-3 rounded-2xl rounded-tr-none shadow-md text-sm font-medium">
+                        <p class="leading-relaxed">${query}</p>
+                    </div>
+                </div>
+            `;
+            
+            // Add Agent Streaming Container Bubble
+            const agentMsgId = 'agent-' + Date.now();
+            chatMessages.innerHTML += `
+                <div class="flex gap-4 max-w-3xl">
+                    <div class="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center shrink-0 border border-slate-700">
+                        <i data-lucide="bot" class="text-amber-500 w-5 h-5"></i>
+                    </div>
+                    <div class="bg-slate-900/80 border border-slate-800 px-4 py-3 rounded-2xl rounded-tl-none shadow-md space-y-2">
+                        <div id="${agentMsgId}" class="text-sm text-slate-200 leading-relaxed font-medium prose prose-invert max-w-none">
+                            <span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse"></span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            lucide.createIcons();
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            const agentContainer = document.getElementById(agentMsgId);
+            let rawBuffer = '';
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+
+                if (!response.ok) {
+                    throw new Error('네트워크 연결이 고르지 않습니다.');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let done = false;
+
+                while (!done) {
+                    const { value, done: readerDone } = await reader.read();
+                    done = readerDone;
+                    if (value) {
+                        const chunkStr = decoder.decode(value, { stream: !done });
+                        const lines = chunkStr.split('\n');
+                        
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                const dataContent = line.slice(6).trim();
+                                if (dataContent === '[DONE]') {
+                                    break;
+                                }
+                                if (dataContent.startsWith('[FINAL]')) {
+                                    // 최종 텍스트가 도착했을 경우 덮어씌움
+                                    try {
+                                        const finalObj = JSON.parse(dataContent.slice(7).trim());
+                                        const finalProcessed = replaceCitations(finalObj.text);
+                                        agentContainer.innerHTML = marked.parse(finalProcessed);
+                                    } catch (err) {
+                                        console.error('Final payload parse error:', err);
+                                    }
+                                    continue;
+                                }
+                                if (dataContent.startsWith('[ERROR]')) {
+                                    agentContainer.innerHTML = `<span class="text-red-400">${dataContent.slice(7)}</span>`;
+                                    continue;
+                                }
+                                
+                                // 스트리밍 텍스트 점진적 렌더링
+                                rawBuffer += dataContent;
+                                const processed = replaceCitations(rawBuffer);
+                                // marked.parse로 변환하여 마크다운 출력
+                                agentContainer.innerHTML = marked.parse(processed) + '<span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-0.5"></span>';
+                                chatMessages.scrollTop = chatMessages.scrollHeight;
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+                agentContainer.innerHTML = `<span class="text-red-400">오류가 발생했습니다: ${err.message}</span>`;
+            } finally {
+                // Remove streaming pulse indicator
+                const cursor = agentContainer.querySelector('.animate-pulse');
+                if (cursor) cursor.remove();
+                
+                queryInput.disabled = false;
+                submitBtn.disabled = false;
+                queryInput.focus();
+            }
+        });
+    </script>
+</body>
+</html>

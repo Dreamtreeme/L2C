@@ -156,3 +156,29 @@ def test_hallucination_rejection(setup_test_db, monkeypatch):
     
     # RAG Pre-LLM Check 또는 Strict Prompting에 의해 즉시 거절 문구가 생성되어야 함
     assert "찾을 수 없습니다" in answer or "확인되지 않음" in answer
+
+
+def test_web_server_api_endpoints(setup_test_db, monkeypatch):
+    monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    
+    from fastapi.testclient import TestClient
+    from agent.web_server import app
+    
+    client = TestClient(app)
+    
+    # 1. 상세 공고 조회 API (/api/jobs/{job_id}) 검증
+    # SQLite에 삽입된 첫 번째 로우(id=1) 데이터 획득 테스트
+    response = client.get("/api/jobs/1")
+    assert response.status_code == 200
+    res_data = response.json()
+    assert res_data["id"] == 1
+    assert res_data["company_name"] == "토스"
+    assert "position" in res_data
+    assert "url" in res_data
+    assert "raw_text" in res_data
+
+    # 2. 미존재 ID 조회 시 에러 응답 검증
+    fail_response = client.get("/api/jobs/9999")
+    assert fail_response.status_code == 200
+    assert "error" in fail_response.json()
+
