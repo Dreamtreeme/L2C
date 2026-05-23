@@ -4,7 +4,7 @@ import base64
 import time
 from typing import Dict, Any, List, Optional
 
-from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
@@ -13,6 +13,8 @@ from agent.tools.perception import PerceptionEngine
 from agent.tools.actions import ActionTools
 from agent.prompts.commander import commander_prompt, COMMANDER_SYSTEM_PROMPT
 from agent.utils.logger import logger
+from agent.tools.rag_search import rag_search
+from agent.tools.realtime_scraping import realtime_scraping
 
 # 싱글톤으로 도구 유지
 perception = PerceptionEngine()
@@ -393,15 +395,14 @@ def validate_citations(answer: str, valid_ids: List[int]) -> str:
 
 def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
     """
-    RAG 검색 및 엄격한 인용 Q&A를 수행하는 Reasoning 노드입니다.
-    Pre-LLM Check에 의해 검색 결과가 없거나 변별력이 낮을 시 LLM을 호출하지 않고 즉시 거절 응답을 리턴합니다.
+    지휘자 모델(Gemini 3.5 Flash)이 사용자 질문을 받고
+    RAG 검색 도구 및 실시간 크롤링 도구를 직접 도구 호출(Tool Calling)을 통해 조율하며 최종 답변을 반환합니다.
     """
-    import time
-    from agent.tools.rag_engine import parse_filters, retrieve
     from shared.config import DB_PATH
+    import time
     
     start_time = time.time()
-    logger.info("Executing QA Reasoning Node (RAG)")
+    logger.info("Executing Commander QA Reasoning Node (Agent Tool Calling Loop)")
     
     query = state.get("goal") or ""
     if not query:
@@ -411,87 +412,102 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
             "step_durations": [{"node": "qa_reasoning", "duration": time.time() - start_time}]
         }
 
-    # 1. 쿼리 필터 파싱
-    filters = parse_filters(query)
-    
-    # 2. RAG 검색 수행
-    retrieved_data = retrieve(query, filters, DB_PATH)
-    
-    # 3. Pre-LLM Check
-    if retrieved_data.get("is_empty", True) or not retrieved_data.get("results"):
-        logger.info("Pre-LLM Check: Rejection. No matching/differentiating documents.")
-        return {
-            "last_action_result": "수집된 공고 내에서 조건에 맞는 정보를 찾을 수 없습니다.",
-            "is_finished": True,
-            "step_durations": [{"node": "qa_reasoning", "duration": time.time() - start_time}]
-        }
-        
-    results = retrieved_data["results"]
-    valid_ids = [item["id"] for item in results]
-    
-    # 4. XML 앵커링 컨텍스트 생성
-    context_parts = []
-    for item in results:
-        doc_xml = (
-            f'<document id="{item["id"]}">\n'
-            f'  <source_url>{item["url"]}</source_url>\n'
-            f'  <company>{item["company_name"]}</company>\n'
-            f'  <position>{item["position"]}</position>\n'
-            f'  <content>\n{item["raw_text"]}\n  </content>\n'
-            f'</document>'
-        )
-        context_parts.append(doc_xml)
-    context_str = "\n\n".join(context_parts)
-    
-    # 5. 엄격한 컨텍스트 밀착 프롬프트
+    # 지휘자 모델 초기화 (도구 바인딩)
+    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
+    tools = [rag_search, realtime_scraping]
+    llm_with_tools = llm.bind_tools(tools)
+
+    # 지휘자의 시스템 지침 설정
     system_prompt = (
-        "당신은 채용 공고 분석을 전담하는 Q&A 에이전트입니다. 아래 지침을 엄격히 준수하여 답변하십시오.\n\n"
+        "당신은 채용 공고 분석을 지휘하는 전문 에이전트(Commander)입니다. 아래 지침을 반드시 준수하여 역할을 수행하세요.\n\n"
         "지침:\n"
-        "1. 제시된 <document> 태그 내부의 내용만을 근거로 답변하고, 외부 지식이나 상식을 절대 섞지 마십시오.\n"
-        "2. 답변의 모든 주장이나 사실적 진술 뒤에는 해당 정보의 출처가 되는 문서의 ID를 반드시 [job_id:ID] 형태로 표기하십시오.\n"
-        "   예: '로이드케이에서는 SwiftUI 경험을 우대합니다 [job_id:1]'\n"
-        "3. 만약 제공된 정보 내에 답변의 근거가 전혀 존재하지 않거나 부족하다면, 자의적으로 상상하여 답변하지 말고 "
-        "   반드시 '공고에서 확인되지 않음' 또는 '수집된 공고 내에서 조건에 맞는 정보를 찾을 수 없습니다.'라고만 대답하십시오.\n"
-        "4. 추측이나 주관적인 보완 진술은 일절 허용되지 않습니다."
+        "1. 사용자의 질문에 답하기 위해 가장 먼저 'rag_search' 도구를 호출하여 데이터베이스에 관련 정보가 있는지 확인하십시오.\n"
+        "2. 'rag_search' 결과 정보가 없거나 부족한 경우(예: '검색 결과가 없습니다' 또는 'Pre-LLM Check 거절 대상' 수신 시), "
+        "   반드시 'realtime_scraping' 도구를 즉시 호출하여 실시간으로 관련 공고를 수집하십시오.\n"
+        "3. 'realtime_scraping' 도구로부터 적재 성공 결과가 피드백되면, 다시 'rag_search' 도구를 재호출하여 업데이트된 공고 내용을 조회하십시오.\n"
+        "4. 획득된 공고 정보(<document id=\"ID\"> XML 내용)만을 근거로 삼아 사용자 질문에 논리적이고 사실적으로 최종 답변을 작성하십시오.\n"
+        "5. 최종 답변의 모든 사실적 진술 뒤에는 해당 문서의 ID를 반드시 [job_id:ID] 형태로 기재하십시오 (예: '로이드케이에서는 SwiftUI를 우대합니다 [job_id:3]').\n"
+        "6. DB 검색이나 실시간 수집을 모두 거친 후에도 근거가 전혀 존재하지 않는다면, 지어내지 말고 '수집된 공고 내에서 조건에 맞는 정보를 찾을 수 없습니다.'라고만 답변하십시오.\n"
+        "7. 대답에 인용 ID [job_id:ID]를 명시하지 못할 경우 해당 내용은 삭제되어야 합니다."
     )
-    
-    human_prompt = (
-        f"질문: {query}\n\n"
-        f"제시된 문서 컨텍스트:\n{context_str}\n\n"
-        "위 문서를 바탕으로 질문에 정확하게 답변하십시오. 답변에 인용 ID [job_id:ID]를 명시하지 못할 경우 해당 내용은 삭제되어야 합니다."
-    )
-    
-    qa_llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
+
+    # 메시지 리스트 초기화
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=human_prompt)
+        HumanMessage(content=query)
     ]
+
+    # 최대 5번의 턴(루프) 제한으로 무한 루프 방지
+    max_turns = 5
+    valid_ids = []
     
-    # 6. 스트리밍 응답 획득
-    logger.info("Generating QA response with streaming...")
-    response_chunks = []
-    try:
-        for chunk in qa_llm.stream(messages):
-            print(chunk.content, end="", flush=True)
-            response_chunks.append(chunk.content)
-        print() # newline
-        full_answer = "".join(response_chunks)
-    except Exception as e:
-        logger.error(f"Failed to generate QA streaming answer: {e}")
-        return {
-            "last_action_result": "답변 생성 실패",
-            "is_finished": True,
-            "step_durations": [{"node": "qa_reasoning", "duration": time.time() - start_time}]
-        }
+    for turn in range(max_turns):
+        logger.info(f"Commander Agent Loop: Turn {turn + 1}")
         
-    # 7. 인용 ID 검증 및 실패 ID 치환
-    final_answer = validate_citations(full_answer, valid_ids)
-    
+        # 지휘자 LLM 호출
+        response = llm_with_tools.invoke(messages)
+        messages.append(response)
+        
+        # 1. 도구 호출이 있는 경우
+        if response.tool_calls:
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                tool_id = tool_call["id"]
+                
+                logger.info(f"Commander decided to call tool: {tool_name} with args: {tool_args}")
+                
+                # 도구 매핑 및 실행
+                if tool_name == "rag_search":
+                    # DB RAG 실행
+                    result_str = rag_search.invoke(tool_args)
+                    
+                    # XML 문서에서 id를 파싱하여 인용 검증용 valid_ids 채우기
+                    import re
+                    doc_ids = re.findall(r'<document id="(\d+)">', result_str)
+                    for d_id in doc_ids:
+                        try:
+                            valid_ids.append(int(d_id))
+                        except ValueError:
+                            pass
+                            
+                elif tool_name == "realtime_scraping":
+                    # Playwright 실시간 수집 실행
+                    result_str = realtime_scraping.invoke(tool_args)
+                else:
+                    result_str = f"알 수 없는 도구: {tool_name}"
+                
+                logger.info(f"Tool {tool_name} execution completed. Result summary: {result_str[:100]}...")
+                
+                # 도구 실행 결과를 지휘자 컨텍스트에 피드백
+                messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+                
+        # 2. 도구 호출 없이 최종 답변을 도출한 경우
+        else:
+            logger.info("Commander formulated the final answer.")
+            full_answer = response.content
+            if isinstance(full_answer, list):
+                full_answer = "".join([item.get("text", "") if isinstance(item, dict) else str(item) for item in full_answer])
+            elif not isinstance(full_answer, str):
+                full_answer = str(full_answer)
+            
+            # 인용 교정 적용 (validate_citations)
+            final_answer = validate_citations(full_answer, list(set(valid_ids)))
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Commander Agent Loop finished successfully in {elapsed:.2f}s")
+            
+            return {
+                "last_action_result": final_answer,
+                "is_finished": True,
+                "step_durations": [{"node": "qa_reasoning", "duration": elapsed}]
+            }
+
+    # 루프 초과 시 강제 거절 폴백
     elapsed = time.time() - start_time
-    logger.info(f"QA Reasoning Node completed in {elapsed:.2f} seconds")
-    
+    logger.error("Commander Agent Loop exceeded max_turns limit.")
     return {
-        "last_action_result": final_answer,
+        "last_action_result": "답변 생성 실패: 최대 추론 횟수를 초과하였습니다.",
         "is_finished": True,
         "step_durations": [{"node": "qa_reasoning", "duration": elapsed}]
     }

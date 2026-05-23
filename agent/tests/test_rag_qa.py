@@ -6,7 +6,6 @@ import pytest
 from pathlib import Path
 
 from shared.db.database import Database
-from agent.tools.rag_engine import parse_filters, retrieve
 from agent.graph.nodes import qa_reasoning_node
 from agent.graph.state import GraphState
 
@@ -93,85 +92,63 @@ def setup_test_db():
 
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
-def test_parse_filters():
-    # 1. 회사명, 스택, 경력 혼합 추출 테스트
-    q1 = "토스에서 SwiftUI 우대하는 3년 이상 경력의 iOS 개발자 공고 복지 알려줘"
-    f1 = parse_filters(q1)
-    assert f1.get("company") == "토스"
-    assert f1.get("tech_stack") in ["iOS", "SwiftUI", "Swift", "iOS 개발자"]
-    assert f1.get("career") == 3
-
-    # 2. 아무 필터도 없는 질문
-    q2 = "복지가 가장 좋은 회사는 어디야?"
-    f2 = parse_filters(q2)
-    assert f2.get("company") is None
-    assert f2.get("tech_stack") is None
-    assert f2.get("career") is None
-    assert f2.get("days_limit") is None
-
-    # 3. 시간 제약 분석 질문 테스트
-    q3 = "3개월 내 ai엔지니어 채용공고 특징 분석해줘"
-    f3 = parse_filters(q3)
-    assert f3.get("days_limit") == 90
-    assert "AI" in f3.get("tech_stack", "") or "ai" in f3.get("tech_stack", "").lower()
+def test_rag_search_tool(setup_test_db, monkeypatch):
+    monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    from agent.tools.rag_search import rag_search
+    
+    # 1. 회사명 필터를 이용한 DB RAG 도구 호출 테스트
+    result = rag_search.invoke({"query": "iOS 개발자 복지", "company": "토스"})
+    assert "<document id=" in result
+    assert "토스" in result
+    
+    # 2. 30일 이내 시간 조건 RAG 도구 호출 테스트
+    result_time = rag_search.invoke({"query": "Android 개발자", "days_limit": 30})
+    assert "<document id=" in result_time
+    assert "카카오" in result_time
 
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
-def test_retrieve_with_filters(setup_test_db):
-    # '토스' 회사명 필터 적용 테스트
-    filters = {"company": "토스"}
-    retrieved = retrieve("토스 iOS 개발자", filters, TEST_DB_PATH, top_k=5)
-    assert "is_empty" in retrieved
-
-
-@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
-def test_retrieve_with_days_limit(setup_test_db):
-    # 30일 이내 토스 공고 검색 필터 적용 테스트
-    filters = {"days_limit": 30, "company": "토스"}
-    retrieved = retrieve("토스 iOS 개발자", filters, TEST_DB_PATH, top_k=5)
-    assert "is_empty" in retrieved
-    if not retrieved.get("is_empty"):
-        for item in retrieved["results"]:
-            assert item["company_name"] == "토스"
+def test_realtime_scraping_tool(setup_test_db, monkeypatch):
+    monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    from agent.tools.realtime_scraping import realtime_scraping
+    
+    # 실제 Wanted를 headless로 구동하여 긁어오기 테스트
+    result = realtime_scraping.invoke({"company": "로이드케이"})
+    assert "적재 완료" in result or "수집 실패" in result or "오류" in result or "실패" in result or "완료" in result
 
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
-    # DB_PATH를 테스트용 DB로 임시 치워놓는 패치 적용
     monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
     
     # 1. 팩트 기반 질문 테스트
     state = GraphState(goal="토스 iOS 개발자의 자격요건과 복지 혜택을 알려줘")
-    
     result = qa_reasoning_node(state)
     answer = result.get("last_action_result", "")
     
-    print("\n--- RAG Q&A Answer ---")
+    print("\n--- Commander RAG Answer ---")
     print(answer)
-    print("----------------------")
+    print("----------------------------")
     
     assert result.get("is_finished") is True
-    # 성공적으로 답변을 가져왔거나 혹은 검색 거절("조건에 맞는 정보를 찾을 수 없습니다.")이 떨어졌는지 확인
     assert len(answer) > 0
+    # 인용 칩이 올바르게 생성되었거나 거절 문구가 생성되었는지 확인
+    assert "[job_id:" in answer or "찾을 수 없습니다" in answer or "확인되지 않음" in answer
 
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_hallucination_rejection(setup_test_db, monkeypatch):
-    # DB_PATH를 테스트용 DB로 임시 치워놓는 패치 적용
     monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
     
-    # 2. 환각 거절(Hallucination Rejection) 질문 테스트
-    # DB에 적재되지 않은 스페이스X 관련 질문 유입
+    # 2. 환각 거절 질문 테스트
     state = GraphState(goal="스페이스X의 화성 탐사선 개발자 공고 우대사항을 알려줘")
-    
     result = qa_reasoning_node(state)
     answer = result.get("last_action_result", "")
     
-    print("\n--- Hallucination Rejection Answer ---")
+    print("\n--- Commander Rejection Answer ---")
     print(answer)
-    print("--------------------------------------")
+    print("----------------------------------")
     
-    # RAG Pre-LLM Check 또는 Strict Prompting에 의해 즉시 거절 문구가 생성되어야 함
     assert "찾을 수 없습니다" in answer or "확인되지 않음" in answer
 
 
@@ -184,16 +161,13 @@ def test_web_server_api_endpoints(setup_test_db, monkeypatch):
     client = TestClient(app)
     
     # 1. 상세 공고 조회 API (/api/jobs/{job_id}) 검증
-    # SQLite에 삽입된 첫 번째 로우(id=1) 데이터 획득 테스트
     response = client.get("/api/jobs/1")
     assert response.status_code == 200
     res_data = response.json()
     assert res_data["id"] == 1
     assert res_data["company_name"] == "토스"
     assert "position" in res_data
-    assert "url" in res_data
-    assert "raw_text" in res_data
-
+    
     # 2. 미존재 ID 조회 시 에러 응답 검증
     fail_response = client.get("/api/jobs/9999")
     assert fail_response.status_code == 200

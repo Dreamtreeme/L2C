@@ -50,7 +50,6 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_name);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash);
 """
 
 
@@ -82,7 +81,7 @@ class Database:
             new_cols = {
                 "source_platform": "TEXT",
                 "raw_ocr_text": "TEXT",
-                "content_hash": "TEXT UNIQUE",
+                "content_hash": "TEXT",
                 "experience_min": "INTEGER",
                 "experience_max": "INTEGER",
                 "experience_text": "TEXT",
