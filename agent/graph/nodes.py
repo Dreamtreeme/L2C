@@ -374,3 +374,125 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "plan": current_plan,
         "current_plan_step": current_plan_step
     }
+
+
+def validate_citations(answer: str, valid_ids: List[int]) -> str:
+    """답변 내의 인용 ID를 검증하고, 유효하지 않은 경우 [출처 확인 불가]로 치환합니다."""
+    import re
+    valid_ids_str = {str(i) for i in valid_ids}
+    
+    def repl(match):
+        jid = match.group(1)
+        if jid in valid_ids_str:
+            return match.group(0)
+        else:
+            return "[출처 확인 불가]"
+            
+    return re.sub(r"\[job_id:(\d+)\]", repl, answer)
+
+
+def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
+    """
+    RAG 검색 및 엄격한 인용 Q&A를 수행하는 Reasoning 노드입니다.
+    Pre-LLM Check에 의해 검색 결과가 없거나 변별력이 낮을 시 LLM을 호출하지 않고 즉시 거절 응답을 리턴합니다.
+    """
+    import time
+    from agent.tools.rag_engine import parse_filters, retrieve
+    from shared.config import DB_PATH
+    
+    start_time = time.time()
+    logger.info("Executing QA Reasoning Node (RAG)")
+    
+    query = state.get("goal") or ""
+    if not query:
+        return {
+            "last_action_result": "질문이 비어있습니다.",
+            "is_finished": True,
+            "step_durations": [{"node": "qa_reasoning", "duration": time.time() - start_time}]
+        }
+
+    # 1. 쿼리 필터 파싱
+    filters = parse_filters(query)
+    
+    # 2. RAG 검색 수행
+    retrieved_data = retrieve(query, filters, DB_PATH)
+    
+    # 3. Pre-LLM Check
+    if retrieved_data.get("is_empty", True) or not retrieved_data.get("results"):
+        logger.info("Pre-LLM Check: Rejection. No matching/differentiating documents.")
+        return {
+            "last_action_result": "수집된 공고 내에서 조건에 맞는 정보를 찾을 수 없습니다.",
+            "is_finished": True,
+            "step_durations": [{"node": "qa_reasoning", "duration": time.time() - start_time}]
+        }
+        
+    results = retrieved_data["results"]
+    valid_ids = [item["id"] for item in results]
+    
+    # 4. XML 앵커링 컨텍스트 생성
+    context_parts = []
+    for item in results:
+        doc_xml = (
+            f'<document id="{item["id"]}">\n'
+            f'  <source_url>{item["url"]}</source_url>\n'
+            f'  <company>{item["company_name"]}</company>\n'
+            f'  <position>{item["position"]}</position>\n'
+            f'  <content>\n{item["raw_text"]}\n  </content>\n'
+            f'</document>'
+        )
+        context_parts.append(doc_xml)
+    context_str = "\n\n".join(context_parts)
+    
+    # 5. 엄격한 컨텍스트 밀착 프롬프트
+    system_prompt = (
+        "당신은 채용 공고 분석을 전담하는 Q&A 에이전트입니다. 아래 지침을 엄격히 준수하여 답변하십시오.\n\n"
+        "지침:\n"
+        "1. 제시된 <document> 태그 내부의 내용만을 근거로 답변하고, 외부 지식이나 상식을 절대 섞지 마십시오.\n"
+        "2. 답변의 모든 주장이나 사실적 진술 뒤에는 해당 정보의 출처가 되는 문서의 ID를 반드시 [job_id:ID] 형태로 표기하십시오.\n"
+        "   예: '로이드케이에서는 SwiftUI 경험을 우대합니다 [job_id:1]'\n"
+        "3. 만약 제공된 정보 내에 답변의 근거가 전혀 존재하지 않거나 부족하다면, 자의적으로 상상하여 답변하지 말고 "
+        "   반드시 '공고에서 확인되지 않음' 또는 '수집된 공고 내에서 조건에 맞는 정보를 찾을 수 없습니다.'라고만 대답하십시오.\n"
+        "4. 추측이나 주관적인 보완 진술은 일절 허용되지 않습니다."
+    )
+    
+    human_prompt = (
+        f"질문: {query}\n\n"
+        f"제시된 문서 컨텍스트:\n{context_str}\n\n"
+        "위 문서를 바탕으로 질문에 정확하게 답변하십시오. 답변에 인용 ID [job_id:ID]를 명시하지 못할 경우 해당 내용은 삭제되어야 합니다."
+    )
+    
+    qa_llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=human_prompt)
+    ]
+    
+    # 6. 스트리밍 응답 획득
+    logger.info("Generating QA response with streaming...")
+    response_chunks = []
+    try:
+        for chunk in qa_llm.stream(messages):
+            print(chunk.content, end="", flush=True)
+            response_chunks.append(chunk.content)
+        print() # newline
+        full_answer = "".join(response_chunks)
+    except Exception as e:
+        logger.error(f"Failed to generate QA streaming answer: {e}")
+        return {
+            "last_action_result": "답변 생성 실패",
+            "is_finished": True,
+            "step_durations": [{"node": "qa_reasoning", "duration": time.time() - start_time}]
+        }
+        
+    # 7. 인용 ID 검증 및 실패 ID 치환
+    final_answer = validate_citations(full_answer, valid_ids)
+    
+    elapsed = time.time() - start_time
+    logger.info(f"QA Reasoning Node completed in {elapsed:.2f} seconds")
+    
+    return {
+        "last_action_result": final_answer,
+        "is_finished": True,
+        "step_durations": [{"node": "qa_reasoning", "duration": elapsed}]
+    }
+

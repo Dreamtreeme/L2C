@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     experience_min  INTEGER,
     experience_max  INTEGER,
     experience_text TEXT,
+    embedding       BLOB,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -85,6 +86,7 @@ class Database:
                 "experience_min": "INTEGER",
                 "experience_max": "INTEGER",
                 "experience_text": "TEXT",
+                "embedding": "BLOB",
             }
             for col, col_type in new_cols.items():
                 if col not in columns:
@@ -112,6 +114,7 @@ class Database:
         data: dict[str, Any],
         screenshot_path: str | None = None,
         ocr_text_path: str | None = None,
+        embedding: bytes | None = None,
     ) -> int:
         now = datetime.now().isoformat(timespec="seconds")
         payload = {
@@ -136,6 +139,7 @@ class Database:
             "experience_min": data.get("experience_min", 0),
             "experience_max": data.get("experience_max", 99),
             "experience_text": data.get("experience_text", "경력 무관"),
+            "embedding": embedding or data.get("embedding"),
             "raw_json": json.dumps(data, ensure_ascii=False),
             "screenshot_path": screenshot_path,
             "ocr_text_path": ocr_text_path,
