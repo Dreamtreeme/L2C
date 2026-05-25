@@ -239,11 +239,11 @@ def main():
         report.append("\n---\n")
         
     report_text = "\n".join(report)
-    report_path = Path("data/jd_comparison_report.md")
+    report_path = Path("benchmark/jd_comparison_report.md")
     report_path.write_text(report_text, encoding="utf-8")
     
     logger.info(f"정밀 비교 리포트 작성 완료: {report_path}")
-    print("\n" + report_text[:1000] + "\n...\n(상세 내용은 data/jd_comparison_report.md 참고)")
+    print("\n" + report_text[:1000] + "\n...\n(상세 내용은 benchmark/jd_comparison_report.md 참고)")
 
 if __name__ == "__main__":
     main()
