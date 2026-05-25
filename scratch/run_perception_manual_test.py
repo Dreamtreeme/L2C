@@ -1,6 +1,10 @@
+import os
+import sys
+# 프로젝트 루트 경로를 sys.path에 추가
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+
 from agent.tools.perception import PerceptionEngine
 from agent.utils.logger import logger
-import os
 
 def main():
     logger.info("Starting Perception Engine test...")

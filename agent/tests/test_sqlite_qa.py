@@ -1,7 +1,6 @@
 import os
 import shutil
 import sqlite3
-import numpy as np
 import pytest
 from pathlib import Path
 
@@ -19,22 +18,6 @@ def setup_test_db():
         
     db = Database(TEST_DB_PATH)
     
-    # 더미 임베딩 생성 (768차원 float32)
-    # 1. iOS/Swift 관련 공고용 임베딩 (iOS 개발자 쿼리와 유사도가 높게 설정)
-    ios_base = np.zeros(768, dtype=np.float32)
-    ios_base[0:10] = 0.5  # 특정 패턴 부여
-    ios_embedding = ios_base.tobytes()
-    
-    # 2. Android 관련 공고용 임베딩
-    android_base = np.zeros(768, dtype=np.float32)
-    android_base[10:20] = 0.5
-    android_embedding = android_base.tobytes()
-    
-    # 3. 기타 백엔드 공고용 임베딩
-    backend_base = np.zeros(768, dtype=np.float32)
-    backend_base[20:30] = 0.5
-    backend_embedding = backend_base.tobytes()
-
     # 테스트 공고 데이터 적재
     db.upsert(
         url="https://www.wanted.co.kr/wd/1000",
@@ -48,8 +31,7 @@ def setup_test_db():
             "experience_max": 10,
             "experience_text": "3년 이상",
             "content_hash": "hash_1000"
-        },
-        embedding=ios_embedding
+        }
     )
 
     db.upsert(
@@ -64,8 +46,7 @@ def setup_test_db():
             "experience_max": 15,
             "experience_text": "5년 이상",
             "content_hash": "hash_2000"
-        },
-        embedding=android_embedding
+        }
     )
 
     db.upsert(
@@ -80,8 +61,7 @@ def setup_test_db():
             "experience_max": 2,
             "experience_text": "신입",
             "content_hash": "hash_3000"
-        },
-        embedding=backend_embedding
+        }
     )
     
     yield db
@@ -91,42 +71,87 @@ def setup_test_db():
         os.remove(TEST_DB_PATH)
 
 
-@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
-def test_rag_search_tool(setup_test_db, monkeypatch):
+def test_sqlite_query_tool(setup_test_db, monkeypatch):
     monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
-    from agent.tools.rag_search import rag_search
+    from agent.tools.sqlite_query import sqlite_query
     
-    # 1. 회사명 필터를 이용한 DB RAG 도구 호출 테스트
-    result = rag_search.invoke({"query": "iOS 개발자 복지", "company": "토스"})
+    # 1. 회사명 필터를 이용한 DB 조회 테스트
+    result = sqlite_query.invoke({"sql_query": "SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE company_name = '토스'"})
     assert "<document id=" in result
     assert "토스" in result
     
-    # 2. 30일 이내 시간 조건 RAG 도구 호출 테스트
-    result_time = rag_search.invoke({"query": "Android 개발자", "days_limit": 30})
+    # 2. 직무명 필터를 이용한 DB 조회 테스트
+    result_time = sqlite_query.invoke({"sql_query": "SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE position LIKE '%Android%'"})
     assert "<document id=" in result_time
     assert "카카오" in result_time
 
 
-@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_realtime_scraping_tool(setup_test_db, monkeypatch):
+    """비전 자율 수집 그래프 invoke를 mock하여 realtime_scraping 도구의 통합 로직을 검증합니다."""
     monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    
+    # 비전 에이전트 그래프를 모킹: invoke 시 수집된 JD 데이터를 반환하는 가짜 앱 생성
+    class FakeGraphApp:
+        def invoke(self, state):
+            return {
+                **state,
+                "is_finished": True,
+                "collected_data": ["모의 수집 완료"],
+                "extracted_jd": {
+                    "공고목록": [
+                        {
+                            "회사명": "테스트컴퍼니",
+                            "직무명": "테스트 엔지니어",
+                            "주요업무": "테스트 자동화 구축",
+                            "자격요건": "Python 3년 이상",
+                            "우대사항": "CI/CD 경험",
+                            "url": "https://www.wanted.co.kr/wd/99999",
+                        }
+                    ]
+                },
+            }
+
+    def mock_build_graph():
+        return FakeGraphApp()
+
+    monkeypatch.setattr("agent.graph.workflow.build_graph", mock_build_graph)
+    
+
+    
     from agent.tools.realtime_scraping import realtime_scraping
     
-    # 실제 Wanted를 headless로 구동하여 긁어오기 테스트
-    result = realtime_scraping.invoke({"company": "로이드케이"})
-    assert "적재 완료" in result or "수집 실패" in result or "오류" in result or "실패" in result or "완료" in result
+    result = realtime_scraping.invoke({"company": "테스트컴퍼니"})
+    assert "적재 완료" in result or "업데이트" in result
+    assert "테스트컴퍼니" in result or "1건" in result
+    
+    # DB에 실제 적재되었는지 검증
+    db = Database(TEST_DB_PATH)
+    conn = sqlite3.connect(TEST_DB_PATH)
+    cursor = conn.execute("SELECT company_name, position FROM jobs WHERE url = 'https://www.wanted.co.kr/wd/99999'")
+    row = cursor.fetchone()
+    conn.close()
+    assert row is not None, "Vision agent 수집 데이터가 DB에 적재되지 않았습니다."
+    assert row[0] == "테스트컴퍼니"
 
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
     monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
     
+    # realtime_scraping 도구 모킹하여 실제 브라우저 자동화 실행 방지
+    from langchain_core.tools import tool
+    @tool("realtime_scraping")
+    def mock_realtime_scraping(company: str = None, tech_stack: str = None) -> str:
+        """실시간 채용 공고를 수집하는 모킹 도구입니다."""
+        return f"실시간 수집 완료: '{company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
+    monkeypatch.setattr("agent.graph.nodes.realtime_scraping", mock_realtime_scraping)
+    
     # 1. 팩트 기반 질문 테스트
     state = GraphState(goal="토스 iOS 개발자의 자격요건과 복지 혜택을 알려줘")
     result = qa_reasoning_node(state)
     answer = result.get("last_action_result", "")
     
-    print("\n--- Commander RAG Answer ---")
+    print("\n--- Commander SQLite Answer ---")
     print(answer)
     print("----------------------------")
     
@@ -139,6 +164,14 @@ def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_hallucination_rejection(setup_test_db, monkeypatch):
     monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    
+    # realtime_scraping 도구 모킹하여 실제 브라우저 자동화 실행 방지
+    from langchain_core.tools import tool
+    @tool("realtime_scraping")
+    def mock_realtime_scraping(company: str = None, tech_stack: str = None) -> str:
+        """실시간 채용 공고를 수집하는 모킹 도구입니다."""
+        return f"실시간 수집 완료: '{company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
+    monkeypatch.setattr("agent.graph.nodes.realtime_scraping", mock_realtime_scraping)
     
     # 2. 환각 거절 질문 테스트
     state = GraphState(goal="스페이스X의 화성 탐사선 개발자 공고 우대사항을 알려줘")

@@ -41,7 +41,7 @@
   3. [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)에 동일 액션 연속 반복 3회 감지 시 에이전트를 안전하게 중단 및 탈출시키는 **Loop Detection & Recursion Limit** 로직을 적용함.
 
 ### [관련 참조 리소스]
-* **Ollama 포맷 재현 테스트 코드**: [test_ollama_format.py](file:///c:/Users/psg/Desktop/L2C/agent/tests/test_ollama_format.py)
+* **Ollama 포맷 재현 테스트 코드**: [run_ollama_format_test.py](file:///c:/Users/psg/Desktop/L2C/scratch/run_ollama_format_test.py)
 * **Ollama 원시 JSON 붕괴 로그**: [raw_ollama_resp.json](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/raw_ollama_resp.json)
 * **스택 기반 파서 디버깅 스크립트**: [debug_ollama_output.py](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/debug_ollama_output.py)
 * **루프 방지가 탑재된 그래프 노드**: [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)
@@ -67,9 +67,9 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
   - 로컬 Ollama 구동 시에는 정확도 방어선으로 해상도를 **`1024px`**로 늘리는 Fallback 브랜치 방안을 구축함.
 
 ### [관련 참조 리소스]
-* **모니터 비율 및 배율 오프셋 보정 디버거**: [debug_coords.py](file:///c:/Users/psg/Desktop/L2C/agent/tests/debug_coords.py)
+* **모니터 비율 및 배율 오프셋 보정 디버거**: [debug_coords.py](file:///c:/Users/psg/Desktop/L2C/scratch/debug_coords.py)
 * **해상도 및 DPI 스케일 검증 도구**: [inspect_dpi.py](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/inspect_dpi.py)
-* **Gemini perception API 개별 검증 스크립트**: [test_gemini_perception.py](file:///c:/Users/psg/Desktop/L2C/agent/tests/test_gemini_perception.py)
+* **Gemini perception API 개별 검증 스크립트**: [run_gemini_perception_test.py](file:///c:/Users/psg/Desktop/L2C/scratch/run_gemini_perception_test.py)
 * **1024px Fallback 및 캡처 스케일링 핵심 파일**: [perception.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/perception.py)
 
 ---
@@ -102,7 +102,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 * **근본 원인 식별**: 현재 윈도우 환경 Ollama(llama.cpp 백엔드) 상에서 Qwen2.5-VL 모델을 돌릴 때 비주얼 엔코더의 Attention 연산 시 **Flash Attention 2 가속이 작동하지 않아** 이미지 토큰 프리필(Prefill) 병목에 고정 40초 이상의 하드웨어 부하가 발생함.
 
 ### [관련 참조 리소스]
-* **7B 최적화 시뮬레이션 제어 코드**: [simulate_local_limit.py](file:///c:/Users/psg/Desktop/L2C/agent/tests/simulate_local_limit.py)
+* **7B 최적화 시뮬레이션 제어 코드**: [simulate_local_limit.py](file:///c:/Users/psg/Desktop/L2C/scratch/simulate_local_limit.py)
 * **가설 1 (768px) 실행 결과 로그**: [task-830.log](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/.system_generated/tasks/task-830.log)
 * **가설 2 (num_ctx 2048) 실행 결과 로그**: [task-850.log](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/.system_generated/tasks/task-850.log)
 
@@ -121,7 +121,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 
 ---
 
-## 7. OmniParser SoM 로컬 파이프라인 실제 구현 및 통합 (YOLOv8 + EasyOCR + PIL 인메모리 처리)
+## 7. OmniParser SoM 로컬 파이프라인 실제 구현 및 통합 (YOLOv8 + PaddleOCR + PIL 인메모리 처리)
 
 ### [현상]
 * 비주얼 기반의 좌표 인식 및 에이전트 구동의 실효성을 높이기 위해, 기존 Mock 데이터를 걷어내고 실제 로컬 Set-of-Marks (SoM) 파이프라인인 **OmniParser 로컬 엔진**을 완전 통합하려 함.
@@ -129,7 +129,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 
 ### [해결 조치]
 1. **인메모리 디코딩 적용**: 디스크 입출력 없이 mss 캡처의 raw BGRA 데이터를 메모리 레벨에서 직접 `BGRX` 디코더를 활용하여 PIL 이미지로 초고속 고정밀 변환 (`wait_stable.py`, `som_engine.py`).
-2. **YOLOv8 & EasyOCR 통합**:
+2. **YOLOv8 & PaddleOCR 통합**:
    - `som_engine.py`에서 로컬 GPU(CUDA)를 바인딩하여 1.2s 수준으로 탐지 속도 가속화.
    - **IoU 기반 텍스트-아이콘 중복 필터링 (NMS)** 알고리즘을 적용하여 UI 마커 숫자가 겹치거나 지저분해지는 중복 마킹 현상을 말끔히 제거.
 3. **듀얼 모니터 좌표 매핑 교정**: 감지된 오프셋 좌표를 브라우저 윈도우 시작점에 매핑하여, 서브 모니터에서도 오차 없이 정밀하게 요소를 타격하는 스케일 보정 코드 적용 완료.
@@ -150,7 +150,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 * **해결 조치**:
   1. Gemini 3.5 Flash는 비전 능력이 탁월하므로 굳이 텍스트 사전 설명이 필요 없음을 간파.
   2. `SKIP_VLM_CAPTION=true` 환경변수 옵션을 추가하여 **VLM 캡셔닝 단계를 완전히 우회(Bypass)** 처리함.
-  3. 로컬 EasyOCR이 감지한 텍스트 데이터와 YOLOv8의 탐지 타입을 직접 결합하여 최소한의 텍스트 설명 컨텍스트를 perception 레벨에서 자율 매핑함.
+  3. 로컬 PaddleOCR이 감지한 텍스트 데이터와 YOLOv8의 탐지 타입을 직접 결합하여 최소한의 텍스트 설명 컨텍스트를 perception 레벨에서 자율 매핑함.
 * **결과**: Perception Node 소요 지연 시간이 **7.12초 ➡️ 평균 1.31초로 약 81.7% 급감**함.
 
 ### [관련 참조 리소스]

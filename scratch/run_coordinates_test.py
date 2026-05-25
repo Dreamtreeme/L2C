@@ -4,7 +4,7 @@ import sys
 import os
 
 # 프로젝트 루트 경로를 sys.path에 추가하여 'agent' 모듈을 찾을 수 있게 합니다.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 from agent.tools.perception import PerceptionEngine
 from agent.utils.logger import logger

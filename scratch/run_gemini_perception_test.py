@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image
 
 # Load environment
-dotenv.load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / '.env')
+dotenv.load_dotenv(dotenv_path=Path(__file__).parent.parent / '.env')
 
 def test_gemini_perception():
     image_path = r"C:\Users\psg\Desktop\L2C\data\screenshots\screen_20260520_073042.png"

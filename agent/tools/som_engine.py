@@ -9,7 +9,7 @@ from agent.utils.logger import logger
 class SomEngine:
     """
     순수 비전 기반 Set-of-Marks (SoM) 엔진입니다.
-    화면 내의 클릭 가능한 요소(아이콘, 버튼, 텍스트)를 YOLOv8과 EasyOCR로 검출하고,
+    화면 내의 클릭 가능한 요소(아이콘, 버튼, 텍스트)를 YOLOv8과 PaddleOCR로 검출하고,
     화면에 숫자 마커 라벨을 합성한 이미지와 해당 마커의 물리 좌표 매핑을 제공합니다.
     """
 
@@ -78,7 +78,7 @@ class SomEngine:
 
         raw_boxes = []
 
-        # PIL 이미지 로드 및 리사이징 (EasyOCR & YOLOv8의 효율성을 위한 최적화)
+        # PIL 이미지 로드 및 리사이징 (PaddleOCR & YOLOv8의 효율성을 위한 최적화)
         try:
             img = Image.open(image_path)
         except Exception as load_err:

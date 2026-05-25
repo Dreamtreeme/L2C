@@ -127,7 +127,7 @@ class PerceptionEngine:
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """
         Set-of-Marks (SoM) 기반의 UI 분석 엔진입니다.
-        로컬 YOLOv8 및 EasyOCR로 마킹 이미지를 생성한 뒤 VLM(Gemini/Ollama)을 호출하여
+        로컬 YOLOv8 및 PaddleOCR로 마킹 이미지를 생성한 뒤 VLM(Gemini/Ollama)을 호출하여
         각 마커 ID의 서비스 상 용도를 캡셔닝하고 물리 좌표와 맵핑하여 반환합니다.
         
         Args:

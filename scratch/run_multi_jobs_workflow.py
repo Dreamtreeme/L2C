@@ -5,10 +5,10 @@ import time
 import dotenv
 
 # .env 파일 로드
-dotenv.load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../.env'))
+dotenv.load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
 
 # 프로젝트 루트 경로를 sys.path에 추가
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 from agent.graph.workflow import build_graph
 from agent.utils.logger import logger
@@ -18,18 +18,20 @@ def main():
         logger.error("GEMINI_API_KEY is not set in .env. Please set it to proceed.")
         return
         
-    logger.info("Starting Random E2E Crawling Workflow (Query chosen by LLM)")
+    logger.info("Starting Multi-Jobs E2E Crawling Workflow (Dynamic Planning & Multi-Postings Loop)")
     
     app = build_graph()
     
-    # 에이전트가 스스로 검색어를 정하고 탐색하여 JSON을 추출하도록 고수준 Goal 정의
+    # 에이전트가 "모든 공고"를 순회하며 동적으로 계획을 세우고 정보를 누적 수집하도록 고수준 Goal 정의
     initial_state = {
         "goal": (
-            "현재 바탕화면입니다. 원티드 사이트(https://www.wanted.co.kr)에 접속하여 원하는 IT 분야 직무 키워드(예: 백엔드 개발자, 프론트엔드 개발자, iOS 개발자, 프로덕트 디자이너 등)를 스스로 하나 무작위로 선택하세요. "
-            "해당 키워드로 검색을 수행한 후, 검색 결과 목록의 첫 번째 채용 공고 상세 페이지에 진입해 주세요. "
-            "상세 페이지 진입 후에는 해당 공고의 브라우저 주소창 URL을 정확히 기록하고, 본문 영역의 '상세 정보 더 보기' 버튼을 찾아 클릭하여 본문을 확장한 뒤, "
-            "스크롤을 활용하여 본문 내용을 끝까지 판독해 주시기 바랍니다. "
-            "마지막으로 수집된 회사명, 직무명, 주요업무, 자격요건, 우대사항, 혜택 정보 및 해당 공고의 'url' 필드를 포함한 JSON 구조를 최종 결과로 반환해 주세요."
+            "현재 바탕화면입니다. 원티드 사이트(https://www.wanted.co.kr)에 접속하여 'iOS 개발자'를 검색창에 입력하고 검색을 수행하세요. "
+            "검색 결과 목록이 나타나면, 실제 노출된 채용 공고 목록을 파악한 뒤 `update_plan_progress` 도구를 사용하여 '검색 결과에 노출된 모든 채용 공고'를 순차적으로 클릭해 수집하는 상세 소목표 계획을 동적으로 수립하십시오. "
+            "소목표 계획 수립 후, 계획에 맞춰 각 공고 상세 페이지에 진입하여 '상세 정보 더 보기' 버튼을 누르고 스크롤을 끝까지 내려 본문을 판독하십시오. "
+            "각 공고 상세 정보(회사명, 직무명, 주요업무, 자격요건, 우대사항, 혜택 정보, 공고 url)를 수집하여 `update_extracted_info` 도구를 사용해 "
+            "\"공고목록\" 리스트 필드를 가진 누적 JSON 구조(예: `{\"공고목록\": [ {공고1}, {공고2}, ... ]}`)로 메모리에 누적 저장하십시오. "
+            "한 공고의 수집이 완료되면 `go_back` 도구를 호출하여 목록 화면으로 돌아오고, 계획을 갱신한 뒤 다음 공고를 동일하게 수집하십시오. "
+            "목록에 노출된 모든 공고 수집을 완료하면 `finish_task`를 호출하여 요약 결과를 반환하고 최종 종료하십시오."
         ),
         "ui_context": "",
         "action_history": [],
@@ -47,7 +49,7 @@ def main():
     os.environ["SKIP_VLM_CAPTION"] = "true"
     os.environ["SKIP_WAIT_STABLE"] = "false"
     
-    logger.info("--- RANDOM WORKFLOW START ---", goal=initial_state["goal"])
+    logger.info("--- MULTI-JOBS WORKFLOW START ---", goal=initial_state["goal"])
     
     step_logs = []
     last_time = time.time()
@@ -56,8 +58,8 @@ def main():
     final_result_data = None
     
     try:
-        # LangGraph 실행 (재귀 한도 150)
-        for output in app.stream(initial_state, {"recursion_limit": 150}):
+        # LangGraph 실행 (재귀 한도 400)
+        for output in app.stream(initial_state, {"recursion_limit": 400}):
             for key, value in output.items():
                 now = time.time()
                 elapsed = now - last_time
@@ -74,7 +76,6 @@ def main():
                 if key == "perception":
                     logger.info("Perception UI Context Snippet:")
                     ui_ctx = value.get("ui_context", "")
-                    # 길면 일부만 출력
                     lines = ui_ctx.split('\n')
                     snippet = '\n'.join(lines[:15])
                     logger.info(f"\n{snippet}\n...")
@@ -105,7 +106,6 @@ def main():
     if final_result_data:
         logger.info("Agent successfully completed the task.")
         try:
-            # 혹시 문자열 형태의 JSON이면 파싱 시도
             if isinstance(final_result_data, str):
                 import re
                 m = re.search(r"\{.*\}", final_result_data, re.DOTALL)
@@ -116,34 +116,25 @@ def main():
             else:
                 parsed_json = final_result_data
                 
-            # data/ 디렉토리에 저장
             os.makedirs("data", exist_ok=True)
-            output_file = "data/agent_extracted_random_jd.json"
+            output_file = "data/agent_extracted_multi_jds.json"
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(parsed_json, f, ensure_ascii=False, indent=2)
-            logger.info(f"Saved extracted JD to: {output_file}")
+            logger.info(f"Saved extracted JDs to: {output_file}")
             
             print("\n" + "="*50)
-            print("             EXTRACTED JOB DESCRIPTION")
+            print("             EXTRACTED JOB DESCRIPTIONS")
             print("="*50)
             print(json.dumps(parsed_json, ensure_ascii=False, indent=2))
             print("="*50)
             
-            # 주소 추출 시도 및 안내
-            target_url = parsed_json.get("url") or parsed_json.get("URL")
-            if target_url:
-                print(f"\n[TARGET_URL] Detected Job URL: {target_url}\n")
-            else:
-                print("\n[WARNING] Could not automatically find 'url' field in the extracted JSON.")
-                print("Please check the printout above to find the URL.\n")
-                
         except Exception as parse_err:
             logger.error("Failed to parse or save final result JSON", error=str(parse_err))
             print(f"Raw Result: {final_result_data}")
     else:
         logger.error("No data collected or workflow did not finish successfully.")
         
-    logger.info("--- RANDOM WORKFLOW END ---")
+    logger.info("--- MULTI-JOBS WORKFLOW END ---")
 
 if __name__ == "__main__":
     main()

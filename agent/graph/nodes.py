@@ -13,7 +13,7 @@ from agent.tools.perception import PerceptionEngine
 from agent.tools.actions import ActionTools
 from agent.prompts.commander import commander_prompt, COMMANDER_SYSTEM_PROMPT
 from agent.utils.logger import logger
-from agent.tools.rag_search import rag_search
+from agent.tools.sqlite_query import sqlite_query
 from agent.tools.realtime_scraping import realtime_scraping
 
 # 싱글톤으로 도구 유지
@@ -414,17 +414,19 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
 
     # 지휘자 모델 초기화 (도구 바인딩)
     llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
-    tools = [rag_search, realtime_scraping]
+    tools = [sqlite_query, realtime_scraping]
     llm_with_tools = llm.bind_tools(tools)
 
     # 지휘자의 시스템 지침 설정
     system_prompt = (
         "당신은 채용 공고 분석을 지휘하는 전문 에이전트(Commander)입니다. 아래 지침을 반드시 준수하여 역할을 수행하세요.\n\n"
         "지침:\n"
-        "1. 사용자의 질문에 답하기 위해 가장 먼저 'rag_search' 도구를 호출하여 데이터베이스에 관련 정보가 있는지 확인하십시오.\n"
-        "2. 'rag_search' 결과 정보가 없거나 부족한 경우(예: '검색 결과가 없습니다' 또는 'Pre-LLM Check 거절 대상' 수신 시), "
+        "1. 사용자의 질문에 답하기 위해 가장 먼저 'sqlite_query' 도구를 호출하여 데이터베이스에 관련 정보가 있는지 확인하십시오.\n"
+        "   - 'sqlite_query' 호출 시 적절한 SQL SELECT 문을 직접 생성하여 조건에 맞는 데이터를 조회하십시오.\n"
+        "   - 예: 특정 회사 채용 정보를 조회하려면 `SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE company_name LIKE '%회사명%'` 형식의 SQL을 작성하십시오.\n"
+        "2. 'sqlite_query' 결과 정보가 없거나 부족한 경우(예: '검색 결과가 없습니다' 수신 시), "
         "   반드시 'realtime_scraping' 도구를 즉시 호출하여 실시간으로 관련 공고를 수집하십시오.\n"
-        "3. 'realtime_scraping' 도구로부터 적재 성공 결과가 피드백되면, 다시 'rag_search' 도구를 재호출하여 업데이트된 공고 내용을 조회하십시오.\n"
+        "3. 'realtime_scraping' 도구로부터 적재 성공 결과가 피드백되면, 다시 'sqlite_query' 도구를 재호출하여 업데이트된 공고 내용을 조회하십시오.\n"
         "4. 획득된 공고 정보(<document id=\"ID\"> XML 내용)만을 근거로 삼아 사용자 질문에 논리적이고 사실적으로 최종 답변을 작성하십시오.\n"
         "5. 최종 답변의 모든 사실적 진술 뒤에는 해당 문서의 ID를 반드시 [job_id:ID] 형태로 기재하십시오 (예: '로이드케이에서는 SwiftUI를 우대합니다 [job_id:3]').\n"
         "6. DB 검색이나 실시간 수집을 모두 거친 후에도 근거가 전혀 존재하지 않는다면, 지어내지 말고 '수집된 공고 내에서 조건에 맞는 정보를 찾을 수 없습니다.'라고만 답변하십시오.\n"
@@ -437,8 +439,8 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
         HumanMessage(content=query)
     ]
 
-    # 최대 5번의 턴(루프) 제한으로 무한 루프 방지
-    max_turns = 5
+    # 최대 7번의 턴(루프) 제한으로 무한 루프 방지
+    max_turns = 7
     valid_ids = []
     
     for turn in range(max_turns):
@@ -458,9 +460,9 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
                 logger.info(f"Commander decided to call tool: {tool_name} with args: {tool_args}")
                 
                 # 도구 매핑 및 실행
-                if tool_name == "rag_search":
-                    # DB RAG 실행
-                    result_str = rag_search.invoke(tool_args)
+                if tool_name == "sqlite_query":
+                    # DB SQLite 쿼리 실행
+                    result_str = sqlite_query.invoke(tool_args)
                     
                     # XML 문서에서 id를 파싱하여 인용 검증용 valid_ids 채우기
                     import re

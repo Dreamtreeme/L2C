@@ -7,8 +7,8 @@ import re
 from pathlib import Path
 
 # Load .env
-dotenv.load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../../.env'))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+dotenv.load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '../.env'))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 from agent.utils.logger import logger
 from classic.automation.capture import capture_and_extract_dom
