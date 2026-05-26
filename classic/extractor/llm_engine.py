@@ -122,62 +122,36 @@ class LLMEngine:
             logger.error("LLM 응답이 비어있습니다.")
             return {}
 
-        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
-        if m:
-            json_str = m.group(1).strip()
-        else:
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            json_str = m.group(0) if m else text.strip()
-        
         try:
-            if not json_str:
-                raise ValueError("추출된 JSON 문자열이 비어있습니다.")
-            return json.loads(json_str)
+            from json_repair import repair_json
+            result = repair_json(text, return_objects=True)
+            if isinstance(result, dict):
+                return result
+            # repair_json이 list 등 비-dict 타입을 반환한 경우 (최상위 배열 등)
+            logger.warning(f"json_repair가 dict 외 타입 반환: {type(result)}")
+            return {}
+        except ImportError:
+            # json-repair 미설치 환경 fallback: 기존 정규식 방식 유지
+            m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+            if m:
+                json_str = m.group(1).strip()
+            else:
+                m = re.search(r"\{.*\}", text, re.DOTALL)
+                json_str = m.group(0) if m else text.strip()
+            try:
+                return json.loads(json_str) if json_str else {}
+            except Exception as e:
+                logger.error(f"JSON 파싱 실패: {e}\n원본 텍스트 일부: {text[:300]}")
+                return {}
         except Exception as e:
             logger.error(f"JSON 파싱 실패: {e}\n원본 텍스트 일부: {text[:300]}")
             return {}
 
-    # 스키마의 단일 string vs list 필드 분류 (LLM이 혼동하는 케이스를 흡수)
-    _STRING_FIELDS = frozenset({
-        "company_name", "position", "job_category", "experience_level",
-        "education", "employment_type", "location", "deadline", "salary",
-    })
-    _LIST_FIELDS = frozenset({
-        "tech_stack", "main_tasks", "requirements", "preferred", "benefits",
-    })
-
-    @classmethod
-    def _normalize_types(cls, data: dict) -> dict:
-        """LLM 출력의 타입 불일치를 스키마에 맞춰 강제 normalize.
-
-        - String 필드가 list로 오면 ", ".join(...)
-          예: experience_level=['신입', '미들', '시니어'] → '신입, 미들, 시니어'
-        - List 필드가 string으로 오면 쉼표/세미콜론으로 split 후 list화
-          예: tech_stack='Java, Spring' → ['Java', 'Spring']
-
-        DB에는 string은 그대로, list는 JSON 직렬화돼 들어가야 하므로
-        타입이 어긋나면 sqlite InterfaceError로 파이프라인이 죽는다.
-        """
-        for f in cls._STRING_FIELDS:
-            v = data.get(f)
-            if isinstance(v, list):
-                joined = ", ".join(str(x).strip() for x in v if str(x).strip())
-                data[f] = joined or None
-
-        for f in cls._LIST_FIELDS:
-            v = data.get(f)
-            if isinstance(v, str):
-                parts = [s.strip() for s in re.split(r"[,;]\s*", v) if s.strip()]
-                data[f] = parts
-
-        return data
-
     @classmethod
     def _validate(cls, data: dict) -> dict:
-        normalized = cls._normalize_types(data)
+        # 타입 정규화(list↔string 강제변환)는 JobPosting @field_validator가 담당합니다.
         try:
-            # 스키마에 맞춰 검증 및 정제
-            return JobPosting(**normalized).model_dump()
+            return JobPosting(**data).model_dump()
         except Exception as e:
             logger.warning(f"스키마 검증 경고: {e}")
-            return normalized
+            return data

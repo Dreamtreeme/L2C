@@ -174,17 +174,23 @@ class Database:
             logger.info(f"DB INSERT id={new_id} url={url} company={data.get('company_name')!r}")
             return new_id
 
-    def get(self, job_id: int) -> dict | None:
+    def _fetch_one(self, where_clause: str, param: Any) -> dict | None:
+        """WHERE 절 하나로 단일 행을 조회하는 공통 헬퍼."""
         with self._conn() as conn:
-            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-        logger.debug(f"get(id={job_id}) found={row is not None}")
+            row = conn.execute(
+                f"SELECT * FROM jobs WHERE {where_clause}", (param,)
+            ).fetchone()
         return self._row_to_dict(row) if row else None
 
+    def get(self, job_id: int) -> dict | None:
+        result = self._fetch_one("id = ?", job_id)
+        logger.debug(f"get(id={job_id}) found={result is not None}")
+        return result
+
     def get_by_url(self, url: str) -> dict | None:
-        with self._conn() as conn:
-            row = conn.execute("SELECT * FROM jobs WHERE url = ?", (url,)).fetchone()
-        logger.debug(f"get_by_url({url}) found={row is not None}")
-        return self._row_to_dict(row) if row else None
+        result = self._fetch_one("url = ?", url)
+        logger.debug(f"get_by_url({url}) found={result is not None}")
+        return result
 
     def list_recent(self, limit: int = 20) -> list[dict]:
         with self._conn() as conn:

@@ -1,6 +1,5 @@
 import os
 import json
-import base64
 import time
 from typing import Dict, Any, List, Optional
 
@@ -145,40 +144,23 @@ qa_llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
 qa_llm_with_tools = qa_llm.bind_tools([sqlite_query, realtime_scraping])
 
 
-def reasoning_node(state: GraphState) -> Dict[str, Any]:
-    """Gemini Flash를 호출하여 다음 행동을 결정합니다."""
-    start_time = time.time()
-    logger.info("Executing Reasoning Node")
-    
-    # 루프 감지 로직
-    action_history = state.get("action_history", [])
-    ui_context = state.get("ui_context", "")
-    loop_warning = ""
-    error_increment = 0
-    
-    if len(action_history) >= 3:
-        last_3 = action_history[-3:]
-        # 각 액션의 대표값 (action 종류 + args의 json 문자열) 추출
-        actions_set = set(
-            (a.get("action"), json.dumps(a.get("args", {}), sort_keys=True)) 
-            for a in last_3 if isinstance(a, dict)
-        )
-        if len(actions_set) == 1:
-            repeated = last_3[-1]
-            logger.warning(f"Loop detected! Repeated action: {repeated.get('action')} with args: {repeated.get('args')}")
-            loop_warning = f"\n\n[경고: 무한 루프 감지됨] 당신은 직전 3회 동안 동일한 행동({repeated.get('action')}: {repeated.get('args')})을 반복했습니다. 절대 동일한 행동(동일 마커 클릭 등)을 다시 수행하지 마십시오. 새로운 마커를 클릭하거나, 스크롤을 하거나, 다른 방식으로 목표를 해결해야 합니다."
-            
-            # 4회 이상 반복 시 에러 카운트 증가를 통한 자동 중단 유도
-            if len(action_history) >= 4:
-                last_4 = action_history[-4:]
-                actions_set_4 = set(
-                    (a.get("action"), json.dumps(a.get("args", {}), sort_keys=True)) 
-                    for a in last_4 if isinstance(a, dict)
-                )
-                if len(actions_set_4) == 1:
-                    logger.error("Persistent loop detected. Increasing error count to terminate.")
-                    error_increment = 1
-                    
+def _is_repeating(history: list, n: int) -> bool:
+    """최근 n개 액션이 모두 동일한지 검사합니다."""
+    if len(history) < n:
+        return False
+    last_n = history[-n:]
+    actions = set(
+        (a.get("action"), json.dumps(a.get("args", {}), sort_keys=True))
+        for a in last_n if isinstance(a, dict)
+    )
+    return len(actions) == 1
+
+
+def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
+    """
+    reasoning_node용 LLM 메시지 리스트를 조립합니다.
+    마킹 이미지가 있으면 멀티모달, 없으면 텍스트 전용 메시지를 반환합니다.
+    """
     plan = state.get("plan", [])
     current_plan_step = state.get("current_plan_step", 0)
     plan_context = ""
@@ -191,6 +173,9 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
 
     system_prompt_text = COMMANDER_SYSTEM_PROMPT.format(goal=state.get("goal", ""))
     extracted_jd = state.get("extracted_jd", {})
+    ui_context = state.get("ui_context", "")
+    action_history = state.get("action_history", [])
+
     human_prompt_text = (
         f"{plan_context}"
         f"현재까지 누적 수집된 정보:\n{json.dumps(extracted_jd, ensure_ascii=False, indent=2)}\n\n"
@@ -199,37 +184,21 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
         f"계획 단계 전환이 일어났다면 update_plan_progress를 함께 체이닝 호출하여 계획 진행률을 반영하십시오."
     )
-    
-    # 마킹 이미지 로드 및 Base64 인코딩 (VLM 리사이징 & JPEG 압축 최적화)
+
+    # 마킹 이미지가 있으면 멀티모달 메시지
     marked_image_path = state.get("marked_image")
     base64_image = ""
     if marked_image_path and os.path.exists(marked_image_path):
         try:
-            from PIL import Image
-            from io import BytesIO
-            with Image.open(marked_image_path) as img:
-                # VLM 최적화를 위해 최대 해상도를 1024px로 축소 (Gemini 3.5 Flash 권장 사양)
-                width, height = img.size
-                max_dim = 1024
-                if width > max_dim or height > max_dim:
-                    ratio = max_dim / max(width, height)
-                    new_w = int(width * ratio)
-                    new_h = int(height * ratio)
-                    # 고품질 LANCZOS 대신 속도가 빠른 BILINEAR로 고속 리사이징
-                    img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-                
-                # PNG 대신 압축률이 높은 JPEG(퀄리티 70)로 변환하여 페이로드 크기 75% 이상 감축
-                buffered = BytesIO()
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                img.save(buffered, format="JPEG", quality=70)
-                base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            from agent.utils.image_utils import image_to_base64_jpeg
+            from pathlib import Path
+            base64_image = image_to_base64_jpeg(Path(marked_image_path), max_dim=1024, quality=70, fast=True)
         except Exception as img_err:
             logger.warning("Failed to read/resize marked_image for reasoning node", error=str(img_err))
-            
+
     if base64_image:
         logger.info("Invoking reasoning node with multimodal SoM marked image...")
-        messages = [
+        return [
             SystemMessage(content=system_prompt_text),
             HumanMessage(content=[
                 {"type": "text", "text": human_prompt_text},
@@ -238,38 +207,111 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         ]
     else:
         logger.info("Invoking reasoning node with text-only prompts...")
-        messages = [
+        return [
             SystemMessage(content=system_prompt_text),
             HumanMessage(content=human_prompt_text)
         ]
-    
-    # LLM 추론
+
+
+def reasoning_node(state: GraphState) -> Dict[str, Any]:
+    """Gemini Flash를 호출하여 다음 행동을 결정합니다."""
+    start_time = time.time()
+    logger.info("Executing Reasoning Node")
+
+    # 루프 감지
+    action_history = state.get("action_history", [])
+    loop_warning = ""
+    error_increment = 0
+
+    if _is_repeating(action_history, 3):
+        repeated = action_history[-1]
+        logger.warning(f"Loop detected! Repeated action: {repeated.get('action')} with args: {repeated.get('args')}")
+        loop_warning = (
+            f"\n\n[경고: 무한 루프 감지됨] 당신은 직전 3회 동안 동일한 행동"
+            f"({repeated.get('action')}: {repeated.get('args')})을 반복했습니다. "
+            f"절대 동일한 행동(동일 마커 클릭 등)을 다시 수행하지 마십시오. "
+            f"새로운 마커를 클릭하거나, 스크롤을 하거나, 다른 방식으로 목표를 해결해야 합니다."
+        )
+
+    if _is_repeating(action_history, 4):
+        logger.error("Persistent loop detected. Increasing error count to terminate.")
+        error_increment = 1
+
+    # 메시지 조립 + LLM 호출
+    messages = _build_reasoning_messages(state, loop_warning)
     response = llm_with_tools.invoke(messages)
-    
+
     elapsed = time.time() - start_time
     logger.info(f"Reasoning Node completed in {elapsed:.2f} seconds")
-    
-    # 결과를 State에 임시 저장 및 에러 카운트 업데이트
+
     result = {
         "last_action_result": response,
         "step_durations": [{"node": "reasoning", "duration": elapsed}]
     }
     if error_increment > 0:
         result["error_count"] = state.get("error_count", 0) + error_increment
-        
+
     return result
+
+
+def _dispatch_ui(action_name: str, args: dict, get_bbox) -> dict:
+    """마우스/키보드 물리 조작 도구를 실행합니다."""
+    if action_name == "click_marker":
+        return action_tools.click_marker(get_bbox(args["marker_id"]))
+    elif action_name == "type_in_marker":
+        return action_tools.type_in_marker(get_bbox(args["marker_id"]), args["text"])
+    elif action_name == "scroll":
+        return action_tools.scroll(direction=args.get("direction", "down"))
+    elif action_name == "press_key":
+        return action_tools.press_key(args["key"])
+    elif action_name == "open_browser":
+        return action_tools.open_browser(args["url"])
+    elif action_name == "get_credentials":
+        return action_tools.get_credentials(args["site"])
+    elif action_name == "go_back":
+        return action_tools.go_back()
+    raise ValueError(f"Unknown UI action: {action_name}")
+
+
+def _dispatch_state(
+    action_name: str, args: dict,
+    current_jd: dict, current_plan: list, current_plan_step: int
+) -> Tuple[dict, dict, list, int]:
+    """그래프 상태 변경 도구를 실행하고 (result, jd, plan, step)을 반환합니다."""
+    if action_name == "update_plan_progress":
+        current_plan_step = args["current_step"]
+        if args.get("plan") is not None:
+            current_plan = args["plan"]
+        result = {
+            "action": "update_plan_progress",
+            "status": "success",
+            "result": f"Plan progress updated. Current step index: {current_plan_step}",
+        }
+    elif action_name == "update_extracted_info":
+        try:
+            new_data = json.loads(args["data_json"])
+            current_jd.update(new_data)
+            result_str = f"Extracted data updated with: {new_data}"
+            status = "success"
+        except Exception as e:
+            result_str = f"Failed to parse data_json: {e}"
+            status = "error"
+        result = {"action": "update_extracted_info", "status": status, "result": result_str}
+    else:
+        raise ValueError(f"Unknown state action: {action_name}")
+    return result, current_jd, current_plan, current_plan_step
 
 
 def action_node(state: GraphState) -> Dict[str, Any]:
     """Reasoning Node가 선택한 도구(들)를 순차적으로 실행(Action Chaining)합니다."""
     start_time = time.time()
     logger.info("Executing Action Node (with potential Action Chaining)")
-    
+
     ai_msg: AIMessage = state.get("last_action_result")
-    
+
     if ai_msg and hasattr(ai_msg, "content") and ai_msg.content:
         logger.info(f"LLM Thoughts: {ai_msg.content}")
-        
+
     if not ai_msg or not hasattr(ai_msg, "tool_calls") or not ai_msg.tool_calls:
         logger.warning("LLM did not return a tool call.")
         elapsed = time.time() - start_time
@@ -277,109 +319,82 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             "action_history": [{"action": "none", "status": "error", "error": "No tool call", "args": {}}],
             "step_durations": [{"node": "action", "duration": elapsed}]
         }
-        
+
     new_actions = []
-    current_jd = dict(state.get("extracted_jd", {}))
-    is_finished = state.get("is_finished", False)
-    collected_data = list(state.get("collected_data", []))
-    error_count = state.get("error_count", 0)
-    step_durations = []
+    current_jd        = dict(state.get("extracted_jd", {}))
+    is_finished       = state.get("is_finished", False)
+    collected_data    = list(state.get("collected_data", []))
+    error_count       = state.get("error_count", 0)
+    step_durations    = []
     current_plan_step = state.get("current_plan_step", 0)
-    current_plan = list(state.get("plan", []))
-    
-    # 헬퍼 함수: marker_id -> bbox 매핑
+    current_plan      = list(state.get("plan", []))
+
+    # marker_id → bbox 변환 헬퍼
     def get_bbox(marker_id: int):
         for m in state.get("current_markers", []):
             if m["id"] == marker_id:
                 return m["bbox"]
         raise ValueError(f"Marker ID {marker_id} not found in current screen.")
-        
+
+    # 도구 카테고리 라우팅 테이블
+    UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key",
+                     "open_browser", "get_credentials", "go_back"}
+    STATE_ACTIONS = {"update_plan_progress", "update_extracted_info"}
+
     for idx, tool_call in enumerate(ai_msg.tool_calls):
         action_name = tool_call["name"]
-        args = tool_call["args"]
-        
+        args        = tool_call["args"]
+
         logger.info(f"LLM decided to call (chained {idx+1}/{len(ai_msg.tool_calls)}): {action_name} with args: {args}")
         step_start = time.time()
-        
+
         try:
-            if action_name == "click_marker":
-                result = action_tools.click_marker(get_bbox(args["marker_id"]))
-            elif action_name == "type_in_marker":
-                result = action_tools.type_in_marker(get_bbox(args["marker_id"]), args["text"])
-            elif action_name == "scroll":
-                result = action_tools.scroll(direction=args.get("direction", "down"))
-            elif action_name == "press_key":
-                result = action_tools.press_key(args["key"])
-            elif action_name == "open_browser":
-                result = action_tools.open_browser(args["url"])
-            elif action_name == "get_credentials":
-                result = action_tools.get_credentials(args["site"])
-            elif action_name == "go_back":
-                result = action_tools.go_back()
-            elif action_name == "update_plan_progress":
-                current_plan_step = args["current_step"]
-                if args.get("plan") is not None:
-                    current_plan = args["plan"]
-                result = {
-                    "action": "update_plan_progress",
-                    "status": "success",
-                    "result": f"Plan progress updated. Current step index: {current_plan_step}",
-                    "args": args
-                }
-            elif action_name == "update_extracted_info":
-                try:
-                    new_data = json.loads(args["data_json"])
-                    current_jd.update(new_data)
-                    result_str = f"Extracted data updated with: {new_data}"
-                except Exception as e:
-                    result_str = f"Failed to parse data_json: {e}"
-                
-                result = {
-                    "action": "update_extracted_info",
-                    "status": "success" if "Failed" not in result_str else "error",
-                    "result": result_str,
-                    "args": args
-                }
+            if action_name in UI_ACTIONS:
+                result = _dispatch_ui(action_name, args, get_bbox)
+
+            elif action_name in STATE_ACTIONS:
+                result, current_jd, current_plan, current_plan_step = _dispatch_state(
+                    action_name, args, current_jd, current_plan, current_plan_step
+                )
+
             elif action_name == "finish_task":
                 result = action_tools.finish_task(args["result"])
-                result["args"] = args
                 is_finished = True
                 collected_data.append(args["result"])
+
             else:
                 raise ValueError(f"Unknown tool: {action_name}")
-                
+
             result["args"] = args
             new_actions.append(result)
-            
+
             step_elapsed = time.time() - step_start
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
             logger.info(f"Action Node [{action_name}] completed in {step_elapsed:.2f} seconds")
-            
+
             if is_finished:
                 break
-                
+
         except Exception as e:
             logger.error(f"Failed to execute action {action_name}", error=str(e))
             step_elapsed = time.time() - step_start
             new_actions.append({"action": action_name, "status": "error", "error": str(e), "args": args})
             error_count += 1
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
-            # 에러 발생 시 도구 체인 중단
-            break
-            
-    # 전체 완료 로그
+            break  # 에러 발생 시 체인 중단
+
     total_elapsed = time.time() - start_time
     logger.info(f"Action Node completed all chained tools in {total_elapsed:.2f} seconds")
-    
+
     return {
-        "action_history": new_actions,
-        "extracted_jd": current_jd,
-        "is_finished": is_finished,
-        "collected_data": collected_data,
-        "error_count": error_count,
-        "step_durations": step_durations,
-        "plan": current_plan,
-        "current_plan_step": current_plan_step
+        "action_history":    new_actions,
+        "extracted_jd":      current_jd,
+        "is_finished":       is_finished,
+        "collected_data":    collected_data,
+        "error_count":       error_count,
+        "step_durations":    step_durations,
+        "plan":              current_plan,
+        "current_plan_step": current_plan_step,
     }
 
 

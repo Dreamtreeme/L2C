@@ -64,20 +64,22 @@ class SaraminAdapter(SiteAdapter):
                 detail_url = f"https://www.saramin.co.kr/zf_user/jobs/relay/view-detail?rec_idx={rec_idx}"
                 logger.info(f"[saramin] iframe 접근 완전 실패. HTTP GET으로 우회 추출: {detail_url}")
                 try:
-                    import urllib.request
-                    req = urllib.request.Request(
-                        detail_url, 
-                        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    import requests as _requests
+                    from bs4 import BeautifulSoup
+                    resp = _requests.get(
+                        detail_url,
+                        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
+                        timeout=10
                     )
-                    with urllib.request.urlopen(req, timeout=10) as response:
-                        html = response.read().decode('utf-8', errors='ignore')
-                    
-                    # 간단한 HTML 텍스트 파싱 (script/style 제거 후 태그 제거)
-                    text = re.sub(r'<style.*?>.*?</style>', '', html, flags=re.DOTALL|re.IGNORECASE)
-                    text = re.sub(r'<script.*?>.*?</script>', '', text, flags=re.DOTALL|re.IGNORECASE)
-                    text = re.sub(r'<[^>]+>', ' ', text)
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    
+                    resp.raise_for_status()
+                    html = resp.text
+
+                    # BeautifulSoup으로 HTML 파싱 (script/style 제거 후 텍스트 추출)
+                    soup = BeautifulSoup(html, "html.parser")
+                    for tag in soup(["script", "style"]):
+                        tag.decompose()
+                    text = soup.get_text(separator=" ", strip=True)
+
                     if text:
                         full_text = text
                         logger.info("[saramin] HTTP GET 우회 상세 페이지에서 본문 추출 완료")

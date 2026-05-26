@@ -35,3 +35,4 @@ Thumbs.db
 
 # 단, 샘플은 커밋
 !data/samples/
+*.fixed

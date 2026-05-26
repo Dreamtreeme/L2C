@@ -1,5 +1,6 @@
 import datetime
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -149,9 +150,7 @@ class PerceptionEngine:
         Returns:
             UI 마커의 ID, 텍스트, 바운딩 박스(bbox) 목록을 담은 딕셔너리
         """
-        import base64
         import json
-        import requests
         
         if not image_path.exists():
             logger.error("Image file not found for UI analysis", image_path=str(image_path))
@@ -176,28 +175,9 @@ class PerceptionEngine:
         else:
             # 2. 마킹된 이미지 로드 및 리사이징 (JPEG 압축 및 VLM 최적화)
             try:
-                with Image.open(marked_path) as img:
-                    width, height = img.size
-                    max_dim = 1024
-                    
-                    # 필요 시 리사이징 진행
-                    if width > max_dim or height > max_dim:
-                        ratio = max_dim / max(width, height)
-                        new_w = int(width * ratio)
-                        new_h = int(height * ratio)
-                        resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                    else:
-                        resized_img = img.copy()
-                        
-                    if resized_img.mode != "RGB":
-                        resized_img = resized_img.convert("RGB")
-                        
-                    from io import BytesIO
-                    buffered = BytesIO()
-                    resized_img.save(buffered, format="JPEG", quality=80)
-                    img_bytes = buffered.getvalue()
-                    
-                base64_image = base64.b64encode(img_bytes).decode("utf-8")
+                from agent.utils.image_utils import image_to_base64_jpeg
+                # fast=False: LANCZOS 리사이징 + quality=80 으로 화질 우선 (캡셔닝 정확도)
+                base64_image = image_to_base64_jpeg(marked_path, max_dim=1024, quality=80, fast=False)
             except Exception as img_err:
                 logger.error("Failed to load and resize marked image", error=str(img_err))
                 return {"markers": [], "original_image": str(image_path)}
@@ -228,77 +208,55 @@ Example output format:
 
             api_key = os.getenv("GEMINI_API_KEY")
 
-            # 4. Gemini 3.5 Flash 호출 시도
+            # 4. Gemini Flash 호출 시도 (langchain_google_genai — llm_engine.py와 동일한 클라이언트)
             if api_key:
                 try:
-                    logger.info("Captioning UI elements via Gemini 3.5 Flash SoM...")
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
-                    payload = {
-                        "contents": [{
-                            "parts": [
-                                {"text": prompt},
-                                {
-                                    "inlineData": {
-                                        "mimeType": "image/jpeg",
-                                        "data": base64_image
-                                    }
-                                }
-                            ]
-                        }],
-                        "generationConfig": {
-                            "responseMimeType": "application/json",
-                            "temperature": 0.1
-                        }
-                    }
-                    
-                    response = requests.post(url, json=payload, timeout=30)
-                    response.raise_for_status()
-                    resp_json = response.json()
-                    text = resp_json["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    
-                    data = json.loads(text)
+                    from langchain_google_genai import ChatGoogleGenerativeAI
+                    from langchain_core.messages import HumanMessage
+                    logger.info("Captioning UI elements via Gemini Flash SoM...")
+                    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
+                    message = HumanMessage(content=[
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ])
+                    response = llm.invoke([message])
+                    output = response.content
+                    if isinstance(output, list):
+                        output = "\n".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in output)
+                    # 마크다운 펜스가 있으면 제거
+                    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", output, re.DOTALL)
+                    json_str = m.group(1).strip() if m else output.strip()
+                    data = json.loads(json_str)
                     elements = data.get("elements", [])
                     logger.info("Gemini SoM captioning completed successfully", elements_count=len(elements))
                 except Exception as gemini_err:
                     logger.warning("Gemini SoM captioning failed, falling back to local Ollama", error=str(gemini_err))
 
-            # 5. 로컬 Ollama (Qwen2.5-VL) Fallback 호출 시도
+            # 5. 로컬 Ollama (Qwen2.5-VL) Fallback 호출 시도 (ollama 클라이언트 — llm_engine.py와 동일)
             if not elements:
                 logger.info("Captioning UI elements via local Ollama SoM (Fallback)...")
                 try:
+                    import ollama as _ollama
+                    from shared.config import OLLAMA_HOST
                     model_name = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
-                    response = requests.post(
-                        "http://localhost:11434/api/generate",
-                        json={
-                            "model": model_name,
-                            "prompt": prompt,
-                            "images": [base64_image],
-                            "stream": False,
-                            "options": {
-                                "num_ctx": 4096,
-                                "num_predict": 1024,
-                                "temperature": 0.1
-                            }
-                        },
-                        timeout=120
+                    client = _ollama.Client(host=OLLAMA_HOST)
+                    resp = client.generate(
+                        model=model_name,
+                        prompt=prompt,
+                        images=[base64_image],
+                        stream=False,
+                        options={"num_ctx": 4096, "num_predict": 1024, "temperature": 0.1}
                     )
-                    response.raise_for_status()
-                    response.encoding = 'utf-8'
-                    
-                    resp_json = response.json()
-                    result_text = resp_json.get("response", "").strip()
-                    thinking_text = resp_json.get("thinking", "").strip()
-                    parse_target = result_text if result_text else thinking_text
-                    
+                    # ollama 버전에 따라 dict 또는 GenerateResponse 객체로 반환됨
+                    result_text = (resp.get("response", "") if isinstance(resp, dict) else getattr(resp, "response", "")) or ""
+                    thinking_text = (resp.get("thinking", "") if isinstance(resp, dict) else getattr(resp, "thinking", "")) or ""
+                    parse_target = result_text.strip() or thinking_text.strip()
+
                     if parse_target:
-                        clean_target = parse_target
-                        if "```json" in clean_target:
-                            clean_target = clean_target.split("```json")[1].split("```")[0].strip()
-                        elif "```" in clean_target:
-                            clean_target = clean_target.split("```")[1].split("```")[0].strip()
-                        
+                        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", parse_target, re.DOTALL)
+                        json_str = m.group(1).strip() if m else parse_target.strip()
                         try:
-                            parsed = json.loads(clean_target)
+                            parsed = json.loads(json_str)
                             if isinstance(parsed, dict) and "elements" in parsed:
                                 elements = parsed["elements"]
                             elif isinstance(parsed, list):
