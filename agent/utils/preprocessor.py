@@ -223,17 +223,26 @@ class Preprocessor:
                            f"우대사항: {' | '.join(preferred)}\n혜택정보: {' | '.join(benefits)}"
 
         # Pydantic 스키마 생성 및 반환
+        # 수집되지 않은 필드는 None으로 둡니다.
+        # 추측값(예: "서울", "정규직")을 기본값으로 채우면 잘못된 데이터가 DB에 저장됩니다.
+        job_category = cls.clean_text(raw_data.get("직군") or raw_data.get("job_category")) or None
+        education = cls.clean_text(raw_data.get("학력") or raw_data.get("education")) or None
+        employment_type = cls.clean_text(raw_data.get("고용형태") or raw_data.get("employment_type")) or None
+        location = cls.clean_text(raw_data.get("근무지") or raw_data.get("location")) or None
+        deadline = cls.clean_text(raw_data.get("마감일") or raw_data.get("deadline")) or None
+        salary = cls.clean_text(raw_data.get("연봉") or raw_data.get("salary")) or None
+
         return JobPosting(
             company_name=company_name,
             position=position,
             url=url,
-            job_category="개발",  # 디폴트
+            job_category=job_category,
             experience_level=exp_text,
-            education="학력 무관",  # 디폴트
-            employment_type="정규직",  # 디폴트
-            location="서울",  # 디폴트
-            deadline="상시 채용",  # 디폴트
-            salary="회사 내규에 따름 (협의)",  # 디폴트
+            education=education,
+            employment_type=employment_type,
+            location=location,
+            deadline=deadline,
+            salary=salary,
             tech_stack=tech_stack,
             main_tasks=main_tasks,
             requirements=requirements,

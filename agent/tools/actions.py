@@ -7,55 +7,34 @@ import pyperclip
 import pygetwindow as gw
 
 from agent.utils.logger import logger
-from agent.utils.wait_stable import WaitStable
 from agent.tools.perception import PerceptionEngine
 
 class ActionTools:
     """
     물리적인 마우스/키보드 조작을 담당하는 Action 도구 모음입니다.
+    화면 안정화 대기는 PerceptionEngine.capture_screen()이 담당합니다.
     """
-    
+
     def __init__(self, perception_engine: PerceptionEngine):
         self.perception = perception_engine
-        self.wait_stable = WaitStable(perception_engine)
-        
+
         # pyautogui 기본 안전 설정
         pyautogui.FAILSAFE = True
         pyautogui.PAUSE = 0.1  # 기본 0.5초에서 0.1초로 단축하여 속도 향상
-        
-    def _execute_with_wait(self, action_name: str, func, *args, **kwargs) -> Dict[str, Any]:
+
+    def _execute(self, action_name: str, func, *args, **kwargs) -> Dict[str, Any]:
         """
-        액션을 실행하기 전후로 화면 안정화 및 로깅을 처리하는 Wrapper
+        액션을 실행하고 결과를 반환합니다.
+        화면 안정화 대기는 다음 perception_node의 capture_screen()이 처리합니다.
         """
         logger.info(f"Executing action: {action_name}")
-        
         try:
-            # 행동 실행
             result = func(*args, **kwargs)
-            
-            # 행동 직후 화면이 안정될 때까지 대기
-            import os
-            skip_wait = os.getenv("SKIP_WAIT_STABLE", "false").lower() == "true"
-            if skip_wait:
-                is_stable = True
-                logger.info("Bypassing screen stabilization (SKIP_WAIT_STABLE is true)")
-            else:
-                is_stable = self.wait_stable.wait()
-            
-            logger.info(f"Action '{action_name}' completed", stable=is_stable)
-            return {
-                "status": "success",
-                "action": action_name,
-                "result": result,
-                "stable": is_stable
-            }
+            logger.info(f"Action '{action_name}' completed")
+            return {"status": "success", "action": action_name, "result": result}
         except Exception as e:
             logger.exception(f"Action '{action_name}' failed", error=str(e))
-            return {
-                "status": "error",
-                "action": action_name,
-                "error": str(e)
-            }
+            return {"status": "error", "action": action_name, "error": str(e)}
             
     def _get_absolute_coords(self, bbox: List[int]) -> tuple[int, int]:
         """
@@ -89,8 +68,8 @@ class ActionTools:
             pyautogui.moveTo(x, y, duration=0.2)
             pyautogui.click()
             return f"Clicked at ({x}, {y})"
-            
-        return self._execute_with_wait("click_marker", _click)
+
+        return self._execute("click_marker", _click)
         
     def type_in_marker(self, bbox: List[int], text: str) -> Dict[str, Any]:
         """마커를 클릭한 후, 기존 텍스트를 지우고 pyperclip을 통해 안전하게 한글/영문 텍스트를 붙여넣습니다."""
@@ -118,7 +97,7 @@ class ActionTools:
             
             return f"Typed text via clipboard: {text}"
             
-        return self._execute_with_wait("type_in_marker", _type)
+        return self._execute("type_in_marker", _type)
 
     def scroll(self, direction: str = "down") -> Dict[str, Any]:
         """화면을 스크롤합니다."""
@@ -135,7 +114,7 @@ class ActionTools:
             
             return f"Scrolled {direction} via {key_to_press}"
             
-        return self._execute_with_wait("scroll", _scroll)
+        return self._execute("scroll", _scroll)
         
     def press_key(self, key: str) -> Dict[str, Any]:
         """특정 특수키(Enter, ESC 등)를 누릅니다."""
@@ -143,18 +122,19 @@ class ActionTools:
             pyautogui.press(key)
             return f"Pressed {key}"
             
-        return self._execute_with_wait("press_key", _press)
+        return self._execute("press_key", _press)
 
     def open_browser(self, url: str) -> Dict[str, Any]:
         """기본 브라우저를 열고 지정된 URL로 이동합니다."""
         def _open():
             import webbrowser
             webbrowser.open(url)
-            # 브라우저 창이 뜨고 페이지가 로딩될 시간을 조금 줍니다.
-            time.sleep(3)
+            # webbrowser.open()은 즉시 반환됩니다.
+            # 브라우저가 실제로 뜨고 로딩될 때까지의 대기는
+            # 다음 perception_node의 WaitStable이 화면 변화를 감지하여 처리합니다.
             return f"Opened browser with URL: {url}"
-            
-        return self._execute_with_wait("open_browser", _open)
+
+        return self._execute("open_browser", _open)
         
     def get_credentials(self, site: str) -> Dict[str, Any]:
         """지정된 사이트의 자격 증명(ID/PW)을 가져옵니다."""
@@ -190,7 +170,7 @@ class ActionTools:
             pyautogui.hotkey('alt', 'left')
             return "Navigated back using Alt + Left Arrow shortcut"
             
-        return self._execute_with_wait("go_back", _back)
+        return self._execute("go_back", _back)
 
     def finish_task(self, final_data: Any) -> Dict[str, Any]:
         """작업을 완료하고 데이터를 반환합니다."""

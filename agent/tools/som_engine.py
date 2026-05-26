@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from PIL import Image, ImageDraw, ImageFont
-import torch
 
 from agent.utils.logger import logger
 

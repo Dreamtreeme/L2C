@@ -1,5 +1,6 @@
 import datetime
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -28,6 +29,11 @@ class PerceptionEngine:
         self.scale_x = 1.0
         self.scale_y = 1.0
         self.last_region = None
+
+        # WaitStable은 PerceptionEngine을 역참조하므로 순환 import를 피하기 위해 lazy 로딩합니다.
+        from agent.utils.wait_stable import WaitStable
+        self._wait_stable = WaitStable(self)
+
         logger.info("PerceptionEngine initialized with SomEngine", screenshot_dir=str(self.screenshot_dir))
 
     def _get_browser_region(self) -> Optional[Dict[str, int]]:
@@ -66,14 +72,21 @@ class PerceptionEngine:
 
     def capture_screen(self, filename: Optional[str] = None) -> Path:
         """
-        브라우저 창 영역(없으면 주 모니터 전체)을 캡처하여 지정된 디렉토리에 저장합니다.
-        
+        화면이 안정화될 때까지 기다린 후 브라우저 창 영역을 캡처합니다.
+        액션 직후 호출되므로, 짧은 초기 대기 후 WaitStable로 렌더링 완료를 감지합니다.
+
         Args:
             filename: 저장할 파일명. 입력하지 않으면 타임스탬프 기반 자동 생성.
-            
+
         Returns:
             저장된 스크린샷 이미지의 절대 경로 (Path 객체)
         """
+        # 액션 효과(클릭, 페이지 이동 등)가 화면에 나타나기 시작할 시간을 줍니다.
+        # 이 초기 대기 없이 바로 WaitStable을 시작하면 화면이 아직 변하지 않은 상태를
+        # "이미 안정됨"으로 오인할 수 있습니다.
+        time.sleep(0.3)
+        self._wait_stable.wait()
+
         if not filename:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"screen_{timestamp}.jpg"
