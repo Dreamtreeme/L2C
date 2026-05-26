@@ -93,6 +93,8 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> None:
     """
     비전 에이전트가 수집한 extracted_jd 데이터를 전처리 후 DB에 UPSERT합니다.
     extracted_jd는 단일 공고 dict이거나, '공고목록' 키 아래 리스트를 담고 있을 수 있습니다.
+    전처리(clean_text / extract_tech_stacks / parse_experience / generate_content_hash)는
+    Preprocessor.process_raw_jd 에 전임합니다.
     """
     from shared.config import DB_PATH
     from shared.db.database import Database
@@ -112,66 +114,20 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> None:
         if not isinstance(job, dict) or not job:
             continue
 
-        try:
+        # fallback으로 검색 결과 페이지 URL을 저장하면 이후 원본 공고 조회 시 엉뚱한 페이지로 연결됩니다.
+        # URL을 수집하지 못한 경우 해당 공고는 적재를 건너뜁니다.
+        url = job.get("url") or job.get("URL")
+        if not url:
             company_name = job.get("회사명", job.get("company_name", ""))
             position = job.get("직무명", job.get("position", ""))
-            full_text = _build_full_text(job)
+            logger.warning(f"[_persist] Skipping job #{idx} ({company_name} - {position}): URL not collected")
+            continue
 
-            if not full_text:
-                logger.warning(f"[_persist] Skipping job #{idx}: empty text body")
-                continue
-
-            # 전처리 파이프라인 적용
-            cleaned_text = Preprocessor.clean_text(full_text)
-            text_parts = [position, cleaned_text] if position else [cleaned_text]
-            normalized_stack = Preprocessor.extract_tech_stacks(text_parts)
-            requirements_list = [cleaned_text]  # parse_experience는 list[str]를 기대
-            exp_min, exp_max, exp_text = Preprocessor.parse_experience(position, requirements_list)
-            content_hash = Preprocessor.generate_content_hash(company_name, position, requirements_list)
-
-            # 원본 URL 복원 (에이전트가 수집했을 수 있음)
-            # fallback으로 검색 결과 페이지 URL을 저장하면 이후 원본 공고 조회 시 엉뚱한 페이지로 연결됩니다.
-            # URL을 수집하지 못한 경우 해당 공고는 적재를 건너뜁니다.
-            url = job.get("url") or job.get("URL")
-            if not url:
-                logger.warning(f"[_persist] Skipping job #{idx} ({company_name} - {position}): URL not collected")
-                continue
-
-            db_payload = {
-                "company_name": company_name,
-                "position": position,
-                "tech_stack": normalized_stack,
-                "raw_ocr_text": cleaned_text,
-                "source_platform": "Wanted",
-                "experience_min": exp_min,
-                "experience_max": exp_max,
-                "experience_text": exp_text,
-                "content_hash": content_hash,
-            }
-            db.upsert(url=url, data=db_payload, embedding=None)
-            logger.info(f"[_persist] Successfully upserted job #{idx}: {company_name} - {position}")
+        try:
+            job_posting = Preprocessor.process_raw_jd(job)
+            db.upsert(url=url, data=job_posting.model_dump())
+            logger.info(f"[_persist] Successfully upserted job #{idx}: {job_posting.company_name} - {job_posting.position}")
 
         except Exception as e:
             logger.error(f"[_persist] Failed to persist job #{idx}: {e}")
             continue
-
-
-def _build_full_text(job: dict) -> str:
-    """job dict의 주요 필드들을 하나의 문자열로 조합합니다."""
-    parts = []
-    for key in ["주요업무", "자격요건", "우대사항", "혜택", "복지",
-                 "description", "requirements", "preferred", "benefits",
-                 "raw_ocr_text"]:
-        val = job.get(key)
-        if val:
-            if isinstance(val, list):
-                parts.append(f"{key}: " + ", ".join(str(v) for v in val))
-            else:
-                parts.append(f"{key}: {val}")
-
-    # 직접 텍스트 필드가 없으면 전체 dict를 문자열화
-    if not parts:
-        import json
-        parts.append(json.dumps(job, ensure_ascii=False))
-
-    return "\n".join(parts)

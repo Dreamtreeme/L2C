@@ -144,25 +144,9 @@ class ActionTools:
             creds = cm.get_credentials(site)
             if creds and creds[0] and creds[1]:
                 return {"username": creds[0], "password": creds[1]}
-            else:
-                raise ValueError(f"No credentials found for site: {site}")
-                
-        # 화면 대기(WaitStable)가 필요 없는 정보 조회 액션
-        logger.info(f"Executing action: get_credentials for {site}")
-        try:
-            result = _get()
-            return {
-                "status": "success",
-                "action": "get_credentials",
-                "result": result
-            }
-        except Exception as e:
-            logger.exception("Failed to get credentials", error=str(e))
-            return {
-                "status": "error",
-                "action": "get_credentials",
-                "error": str(e)
-            }
+            raise ValueError(f"No credentials found for site: {site}")
+
+        return self._execute("get_credentials", _get)
 
     def go_back(self) -> Dict[str, Any]:
         """브라우저의 뒤로가기 동작을 수행합니다 (Alt + Left Arrow)."""
@@ -175,9 +159,4 @@ class ActionTools:
     def finish_task(self, final_data: Any) -> Dict[str, Any]:
         """작업을 완료하고 데이터를 반환합니다."""
         logger.info("Task finished by agent")
-        # finish_task는 화면 대기를 할 필요가 없으므로 직접 반환
-        return {
-            "status": "success",
-            "action": "finish_task",
-            "result": final_data
-        }
+        return self._execute("finish_task", lambda: final_data)
