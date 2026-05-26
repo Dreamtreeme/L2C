@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from agent.graph.state import GraphState
 from agent.tools.perception import PerceptionEngine
 from agent.tools.actions import ActionTools
-from agent.prompts.commander import commander_prompt, COMMANDER_SYSTEM_PROMPT
+from agent.prompts.commander import commander_prompt, COMMANDER_SYSTEM_PROMPT, QA_COMMANDER_SYSTEM_PROMPT
 from agent.utils.logger import logger
 from agent.tools.sqlite_query import sqlite_query
 from agent.tools.realtime_scraping import realtime_scraping
@@ -125,6 +125,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
 
 
 # 글로벌 모델 초기화로 커넥션 풀링 유지 (TCP/SSL 핸드셰이크 레이턴시 절감)
+# 브라우저 자동화용 (temperature=0.1, 브라우저 조작 도구 바인딩)
 llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
 llm_with_tools = llm.bind_tools([
     click_marker,
@@ -138,6 +139,10 @@ llm_with_tools = llm.bind_tools([
     update_plan_progress,
     finish_task
 ])
+
+# QA 지휘자용 (temperature=0.0, DB조회/실시간수집 도구 바인딩)
+qa_llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
+qa_llm_with_tools = qa_llm.bind_tools([sqlite_query, realtime_scraping])
 
 
 def reasoning_node(state: GraphState) -> Dict[str, Any]:
@@ -412,30 +417,9 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
             "step_durations": [{"node": "qa_reasoning", "duration": time.time() - start_time}]
         }
 
-    # 지휘자 모델 초기화 (도구 바인딩)
-    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
-    tools = [sqlite_query, realtime_scraping]
-    llm_with_tools = llm.bind_tools(tools)
-
-    # 지휘자의 시스템 지침 설정
-    system_prompt = (
-        "당신은 채용 공고 분석을 지휘하는 전문 에이전트(Commander)입니다. 아래 지침을 반드시 준수하여 역할을 수행하세요.\n\n"
-        "지침:\n"
-        "1. 사용자의 질문에 답하기 위해 가장 먼저 'sqlite_query' 도구를 호출하여 데이터베이스에 관련 정보가 있는지 확인하십시오.\n"
-        "   - 'sqlite_query' 호출 시 적절한 SQL SELECT 문을 직접 생성하여 조건에 맞는 데이터를 조회하십시오.\n"
-        "   - 예: 특정 회사 채용 정보를 조회하려면 `SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE company_name LIKE '%회사명%'` 형식의 SQL을 작성하십시오.\n"
-        "2. 'sqlite_query' 결과 정보가 없거나 부족한 경우(예: '검색 결과가 없습니다' 수신 시), "
-        "   반드시 'realtime_scraping' 도구를 즉시 호출하여 실시간으로 관련 공고를 수집하십시오.\n"
-        "3. 'realtime_scraping' 도구로부터 적재 성공 결과가 피드백되면, 다시 'sqlite_query' 도구를 재호출하여 업데이트된 공고 내용을 조회하십시오.\n"
-        "4. 획득된 공고 정보(<document id=\"ID\"> XML 내용)만을 근거로 삼아 사용자 질문에 논리적이고 사실적으로 최종 답변을 작성하십시오.\n"
-        "5. 최종 답변의 모든 사실적 진술 뒤에는 해당 문서의 ID를 반드시 [job_id:ID] 형태로 기재하십시오 (예: '로이드케이에서는 SwiftUI를 우대합니다 [job_id:3]').\n"
-        "6. DB 검색이나 실시간 수집을 모두 거친 후에도 근거가 전혀 존재하지 않는다면, 지어내지 말고 '수집된 공고 내에서 조건에 맞는 정보를 찾을 수 없습니다.'라고만 답변하십시오.\n"
-        "7. 대답에 인용 ID [job_id:ID]를 명시하지 못할 경우 해당 내용은 삭제되어야 합니다."
-    )
-
-    # 메시지 리스트 초기화
+    # 메시지 리스트 초기화 (모듈 레벨 싱글톤 qa_llm_with_tools 사용)
     messages = [
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=QA_COMMANDER_SYSTEM_PROMPT),
         HumanMessage(content=query)
     ]
 
@@ -446,8 +430,8 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
     for turn in range(max_turns):
         logger.info(f"Commander Agent Loop: Turn {turn + 1}")
         
-        # 지휘자 LLM 호출
-        response = llm_with_tools.invoke(messages)
+        # 지휘자 LLM 호출 (모듈 레벨 qa_llm_with_tools 싱글톤 사용)
+        response = qa_llm_with_tools.invoke(messages)
         messages.append(response)
         
         # 1. 도구 호출이 있는 경우

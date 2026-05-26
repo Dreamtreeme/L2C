@@ -71,8 +71,26 @@ async def chat_endpoint(req: ChatRequest):
 
         logger.info(f"Received query for commander: {query!r}")
 
-        # 1. 지휘자 에이전트 노드 비동기 실행 (RAG 및 실시간 스크래핑을 지휘자가 직접 조율)
-        state = GraphState(goal=query)
+        # 1. 수신 즉시 클라이언트에 확인 응답 — realtime_scraping 트리거 시 수 분 공백 방지
+        yield "data: [PROCESSING]\n\n"
+
+        # 2. 지휘자 에이전트 노드 비동기 실행 (RAG 및 실시간 스크래핑을 지휘자가 직접 조율)
+        state = GraphState(
+            goal=query,
+            ui_context="",
+            current_markers=[],
+            action_history=[],
+            recent_images=[],
+            marked_image="",
+            error_count=0,
+            is_finished=False,
+            collected_data=[],
+            extracted_jd={},
+            last_action_result=None,
+            plan=[],
+            current_plan_step=0,
+            step_durations=[],
+        )
         try:
             result = await asyncio.to_thread(qa_reasoning_node, state)
             final_answer = result.get("last_action_result", "")
@@ -81,7 +99,7 @@ async def chat_endpoint(req: ChatRequest):
             yield f"data: [ERROR] 지휘자 에이전트 실행 실패: {str(e)}\n\n"
             return
 
-        # 2. 클라이언트 단으로 타이핑 효과 실시간 스트리밍
+        # 3. 클라이언트 단으로 타이핑 효과 실시간 스트리밍
         logger.info("Streaming commander's final answer to client...")
         for char in final_answer:
             yield f"data: {char}\n\n"

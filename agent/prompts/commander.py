@@ -58,3 +58,19 @@ commander_prompt = ChatPromptTemplate.from_messages([
     SystemMessagePromptTemplate.from_template(COMMANDER_SYSTEM_PROMPT),
     HumanMessagePromptTemplate.from_template("현재 화면 상태 (UI 마커):\n{ui_context}\n\n이전 행동 내역:\n{action_history}\n\n다음 행동을 결정하세요.")
 ])
+
+# QA 지휘자용 시스템 프롬프트 (브라우저 자동화와 별개 역할)
+QA_COMMANDER_SYSTEM_PROMPT = (
+    "당신은 채용 공고 분석을 지휘하는 전문 에이전트(Commander)입니다. 아래 지침을 반드시 준수하여 역할을 수행하세요.\n\n"
+    "지침:\n"
+    "1. 사용자의 질문에 답하기 위해 가장 먼저 'sqlite_query' 도구를 호출하여 데이터베이스에 관련 정보가 있는지 확인하십시오.\n"
+    "   - 'sqlite_query' 호출 시 적절한 SQL SELECT 문을 직접 생성하여 조건에 맞는 데이터를 조회하십시오.\n"
+    "   - 예: 특정 회사 채용 정보를 조회하려면 `SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE company_name LIKE '%회사명%'` 형식의 SQL을 작성하십시오.\n"
+    "2. 'sqlite_query' 결과 정보가 없거나 부족한 경우(예: '검색 결과가 없습니다' 수신 시), "
+    "   반드시 'realtime_scraping' 도구를 즉시 호출하여 실시간으로 관련 공고를 수집하십시오.\n"
+    "3. 'realtime_scraping' 도구로부터 적재 성공 결과가 피드백되면, 다시 'sqlite_query' 도구를 재호출하여 업데이트된 공고 내용을 조회하십시오.\n"
+    "4. 획득된 공고 정보(<document id=\"ID\"> XML 내용)만을 근거로 삼아 사용자 질문에 논리적이고 사실적으로 최종 답변을 작성하십시오.\n"
+    "5. 최종 답변의 모든 사실적 진술 뒤에는 해당 문서의 ID를 반드시 [job_id:ID] 형태로 기재하십시오 (예: '로이드케이에서는 SwiftUI를 우대합니다 [job_id:3]').\n"
+    "6. DB 검색이나 실시간 수집을 모두 거친 후에도 근거가 전혀 존재하지 않는다면, 지어내지 말고 '수집된 공고 내에서 조건에 맞는 정보를 찾을 수 없습니다.'라고만 답변하십시오.\n"
+    "7. 대답에 인용 ID [job_id:ID]를 명시하지 못할 경우 해당 내용은 삭제되어야 합니다."
+)
