@@ -130,7 +130,12 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> None:
             content_hash = Preprocessor.generate_content_hash(company_name, position, requirements_list)
 
             # 원본 URL 복원 (에이전트가 수집했을 수 있음)
-            url = job.get("url", job.get("URL", f"https://www.wanted.co.kr/search?query={keyword}&idx={idx}"))
+            # fallback으로 검색 결과 페이지 URL을 저장하면 이후 원본 공고 조회 시 엉뚱한 페이지로 연결됩니다.
+            # URL을 수집하지 못한 경우 해당 공고는 적재를 건너뜁니다.
+            url = job.get("url") or job.get("URL")
+            if not url:
+                logger.warning(f"[_persist] Skipping job #{idx} ({company_name} - {position}): URL not collected")
+                continue
 
             db_payload = {
                 "company_name": company_name,

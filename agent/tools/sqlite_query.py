@@ -53,6 +53,8 @@ def sqlite_query(sql_query: str) -> str:
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
+        # 읽기 전용 모드로 설정하여 LLM이 생성한 쿼리가 데이터를 변경하는 것을 원천 차단합니다.
+        conn.execute("PRAGMA query_only = ON")
         cursor = conn.execute(sql_query)
         rows = cursor.fetchall()
         conn.close()

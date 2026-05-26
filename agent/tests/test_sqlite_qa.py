@@ -72,7 +72,13 @@ def setup_test_db():
 
 
 def test_sqlite_query_tool(setup_test_db, monkeypatch):
-    monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    # shared.config.DB_PATH 를 패치해도 sqlite_query 내부에서
+    # `from shared.config import DB_PATH` 로 이미 바인딩된 로컬 변수는 영향받지 않습니다.
+    # 실제로 쿼리가 참조하는 모듈 내 변수를 직접 패치해야 합니다.
+    import agent.tools.sqlite_query as sq_module
+    monkeypatch.setattr(sq_module, "DB_PATH", TEST_DB_PATH, raising=False)
+    import shared.config as cfg
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     from agent.tools.sqlite_query import sqlite_query
     
     # 1. 회사명 필터를 이용한 DB 조회 테스트
@@ -88,7 +94,8 @@ def test_sqlite_query_tool(setup_test_db, monkeypatch):
 
 def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     """비전 자율 수집 그래프 invoke를 mock하여 realtime_scraping 도구의 통합 로직을 검증합니다."""
-    monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    import shared.config as cfg
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     
     # 비전 에이전트 그래프를 모킹: invoke 시 수집된 JD 데이터를 반환하는 가짜 앱 생성
     class FakeGraphApp:
@@ -136,7 +143,8 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
-    monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    import shared.config as cfg
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     
     # realtime_scraping 도구 모킹하여 실제 브라우저 자동화 실행 방지
     from langchain_core.tools import tool
@@ -163,7 +171,8 @@ def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_hallucination_rejection(setup_test_db, monkeypatch):
-    monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    import shared.config as cfg
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     
     # realtime_scraping 도구 모킹하여 실제 브라우저 자동화 실행 방지
     from langchain_core.tools import tool
@@ -186,7 +195,8 @@ def test_hallucination_rejection(setup_test_db, monkeypatch):
 
 
 def test_web_server_api_endpoints(setup_test_db, monkeypatch):
-    monkeypatch.setattr("shared.config.DB_PATH", TEST_DB_PATH)
+    import shared.config as cfg
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     
     from fastapi.testclient import TestClient
     from agent.web_server import app

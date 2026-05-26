@@ -1,5 +1,5 @@
 import operator
-from typing import TypedDict, List, Dict, Any, Annotated
+from typing import TypedDict, List, Dict, Any, Annotated, Optional
 from pathlib import Path
 
 class GraphState(TypedDict):
@@ -45,3 +45,7 @@ class GraphState(TypedDict):
 
     # 현재 실행 중인 계획 단계 인덱스
     current_plan_step: int
+
+    # 각 노드의 실행 시간 기록 (디버깅/성능 측정용)
+    # Annotated + operator.add 로 노드마다 append되어 누적됩니다.
+    step_durations: Annotated[List[Dict[str, Any]], operator.add]
