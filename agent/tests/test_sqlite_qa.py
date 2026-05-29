@@ -96,10 +96,12 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     """비전 자율 수집 그래프 invoke를 mock하여 realtime_scraping 도구의 통합 로직을 검증합니다."""
     import shared.config as cfg
     monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
+    monkeypatch.delenv("VISION_AGENT_RECURSION_LIMIT", raising=False)
     
     # 비전 에이전트 그래프를 모킹: invoke 시 수집된 JD 데이터를 반환하는 가짜 앱 생성
     class FakeGraphApp:
-        def invoke(self, state):
+        def invoke(self, state, config=None):
+            assert config["recursion_limit"] == 60
             return {
                 **state,
                 "is_finished": True,
@@ -215,4 +217,3 @@ def test_web_server_api_endpoints(setup_test_db, monkeypatch):
     fail_response = client.get("/api/jobs/9999")
     assert fail_response.status_code == 200
     assert "error" in fail_response.json()
-

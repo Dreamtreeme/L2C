@@ -390,6 +390,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 )
 
             elif action_name == "finish_task":
+                action_tools = _get_action_tools()
                 result = action_tools.finish_task(args["result"])
                 is_finished = True
                 collected_data.append(args["result"])

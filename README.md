@@ -281,6 +281,7 @@ python -m playwright install chromium
 
 # Gemini 기반 지휘자/QA 사용 시 .env에 GEMINI_API_KEY를 설정
 # 기본값 SKIP_VLM_CAPTION=true 로 VLM 캡셔닝 단계를 우회
+# 비전 자율 수집은 VISION_AGENT_RECURSION_LIMIT=60 기본값으로 실행
 
 # 자격증명 등록 (최초 1회)
 python agent/setup_credentials.py wanted

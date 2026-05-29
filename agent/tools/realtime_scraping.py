@@ -1,7 +1,11 @@
 import logging
+import os
+
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_RECURSION_LIMIT = 60
 
 
 @tool
@@ -61,10 +65,12 @@ def realtime_scraping(company: str = None, tech_stack: str = None) -> str:
 
         logger.info(f"[realtime_scraping] Starting autonomous vision collection graph with goal: {goal}")
 
+        recursion_limit = int(os.getenv("VISION_AGENT_RECURSION_LIMIT", str(DEFAULT_RECURSION_LIMIT)))
+
         # LangGraph 앱 실행 (동기 invoke)
         # 모든 perception → reasoning → action 루프가 자율적으로 순환하며
         # 도구 호출 궤적이 LangSmith 트레이스에 자동 기록됨
-        final_state = app.invoke(initial_state)
+        final_state = app.invoke(initial_state, config={"recursion_limit": recursion_limit})
 
         # 수집 결과 분석
         collected = final_state.get("collected_data", [])
