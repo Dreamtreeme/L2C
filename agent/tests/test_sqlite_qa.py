@@ -200,6 +200,85 @@ def test_browser_back_marker_detection():
     assert _is_browser_back_marker_bbox([8, 210, 62, 260]) is False
 
 
+def test_url_stale_flag_for_actions(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_ui(action_name, args, get_bbox):
+        if action_name == "scroll":
+            return {"status": "success", "action": "scroll", "result": "ok"}
+        if action_name == "click_marker":
+            return {"status": "success", "action": "click_marker", "result": "ok"}
+        raise AssertionError(action_name)
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    base_state = {
+        "current_markers": [{"id": 1, "bbox": [100, 100, 140, 140]}],
+        "current_url": "https://www.wanted.co.kr/wd/1",
+        "current_url_stale": False,
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+    }
+
+    scroll_state = {
+        **base_state,
+        "last_action_result": AIMessage(content="", tool_calls=[{"name": "scroll", "args": {"direction": "down"}, "id": "1"}]),
+    }
+    assert nodes.action_node(scroll_state)["current_url_stale"] is False
+
+    click_state = {
+        **base_state,
+        "last_action_result": AIMessage(content="", tool_calls=[{"name": "click_marker", "args": {"marker_id": 1}, "id": "1"}]),
+    }
+    assert nodes.action_node(click_state)["current_url_stale"] is True
+
+
+def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
+    from PIL import Image
+    from agent.graph import nodes
+
+    image_path = tmp_path / "screen.png"
+    Image.new("RGB", (200, 200), "white").save(image_path)
+
+    class FakePerception:
+        def __init__(self):
+            self.url_reads = 0
+
+        def capture_screen(self):
+            return image_path
+
+        def analyze_ui(self, _image_path):
+            return {"markers": [], "marked_image": str(image_path)}
+
+        def get_current_url(self):
+            self.url_reads += 1
+            return "https://www.wanted.co.kr/wd/fresh"
+
+    fake_perception = FakePerception()
+    monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
+
+    fresh_result = nodes.perception_node({
+        "current_url": "https://www.wanted.co.kr/wd/cached",
+        "current_url_stale": False,
+    })
+    assert fake_perception.url_reads == 0
+    assert fresh_result["current_url"] == "https://www.wanted.co.kr/wd/cached"
+    assert fresh_result["current_url_stale"] is False
+
+    stale_result = nodes.perception_node({
+        "current_url": "https://www.wanted.co.kr/wd/cached",
+        "current_url_stale": True,
+    })
+    assert fake_perception.url_reads == 1
+    assert stale_result["current_url"] == "https://www.wanted.co.kr/wd/fresh"
+    assert stale_result["current_url_stale"] is False
+
+
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
     import shared.config as cfg

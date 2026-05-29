@@ -14,6 +14,9 @@ class GraphState(TypedDict):
 
     # 현재 활성 브라우저 URL
     current_url: str
+
+    # 현재 URL 캐시가 브라우저 실제 주소와 달라졌을 가능성
+    current_url_stale: bool
     
     # 원본 마커 데이터 (ID 매핑용)
     current_markers: List[Dict[str, Any]]

@@ -132,7 +132,13 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     analysis = perception.analyze_ui(image_path)
     markers = analysis.get("markers", [])
     marked_image = analysis.get("marked_image", "")
-    current_url = perception.get_current_url()
+    current_url = state.get("current_url", "")
+    current_url_stale = state.get("current_url_stale", True)
+    if current_url_stale or not current_url:
+        fetched_url = perception.get_current_url()
+        if fetched_url:
+            current_url = fetched_url
+        current_url_stale = False
     
     # 우측 스크롤바 영역 마커 필터링 (우측 끝 35픽셀 이내 제거)
     from PIL import Image
@@ -179,6 +185,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "current_markers": markers,
         "ui_context": ui_context,
         "current_url": current_url,
+        "current_url_stale": current_url_stale,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
 
@@ -423,7 +430,7 @@ def _dispatch_ui(action_name: str, args: dict, get_bbox) -> dict:
     if action_name == "click_marker":
         bbox = get_bbox(args["marker_id"])
         if _is_browser_back_marker_bbox(bbox):
-            logger.info("Redirecting browser toolbar back marker click to go_back", marker_id=args["marker_id"], bbox=bbox)
+            logger.info(f"Redirecting browser toolbar back marker click to go_back: marker_id={args['marker_id']}, bbox={bbox}")
             return action_tools.go_back()
         return action_tools.click_marker(bbox)
     elif action_name == "type_in_marker":
@@ -503,6 +510,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     current_plan_step = state.get("current_plan_step", 0)
     current_plan      = list(state.get("plan", []))
     current_url       = state.get("current_url", "")
+    current_url_stale = state.get("current_url_stale", True)
     screen_changed    = False
 
     # marker_id → bbox 변환 헬퍼
@@ -516,6 +524,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key",
                      "open_browser", "get_credentials", "get_current_url", "go_back"}
     SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "go_back"}
+    URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "go_back"}
     STATE_ACTIONS = {"update_plan_progress", "update_extracted_info"}
 
     for idx, tool_call in enumerate(ai_msg.tool_calls):
@@ -532,12 +541,15 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             if action_name in UI_ACTIONS:
                 result = _dispatch_ui(action_name, args, get_bbox)
                 screen_changed = screen_changed or action_name in SCREEN_CHANGING_ACTIONS
+                current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
                 if action_name == "open_browser":
                     current_url = args["url"]
+                    current_url_stale = True
                 elif action_name == "get_current_url" and result.get("status") == "success":
                     result_url = result.get("result", {}).get("url") if isinstance(result.get("result"), dict) else ""
                     if result_url:
                         current_url = result_url
+                        current_url_stale = False
 
             elif action_name in STATE_ACTIONS:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
@@ -584,6 +596,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "plan":              current_plan,
         "current_plan_step": current_plan_step,
         "current_url":       current_url,
+        "current_url_stale": current_url_stale,
         "last_action_screen_changed": screen_changed,
     }
 

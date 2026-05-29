@@ -98,6 +98,7 @@ def main():
         ),
         "ui_context": "",
         "current_url": "",
+        "current_url_stale": True,
         "action_history": [],
         "recent_images": [],
         "current_markers": [],

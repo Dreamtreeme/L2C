@@ -30,6 +30,7 @@ class PerceptionEngine:
         self.scale_x = 1.0
         self.scale_y = 1.0
         self.last_region = None
+        self._last_url = ""
 
         # WaitStable은 PerceptionEngine을 역참조하므로 순환 import를 피하기 위해 lazy 로딩합니다.
         from agent.utils.wait_stable import WaitStable
@@ -147,16 +148,17 @@ class PerceptionEngine:
 
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
             pyautogui.hotkey(modifier, "l")
-            time.sleep(0.05)
+            time.sleep(0.02)
             pyautogui.hotkey(modifier, "c")
-            time.sleep(0.05)
+            time.sleep(0.03)
             url = (pyperclip.paste() or "").strip()
             pyautogui.press("esc")
             if url.startswith(("http://", "https://")):
+                self._last_url = url
                 return url
         except Exception as e:
             logger.debug("Failed to read current browser URL", error=str(e))
-        return ""
+        return self._last_url
 
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """

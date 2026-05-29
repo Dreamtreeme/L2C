@@ -31,6 +31,7 @@ def main():
         goal=query,
         ui_context="",
         current_url="",
+        current_url_stale=True,
         current_markers=[],
         action_history=[],
         recent_images=[],
