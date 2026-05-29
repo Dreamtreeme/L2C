@@ -40,7 +40,8 @@ def main():
         extracted_jd={},
         last_action_result=None,
         plan=[],
-        current_plan_step=0
+        current_plan_step=0,
+        step_durations=[],
     )
     
     try:

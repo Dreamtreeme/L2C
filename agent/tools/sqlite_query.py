@@ -1,13 +1,17 @@
 import sqlite3
 import logging
-from typing import List, Dict, Any
+from html import escape
 from pathlib import Path
+from typing import Any
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+MAX_RESULT_ROWS = 20
+MAX_CONTENT_CHARS = 4000
 
 @tool
 def sqlite_query(sql_query: str) -> str:
@@ -56,7 +60,7 @@ def sqlite_query(sql_query: str) -> str:
         # 읽기 전용 모드로 설정하여 LLM이 생성한 쿼리가 데이터를 변경하는 것을 원천 차단합니다.
         conn.execute("PRAGMA query_only = ON")
         cursor = conn.execute(sql_query)
-        rows = cursor.fetchall()
+        rows = cursor.fetchmany(MAX_RESULT_ROWS + 1)
         conn.close()
         logger.info(f"[sqlite_query] SQL executed successfully. Returned {len(rows)} rows.")
     except Exception as e:
@@ -65,6 +69,12 @@ def sqlite_query(sql_query: str) -> str:
 
     if not rows:
         return "검색 결과가 없습니다. 조건에 일치하는 채용 공고가 데이터베이스에 존재하지 않습니다."
+
+    truncated_rows = len(rows) > MAX_RESULT_ROWS
+    rows = rows[:MAX_RESULT_ROWS]
+
+    def xml_text(value: Any) -> str:
+        return escape("" if value is None else str(value), quote=True)
 
     context_parts = []
     for idx, row in enumerate(rows):
@@ -91,14 +101,23 @@ def sqlite_query(sql_query: str) -> str:
             else:
                 content = "\n".join(details)
 
+        content = str(content)
+        if len(content) > MAX_CONTENT_CHARS:
+            content = content[:MAX_CONTENT_CHARS] + "\n[내용 일부 생략]"
+
         doc_xml = (
-            f'<document id="{db_id}">\n'
-            f'  <source_url>{url}</source_url>\n'
-            f'  <company>{company}</company>\n'
-            f'  <position>{position}</position>\n'
-            f'  <content>\n{content}\n  </content>\n'
+            f'<document id="{xml_text(db_id)}">\n'
+            f'  <source_url>{xml_text(url)}</source_url>\n'
+            f'  <company>{xml_text(company)}</company>\n'
+            f'  <position>{xml_text(position)}</position>\n'
+            f'  <content>\n{xml_text(content)}\n  </content>\n'
             f'</document>'
         )
         context_parts.append(doc_xml)
-        
+
+    if truncated_rows:
+        context_parts.append(
+            f"<notice>결과가 {MAX_RESULT_ROWS}건을 초과하여 상위 {MAX_RESULT_ROWS}건만 반환했습니다.</notice>"
+        )
+
     return "\n\n".join(context_parts)

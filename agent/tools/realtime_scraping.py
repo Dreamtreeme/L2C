@@ -56,6 +56,7 @@ def realtime_scraping(company: str = None, tech_stack: str = None) -> str:
             "last_action_result": None,
             "plan": [],
             "current_plan_step": 0,
+            "step_durations": [],
         }
 
         logger.info(f"[realtime_scraping] Starting autonomous vision collection graph with goal: {goal}")
@@ -124,6 +125,7 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> None:
             continue
 
         try:
+            job.setdefault("url", url)
             job_posting = Preprocessor.process_raw_jd(job)
             db.upsert(url=url, data=job_posting.model_dump())
             logger.info(f"[_persist] Successfully upserted job #{idx}: {job_posting.company_name} - {job_posting.position}")

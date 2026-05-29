@@ -1,23 +1,21 @@
-import os
 import json
+import os
 import time
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
 from agent.graph.state import GraphState
-from agent.tools.perception import PerceptionEngine
-from agent.tools.actions import ActionTools
-from agent.prompts.commander import commander_prompt, COMMANDER_SYSTEM_PROMPT, QA_COMMANDER_SYSTEM_PROMPT
+from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT, QA_COMMANDER_SYSTEM_PROMPT
 from agent.utils.logger import logger
 from agent.tools.sqlite_query import sqlite_query
 from agent.tools.realtime_scraping import realtime_scraping
 
-# 싱글톤으로 도구 유지
-perception = PerceptionEngine()
-action_tools = ActionTools(perception)
+_perception = None
+_action_tools = None
+_ui_llm_with_tools = None
+_qa_llm_with_tools = None
 
 # --- LLM 도구 정의용 Pydantic 모델 ---
 class click_marker(BaseModel):
@@ -63,10 +61,64 @@ class finish_task(BaseModel):
     result: str = Field(..., description="최종 완료 요약 또는 결과 데이터")
 
 
+def _get_perception():
+    """비전 엔진은 실제 브라우저 제어 경로에서만 초기화합니다."""
+    global _perception
+    if _perception is None:
+        from agent.tools.perception import PerceptionEngine
+
+        _perception = PerceptionEngine()
+    return _perception
+
+
+def _get_action_tools():
+    """물리 조작 도구는 비전 엔진과 같은 생명주기로 lazy 초기화합니다."""
+    global _action_tools
+    if _action_tools is None:
+        from agent.tools.actions import ActionTools
+
+        _action_tools = ActionTools(_get_perception())
+    return _action_tools
+
+
+def _get_ui_llm_with_tools():
+    """브라우저 자동화용 LLM은 import 시점이 아니라 호출 시점에 준비합니다."""
+    global _ui_llm_with_tools
+    if _ui_llm_with_tools is None:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
+        _ui_llm_with_tools = llm.bind_tools([
+            click_marker,
+            type_in_marker,
+            scroll,
+            press_key,
+            open_browser,
+            get_credentials,
+            update_extracted_info,
+            go_back,
+            update_plan_progress,
+            finish_task,
+        ])
+    return _ui_llm_with_tools
+
+
+def _get_qa_llm_with_tools():
+    """QA 지휘자용 LLM은 서버 import와 분리해 필요한 순간에만 초기화합니다."""
+    global _qa_llm_with_tools
+    if _qa_llm_with_tools is None:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        qa_llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
+        _qa_llm_with_tools = qa_llm.bind_tools([sqlite_query, realtime_scraping])
+    return _qa_llm_with_tools
+
+
 def perception_node(state: GraphState) -> Dict[str, Any]:
     """화면을 캡처하고 마커를 파싱하여 상태를 업데이트합니다."""
     start_time = time.time()
     logger.info("Executing Perception Node")
+    perception = _get_perception()
     
     # 화면 캡처
     image_path = perception.capture_screen()
@@ -121,27 +173,6 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "ui_context": ui_context,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
-
-
-# 글로벌 모델 초기화로 커넥션 풀링 유지 (TCP/SSL 핸드셰이크 레이턴시 절감)
-# 브라우저 자동화용 (temperature=0.1, 브라우저 조작 도구 바인딩)
-llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
-llm_with_tools = llm.bind_tools([
-    click_marker,
-    type_in_marker,
-    scroll,
-    press_key,
-    open_browser,
-    get_credentials,
-    update_extracted_info,
-    go_back,
-    update_plan_progress,
-    finish_task
-])
-
-# QA 지휘자용 (temperature=0.0, DB조회/실시간수집 도구 바인딩)
-qa_llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
-qa_llm_with_tools = qa_llm.bind_tools([sqlite_query, realtime_scraping])
 
 
 def _is_repeating(history: list, n: int) -> bool:
@@ -239,7 +270,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
 
     # 메시지 조립 + LLM 호출
     messages = _build_reasoning_messages(state, loop_warning)
-    response = llm_with_tools.invoke(messages)
+    response = _get_ui_llm_with_tools().invoke(messages)
 
     elapsed = time.time() - start_time
     logger.info(f"Reasoning Node completed in {elapsed:.2f} seconds")
@@ -256,6 +287,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
 
 def _dispatch_ui(action_name: str, args: dict, get_bbox) -> dict:
     """마우스/키보드 물리 조작 도구를 실행합니다."""
+    action_tools = _get_action_tools()
     if action_name == "click_marker":
         return action_tools.click_marker(get_bbox(args["marker_id"]))
     elif action_name == "type_in_marker":
@@ -445,8 +477,8 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
     for turn in range(max_turns):
         logger.info(f"Commander Agent Loop: Turn {turn + 1}")
         
-        # 지휘자 LLM 호출 (모듈 레벨 qa_llm_with_tools 싱글톤 사용)
-        response = qa_llm_with_tools.invoke(messages)
+        # 지휘자 LLM 호출
+        response = _get_qa_llm_with_tools().invoke(messages)
         messages.append(response)
         
         # 1. 도구 호출이 있는 경우
@@ -512,4 +544,3 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
         "is_finished": True,
         "step_durations": [{"node": "qa_reasoning", "duration": elapsed}]
     }
-

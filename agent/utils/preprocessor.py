@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from urllib.parse import urlparse
 from typing import Any
@@ -57,6 +58,7 @@ class Preprocessor:
         """OCR 마커 노이즈([0], [id: 10]) 및 특수문자 클렌징"""
         if not text:
             return ""
+        text = str(text)
         # 1. SoM 숫자 라벨 제거 ([0], [1], [id: 2])
         text = re.sub(r"\[\d+\]", "", text)
         text = re.sub(r"\[id:\s*\d+\]", "", text)
@@ -66,10 +68,23 @@ class Preprocessor:
         return text.strip()
 
     @classmethod
-    def clean_list(cls, items: list[str] | None) -> list[str]:
+    def clean_list(cls, items: list[str] | str | None) -> list[str]:
         """텍스트 리스트 전처리 및 빈 값 제거"""
         if not items:
             return []
+        if isinstance(items, str):
+            raw = items.strip()
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    items = parsed
+                else:
+                    items = [raw]
+            except json.JSONDecodeError:
+                items = [line for line in re.split(r"\r?\n", raw) if line.strip()] or [raw]
+
         cleaned = []
         for item in items:
             c = cls.clean_text(item)
@@ -124,8 +139,11 @@ class Preprocessor:
         # 3. 경력 텍스트를 구조화 수치(min/max)로 파싱
         cleaned_exp = cls.clean_text(exp_text)
         
-        # 패턴 A: "3~7년", "3년~7년", "신입~3년"
-        range_match = re.search(r"(\d+)\s*~\s*(\d+)년", cleaned_exp)
+        # 패턴 A: "3~7년", "3년~7년", "3년 이상 ~ 7년 이하"
+        range_match = re.search(
+            r"(\d+)\s*년?\s*(?:이상)?\s*[~\-]\s*(\d+)\s*년?\s*(?:이하)?",
+            cleaned_exp,
+        )
         if range_match:
             exp_min = int(range_match.group(1))
             exp_max = int(range_match.group(2))

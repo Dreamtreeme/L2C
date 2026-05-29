@@ -1,7 +1,9 @@
 import json
 import asyncio
 import logging
-from fastapi import FastAPI, Request
+import os
+
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,11 +20,17 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="L2C RAG Q&A API Server")
 
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+
 # CORS 활성화
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins or ["*"],
+    allow_credentials=("*" not in cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -12,6 +12,11 @@ beautifulsoup4>=4.12.0
 json-repair>=0.25.0
 requests>=2.31.0
 
+# ===== API / 테스트 =====
+fastapi>=0.110.0
+uvicorn>=0.27.0
+pytest>=8.0.0
+
 # ===== Agent (Phase 2) =====
 structlog>=24.0.0
 sentry-sdk>=2.0.0
@@ -37,4 +42,3 @@ pygetwindow>=0.0.9
 # paddlepaddle-gpu>=2.5.0 (또는 CPU 전용 paddlepaddle>=2.5.0)
 # paddleocr>=2.7.0
 # easyocr>=1.7.1
-
