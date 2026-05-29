@@ -153,12 +153,13 @@ class ActionTools:
         return self._execute("get_credentials", _get)
 
     def go_back(self) -> Dict[str, Any]:
-        """브라우저의 뒤로가기 동작을 수행합니다 (Alt + Left Arrow)."""
+        """브라우저의 뒤로가기 동작을 수행합니다."""
         def _back():
             self.perception._get_browser_region()
-            time.sleep(0.05)
-            pyautogui.hotkey('alt', 'left')
-            return "Navigated back using Alt + Left Arrow shortcut"
+            self.perception.release_address_bar_focus(key_pause=0.02)
+            logger.info("Sending browserback key after releasing address bar focus")
+            pyautogui.press("browserback")
+            return "Navigated back using browser back key"
             
         return self._execute("go_back", _back)
 

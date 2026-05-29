@@ -146,19 +146,42 @@ class PerceptionEngine:
             import pyautogui
             import pyperclip
 
+            old_pause = pyautogui.PAUSE
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
-            pyautogui.hotkey(modifier, "l")
-            time.sleep(0.02)
-            pyautogui.hotkey(modifier, "c")
-            time.sleep(0.03)
-            url = (pyperclip.paste() or "").strip()
-            pyautogui.press("esc")
+            pyautogui.PAUSE = min(old_pause, 0.02)
+            try:
+                pyautogui.hotkey(modifier, "l")
+                time.sleep(0.02)
+                pyautogui.hotkey(modifier, "c")
+                time.sleep(0.03)
+                url = (pyperclip.paste() or "").strip()
+            finally:
+                self.release_address_bar_focus(pyautogui, key_pause=0.02)
+                pyautogui.PAUSE = old_pause
             if url.startswith(("http://", "https://")):
                 self._last_url = url
                 return url
         except Exception as e:
             logger.debug("Failed to read current browser URL", error=str(e))
         return self._last_url
+
+    def release_address_bar_focus(self, pyautogui_module=None, key_pause: float = 0.02) -> None:
+        """주소창 URL 복사 후 남는 브라우저 툴바 포커스를 페이지 쪽으로 되돌립니다."""
+        try:
+            if pyautogui_module is None:
+                import pyautogui as pyautogui_module
+
+            old_pause = pyautogui_module.PAUSE
+            pyautogui_module.PAUSE = min(old_pause, key_pause)
+            try:
+                pyautogui_module.press("esc")
+                time.sleep(0.02)
+                pyautogui_module.press("esc")
+                time.sleep(0.02)
+            finally:
+                pyautogui_module.PAUSE = old_pause
+        except Exception as e:
+            logger.debug("Failed to release browser address bar focus", error=str(e))
 
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """

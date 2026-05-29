@@ -279,6 +279,56 @@ def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
     assert stale_result["current_url_stale"] is False
 
 
+def test_release_address_bar_focus_presses_escape_twice():
+    from agent.tools.perception import PerceptionEngine
+
+    class FakePyAutoGUI:
+        PAUSE = 0.1
+
+        def __init__(self):
+            self.pressed = []
+
+        def press(self, key):
+            self.pressed.append(key)
+
+    fake_pyautogui = FakePyAutoGUI()
+    engine = object.__new__(PerceptionEngine)
+
+    engine.release_address_bar_focus(fake_pyautogui, key_pause=0.02)
+
+    assert fake_pyautogui.pressed == ["esc", "esc"]
+    assert fake_pyautogui.PAUSE == 0.1
+
+
+def test_go_back_releases_address_bar_focus_and_uses_browserback(monkeypatch):
+    from agent.tools import actions
+    from agent.tools.actions import ActionTools
+
+    calls = []
+
+    class FakePerception:
+        def _get_browser_region(self):
+            calls.append("region")
+            return {"left": 0, "top": 0, "width": 100, "height": 100}
+
+        def release_address_bar_focus(self, key_pause=0.02):
+            calls.append(("release_focus", key_pause))
+
+    class FakePyAutoGUI:
+        def press(self, key):
+            calls.append(("press", key))
+
+    monkeypatch.setattr(actions, "pyautogui", FakePyAutoGUI())
+
+    action_tools = object.__new__(ActionTools)
+    action_tools.perception = FakePerception()
+
+    result = action_tools.go_back()
+
+    assert result["status"] == "success"
+    assert calls == ["region", ("release_focus", 0.02), ("press", "browserback")]
+
+
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
     import shared.config as cfg
