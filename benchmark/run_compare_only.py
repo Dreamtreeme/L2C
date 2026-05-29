@@ -1,5 +1,6 @@
 import json
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -19,7 +20,15 @@ def calculate_overlap(list1, list2):
     return len(intersection) / len(union)
 
 def main():
-    classic_json_path = Path("data/classic_extracted_jd.json")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    classic_candidates = sorted(
+        Path("data/json").glob("wanted_350432_*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    classic_json_path = classic_candidates[0] if classic_candidates else Path("data/classic_extracted_jd.json")
     agent_json_path = Path("data/agent_extracted_jd.json")
     
     with open(classic_json_path, "r", encoding="utf-8") as f:
@@ -32,6 +41,8 @@ def main():
     report.append("# Classic (원문) vs Agent (비전 판독) 본문 정합성 비교 리포트\n")
     report.append("- **대상 URL**: https://www.wanted.co.kr/wd/350432\n")
     report.append(f"- **검증 시간**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+    report.append(f"- **Classic 원문 기준 파일**: `{classic_json_path.as_posix()}`\n")
+    report.append(f"- **Agent 비전 기준 파일**: `{agent_json_path.as_posix()}`\n\n")
     
     report.append("## 1. 필드별 텍스트 자카드 유사도 비교\n")
     report.append("| 필드 항목 | Classic 원문 크기 (자수) | Agent 추출 크기 (자수) | 단어 자카드 유사도 (Jaccard) | 일치율 평가 |")
@@ -95,7 +106,7 @@ def main():
         
     report_text = "\n".join(report)
     report_path = Path("benchmark/jd_comparison_report.md")
-    report_path.write_text(report_text, encoding="utf-8")
+    report_path.write_text(report_text, encoding="utf-8", newline="\n")
     print("SUCCESS")
     print(report_text[:1500])
 

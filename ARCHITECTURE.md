@@ -28,7 +28,7 @@ Agent 시스템은 브라우저 DOM API를 일절 사용하지 않고, 오직 �
 ### 1. 파이프라인 데이터 흐름
 ```mermaid
 graph TD
-    A[Playwright Browser] -->|1. Screenshot| B[Perception Node]
+    A[Browser Window] -->|1. Screenshot| B[Perception Node]
     B -->|2. Image Path| C[SomEngine]
     C -->|3. Run YOLOv8| D[Icon/Button Detection]
     C -->|4. Subprocess Spawn| E[paddle_ocr_runner.py]
@@ -41,7 +41,7 @@ graph TD
     I -->|10. Execute Tools & Update State| A
 ```
 
-1. **`Perception Node`**: Playwright 브라우저의 현재 화면을 `mss`를 사용하여 인메모리에서 초고속으로 캡처하고, 브라우저의 물리적 윈도우 오프셋 및 DPI 스케일을 보정합니다.
+1. **`Perception Node`**: 현재 브라우저 창 화면을 `mss`를 사용하여 인메모리에서 초고속으로 캡처하고, 브라우저의 물리적 윈도우 오프셋 및 DPI 스케일을 보정합니다.
 2. **`SomEngine (Set-of-Marks)`**:
    - **YOLOv8**: 로컬 GPU(CUDA) 바인딩을 통해 화면 내의 미세 아이콘 및 버튼 요소를 검출합니다.
    - **PaddleOCR (Isolated Subprocess)**: 독립 서브프로세스 래퍼([paddle_ocr_runner.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/paddle_ocr_runner.py))를 띄워 화면 텍스트 영역을 판독합니다. Windows 환경의 PyTorch와 PaddlePaddle 간 CUDA DLL 충돌(`WinError 127`)을 방지하기 위해 `torch` 모킹을 적용하고, IR Optimization 비활성화(`switch_ir_optim(False)`)로 기동 속도를 7.8초에서 0.35초로 95% 이상 단축했습니다.
@@ -59,6 +59,15 @@ graph TD
 - **동적 계획 수립 (Dynamic Planning)**: 바탕화면 단계에서 억지로 완벽한 계획을 짜는 정적 `planning_node`를 제거하고, 화면을 직접 탐색하면서 상황(예: 검색 결과 개수)에 맞게 `update_plan_progress`를 통해 유연하게 소목표 계획을 세우고 실행하도록 유도합니다.
 - **하향 전용 앵커 기반 스크롤 (Scroll Anchor-Down)**: 스크롤 탐색 시 위아래로 진동하는 현상을 방지하기 위해 오직 아래로만 스크롤하며, 이전 화면의 마지막 문장을 앵커로 삼아 정보를 누적 수집하는 프롬프트 가이드라인을 명시했습니다.
 - **서브프로세스 및 리소스 최적화**: 윈도우 환경에서 PyTorch와 PaddlePaddle 간 DLL 충돌을 프로세스 격리로 완벽하게 회피하고, 그래프 컴파일 제거 패치를 통해 단일 OCR 처리 속도를 총 0.8초 이내로 종결했습니다.
+- **지연 초기화 (Lazy Initialization)**: `agent.graph.nodes`는 QA 서버나 SQLite 질의 경로에서 import될 수 있으므로, 비전 엔진(`PerceptionEngine`), 물리 조작 도구(`ActionTools`), Gemini 도구 바인딩은 실제 사용 시점에만 초기화합니다. 이를 통해 웹 Q&A 서버가 YOLO 모델 다운로드, 화면 캡처 장치, GUI 자동화 의존성에 불필요하게 묶이지 않도록 분리했습니다.
+
+## QA 및 SQLite 검색 계층
+
+Phase 7 이후 지휘자 에이전트는 사용자의 자연어 질문을 먼저 SQLite 조회로 해결합니다. `sqlite_query` 도구는 LLM이 작성한 SQL을 실행하되 `SELECT` 문만 허용하고, SQLite `PRAGMA query_only = ON`을 적용해 쓰기 작업을 차단합니다.
+
+검색 결과는 `<document id="...">` XML 컨텍스트로 직렬화되어 지휘자 모델에 전달됩니다. 최신 구현에서는 XML 특수문자를 escape하고, 반환 row 수와 본문 길이를 제한해 공고 본문에 포함된 `<`, `&`, 긴 OCR 텍스트가 프롬프트 구조를 깨지 않도록 방어합니다. 최종 답변은 `[job_id:ID]` 인용만 유효한 출처로 인정하며, 조회 결과에 없는 ID는 `[출처 확인 불가]`로 치환됩니다.
+
+웹 Q&A 서버(`agent/web_server.py`)는 SSE로 즉시 `[PROCESSING]` 이벤트를 보내고, 지휘자 답변을 문자 단위로 스트리밍합니다. CORS 허용 목록은 `CORS_ALLOW_ORIGINS` 환경변수로 제어하며, 기본 개발값은 `*`입니다.
 
 ## 두 시스템 비교
 
@@ -76,5 +85,4 @@ graph TD
 1. **높은 텍스트 복원력**: 대다수 공고(글로벌머니익스프레스, 왓챠, 네이버파이낸셜, 휴넷 등)의 자격요건, 우대사항, 주요업무 항목에서 **90% ~ 100% 수준의 자카드 유사도**를 보이며 DOM 기반 스크래핑 못지않은 정확도를 확보했습니다.
 2. **미세 유실 케이스 식별**:
    - 스크롤 도중 VLM이 본문 하단의 긴 텍스트를 인계받는 시점에 앵커 텍스트 누락이 발생하거나, 마커 ID 매핑 단계에서 본문의 상세정보 더보기 영역을 올바르게 확장하지 못할 경우(예: 헤렌, 드림어스컴퍼니 등) 일부 본문 항목이 비어있음으로 기록되는 일부 텍스트 유실 현상이 식별되었습니다.
-   - 이는 향후 페이즈 6에서 장기 스트레스 테스트와 스크롤 상태 전이 정밀화, VLM 프롬프트 튜닝을 통해 개선할 지점입니다.
-
+   - 이는 향후 Phase 8의 궤적 기반 스크립트 생성과 별도의 장기 스트레스 테스트에서 스크롤 상태 전이 정밀화, VLM 프롬프트 튜닝으로 개선할 지점입니다.

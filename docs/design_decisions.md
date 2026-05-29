@@ -58,3 +58,34 @@
     - `paddle_ocr_runner.py`를 독립 서브프로세스로 분리하여 `subprocess.run`으로 실행합니다.
     - 서브프로세스 진입 시 `sys.modules['torch'] = MagicMock()` 모킹 패치를 가하여 PyTorch가 임포트되어 충돌하는 현상을 원천 방지합니다.
     - PaddleOCR 초기 기동 시 7초 이상 소요되던 분석 지연을 막기 위해 `paddle.inference.Config.switch_ir_optim = False` 패치를 적용, 내부 연산 최적화 단계를 스킵함으로써 기동 속도를 **0.35초**로 단축했습니다.
+
+---
+
+## 5. QA 경로와 비전 수집 경로의 지연 초기화 분리
+
+### [결정] `agent.graph.nodes` import 시점에는 무거운 비전/GUI 엔진을 초기화하지 않고, 실제 도구 호출 시점에 lazy initialization 수행
+
+*   **문제**:
+    - 웹 Q&A 서버와 SQLite 질의 경로는 화면 캡처, YOLO 모델, PyAutoGUI 물리 제어가 필요하지 않습니다.
+    - 이전 구조에서는 `nodes.py`를 import하는 순간 `PerceptionEngine()`이 생성되어 SomEngine 모델 로딩, mss 초기화, GUI 의존성 로딩이 함께 발생했습니다.
+    - 결과적으로 단순 DB 질의 API도 비전 런타임, 모델 파일, 화면 환경에 강하게 결합되었습니다.
+*   **해결**:
+    - `_get_perception()`, `_get_action_tools()`, `_get_ui_llm_with_tools()`, `_get_qa_llm_with_tools()` 헬퍼를 두고 필요할 때만 싱글톤을 생성하도록 변경했습니다.
+    - QA 서버 import는 가벼워지고, 실시간 수집 도구가 호출될 때만 비전 에이전트 그래프가 비전 의존성을 준비합니다.
+*   **트레이드오프**:
+    - 첫 비전 수집 호출의 초기 지연은 유지됩니다.
+    - 대신 평상시 Q&A, 테스트, API 서버 기동 경로의 재현성과 안정성이 크게 개선됩니다.
+
+---
+
+## 6. LLM 생성 SQL/XML 컨텍스트의 방어적 직렬화
+
+### [결정] SQLite 도구는 SELECT-only + query_only에 더해 XML escaping과 결과 크기 제한을 적용
+
+*   **문제**:
+    - 채용 공고 본문에는 `<`, `&`, 코드 조각, 긴 OCR 텍스트가 자연스럽게 포함될 수 있습니다.
+    - 이를 그대로 `<document>` XML 컨텍스트에 삽입하면 지휘자 프롬프트의 구조가 깨질 수 있고, 큰 SELECT 결과는 컨텍스트를 과도하게 점유합니다.
+*   **해결**:
+    - XML 텍스트와 속성 값을 모두 escape합니다.
+    - 반환 row 수는 최대 20건, 각 문서 본문은 최대 4,000자로 제한합니다.
+    - 결과가 잘리면 `<notice>`를 추가해 지휘자 모델이 축약 사실을 알 수 있게 했습니다.

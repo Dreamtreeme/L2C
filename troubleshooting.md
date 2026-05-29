@@ -179,3 +179,23 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 * **대기 정밀도 변경 모듈**: [wait_stable.py](file:///c:/Users/psg/Desktop/L2C/agent/utils/wait_stable.py)
 * **프롬프트 토큰 축약 적용 노드**: [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)
 * **지휘자 프롬프트**: [commander.py](file:///c:/Users/psg/Desktop/L2C/agent/prompts/commander.py)
+
+---
+
+## 10. QA 서버 import 시 비전 엔진까지 초기화되는 문제
+
+### [현상]
+웹 Q&A 서버(`agent/web_server.py`)와 SQLite 질의 테스트는 화면 인식이나 물리 브라우저 제어가 필요하지 않은데도, `agent.graph.nodes`를 import하는 순간 `PerceptionEngine()`과 `ActionTools()`가 전역 싱글톤으로 생성되었습니다. 이로 인해 서버 시작 경로가 YOLO 모델, mss 캡처 장치, PyAutoGUI, OmniParser 가중치 상태에 종속되었습니다.
+
+### [원인 분석]
+Phase 3 이후 성능 최적화를 위해 도구와 LLM 클라이언트를 모듈 전역에서 재사용하도록 만들었지만, QA 지휘자와 비전 실행자가 같은 `nodes.py` 안에 공존하면서 import side effect가 커졌습니다. 특히 Phase 7의 SQLite Q&A 경로는 비전 엔진이 필요하지 않으므로 이 결합은 불필요한 장애면이었습니다.
+
+### [해결 조치]
+1. `PerceptionEngine`, `ActionTools`, 브라우저 자동화용 Gemini 도구 바인딩, QA용 Gemini 도구 바인딩을 `_get_*()` 헬퍼로 지연 초기화했습니다.
+2. `agent/main.py`와 `realtime_scraping.py`의 초기 `GraphState`에 `step_durations`를 명시하여 상태 스키마 누락 가능성을 줄였습니다.
+3. Windows/WSL 혼합 환경에서 줄끝 변경만으로 대형 diff가 생기지 않도록 `.gitattributes`에 LF 정책을 추가했습니다.
+
+### [검증]
+* `python.exe -m pytest agent/tests -q` 결과: `6 passed`
+* `python.exe -m compileall -q classic agent shared benchmark scratch` 통과
+* `git diff --check` 통과

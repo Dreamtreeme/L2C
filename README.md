@@ -65,8 +65,9 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
   사이트 사전지식 조회
   도구 선택 및 순차 호출
     ↓
-    ├─ [실행자 — Qwen2.5-VL] (수집이 필요할 때)
+    ├─ [비전 실행 루프 — Gemini 3.5 Flash + 로컬 SoM] (수집이 필요할 때)
     │   화면 인식 (OmniParser Set-of-Marks)
+    │   Qwen2.5-VL/Ollama는 VLM 캡셔닝 폴백으로 사용 가능
     │   물리 행동 도구
     │     - 로그인 (자격증명은 .env 활용)
     │     - 검색·탐색
@@ -75,6 +76,7 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     │
     └─ [SQLite 검색 도구] (적재된 DB 조회로 충분할 때)
         Gemini SQL 직접 생성 및 실행
+        XML escape 및 결과 길이 제한
         인용 ID 부여
     ↓
 [지휘자 — Gemini 3.5 Flash]
@@ -82,6 +84,8 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
   다음 사이트, 재계획, 또는 답변 생성 결정
   답변 시 인용 검증 적용
 ```
+
+운영 경로는 지연 초기화(lazy initialization)를 적용합니다. DB 질의와 웹 Q&A 서버는 비전 엔진, YOLO 모델, 물리 GUI 제어 도구를 import 시점에 초기화하지 않고, 실시간 수집이 실제로 필요할 때만 비전 파이프라인을 준비합니다.
 
 ## 진행 상황
 
@@ -117,8 +121,8 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 
 - [x] Phase 3: LangGraph 지휘자 워크플로우 구성 (비전 통합은 Phase 3.5에서 본격 구현)
   - [x] 1. 노드 설계 및 관찰 → 계획 → 행동 루프
-    - [x] Perception Node: 시스템이 화면을 캡처하고 Qwen 비전 모델이 분석하여 요소들을 JSON 텍스트로 추출 후 상태 갱신
-    - [x] Reasoning Node: 토큰 비용 절감을 위해 지휘자는 이미지를 보지 않고 Qwen이 넘겨준 텍스트 정보만 읽어 다음 행동 도구 선택
+    - [x] Perception Node: 시스템이 화면을 캡처하고 로컬 SoM(YOLOv8 + PaddleOCR)으로 UI 요소와 텍스트를 추출 후 상태 갱신
+    - [x] Reasoning Node: 마킹 이미지와 압축된 UI 텍스트 컨텍스트를 Gemini 3.5 Flash에 전달해 다음 행동 도구 선택
     - [x] Action Node: 도구 실행 및 시스템 안정화 후 다시 Perception Node로 회귀
   - [x] 2. 모듈화 기반 서브 그래프 구축
     - [x] 향후 Phase 6의 라우터 확장을 고려하여 구조를 유연하게 분리
@@ -154,6 +158,8 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 - [x] Phase 6: 수집 데이터 전처리 및 DB 적재 신뢰성 강화
   - [x] 1. 고정밀 텍스트 전처리 엔진 구현 (`preprocessor.py`)
     - [x] OCR 텍스트 내 불필요 개행, 특수 기호, 마커 잔영(`[id]`) 제거 및 기술 스택 동의어 매핑
+    - [x] LLM이 리스트 필드를 단일 문자열 또는 JSON 문자열로 반환해도 안전하게 리스트로 정규화
+    - [x] `3년 이상 ~ 7년 이하` 같은 경력 범위 표현 파싱 보강
   - [x] 2. 수집 필드 확장 스키마 설계 및 마이그레이션 (`jd_schema.py`, `database.py`)
     - [x] `source_platform`, `raw_ocr_text`, `content_hash`, `experience_min/max/text` 필드 및 인덱스 동적 추가
   - [x] 3. SQLite DB 이중 중복 방지 적재
@@ -165,9 +171,11 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
   - [x] 1. SQLite 검색 엔진 구현 및 LLM SQL 생성 위임 (`sqlite_query.py`)
     - [x] SQL SELECT 구문을 직접 생성하여 조건에 맞는 데이터를 정밀 조회하는 sqlite_query 도구 탑재
     - [x] 쿼리 유효성 검증 (SELECT 쿼리만 한정하도록 보완) 및 XML 구조화 응답 포맷 연동
+    - [x] XML 특수문자 escaping, 최대 결과 개수 및 본문 길이 제한으로 컨텍스트 파손 방지
   - [x] 2. 지휘자 도구 통합 및 라우팅 (`nodes.py`)
     - [x] sqlite_query 검색 도구를 지휘자의 function calling 도구로 등록
     - [x] 기존 비전 에이전트 수집 흐름을 지휘자의 보조 도구로 통합 및 순차 호출 라우팅
+    - [x] QA 경로와 비전 수집 경로의 런타임 초기화를 분리하여 서버 import 안정성 개선
   - [x] 3. 답변 생성 및 인용 검증 (`nodes.py`)
     - [x] XML 구조화 컨텍스트 주입, 스트리밍 응답, 온도 0.0 설정
     - [x] 답변 생성 후 인용 ID 정합성 검사 및 위반 ID는 `[출처 확인 불가]` 마커로 치환 (`validate_citations`)
@@ -222,7 +230,7 @@ L2C/
 │   ├── db/               SQLite 데이터베이스 관리
 │   └── schema/           Pydantic 스키마 정의
 │
-├── benchmark/          비교 벤치마크 (.gitkeep만 존재)
+├── benchmark/          비교 벤치마크 스크립트 및 정합성 리포트
 │
 ├── data/               수집 데이터 및 정합성 검증 비교 리포트
 │   ├── screenshots/      에이전트 구동 중 캡처 화면
@@ -245,9 +253,10 @@ L2C/
 | UI 요소 검출 | OmniParser (Microsoft) |
 | 에이전트 워크플로우 | LangGraph |
 | 지휘자 모델 | Gemini 3.5 Flash |
-| 실행자 비전 모델 | Qwen2.5-VL (Ollama) |
+| 비전 판단 모델 | Gemini 3.5 Flash |
+| VLM 캡셔닝 폴백 | Qwen2.5-VL (Ollama) |
 | 실행자 텍스트 모델 | Qwen (Ollama) |
-| 임베딩 모델 | Gemini text-embedding-004 |
+| 검색 방식 | SQLite SELECT + XML 컨텍스트 |
 | 궤적 트래킹 | LangSmith |
 | 자격증명 보안 | .env (python-dotenv) |
 | 저장소 | SQLite |
@@ -268,22 +277,31 @@ cd L2C
 cp .env.example .env
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+python -m playwright install chromium
+
+# Gemini 기반 지휘자/QA 사용 시 .env에 GEMINI_API_KEY를 설정
+# 기본값 SKIP_VLM_CAPTION=true 로 VLM 캡셔닝 단계를 우회
 
 # 자격증명 등록 (최초 1회)
 python agent/setup_credentials.py wanted
 
 # Classic 방식 — URL 직접 입력
-python classic/main.py extract https://www.wanted.co.kr/wd/123456
+python -m classic.main extract https://www.wanted.co.kr/wd/350432
 
 # Agent 방식 — 자연어 명령 (수집)
-python agent/main.py "데이터 분석가 신입 공고 모아줘"
+python -m agent.main "데이터 분석가 신입 공고 모아줘"
 
 # Agent 방식 — 자연어 질의 (적재 DB SQLite 조회)
-python agent/main.py "수집된 공고 중 신입 가능한 곳 알려줘"
+python -m agent.main "수집된 공고 중 신입 가능한 곳 알려줘"
+
+# 웹 Q&A 서버
+uvicorn agent.web_server:app --reload
 
 # 두 방식 비교 (정합성 검증 테스트 스크립트 실행)
-python scratch/run_compare_jd.py
+python -m benchmark.run_compare_only
 ```
+
+Windows Python을 WSL/Git Bash에서 직접 호출해 한글이나 이모지가 깨지는 경우에는 `python -X utf8 -m ...` 형태로 실행하세요.
 
 ## 향후 작업
 
