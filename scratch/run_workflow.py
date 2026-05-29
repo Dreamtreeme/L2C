@@ -30,6 +30,8 @@ def main():
         "ui_context": "",
         "current_url": "",
         "current_url_stale": True,
+        "page_text": "",
+        "page_text_url": "",
         "action_history": [],
         "recent_images": [],
         "current_markers": [],

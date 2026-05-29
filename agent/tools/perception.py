@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import os
 import re
 import time
@@ -31,6 +32,9 @@ class PerceptionEngine:
         self.scale_y = 1.0
         self.last_region = None
         self._last_url = ""
+        self._analysis_cache: Dict[str, Dict[str, Any]] = {}
+        self._analysis_cache_order: list[str] = []
+        self._analysis_cache_limit = int(os.getenv("VISION_UI_ANALYSIS_CACHE_LIMIT", "8"))
 
         # WaitStable은 PerceptionEngine을 역참조하므로 순환 import를 피하기 위해 lazy 로딩합니다.
         from agent.utils.wait_stable import WaitStable
@@ -165,6 +169,41 @@ class PerceptionEngine:
             logger.debug("Failed to read current browser URL", error=str(e))
         return self._last_url
 
+    def copy_page_text(self, max_chars: int = 12000) -> str:
+        """브라우저 페이지 본문 텍스트를 키보드 복사 동작으로 읽습니다."""
+        try:
+            import platform
+            import pyautogui
+            import pyperclip
+
+            previous_clipboard = pyperclip.paste() or ""
+            old_pause = pyautogui.PAUSE
+            modifier = "command" if platform.system() == "Darwin" else "ctrl"
+            pyautogui.PAUSE = min(old_pause, 0.02)
+            try:
+                self.release_address_bar_focus(pyautogui, key_pause=0.02)
+                pyautogui.hotkey(modifier, "a")
+                time.sleep(0.03)
+                pyautogui.hotkey(modifier, "c")
+                time.sleep(0.06)
+                text = (pyperclip.paste() or "").strip()
+                self.release_address_bar_focus(pyautogui, key_pause=0.02)
+                if previous_clipboard != text:
+                    pyperclip.copy(previous_clipboard)
+            finally:
+                pyautogui.PAUSE = old_pause
+            if text.startswith(("http://", "https://")):
+                return ""
+            text = re.sub(r"\n{3,}", "\n\n", text)
+            text = re.sub(r"[ \t]{2,}", " ", text)
+            if max_chars > 0:
+                text = text[:max_chars]
+            logger.info("Copied browser page text", chars=len(text))
+            return text
+        except Exception as e:
+            logger.debug("Failed to copy browser page text", error=str(e))
+            return ""
+
     def release_address_bar_focus(self, pyautogui_module=None, key_pause: float = 0.02) -> None:
         """주소창 URL 복사 후 남는 브라우저 툴바 포커스를 페이지 쪽으로 되돌립니다."""
         try:
@@ -182,6 +221,52 @@ class PerceptionEngine:
                 pyautogui_module.PAUSE = old_pause
         except Exception as e:
             logger.debug("Failed to release browser address bar focus", error=str(e))
+
+    def _image_signature(self, image_path: Path) -> str:
+        try:
+            with Image.open(image_path) as img:
+                thumb = img.convert("L").resize((32, 32), Image.Resampling.BILINEAR)
+                return hashlib.sha1(thumb.tobytes()).hexdigest()
+        except Exception as e:
+            logger.debug("Failed to build image signature", error=str(e))
+            return ""
+
+    def _cache_analysis(self, key: str, analysis: Dict[str, Any]) -> None:
+        if not key or self._analysis_cache_limit <= 0:
+            return
+        self._analysis_cache[key] = {
+            "markers": [dict(marker) for marker in analysis.get("markers", [])],
+            "original_image": analysis.get("original_image", ""),
+            "marked_image": analysis.get("marked_image", ""),
+        }
+        if key in self._analysis_cache_order:
+            self._analysis_cache_order.remove(key)
+        self._analysis_cache_order.append(key)
+        while len(self._analysis_cache_order) > self._analysis_cache_limit:
+            old_key = self._analysis_cache_order.pop(0)
+            self._analysis_cache.pop(old_key, None)
+
+    def _prepare_som_image(self, image_path: Path) -> tuple[Path, int]:
+        try:
+            crop_top = int(os.getenv("VISION_SOM_CROP_TOP", "96"))
+        except ValueError:
+            crop_top = 96
+        if crop_top <= 0:
+            return image_path, 0
+        try:
+            with Image.open(image_path) as img:
+                if img.height <= crop_top + 400:
+                    return image_path, 0
+                cropped_path = image_path.with_name(f"som_{image_path.name}")
+                cropped = img.crop((0, crop_top, img.width, img.height))
+                if cropped_path.suffix.lower() in (".jpg", ".jpeg"):
+                    cropped.save(cropped_path, "JPEG", quality=80)
+                else:
+                    cropped.save(cropped_path)
+                return cropped_path, crop_top
+        except Exception as e:
+            logger.debug("Failed to crop browser chrome for SoM", error=str(e))
+            return image_path, 0
 
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """
@@ -201,16 +286,40 @@ class PerceptionEngine:
             logger.error("Image file not found for UI analysis", image_path=str(image_path))
             raise FileNotFoundError(f"Image not found: {image_path}")
 
+        cache_key = self._image_signature(image_path)
+        if cache_key and cache_key in self._analysis_cache:
+            cached = self._analysis_cache[cache_key]
+            logger.info("UI analysis cache hit", markers_count=len(cached.get("markers", [])))
+            return {
+                "markers": [dict(marker) for marker in cached.get("markers", [])],
+                "original_image": str(image_path),
+                "marked_image": cached.get("marked_image", ""),
+            }
+
         # 1. 로컬 SoM 엔진 실행 (마킹 이미지 합성 및 좌표 추출)
+        som_image_path, crop_top = self._prepare_som_image(image_path)
         try:
             marked_filename = f"marked_{image_path.name}"
             marked_path, marker_coords, marker_bboxes, final_elements = self.som_engine.process_image(
-                image_path, 
+                som_image_path,
                 output_filename=marked_filename
             )
+            if crop_top:
+                for bbox in marker_bboxes.values():
+                    bbox[1] += crop_top
+                    bbox[3] += crop_top
+                for coords in marker_coords.values():
+                    coords[1] += crop_top
+                logger.info("Applied browser chrome crop for SoM", crop_top=crop_top)
         except Exception as som_err:
             logger.error("Local SoM processing failed", error=str(som_err))
             return {"markers": [], "original_image": str(image_path)}
+        finally:
+            if som_image_path != image_path:
+                try:
+                    som_image_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         skip_vlm_caption = os.getenv("SKIP_VLM_CAPTION", "true").lower() == "true"
         elements = []
@@ -341,8 +450,10 @@ Example output format:
             })
 
         logger.info("UI analysis pipeline complete", final_markers_count=len(markers))
-        return {
+        analysis = {
             "markers": markers,
             "original_image": str(image_path),
             "marked_image": str(marked_path)
         }
+        self._cache_analysis(cache_key, analysis)
+        return analysis

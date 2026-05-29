@@ -53,7 +53,7 @@ class update_extracted_info(BaseModel):
     data_json: str = Field(..., description="업데이트할 정보 키-값 딕셔너리의 JSON 문자열")
 
 class go_back(BaseModel):
-    """브라우저의 뒤로가기(이전 페이지 이동) 기능을 실행합니다. Alt + Left Arrow 단축키를 시뮬레이션합니다."""
+    """브라우저의 뒤로가기(이전 페이지 이동) 기능을 실행합니다."""
     pass
 
 class update_plan_progress(BaseModel):
@@ -128,10 +128,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     
     # 화면 캡처
     image_path = perception.capture_screen()
-    
-    analysis = perception.analyze_ui(image_path)
-    markers = analysis.get("markers", [])
-    marked_image = analysis.get("marked_image", "")
+
     current_url = state.get("current_url", "")
     current_url_stale = state.get("current_url_stale", True)
     if current_url_stale or not current_url:
@@ -139,6 +136,34 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         if fetched_url:
             current_url = fetched_url
         current_url_stale = False
+
+    page_text = state.get("page_text", "")
+    page_text_url = state.get("page_text_url", "")
+    if _looks_like_job_detail_url(current_url):
+        if page_text_url != current_url or not page_text:
+            page_text = perception.copy_page_text()
+            page_text_url = current_url if page_text else ""
+        if page_text:
+            elapsed = time.time() - start_time
+            logger.info(f"Perception Node completed in {elapsed:.2f} seconds (detail page text fast-path)")
+            return {
+                "recent_images": [image_path],
+                "marked_image": "",
+                "current_markers": [],
+                "ui_context": _build_detail_page_text_context(page_text),
+                "current_url": current_url,
+                "current_url_stale": current_url_stale,
+                "page_text": page_text,
+                "page_text_url": page_text_url,
+                "step_durations": [{"node": "perception", "duration": elapsed}]
+            }
+
+    page_text = ""
+    page_text_url = ""
+
+    analysis = perception.analyze_ui(image_path)
+    markers = analysis.get("markers", [])
+    marked_image = analysis.get("marked_image", "")
     
     # 우측 스크롤바 영역 마커 필터링 (우측 끝 35픽셀 이내 제거)
     from PIL import Image
@@ -159,23 +184,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         filtered_markers.append(m)
     markers = filtered_markers
     
-    # 텍스트가 있는 요소와 없는 요소를 구분하여 프롬프트 토큰 최적화 (지연 시간 절감)
-    text_elements = []
-    icon_ids = []
-    for m in markers:
-        text = m['text']
-        if text.startswith("상호작용 가능한 요소 (") or text == "상호작용 가능한 요소":
-            icon_ids.append(m['id'])
-        else:
-            text_elements.append(f"[id: {m['id']}] {text}")
-            
-    ui_context = ""
-    if text_elements:
-        ui_context += "식별된 텍스트 요소:\n" + "\n".join(text_elements) + "\n"
-    if icon_ids:
-        ui_context += f"기타 아이콘/버튼 마커 ID 목록: {icon_ids}"
-    if not ui_context:
-        ui_context = "발견된 UI 마커 없음"
+    ui_context = _build_ui_context(markers)
     
     elapsed = time.time() - start_time
     logger.info(f"Perception Node completed in {elapsed:.2f} seconds")
@@ -186,6 +195,8 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "ui_context": ui_context,
         "current_url": current_url,
         "current_url_stale": current_url_stale,
+        "page_text": page_text,
+        "page_text_url": page_text_url,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
 
@@ -204,6 +215,25 @@ def _is_repeating(history: list, n: int) -> bool:
 
 def _looks_like_job_detail_url(url: str) -> bool:
     return bool(url and re.search(r"/wd/\d+", url))
+
+
+def _compact_page_text(text: str, max_chars: int = 9000) -> str:
+    text = re.sub(r"\r\n?", "\n", text or "")
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n\n...[truncated]"
+
+
+def _build_detail_page_text_context(page_text: str) -> str:
+    compact_text = _compact_page_text(page_text)
+    return (
+        "상세 페이지 본문 텍스트 스냅샷(브라우저 전체 선택/복사 기반):\n"
+        f"{compact_text}\n\n"
+        "이 텍스트는 상세 공고의 본문 전체를 빠르게 수집하기 위한 우선 입력입니다. "
+        "새 마커 클릭이나 추가 스크롤 없이 이 텍스트에서 회사명, 직무명, 주요업무, 자격요건, 우대사항, 혜택을 구조화하십시오."
+    )
 
 
 def _is_browser_back_marker_bbox(bbox: list) -> bool:
@@ -324,6 +354,56 @@ def _compact_action_args(action_name: str, args: dict) -> dict:
     }
 
 
+def _marker_prompt_rank(marker: dict) -> tuple[int, int, int]:
+    text = marker.get("text", "")
+    bbox = marker.get("bbox", [0, 0, 0, 0])
+    y = int(bbox[1]) if len(bbox) == 4 else 0
+    x = int(bbox[0]) if len(bbox) == 4 else 0
+    lowered = text.lower()
+    important_terms = (
+        "검색", "채용", "포지션", "데이터", "엔지니어", "개발", "로그인",
+        "닫기", "x", "원티드", "wanted", "지원", "상세", "회사",
+    )
+    priority = 0 if any(term in lowered for term in important_terms) else 1
+    return (priority, y, x)
+
+
+def _build_ui_context(markers: list[dict]) -> str:
+    try:
+        text_limit = int(os.getenv("VISION_UI_TEXT_MARKER_LIMIT", "90"))
+        icon_limit = int(os.getenv("VISION_UI_ICON_MARKER_LIMIT", "45"))
+    except ValueError:
+        text_limit = 90
+        icon_limit = 45
+    text_markers = []
+    icon_markers = []
+    for marker in markers:
+        text = marker.get("text", "")
+        if text.startswith("상호작용 가능한 요소 (") or text == "상호작용 가능한 요소":
+            icon_markers.append(marker)
+        else:
+            text_markers.append(marker)
+
+    text_markers = sorted(text_markers, key=_marker_prompt_rank)
+    icon_markers = sorted(icon_markers, key=_marker_prompt_rank)
+    shown_text_markers = text_markers[:text_limit]
+    shown_icon_markers = icon_markers[:icon_limit]
+
+    parts = []
+    if shown_text_markers:
+        parts.append(
+            "식별된 텍스트 요소:\n"
+            + "\n".join(f"[id: {m['id']}] {m.get('text', '')}" for m in shown_text_markers)
+        )
+    if shown_icon_markers:
+        parts.append(f"기타 아이콘/버튼 마커 ID 목록: {[m['id'] for m in shown_icon_markers]}")
+    omitted_text = max(0, len(text_markers) - len(shown_text_markers))
+    omitted_icon = max(0, len(icon_markers) - len(shown_icon_markers))
+    if omitted_text or omitted_icon:
+        parts.append(f"프롬프트 경량화를 위해 생략된 마커: 텍스트 {omitted_text}개, 아이콘 {omitted_icon}개")
+    return "\n".join(parts) if parts else "발견된 UI 마커 없음"
+
+
 def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     """
     reasoning_node용 LLM 메시지 리스트를 조립합니다.
@@ -343,7 +423,12 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     extracted_jd = state.get("extracted_jd", {})
     ui_context = state.get("ui_context", "")
     current_url = state.get("current_url", "")
+    page_text = state.get("page_text", "")
+    page_text_url = state.get("page_text_url", "")
     action_history = state.get("action_history", [])
+    has_detail_page_text = bool(
+        page_text and page_text_url == current_url and _looks_like_job_detail_url(current_url)
+    )
 
     human_prompt_text = (
         f"{plan_context}"
@@ -354,15 +439,28 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
         f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
         f"계획 단계 전환이 일어났다면 update_plan_progress를 함께 체이닝 호출하여 계획 진행률을 반영하십시오."
     )
+    if has_detail_page_text:
+        human_prompt_text += (
+            "\n\n[상세 페이지 빠른 수집 모드]\n"
+            "현재 화면은 공고 상세 페이지이며 브라우저 텍스트 복사로 본문 스냅샷을 확보했습니다. "
+            "이 턴에서는 추가 scroll 없이 `update_extracted_info`로 한 공고의 전체 필드를 최대한 구조화하고, "
+            "목록으로 돌아가야 하면 같은 턴에 `go_back`을 체이닝하십시오."
+        )
 
     # 마킹 이미지가 있으면 멀티모달 메시지
     marked_image_path = state.get("marked_image")
     base64_image = ""
-    if marked_image_path and os.path.exists(marked_image_path):
+    if marked_image_path and os.path.exists(marked_image_path) and not has_detail_page_text:
         try:
             from agent.utils.image_utils import image_to_base64_jpeg
             from pathlib import Path
-            base64_image = image_to_base64_jpeg(Path(marked_image_path), max_dim=1024, quality=70, fast=True)
+            try:
+                max_dim = int(os.getenv("VISION_REASONING_IMAGE_MAX_DIM", "768"))
+                quality = int(os.getenv("VISION_REASONING_IMAGE_QUALITY", "60"))
+            except ValueError:
+                max_dim = 768
+                quality = 60
+            base64_image = image_to_base64_jpeg(Path(marked_image_path), max_dim=max_dim, quality=quality, fast=True)
         except Exception as img_err:
             logger.warning("Failed to read/resize marked_image for reasoning node", error=str(img_err))
 
@@ -376,7 +474,10 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
             ])
         ]
     else:
-        logger.info("Invoking reasoning node with text-only prompts...")
+        if has_detail_page_text:
+            logger.info("Invoking reasoning node with text-only detail page snapshot...")
+        else:
+            logger.info("Invoking reasoning node with text-only prompts...")
         return [
             SystemMessage(content=system_prompt_text),
             HumanMessage(content=human_prompt_text)
@@ -511,6 +612,8 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     current_plan      = list(state.get("plan", []))
     current_url       = state.get("current_url", "")
     current_url_stale = state.get("current_url_stale", True)
+    page_text         = state.get("page_text", "")
+    page_text_url     = state.get("page_text_url", "")
     screen_changed    = False
 
     # marker_id → bbox 변환 헬퍼
@@ -542,6 +645,9 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 result = _dispatch_ui(action_name, args, get_bbox)
                 screen_changed = screen_changed or action_name in SCREEN_CHANGING_ACTIONS
                 current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
+                if action_name in URL_STALE_ACTIONS:
+                    page_text = ""
+                    page_text_url = ""
                 if action_name == "open_browser":
                     current_url = args["url"]
                     current_url_stale = True
@@ -550,6 +656,9 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     if result_url:
                         current_url = result_url
                         current_url_stale = False
+                        if page_text_url != current_url:
+                            page_text = ""
+                            page_text_url = ""
 
             elif action_name in STATE_ACTIONS:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
@@ -597,6 +706,8 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "current_plan_step": current_plan_step,
         "current_url":       current_url,
         "current_url_stale": current_url_stale,
+        "page_text":         page_text,
+        "page_text_url":     page_text_url,
         "last_action_screen_changed": screen_changed,
     }
 

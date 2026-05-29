@@ -237,7 +237,10 @@ class SomEngine:
         original_w, original_h = img.size
 
         # 추론용 리사이즈 (PaddleOCR & YOLO 효율 최적화)
-        max_dim = 1280
+        try:
+            max_dim = int(os.getenv("SOM_INFERENCE_MAX_DIM", "1024"))
+        except ValueError:
+            max_dim = 1024
         if original_w > max_dim or original_h > max_dim:
             scale = max_dim / max(original_w, original_h)
             inference_img = img.resize(

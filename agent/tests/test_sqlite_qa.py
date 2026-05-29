@@ -217,6 +217,8 @@ def test_url_stale_flag_for_actions(monkeypatch):
         "current_markers": [{"id": 1, "bbox": [100, 100, 140, 140]}],
         "current_url": "https://www.wanted.co.kr/wd/1",
         "current_url_stale": False,
+        "page_text": "cached detail text",
+        "page_text_url": "https://www.wanted.co.kr/wd/1",
         "extracted_jd": {},
         "is_finished": False,
         "collected_data": [],
@@ -235,7 +237,10 @@ def test_url_stale_flag_for_actions(monkeypatch):
         **base_state,
         "last_action_result": AIMessage(content="", tool_calls=[{"name": "click_marker", "args": {"marker_id": 1}, "id": "1"}]),
     }
-    assert nodes.action_node(click_state)["current_url_stale"] is True
+    click_result = nodes.action_node(click_state)
+    assert click_result["current_url_stale"] is True
+    assert click_result["page_text"] == ""
+    assert click_result["page_text_url"] == ""
 
 
 def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
@@ -277,6 +282,89 @@ def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
     assert fake_perception.url_reads == 1
     assert stale_result["current_url"] == "https://www.wanted.co.kr/wd/fresh"
     assert stale_result["current_url_stale"] is False
+
+
+def test_perception_node_uses_page_text_fast_path_for_detail_url(monkeypatch, tmp_path):
+    from PIL import Image
+    from agent.graph import nodes
+
+    image_path = tmp_path / "screen.png"
+    Image.new("RGB", (200, 200), "white").save(image_path)
+
+    class FakePerception:
+        def __init__(self):
+            self.text_reads = 0
+
+        def capture_screen(self):
+            return image_path
+
+        def copy_page_text(self):
+            self.text_reads += 1
+            return "회사명 래브라도랩스\n직무명 데이터 엔지니어\n주요업무 데이터 파이프라인 구축"
+
+        def analyze_ui(self, _image_path):
+            raise AssertionError("detail text fast-path should skip SoM analysis")
+
+    fake_perception = FakePerception()
+    monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
+
+    result = nodes.perception_node({
+        "current_url": "https://www.wanted.co.kr/wd/363969",
+        "current_url_stale": False,
+        "page_text": "",
+        "page_text_url": "",
+    })
+
+    assert fake_perception.text_reads == 1
+    assert result["current_markers"] == []
+    assert result["marked_image"] == ""
+    assert result["page_text_url"] == "https://www.wanted.co.kr/wd/363969"
+    assert "상세 페이지 본문 텍스트 스냅샷" in result["ui_context"]
+
+
+def test_ui_context_limits_marker_prompt(monkeypatch):
+    from agent.graph.nodes import _build_ui_context
+
+    monkeypatch.setenv("VISION_UI_TEXT_MARKER_LIMIT", "2")
+    monkeypatch.setenv("VISION_UI_ICON_MARKER_LIMIT", "1")
+    markers = [
+        {"id": 1, "text": "검색", "bbox": [0, 10, 10, 20]},
+        {"id": 2, "text": "회사명", "bbox": [0, 20, 10, 30]},
+        {"id": 3, "text": "일반 텍스트", "bbox": [0, 30, 10, 40]},
+        {"id": 4, "text": "상호작용 가능한 요소 (icon)", "bbox": [0, 40, 10, 50]},
+        {"id": 5, "text": "상호작용 가능한 요소 (icon)", "bbox": [0, 50, 10, 60]},
+    ]
+
+    ui_context = _build_ui_context(markers)
+
+    assert "[id: 1] 검색" in ui_context
+    assert "[id: 2] 회사명" in ui_context
+    assert "[id: 3]" not in ui_context
+    assert "기타 아이콘/버튼 마커 ID 목록: [4]" in ui_context
+    assert "생략된 마커: 텍스트 1개, 아이콘 1개" in ui_context
+
+
+def test_analyze_ui_returns_cached_result_without_som(tmp_path):
+    from PIL import Image
+    from agent.tools.perception import PerceptionEngine
+
+    image_path = tmp_path / "screen.png"
+    Image.new("RGB", (200, 200), "white").save(image_path)
+    engine = object.__new__(PerceptionEngine)
+    engine._analysis_cache = {}
+    engine._analysis_cache_order = []
+    engine._analysis_cache_limit = 8
+    key = engine._image_signature(image_path)
+    engine._analysis_cache[key] = {
+        "markers": [{"id": 7, "text": "검색", "bbox": [10, 20, 30, 40]}],
+        "original_image": str(image_path),
+        "marked_image": "marked.png",
+    }
+
+    result = engine.analyze_ui(image_path)
+
+    assert result["markers"] == [{"id": 7, "text": "검색", "bbox": [10, 20, 30, 40]}]
+    assert result["marked_image"] == "marked.png"
 
 
 def test_release_address_bar_focus_presses_escape_twice():

@@ -219,7 +219,7 @@ class Preprocessor:
         main_tasks = cls.clean_list(raw_data.get("주요업무") or raw_data.get("main_tasks"))
         requirements = cls.clean_list(raw_data.get("자격요건") or raw_data.get("requirements"))
         preferred = cls.clean_list(raw_data.get("우대사항") or raw_data.get("preferred"))
-        benefits = cls.clean_list(raw_data.get("혜택정보") or raw_data.get("benefits"))
+        benefits = cls.clean_list(raw_data.get("혜택정보") or raw_data.get("혜택") or raw_data.get("benefits"))
 
         # 플랫폼 분류
         source_platform = cls.parse_source_platform(url)

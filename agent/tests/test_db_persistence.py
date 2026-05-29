@@ -18,6 +18,17 @@ TEST_DB_PATH = Path("data/test_jobs.db")
 AGENT_JSON_PATH = Path("data/agent_extracted_multi_jds_decoded.json")
 
 
+def test_preprocessor_accepts_korean_benefits_alias():
+    job_posting = Preprocessor.process_raw_jd({
+        "회사명": "테스트컴퍼니",
+        "직무명": "데이터 엔지니어",
+        "url": "https://www.wanted.co.kr/wd/123",
+        "혜택": ["식대지원", "장비지원"],
+    })
+
+    assert job_posting.benefits == ["식대지원", "장비지원"]
+
+
 def test_persistence_pipeline():
     print("=== [테스트 시작] 전처리 및 DB 적재 파이프라인 검증 ===")
     

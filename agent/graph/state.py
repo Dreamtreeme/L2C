@@ -17,6 +17,10 @@ class GraphState(TypedDict):
 
     # 현재 URL 캐시가 브라우저 실제 주소와 달라졌을 가능성
     current_url_stale: bool
+
+    # 상세 페이지에서 브라우저 텍스트 복사로 확보한 본문 스냅샷
+    page_text: str
+    page_text_url: str
     
     # 원본 마커 데이터 (ID 매핑용)
     current_markers: List[Dict[str, Any]]
