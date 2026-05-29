@@ -199,6 +199,15 @@ def _looks_like_job_detail_url(url: str) -> bool:
     return bool(url and re.search(r"/wd/\d+", url))
 
 
+def _is_browser_back_marker_bbox(bbox: list) -> bool:
+    """브라우저 툴바의 뒤로가기 버튼 마커를 일반 좌표 클릭 대신 go_back으로 처리합니다."""
+    if len(bbox) != 4:
+        return False
+    x_center = (bbox[0] + bbox[2]) // 2
+    y_center = (bbox[1] + bbox[3]) // 2
+    return x_center <= 90 and 60 <= y_center <= 180
+
+
 def _job_identity(job: dict) -> tuple:
     url = (job.get("url") or job.get("URL") or job.get("공고url") or "").strip()
     company = (job.get("회사명") or job.get("company_name") or "").strip()
@@ -412,7 +421,11 @@ def _dispatch_ui(action_name: str, args: dict, get_bbox) -> dict:
     """마우스/키보드 물리 조작 도구를 실행합니다."""
     action_tools = _get_action_tools()
     if action_name == "click_marker":
-        return action_tools.click_marker(get_bbox(args["marker_id"]))
+        bbox = get_bbox(args["marker_id"])
+        if _is_browser_back_marker_bbox(bbox):
+            logger.info("Redirecting browser toolbar back marker click to go_back", marker_id=args["marker_id"], bbox=bbox)
+            return action_tools.go_back()
+        return action_tools.click_marker(bbox)
     elif action_name == "type_in_marker":
         return action_tools.type_in_marker(get_bbox(args["marker_id"]), args["text"])
     elif action_name == "scroll":

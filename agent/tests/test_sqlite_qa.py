@@ -192,6 +192,14 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     assert row[0] == "부분수집컴퍼니"
 
 
+def test_browser_back_marker_detection():
+    from agent.graph.nodes import _is_browser_back_marker_bbox
+
+    assert _is_browser_back_marker_bbox([8, 121, 62, 173]) is True
+    assert _is_browser_back_marker_bbox([180, 121, 240, 173]) is False
+    assert _is_browser_back_marker_bbox([8, 210, 62, 260]) is False
+
+
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
     import shared.config as cfg
