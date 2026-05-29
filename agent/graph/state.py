@@ -11,6 +11,9 @@ class GraphState(TypedDict):
     
     # 현재 화면에서 추출된 UI 요소 목록 (텍스트)
     ui_context: str
+
+    # 현재 활성 브라우저 URL
+    current_url: str
     
     # 원본 마커 데이터 (ID 매핑용)
     current_markers: List[Dict[str, Any]]
@@ -49,3 +52,6 @@ class GraphState(TypedDict):
     # 각 노드의 실행 시간 기록 (디버깅/성능 측정용)
     # Annotated + operator.add 로 노드마다 append되어 누적됩니다.
     step_durations: Annotated[List[Dict[str, Any]], operator.add]
+
+    # 마지막 action이 화면 전환/렌더링 변화를 유발했는지 여부
+    last_action_screen_changed: bool

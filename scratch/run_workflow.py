@@ -28,6 +28,7 @@ def main():
             "(주의: 정보 수집 시 화면에 접힌 부분이 있거나 보이지 않는 내용이 있다면 클릭 및 스크롤을 활용하여 본문을 끝까지 읽고 수집을 완료해야 합니다.)"
         ),
         "ui_context": "",
+        "current_url": "",
         "action_history": [],
         "recent_images": [],
         "current_markers": [],
@@ -37,7 +38,8 @@ def main():
         "extracted_jd": {},
         "last_action_result": None,
         "plan": [],
-        "current_plan_step": 0
+        "current_plan_step": 0,
+        "last_action_screen_changed": True,
     }
     
     import time

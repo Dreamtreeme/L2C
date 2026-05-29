@@ -32,6 +32,7 @@ def main():
             "마지막으로 수집된 회사명, 직무명, 주요업무, 자격요건, 우대사항, 혜택 정보 및 해당 공고의 'url' 필드를 포함한 JSON 구조를 최종 결과로 반환해 주세요."
         ),
         "ui_context": "",
+        "current_url": "",
         "action_history": [],
         "recent_images": [],
         "current_markers": [],
@@ -41,7 +42,8 @@ def main():
         "extracted_jd": {},
         "last_action_result": None,
         "plan": [],
-        "current_plan_step": 0
+        "current_plan_step": 0,
+        "last_action_screen_changed": True,
     }
     
     os.environ["SKIP_VLM_CAPTION"] = "true"

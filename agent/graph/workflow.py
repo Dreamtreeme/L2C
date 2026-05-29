@@ -13,7 +13,11 @@ def should_continue(state: GraphState) -> str:
     if state.get("error_count", 0) >= 3:
         logger.error("Too many errors. Forcing workflow to end.")
         return "end"
-        
+
+    if state.get("last_action_screen_changed") is False:
+        logger.info("Last action did not change the screen. Skipping perception.")
+        return "reasoning"
+
     return "perception"
 
 def build_graph():
@@ -45,6 +49,7 @@ def build_graph():
         should_continue,
         {
             "perception": "perception",
+            "reasoning": "reasoning",
             "end": END
         }
     )

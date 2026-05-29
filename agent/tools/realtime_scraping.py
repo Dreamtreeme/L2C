@@ -1,11 +1,33 @@
 import logging
 import os
+from typing import Any
 
 from langchain_core.tools import tool
+from langgraph.errors import GraphRecursionError
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECURSION_LIMIT = 60
+
+
+def _run_graph_with_last_state(app: Any, initial_state: dict, recursion_limit: int) -> tuple[dict, bool]:
+    """
+    LangGraph 실행 중 recursion limit에 걸려도 마지막 state를 보존합니다.
+    app.invoke()는 예외 시 partial state를 돌려주지 않으므로 stream(values)을 사용합니다.
+    """
+    last_state = initial_state
+    try:
+        for state in app.stream(
+            initial_state,
+            config={"recursion_limit": recursion_limit},
+            stream_mode="values",
+        ):
+            if isinstance(state, dict):
+                last_state = state
+        return last_state, False
+    except GraphRecursionError as e:
+        logger.warning(f"[realtime_scraping] Graph recursion limit reached; preserving partial state: {e}")
+        return last_state, True
 
 
 @tool
@@ -49,6 +71,7 @@ def realtime_scraping(company: str = None, tech_stack: str = None) -> str:
         initial_state = {
             "goal": goal,
             "ui_context": "",
+            "current_url": "",
             "current_markers": [],
             "action_history": [],
             "recent_images": [],
@@ -61,32 +84,39 @@ def realtime_scraping(company: str = None, tech_stack: str = None) -> str:
             "plan": [],
             "current_plan_step": 0,
             "step_durations": [],
+            "last_action_screen_changed": True,
         }
 
         logger.info(f"[realtime_scraping] Starting autonomous vision collection graph with goal: {goal}")
 
         recursion_limit = int(os.getenv("VISION_AGENT_RECURSION_LIMIT", str(DEFAULT_RECURSION_LIMIT)))
 
-        # LangGraph 앱 실행 (동기 invoke)
+        # LangGraph 앱 실행 (동기 stream)
         # 모든 perception → reasoning → action 루프가 자율적으로 순환하며
         # 도구 호출 궤적이 LangSmith 트레이스에 자동 기록됨
-        final_state = app.invoke(initial_state, config={"recursion_limit": recursion_limit})
+        final_state, hit_recursion_limit = _run_graph_with_last_state(app, initial_state, recursion_limit)
 
         # 수집 결과 분석
         collected = final_state.get("collected_data", [])
         extracted = final_state.get("extracted_jd", {})
         is_finished = final_state.get("is_finished", False)
 
-        if is_finished and (collected or extracted):
+        if extracted:
             # 수집된 데이터를 DB에 전처리 및 적재
-            _persist_collected_data(extracted, search_keyword)
+            persisted_count = _persist_collected_data(extracted, search_keyword)
 
-            item_count = len(collected) if collected else (1 if extracted else 0)
-            logger.info(f"[realtime_scraping] Vision agent collection completed. Items: {item_count}")
-            return (
-                f"실시간 비전 자율 수집 및 적재 완료: '{search_keyword}' 키워드로 "
-                f"총 {item_count}건의 채용 공고 정보가 데이터베이스에 성공적으로 동적 업데이트되었습니다."
+            item_count = len(extracted.get("공고목록", [])) if isinstance(extracted.get("공고목록"), list) else 1
+            logger.info(
+                f"[realtime_scraping] Vision agent collection completed. "
+                f"Items: {item_count}, persisted: {persisted_count}, finished: {is_finished}"
             )
+            completion_type = "부분 수집 및 적재 완료" if hit_recursion_limit and not is_finished else "실시간 비전 자율 수집 및 적재 완료"
+            return (
+                f"{completion_type}: '{search_keyword}' 키워드로 "
+                f"총 {item_count}건 중 {persisted_count}건의 채용 공고 정보가 데이터베이스에 업데이트되었습니다."
+            )
+        if hit_recursion_limit:
+            return f"실시간 수집 중단: '{search_keyword}' 수집 중 recursion limit에 도달했고 저장 가능한 공고가 없습니다."
         else:
             logger.warning(f"[realtime_scraping] Vision agent finished but no data collected for '{search_keyword}'")
             return f"실시간 수집 완료: '{search_keyword}'에 매칭되는 유효한 채용 정보를 찾지 못했습니다."
@@ -96,7 +126,7 @@ def realtime_scraping(company: str = None, tech_stack: str = None) -> str:
         return f"실시간 수집 오류: {e}"
 
 
-def _persist_collected_data(extracted_jd: dict, keyword: str) -> None:
+def _persist_collected_data(extracted_jd: dict, keyword: str) -> int:
     """
     비전 에이전트가 수집한 extracted_jd 데이터를 전처리 후 DB에 UPSERT합니다.
     extracted_jd는 단일 공고 dict이거나, '공고목록' 키 아래 리스트를 담고 있을 수 있습니다.
@@ -117,6 +147,7 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> None:
     else:
         job_list = [extracted_jd] if extracted_jd else []
 
+    persisted_count = 0
     for idx, job in enumerate(job_list):
         if not isinstance(job, dict) or not job:
             continue
@@ -134,8 +165,10 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> None:
             job.setdefault("url", url)
             job_posting = Preprocessor.process_raw_jd(job)
             db.upsert(url=url, data=job_posting.model_dump())
+            persisted_count += 1
             logger.info(f"[_persist] Successfully upserted job #{idx}: {job_posting.company_name} - {job_posting.position}")
 
         except Exception as e:
             logger.error(f"[_persist] Failed to persist job #{idx}: {e}")
             continue
+    return persisted_count

@@ -138,6 +138,26 @@ class PerceptionEngine:
             logger.exception("Failed to capture screen", error=str(e))
             raise
 
+    def get_current_url(self) -> str:
+        """활성 브라우저의 주소창 URL을 클립보드 경유로 읽습니다."""
+        try:
+            import platform
+            import pyautogui
+            import pyperclip
+
+            modifier = "command" if platform.system() == "Darwin" else "ctrl"
+            pyautogui.hotkey(modifier, "l")
+            time.sleep(0.05)
+            pyautogui.hotkey(modifier, "c")
+            time.sleep(0.05)
+            url = (pyperclip.paste() or "").strip()
+            pyautogui.press("esc")
+            if url.startswith(("http://", "https://")):
+                return url
+        except Exception as e:
+            logger.debug("Failed to read current browser URL", error=str(e))
+        return ""
+
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """
         Set-of-Marks (SoM) 기반의 UI 분석 엔진입니다.

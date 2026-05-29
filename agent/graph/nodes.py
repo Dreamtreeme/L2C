@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,8 +44,12 @@ class get_credentials(BaseModel):
     """특정 사이트(예: 'wanted')의 ID/PW를 보안 저장소에서 가져와 반환합니다. 로그인 폼이 보일 때 호출하세요."""
     site: str = Field(..., description="자격 증명을 가져올 사이트 식별자 (예: 'wanted')")
 
+class get_current_url(BaseModel):
+    """활성 브라우저 주소창의 현재 URL을 읽습니다."""
+    pass
+
 class update_extracted_info(BaseModel):
-    """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 누적 업데이트합니다. 스크롤하면서 새로운 정보를 찾을 때마다 이 도구를 호출하여 정보를 보존해 두세요. (예: {'회사명': '로이드케이', '주요업무': ['A', 'B']} 형태의 JSON 문자열)"""
+    """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 병합합니다. 변경된 공고 또는 새 필드만 보내도 됩니다. (예: {'공고목록': [{'회사명': '로이드케이', '직무명': '...', '주요업무': ['A']}]} 형태의 JSON 문자열)"""
     data_json: str = Field(..., description="업데이트할 정보 키-값 딕셔너리의 JSON 문자열")
 
 class go_back(BaseModel):
@@ -95,6 +100,7 @@ def _get_ui_llm_with_tools():
             press_key,
             open_browser,
             get_credentials,
+            get_current_url,
             update_extracted_info,
             go_back,
             update_plan_progress,
@@ -126,6 +132,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     analysis = perception.analyze_ui(image_path)
     markers = analysis.get("markers", [])
     marked_image = analysis.get("marked_image", "")
+    current_url = perception.get_current_url()
     
     # 우측 스크롤바 영역 마커 필터링 (우측 끝 35픽셀 이내 제거)
     from PIL import Image
@@ -171,6 +178,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "marked_image": marked_image,
         "current_markers": markers,
         "ui_context": ui_context,
+        "current_url": current_url,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
 
@@ -185,6 +193,119 @@ def _is_repeating(history: list, n: int) -> bool:
         for a in last_n if isinstance(a, dict)
     )
     return len(actions) == 1
+
+
+def _looks_like_job_detail_url(url: str) -> bool:
+    return bool(url and re.search(r"/wd/\d+", url))
+
+
+def _job_identity(job: dict) -> tuple:
+    url = (job.get("url") or job.get("URL") or job.get("공고url") or "").strip()
+    company = (job.get("회사명") or job.get("company_name") or "").strip()
+    position = (job.get("직무명") or job.get("position") or "").strip()
+    return (url, company, position)
+
+
+def _merge_value(old: Any, new: Any) -> Any:
+    if new in (None, "", [], {}):
+        return old
+    if isinstance(old, list) or isinstance(new, list):
+        old_items = old if isinstance(old, list) else ([old] if old not in (None, "") else [])
+        new_items = new if isinstance(new, list) else [new]
+        merged = []
+        seen = set()
+        for item in old_items + new_items:
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True) if isinstance(item, (dict, list)) else str(item)
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(item)
+        return merged
+    if isinstance(old, dict) and isinstance(new, dict):
+        merged = dict(old)
+        for key, value in new.items():
+            merged[key] = _merge_value(merged.get(key), value)
+        return merged
+    return new
+
+
+def _merge_extracted_info(current_jd: dict, new_data: dict, current_url: str = "") -> tuple[dict, dict]:
+    merged = dict(current_jd)
+    summary = {"incoming_jobs": 0, "total_jobs": 0, "fields": []}
+
+    incoming_jobs = new_data.get("공고목록")
+    if isinstance(incoming_jobs, dict):
+        incoming_jobs = [incoming_jobs]
+
+    if isinstance(incoming_jobs, list):
+        existing_jobs = merged.get("공고목록")
+        if not isinstance(existing_jobs, list):
+            existing_jobs = []
+
+        for incoming in incoming_jobs:
+            if not isinstance(incoming, dict):
+                continue
+            job = dict(incoming)
+            if _looks_like_job_detail_url(current_url) and not (job.get("url") or job.get("URL") or job.get("공고url")):
+                job["url"] = current_url
+
+            summary["incoming_jobs"] += 1
+            summary["fields"].extend(job.keys())
+            identity = _job_identity(job)
+            match_index = None
+            for idx, existing in enumerate(existing_jobs):
+                if not isinstance(existing, dict):
+                    continue
+                if _job_identity(existing) == identity and any(identity):
+                    match_index = idx
+                    break
+                if identity[0] and identity[0] in _job_identity(existing):
+                    match_index = idx
+                    break
+                if identity[1:] == _job_identity(existing)[1:] and all(identity[1:]):
+                    match_index = idx
+                    break
+
+            if match_index is None:
+                existing_jobs.append(job)
+            else:
+                existing_jobs[match_index] = _merge_value(existing_jobs[match_index], job)
+
+        merged["공고목록"] = existing_jobs
+        summary["total_jobs"] = len(existing_jobs)
+
+    for key, value in new_data.items():
+        if key == "공고목록":
+            continue
+        summary["fields"].append(key)
+        merged[key] = _merge_value(merged.get(key), value)
+
+    summary["fields"] = sorted({str(field) for field in summary["fields"]})
+    if not summary["total_jobs"] and isinstance(merged.get("공고목록"), list):
+        summary["total_jobs"] = len(merged["공고목록"])
+    return merged, summary
+
+
+def _compact_action_args(action_name: str, args: dict) -> dict:
+    if action_name != "update_extracted_info":
+        return args
+    try:
+        data = json.loads(args.get("data_json", "{}"))
+    except Exception:
+        return {"data_json": "<invalid json>"}
+    jobs = data.get("공고목록")
+    if isinstance(jobs, dict):
+        jobs = [jobs]
+    fields = []
+    if isinstance(jobs, list):
+        for job in jobs:
+            if isinstance(job, dict):
+                fields.extend(job.keys())
+    fields.extend(k for k in data.keys() if k != "공고목록")
+    return {
+        "incoming_jobs": len(jobs) if isinstance(jobs, list) else 0,
+        "fields": sorted({str(field) for field in fields}),
+        "payload_chars": len(args.get("data_json", "")),
+    }
 
 
 def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
@@ -205,11 +326,13 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     system_prompt_text = COMMANDER_SYSTEM_PROMPT.format(goal=state.get("goal", ""))
     extracted_jd = state.get("extracted_jd", {})
     ui_context = state.get("ui_context", "")
+    current_url = state.get("current_url", "")
     action_history = state.get("action_history", [])
 
     human_prompt_text = (
         f"{plan_context}"
         f"현재까지 누적 수집된 정보:\n{json.dumps(extracted_jd, ensure_ascii=False, indent=2)}\n\n"
+        f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"이전 행동 내역:\n{json.dumps(action_history[-5:], ensure_ascii=False, indent=2)}\n\n"
         f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
@@ -300,6 +423,8 @@ def _dispatch_ui(action_name: str, args: dict, get_bbox) -> dict:
         return action_tools.open_browser(args["url"])
     elif action_name == "get_credentials":
         return action_tools.get_credentials(args["site"])
+    elif action_name == "get_current_url":
+        return action_tools.get_current_url()
     elif action_name == "go_back":
         return action_tools.go_back()
     raise ValueError(f"Unknown UI action: {action_name}")
@@ -307,7 +432,7 @@ def _dispatch_ui(action_name: str, args: dict, get_bbox) -> dict:
 
 def _dispatch_state(
     action_name: str, args: dict,
-    current_jd: dict, current_plan: list, current_plan_step: int
+    current_jd: dict, current_plan: list, current_plan_step: int, current_url: str = ""
 ) -> Tuple[dict, dict, list, int]:
     """그래프 상태 변경 도구를 실행하고 (result, jd, plan, step)을 반환합니다."""
     if action_name == "update_plan_progress":
@@ -322,8 +447,12 @@ def _dispatch_state(
     elif action_name == "update_extracted_info":
         try:
             new_data = json.loads(args["data_json"])
-            current_jd.update(new_data)
-            result_str = f"Extracted data updated with: {new_data}"
+            current_jd, summary = _merge_extracted_info(current_jd, new_data, current_url=current_url)
+            result_str = (
+                "Extracted data merged "
+                f"(incoming_jobs={summary['incoming_jobs']}, total_jobs={summary['total_jobs']}, "
+                f"fields={summary['fields']})"
+            )
             status = "success"
         except Exception as e:
             result_str = f"Failed to parse data_json: {e}"
@@ -360,6 +489,8 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     step_durations    = []
     current_plan_step = state.get("current_plan_step", 0)
     current_plan      = list(state.get("plan", []))
+    current_url       = state.get("current_url", "")
+    screen_changed    = False
 
     # marker_id → bbox 변환 헬퍼
     def get_bbox(marker_id: int):
@@ -370,23 +501,34 @@ def action_node(state: GraphState) -> Dict[str, Any]:
 
     # 도구 카테고리 라우팅 테이블
     UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key",
-                     "open_browser", "get_credentials", "go_back"}
+                     "open_browser", "get_credentials", "get_current_url", "go_back"}
+    SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "go_back"}
     STATE_ACTIONS = {"update_plan_progress", "update_extracted_info"}
 
     for idx, tool_call in enumerate(ai_msg.tool_calls):
         action_name = tool_call["name"]
         args        = tool_call["args"]
 
-        logger.info(f"LLM decided to call (chained {idx+1}/{len(ai_msg.tool_calls)}): {action_name} with args: {args}")
+        logger.info(
+            f"LLM decided to call (chained {idx+1}/{len(ai_msg.tool_calls)}): "
+            f"{action_name} with args: {_compact_action_args(action_name, args)}"
+        )
         step_start = time.time()
 
         try:
             if action_name in UI_ACTIONS:
                 result = _dispatch_ui(action_name, args, get_bbox)
+                screen_changed = screen_changed or action_name in SCREEN_CHANGING_ACTIONS
+                if action_name == "open_browser":
+                    current_url = args["url"]
+                elif action_name == "get_current_url" and result.get("status") == "success":
+                    result_url = result.get("result", {}).get("url") if isinstance(result.get("result"), dict) else ""
+                    if result_url:
+                        current_url = result_url
 
             elif action_name in STATE_ACTIONS:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
-                    action_name, args, current_jd, current_plan, current_plan_step
+                    action_name, args, current_jd, current_plan, current_plan_step, current_url=current_url
                 )
 
             elif action_name == "finish_task":
@@ -398,7 +540,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             else:
                 raise ValueError(f"Unknown tool: {action_name}")
 
-            result["args"] = args
+            result["args"] = _compact_action_args(action_name, args)
             new_actions.append(result)
 
             step_elapsed = time.time() - step_start
@@ -428,6 +570,8 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "step_durations":    step_durations,
         "plan":              current_plan,
         "current_plan_step": current_plan_step,
+        "current_url":       current_url,
+        "last_action_screen_changed": screen_changed,
     }
 
 

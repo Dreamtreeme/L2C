@@ -34,6 +34,7 @@ def main():
             "목록에 노출된 모든 공고 수집을 완료하면 `finish_task`를 호출하여 요약 결과를 반환하고 최종 종료하십시오."
         ),
         "ui_context": "",
+        "current_url": "",
         "action_history": [],
         "recent_images": [],
         "current_markers": [],
@@ -43,7 +44,8 @@ def main():
         "extracted_jd": {},
         "last_action_result": None,
         "plan": [],
-        "current_plan_step": 0
+        "current_plan_step": 0,
+        "last_action_screen_changed": True,
     }
     
     os.environ["SKIP_VLM_CAPTION"] = "true"

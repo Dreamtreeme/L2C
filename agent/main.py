@@ -30,6 +30,7 @@ def main():
     state = GraphState(
         goal=query,
         ui_context="",
+        current_url="",
         current_markers=[],
         action_history=[],
         recent_images=[],
@@ -42,6 +43,7 @@ def main():
         plan=[],
         current_plan_step=0,
         step_durations=[],
+        last_action_screen_changed=True,
     )
     
     try:

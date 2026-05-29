@@ -63,7 +63,7 @@ class SomEngine:
     #  단계별 private 메서드                                                #
     # ------------------------------------------------------------------ #
 
-    def _run_paddle_ocr(self, image_path: Path) -> List[Dict]:
+    def _run_paddle_ocr(self, image_path: Path, scale: float = 1.0) -> List[Dict]:
         """PaddleOCR 서브프로세스를 실행하여 텍스트 박스 목록을 반환합니다."""
         import subprocess, json, sys
 
@@ -88,8 +88,11 @@ class SomEngine:
         for item in ocr_results:
             if item["confidence"] < 0.2:
                 continue
+            bbox = item["bbox"]
+            if scale != 1.0:
+                bbox = [coord / scale for coord in bbox]
             raw_boxes.append({
-                "bbox": item["bbox"],
+                "bbox": bbox,
                 "type": "text",
                 "text": item["text"],
                 "conf": item["confidence"],
@@ -248,8 +251,23 @@ class SomEngine:
             scale = 1.0
             inference_img = img
 
+        ocr_image_path = image_path
+        if scale != 1.0:
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                ocr_image_path = Path(tmp.name)
+            inference_img.save(ocr_image_path, "JPEG", quality=85)
+
         # 1 & 2. 검출
-        raw_boxes  = self._run_paddle_ocr(image_path)
+        try:
+            raw_boxes = self._run_paddle_ocr(ocr_image_path, scale=scale)
+        finally:
+            if ocr_image_path != image_path:
+                try:
+                    ocr_image_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
         raw_boxes += self._run_yolo(inference_img, scale)
 
         # 3. 중복 제거 & 정렬

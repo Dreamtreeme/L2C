@@ -86,6 +86,7 @@ async def chat_endpoint(req: ChatRequest):
         state = GraphState(
             goal=query,
             ui_context="",
+            current_url="",
             current_markers=[],
             action_history=[],
             recent_images=[],
@@ -98,6 +99,7 @@ async def chat_endpoint(req: ChatRequest):
             plan=[],
             current_plan_step=0,
             step_durations=[],
+            last_action_screen_changed=True,
         )
         try:
             result = await asyncio.to_thread(qa_reasoning_node, state)

@@ -124,6 +124,10 @@ class ActionTools:
             
         return self._execute("press_key", _press)
 
+    def get_current_url(self) -> Dict[str, Any]:
+        """활성 브라우저 주소창의 현재 URL을 읽습니다."""
+        return self._execute("get_current_url", lambda: {"url": self.perception.get_current_url()})
+
     def open_browser(self, url: str) -> Dict[str, Any]:
         """기본 브라우저를 열고 지정된 URL로 이동합니다."""
         def _open():

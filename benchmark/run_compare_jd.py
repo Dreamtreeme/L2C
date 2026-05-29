@@ -97,6 +97,7 @@ def main():
             "(주의: 수집 중 접힌 본문이 있거나 보이지 않는 하단 정보가 있는 경우, 클릭 및 스크롤을 활용하여 본문을 끝까지 스스로 확인한 뒤 완료 결정을 내리십시오.)"
         ),
         "ui_context": "",
+        "current_url": "",
         "action_history": [],
         "recent_images": [],
         "current_markers": [],
@@ -106,7 +107,8 @@ def main():
         "extracted_jd": {},
         "last_action_result": None,
         "plan": [],
-        "current_plan_step": 0
+        "current_plan_step": 0,
+        "last_action_screen_changed": True,
     }
     
     agent_data = {}

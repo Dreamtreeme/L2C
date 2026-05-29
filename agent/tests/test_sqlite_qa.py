@@ -93,16 +93,17 @@ def test_sqlite_query_tool(setup_test_db, monkeypatch):
 
 
 def test_realtime_scraping_tool(setup_test_db, monkeypatch):
-    """비전 자율 수집 그래프 invoke를 mock하여 realtime_scraping 도구의 통합 로직을 검증합니다."""
+    """비전 자율 수집 그래프 stream을 mock하여 realtime_scraping 도구의 통합 로직을 검증합니다."""
     import shared.config as cfg
     monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     monkeypatch.delenv("VISION_AGENT_RECURSION_LIMIT", raising=False)
     
-    # 비전 에이전트 그래프를 모킹: invoke 시 수집된 JD 데이터를 반환하는 가짜 앱 생성
+    # 비전 에이전트 그래프를 모킹: stream 시 수집된 JD 데이터를 반환하는 가짜 앱 생성
     class FakeGraphApp:
-        def invoke(self, state, config=None):
+        def stream(self, state, config=None, stream_mode=None):
             assert config["recursion_limit"] == 60
-            return {
+            assert stream_mode == "values"
+            yield {
                 **state,
                 "is_finished": True,
                 "collected_data": ["모의 수집 완료"],
@@ -141,6 +142,54 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     conn.close()
     assert row is not None, "Vision agent 수집 데이터가 DB에 적재되지 않았습니다."
     assert row[0] == "테스트컴퍼니"
+
+
+def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_db, monkeypatch):
+    """recursion limit에 걸려도 마지막 partial state의 수집 데이터는 저장합니다."""
+    import shared.config as cfg
+    from langgraph.errors import GraphRecursionError
+
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
+    monkeypatch.delenv("VISION_AGENT_RECURSION_LIMIT", raising=False)
+
+    class FakeGraphApp:
+        def stream(self, state, config=None, stream_mode=None):
+            assert config["recursion_limit"] == 60
+            yield state
+            yield {
+                **state,
+                "is_finished": False,
+                "extracted_jd": {
+                    "공고목록": [
+                        {
+                            "회사명": "부분수집컴퍼니",
+                            "직무명": "데이터 엔지니어",
+                            "주요업무": ["데이터 파이프라인 구축"],
+                            "자격요건": ["Python 경험"],
+                            "url": "https://www.wanted.co.kr/wd/88888",
+                        }
+                    ]
+                },
+            }
+            raise GraphRecursionError("test recursion limit")
+
+    def mock_build_graph():
+        return FakeGraphApp()
+
+    monkeypatch.setattr("agent.graph.workflow.build_graph", mock_build_graph)
+
+    from agent.tools.realtime_scraping import realtime_scraping
+
+    result = realtime_scraping.invoke({"company": "부분수집컴퍼니"})
+    assert "부분 수집" in result
+    assert "1건" in result
+
+    conn = sqlite3.connect(TEST_DB_PATH)
+    cursor = conn.execute("SELECT company_name, position FROM jobs WHERE url = 'https://www.wanted.co.kr/wd/88888'")
+    row = cursor.fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == "부분수집컴퍼니"
 
 
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
