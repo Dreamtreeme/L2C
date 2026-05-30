@@ -137,30 +137,6 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
             current_url = fetched_url
         current_url_stale = False
 
-    page_text = state.get("page_text", "")
-    page_text_url = state.get("page_text_url", "")
-    if _looks_like_job_detail_url(current_url):
-        if page_text_url != current_url or not page_text:
-            page_text = perception.copy_page_text()
-            page_text_url = current_url if page_text else ""
-        if page_text:
-            elapsed = time.time() - start_time
-            logger.info(f"Perception Node completed in {elapsed:.2f} seconds (detail page text fast-path)")
-            return {
-                "recent_images": [image_path],
-                "marked_image": "",
-                "current_markers": [],
-                "ui_context": _build_detail_page_text_context(page_text),
-                "current_url": current_url,
-                "current_url_stale": current_url_stale,
-                "page_text": page_text,
-                "page_text_url": page_text_url,
-                "step_durations": [{"node": "perception", "duration": elapsed}]
-            }
-
-    page_text = ""
-    page_text_url = ""
-
     analysis = perception.analyze_ui(image_path)
     markers = analysis.get("markers", [])
     marked_image = analysis.get("marked_image", "")
@@ -195,8 +171,6 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "ui_context": ui_context,
         "current_url": current_url,
         "current_url_stale": current_url_stale,
-        "page_text": page_text,
-        "page_text_url": page_text_url,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
 
@@ -215,25 +189,6 @@ def _is_repeating(history: list, n: int) -> bool:
 
 def _looks_like_job_detail_url(url: str) -> bool:
     return bool(url and re.search(r"/wd/\d+", url))
-
-
-def _compact_page_text(text: str, max_chars: int = 9000) -> str:
-    text = re.sub(r"\r\n?", "\n", text or "")
-    text = re.sub(r"[ \t]{2,}", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "\n\n...[truncated]"
-
-
-def _build_detail_page_text_context(page_text: str) -> str:
-    compact_text = _compact_page_text(page_text)
-    return (
-        "상세 페이지 본문 텍스트 스냅샷(브라우저 전체 선택/복사 기반):\n"
-        f"{compact_text}\n\n"
-        "이 텍스트는 상세 공고의 본문 전체를 빠르게 수집하기 위한 우선 입력입니다. "
-        "새 마커 클릭이나 추가 스크롤 없이 이 텍스트에서 회사명, 직무명, 주요업무, 자격요건, 우대사항, 혜택을 구조화하십시오."
-    )
 
 
 def _is_browser_back_marker_bbox(bbox: list) -> bool:
@@ -423,12 +378,7 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     extracted_jd = state.get("extracted_jd", {})
     ui_context = state.get("ui_context", "")
     current_url = state.get("current_url", "")
-    page_text = state.get("page_text", "")
-    page_text_url = state.get("page_text_url", "")
     action_history = state.get("action_history", [])
-    has_detail_page_text = bool(
-        page_text and page_text_url == current_url and _looks_like_job_detail_url(current_url)
-    )
 
     human_prompt_text = (
         f"{plan_context}"
@@ -439,18 +389,11 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
         f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
         f"계획 단계 전환이 일어났다면 update_plan_progress를 함께 체이닝 호출하여 계획 진행률을 반영하십시오."
     )
-    if has_detail_page_text:
-        human_prompt_text += (
-            "\n\n[상세 페이지 빠른 수집 모드]\n"
-            "현재 화면은 공고 상세 페이지이며 브라우저 텍스트 복사로 본문 스냅샷을 확보했습니다. "
-            "이 턴에서는 추가 scroll 없이 `update_extracted_info`로 한 공고의 전체 필드를 최대한 구조화하고, "
-            "목록으로 돌아가야 하면 같은 턴에 `go_back`을 체이닝하십시오."
-        )
 
     # 마킹 이미지가 있으면 멀티모달 메시지
     marked_image_path = state.get("marked_image")
     base64_image = ""
-    if marked_image_path and os.path.exists(marked_image_path) and not has_detail_page_text:
+    if marked_image_path and os.path.exists(marked_image_path):
         try:
             from agent.utils.image_utils import image_to_base64_jpeg
             from pathlib import Path
@@ -474,10 +417,7 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
             ])
         ]
     else:
-        if has_detail_page_text:
-            logger.info("Invoking reasoning node with text-only detail page snapshot...")
-        else:
-            logger.info("Invoking reasoning node with text-only prompts...")
+        logger.info("Invoking reasoning node with text-only prompts...")
         return [
             SystemMessage(content=system_prompt_text),
             HumanMessage(content=human_prompt_text)
@@ -612,8 +552,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     current_plan      = list(state.get("plan", []))
     current_url       = state.get("current_url", "")
     current_url_stale = state.get("current_url_stale", True)
-    page_text         = state.get("page_text", "")
-    page_text_url     = state.get("page_text_url", "")
     screen_changed    = False
 
     # marker_id → bbox 변환 헬퍼
@@ -645,9 +583,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 result = _dispatch_ui(action_name, args, get_bbox)
                 screen_changed = screen_changed or action_name in SCREEN_CHANGING_ACTIONS
                 current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
-                if action_name in URL_STALE_ACTIONS:
-                    page_text = ""
-                    page_text_url = ""
                 if action_name == "open_browser":
                     current_url = args["url"]
                     current_url_stale = True
@@ -656,9 +591,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     if result_url:
                         current_url = result_url
                         current_url_stale = False
-                        if page_text_url != current_url:
-                            page_text = ""
-                            page_text_url = ""
 
             elif action_name in STATE_ACTIONS:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
@@ -706,8 +638,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "current_plan_step": current_plan_step,
         "current_url":       current_url,
         "current_url_stale": current_url_stale,
-        "page_text":         page_text,
-        "page_text_url":     page_text_url,
         "last_action_screen_changed": screen_changed,
     }
 

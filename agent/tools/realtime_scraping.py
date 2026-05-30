@@ -73,8 +73,6 @@ def realtime_scraping(company: str = None, tech_stack: str = None) -> str:
             "ui_context": "",
             "current_url": "",
             "current_url_stale": True,
-            "page_text": "",
-            "page_text_url": "",
             "current_markers": [],
             "action_history": [],
             "recent_images": [],

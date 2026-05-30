@@ -88,8 +88,6 @@ async def chat_endpoint(req: ChatRequest):
             ui_context="",
             current_url="",
             current_url_stale=True,
-            page_text="",
-            page_text_url="",
             current_markers=[],
             action_history=[],
             recent_images=[],

@@ -217,8 +217,6 @@ def test_url_stale_flag_for_actions(monkeypatch):
         "current_markers": [{"id": 1, "bbox": [100, 100, 140, 140]}],
         "current_url": "https://www.wanted.co.kr/wd/1",
         "current_url_stale": False,
-        "page_text": "cached detail text",
-        "page_text_url": "https://www.wanted.co.kr/wd/1",
         "extracted_jd": {},
         "is_finished": False,
         "collected_data": [],
@@ -239,8 +237,6 @@ def test_url_stale_flag_for_actions(monkeypatch):
     }
     click_result = nodes.action_node(click_state)
     assert click_result["current_url_stale"] is True
-    assert click_result["page_text"] == ""
-    assert click_result["page_text_url"] == ""
 
 
 def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
@@ -282,44 +278,6 @@ def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
     assert fake_perception.url_reads == 1
     assert stale_result["current_url"] == "https://www.wanted.co.kr/wd/fresh"
     assert stale_result["current_url_stale"] is False
-
-
-def test_perception_node_uses_page_text_fast_path_for_detail_url(monkeypatch, tmp_path):
-    from PIL import Image
-    from agent.graph import nodes
-
-    image_path = tmp_path / "screen.png"
-    Image.new("RGB", (200, 200), "white").save(image_path)
-
-    class FakePerception:
-        def __init__(self):
-            self.text_reads = 0
-
-        def capture_screen(self):
-            return image_path
-
-        def copy_page_text(self):
-            self.text_reads += 1
-            return "회사명 래브라도랩스\n직무명 데이터 엔지니어\n주요업무 데이터 파이프라인 구축"
-
-        def analyze_ui(self, _image_path):
-            raise AssertionError("detail text fast-path should skip SoM analysis")
-
-    fake_perception = FakePerception()
-    monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
-
-    result = nodes.perception_node({
-        "current_url": "https://www.wanted.co.kr/wd/363969",
-        "current_url_stale": False,
-        "page_text": "",
-        "page_text_url": "",
-    })
-
-    assert fake_perception.text_reads == 1
-    assert result["current_markers"] == []
-    assert result["marked_image"] == ""
-    assert result["page_text_url"] == "https://www.wanted.co.kr/wd/363969"
-    assert "상세 페이지 본문 텍스트 스냅샷" in result["ui_context"]
 
 
 def test_ui_context_limits_marker_prompt(monkeypatch):

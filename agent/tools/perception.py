@@ -180,41 +180,6 @@ class PerceptionEngine:
             logger.debug("Failed to read current browser URL", error=str(e))
         return self._last_url
 
-    def copy_page_text(self, max_chars: int = 12000) -> str:
-        """브라우저 페이지 본문 텍스트를 키보드 복사 동작으로 읽습니다."""
-        try:
-            import platform
-            import pyautogui
-            import pyperclip
-
-            previous_clipboard = pyperclip.paste() or ""
-            old_pause = pyautogui.PAUSE
-            modifier = "command" if platform.system() == "Darwin" else "ctrl"
-            pyautogui.PAUSE = min(old_pause, 0.02)
-            try:
-                self.release_address_bar_focus(pyautogui, key_pause=0.02)
-                pyautogui.hotkey(modifier, "a")
-                time.sleep(0.03)
-                pyautogui.hotkey(modifier, "c")
-                time.sleep(0.06)
-                text = (pyperclip.paste() or "").strip()
-                self.release_address_bar_focus(pyautogui, key_pause=0.02)
-                if previous_clipboard != text:
-                    pyperclip.copy(previous_clipboard)
-            finally:
-                pyautogui.PAUSE = old_pause
-            if text.startswith(("http://", "https://")):
-                return ""
-            text = re.sub(r"\n{3,}", "\n\n", text)
-            text = re.sub(r"[ \t]{2,}", " ", text)
-            if max_chars > 0:
-                text = text[:max_chars]
-            logger.info("Copied browser page text", chars=len(text))
-            return text
-        except Exception as e:
-            logger.debug("Failed to copy browser page text", error=str(e))
-            return ""
-
     def release_address_bar_focus(self, pyautogui_module=None, key_pause: float = 0.02) -> None:
         """주소창 URL 복사 후 남는 브라우저 툴바 포커스를 페이지 쪽으로 되돌립니다."""
         try:
