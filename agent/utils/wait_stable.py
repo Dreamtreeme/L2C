@@ -1,4 +1,5 @@
 import time
+import os
 from typing import Optional
 
 from PIL import Image, ImageChops, ImageStat
@@ -16,11 +17,12 @@ class WaitStable:
     def __init__(self, perception_engine: PerceptionEngine):
         self.perception = perception_engine
 
-    def _capture_memory_image(self) -> Image.Image:
+    def _capture_memory_image(self, region: Optional[dict] = None, sample_width: int = 360) -> Image.Image:
         """
         현재 화면(브라우저 영역)을 파일로 저장하지 않고 메모리(PIL Image)로 즉시 가져옵니다.
         """
-        region = self.perception._get_browser_region()
+        if region is None:
+            region = self.perception._get_browser_region()
         
         try:
             if region:
@@ -29,12 +31,36 @@ class WaitStable:
                 sct_img = self.perception.sct.grab(self.perception.sct.monitors[1])
                 
             # mss의 raw BGRA 바이트를 BGRX 디코더로 PIL Image로 고속 변환
-            return Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+            if sample_width > 0 and img.width > sample_width:
+                ratio = sample_width / img.width
+                img = img.resize((sample_width, max(1, int(img.height * ratio))), Image.Resampling.BILINEAR)
+            return img
         except Exception as e:
             logger.exception("Failed to capture memory image for stabilization check", error=str(e))
             raise
 
-    def wait(self, max_wait_sec: float = 5.0, check_interval_sec: float = 0.05, threshold_percent: float = 1.0) -> bool:
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, str(default)))
+        except ValueError:
+            return default
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, str(default)))
+        except ValueError:
+            return default
+
+    def wait(
+        self,
+        max_wait_sec: Optional[float] = None,
+        check_interval_sec: Optional[float] = None,
+        threshold_percent: Optional[float] = None,
+        region: Optional[dict] = None,
+    ) -> bool:
         """
         화면 렌더링이 완료될 때까지 대기합니다.
         연속된 두 프레임의 픽셀 변화율 평균이 threshold_percent 이하가 되면 안정화된 것으로 판단합니다.
@@ -47,14 +73,22 @@ class WaitStable:
         Returns:
             안정화 도달 시 True, 시간 초과 시 False
         """
+        if max_wait_sec is None:
+            max_wait_sec = self._env_float("VISION_STABLE_MAX_WAIT_SEC", 2.0)
+        if check_interval_sec is None:
+            check_interval_sec = self._env_float("VISION_STABLE_CHECK_INTERVAL_SEC", 0.04)
+        if threshold_percent is None:
+            threshold_percent = self._env_float("VISION_STABLE_THRESHOLD_PERCENT", 1.0)
+        sample_width = self._env_int("VISION_STABLE_SAMPLE_WIDTH", 360)
+
         logger.info("Waiting for screen to stabilize...")
         start_time = time.time()
         
-        prev_img = self._capture_memory_image()
+        prev_img = self._capture_memory_image(region=region, sample_width=sample_width)
         
         while (time.time() - start_time) < max_wait_sec:
             time.sleep(check_interval_sec)
-            curr_img = self._capture_memory_image()
+            curr_img = self._capture_memory_image(region=region, sample_width=sample_width)
             
             # 1. 두 이미지 간의 픽셀 차이 절댓값 이미지 생성
             diff = ImageChops.difference(prev_img, curr_img)

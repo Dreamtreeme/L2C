@@ -1,4 +1,7 @@
 import os
+import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from PIL import Image, ImageDraw, ImageFont
@@ -18,6 +21,7 @@ class SomEngine:
         self.model_path = self.model_dir / "icon_detect" / "model.pt"
 
         self._ensure_model_downloaded()
+        self._ocr_worker = None
 
         from ultralytics import YOLO
         logger.info("Loading local YOLOv8 OmniParser model...", model_path=str(self.model_path))
@@ -25,6 +29,9 @@ class SomEngine:
 
         logger.info("SomEngine will invoke PaddleOCR (GPU/Isolated Subprocess) for text detection.")
         logger.info("SomEngine initialization complete.")
+
+    def __del__(self):
+        self._stop_ocr_worker()
 
     def _ensure_model_downloaded(self):
         """OmniParser YOLOv8 가중치 파일이 로컬에 없으면 Hugging Face에서 자동 다운로드합니다."""
@@ -63,10 +70,8 @@ class SomEngine:
     #  단계별 private 메서드                                                #
     # ------------------------------------------------------------------ #
 
-    def _run_paddle_ocr(self, image_path: Path, scale: float = 1.0) -> List[Dict]:
-        """PaddleOCR 서브프로세스를 실행하여 텍스트 박스 목록을 반환합니다."""
-        import subprocess, json, sys
-
+    def _run_paddle_ocr_once(self, image_path: Path) -> List[Dict]:
+        """PaddleOCR 1회성 서브프로세스를 실행하여 원본 OCR 결과를 반환합니다."""
         runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
         logger.debug("Invoking PaddleOCR runner", script=str(runner_script), image=str(image_path))
 
@@ -75,7 +80,6 @@ class SomEngine:
             capture_output=True, text=True, encoding="utf-8", errors="ignore",
         )
 
-        raw_boxes = []
         output_str = res.stdout.strip()
         marker = "__OCR_JSON_START__"
         if marker in output_str:
@@ -85,6 +89,58 @@ class SomEngine:
             logger.warning("OCR JSON marker not found in output", output=output_str)
             ocr_results = []
 
+        return ocr_results
+
+    def _start_ocr_worker(self):
+        if self._ocr_worker and self._ocr_worker.poll() is None:
+            return self._ocr_worker
+
+        runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
+        logger.info("Starting persistent PaddleOCR worker", script=str(runner_script))
+        self._ocr_worker = subprocess.Popen(
+            [sys.executable, str(runner_script), "--worker"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            bufsize=1,
+        )
+        return self._ocr_worker
+
+    def _stop_ocr_worker(self) -> None:
+        worker = getattr(self, "_ocr_worker", None)
+        self._ocr_worker = None
+        if not worker:
+            return
+        try:
+            if worker.poll() is None:
+                worker.terminate()
+        except Exception:
+            pass
+
+    def _run_paddle_ocr_worker(self, image_path: Path) -> List[Dict]:
+        worker = self._start_ocr_worker()
+        if not worker.stdin or not worker.stdout:
+            raise RuntimeError("PaddleOCR worker pipes are unavailable")
+
+        request = json.dumps({"image_path": str(image_path)}, ensure_ascii=False)
+        worker.stdin.write(request + "\n")
+        worker.stdin.flush()
+
+        while True:
+            line = worker.stdout.readline()
+            if line == "":
+                raise RuntimeError("PaddleOCR worker exited before returning a result")
+            line = line.strip()
+            if not line or not line.startswith("__OCR_JSON_RESULT__"):
+                continue
+            payload = line.removeprefix("__OCR_JSON_RESULT__").strip()
+            return json.loads(payload) if payload else []
+
+    def _normalize_ocr_results(self, ocr_results: List[Dict], scale: float = 1.0) -> List[Dict]:
+        raw_boxes = []
         for item in ocr_results:
             if item["confidence"] < 0.2:
                 continue
@@ -100,6 +156,21 @@ class SomEngine:
 
         logger.debug("PaddleOCR element detection complete", count=len(raw_boxes))
         return raw_boxes
+
+    def _run_paddle_ocr(self, image_path: Path, scale: float = 1.0) -> List[Dict]:
+        """PaddleOCR 워커를 재사용하여 텍스트 박스 목록을 반환합니다."""
+        use_worker = os.getenv("SOM_OCR_WORKER_REUSE", "true").lower() == "true"
+        if use_worker:
+            try:
+                return self._normalize_ocr_results(self._run_paddle_ocr_worker(image_path), scale=scale)
+            except Exception as worker_err:
+                logger.warning(
+                    "Persistent PaddleOCR worker failed; falling back to one-shot runner",
+                    error=str(worker_err),
+                )
+                self._stop_ocr_worker()
+
+        return self._normalize_ocr_results(self._run_paddle_ocr_once(image_path), scale=scale)
 
     def _run_yolo(self, inference_img, scale: float) -> List[Dict]:
         """YOLOv8으로 아이콘/버튼을 검출하고 원본 이미지 좌표로 복원하여 반환합니다."""

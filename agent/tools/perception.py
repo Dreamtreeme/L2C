@@ -42,6 +42,13 @@ class PerceptionEngine:
 
         logger.info("PerceptionEngine initialized with SomEngine", screenshot_dir=str(self.screenshot_dir))
 
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, str(default)))
+        except ValueError:
+            return default
+
     def _get_browser_region(self) -> Optional[Dict[str, int]]:
         """
         열려있는 창 중에서 브라우저(Chrome, Edge, Whale)를 찾아 해당 영역을 반환합니다.
@@ -76,7 +83,7 @@ class PerceptionEngine:
                 }
         return None
 
-    def capture_screen(self, filename: Optional[str] = None) -> Path:
+    def capture_screen(self, filename: Optional[str] = None, initial_wait_sec: Optional[float] = None) -> Path:
         """
         화면이 안정화될 때까지 기다린 후 브라우저 창 영역을 캡처합니다.
         액션 직후 호출되므로, 짧은 초기 대기 후 WaitStable로 렌더링 완료를 감지합니다.
@@ -90,17 +97,21 @@ class PerceptionEngine:
         # 액션 효과(클릭, 페이지 이동 등)가 화면에 나타나기 시작할 시간을 줍니다.
         # 이 초기 대기 없이 바로 WaitStable을 시작하면 화면이 아직 변하지 않은 상태를
         # "이미 안정됨"으로 오인할 수 있습니다.
-        time.sleep(0.3)
-        self._wait_stable.wait()
+        if initial_wait_sec is None:
+            initial_wait_sec = self._env_float("VISION_CAPTURE_INITIAL_WAIT_SEC", 0.16)
+        if initial_wait_sec > 0:
+            time.sleep(initial_wait_sec)
+
+        # Browser region lookup activates the window and is relatively expensive.
+        # Resolve it once and share it with WaitStable and the final capture.
+        region = self._get_browser_region()
+        self._wait_stable.wait(region=region)
 
         if not filename:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"screen_{timestamp}.jpg"
             
         output_path = self.screenshot_dir / filename
-        
-        # 1. 브라우저 창 영역 찾기
-        region = self._get_browser_region()
         
         try:
             if region:
