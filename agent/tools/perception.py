@@ -163,15 +163,17 @@ class PerceptionEngine:
 
             old_pause = pyautogui.PAUSE
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
-            pyautogui.PAUSE = min(old_pause, 0.02)
+            key_pause = self._env_float("VISION_URL_KEY_PAUSE_SEC", 0.015)
+            copy_wait = self._env_float("VISION_URL_COPY_WAIT_SEC", 0.015)
+            pyautogui.PAUSE = min(old_pause, key_pause)
             try:
                 pyautogui.hotkey(modifier, "l")
-                time.sleep(0.02)
                 pyautogui.hotkey(modifier, "c")
-                time.sleep(0.03)
+                if copy_wait > 0:
+                    time.sleep(copy_wait)
                 url = (pyperclip.paste() or "").strip()
             finally:
-                self.release_address_bar_focus(pyautogui, key_pause=0.02)
+                self.release_address_bar_focus(pyautogui, key_pause=key_pause)
                 pyautogui.PAUSE = old_pause
             if url.startswith(("http://", "https://")):
                 self._last_url = url
@@ -190,9 +192,7 @@ class PerceptionEngine:
             pyautogui_module.PAUSE = min(old_pause, key_pause)
             try:
                 pyautogui_module.press("esc")
-                time.sleep(0.02)
                 pyautogui_module.press("esc")
-                time.sleep(0.02)
             finally:
                 pyautogui_module.PAUSE = old_pause
         except Exception as e:

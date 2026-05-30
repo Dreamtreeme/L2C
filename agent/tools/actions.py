@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Dict, Any, List
 import platform
@@ -17,10 +18,31 @@ class ActionTools:
 
     def __init__(self, perception_engine: PerceptionEngine):
         self.perception = perception_engine
+        self.action_pause_sec = self._env_float("VISION_ACTION_PAUSE_SEC", 0.03)
+        self.move_duration_sec = self._env_float("VISION_ACTION_MOVE_DURATION_SEC", 0.05)
+        self.input_delay_sec = self._env_float("VISION_ACTION_INPUT_DELAY_SEC", 0.02)
+        self.clipboard_delay_sec = self._env_float("VISION_ACTION_CLIPBOARD_DELAY_SEC", 0.02)
 
         # pyautogui 기본 안전 설정
         pyautogui.FAILSAFE = True
-        pyautogui.PAUSE = 0.1  # 기본 0.5초에서 0.1초로 단축하여 속도 향상
+        pyautogui.PAUSE = self.action_pause_sec
+
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return max(0.0, float(os.getenv(name, str(default))))
+        except ValueError:
+            return default
+
+    def _cfg_float(self, attr: str, env_name: str, default: float) -> float:
+        return getattr(self, attr, self._env_float(env_name, default))
+
+    def _sleep(self, seconds: float) -> None:
+        if seconds > 0:
+            time.sleep(seconds)
+
+    def _action_region(self):
+        return getattr(self.perception, "last_region", None) or self.perception._get_browser_region()
 
     def _execute(self, action_name: str, func, *args, **kwargs) -> Dict[str, Any]:
         """
@@ -42,7 +64,7 @@ class ActionTools:
         해당 박스의 정중앙을 반환합니다.
         bbox: [x_min, y_min, x_max, y_max] (브라우저 창 내부 상대 좌표라고 가정)
         """
-        region = self.perception._get_browser_region()
+        region = self._action_region()
         if not region:
             raise ValueError("Browser window not found")
             
@@ -65,7 +87,7 @@ class ActionTools:
         """마커(UI 요소)의 중앙을 클릭합니다."""
         def _click():
             x, y = self._get_absolute_coords(bbox)
-            pyautogui.moveTo(x, y, duration=0.2)
+            pyautogui.moveTo(x, y, duration=self._cfg_float("move_duration_sec", "VISION_ACTION_MOVE_DURATION_SEC", 0.05))
             pyautogui.click()
             return f"Clicked at ({x}, {y})"
 
@@ -75,25 +97,22 @@ class ActionTools:
         """마커를 클릭한 후, 기존 텍스트를 지우고 pyperclip을 통해 안전하게 한글/영문 텍스트를 붙여넣습니다."""
         def _type():
             x, y = self._get_absolute_coords(bbox)
-            pyautogui.moveTo(x, y, duration=0.2)
+            pyautogui.moveTo(x, y, duration=self._cfg_float("move_duration_sec", "VISION_ACTION_MOVE_DURATION_SEC", 0.05))
             pyautogui.click()
-            time.sleep(0.1)
+            self._sleep(self._cfg_float("input_delay_sec", "VISION_ACTION_INPUT_DELAY_SEC", 0.02))
             
             # OS에 따른 제어 특수키 설정 (Mac: command, Windows: ctrl)
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
             
             # 기존 입력값을 완전히 지우기 위한 전체선택(Ctrl+A) -> 백스페이스(Backspace) 수행
             pyautogui.hotkey(modifier, "a")
-            time.sleep(0.05)
             pyautogui.press("backspace")
-            time.sleep(0.05)
             
             # 클립보드를 통한 한글 씹힘 방지 타이핑
             pyperclip.copy(text)
-            time.sleep(0.1) # 클립보드 복사 대기
+            self._sleep(self._cfg_float("clipboard_delay_sec", "VISION_ACTION_CLIPBOARD_DELAY_SEC", 0.02))
             
             pyautogui.hotkey(modifier, "v")
-            time.sleep(0.1)
             
             return f"Typed text via clipboard: {text}"
             
@@ -103,10 +122,13 @@ class ActionTools:
         """화면을 스크롤합니다."""
         def _scroll():
             # 활성 창(브라우저)의 중앙을 클릭하여 포커스 확보
-            win = gw.getActiveWindow()
-            if win:
-                pyautogui.click(win.left + win.width // 2, win.top + win.height // 2)
-                time.sleep(0.1)
+            region = getattr(self.perception, "last_region", None)
+            if region:
+                pyautogui.click(region["left"] + region["width"] // 2, region["top"] + region["height"] // 2)
+            else:
+                win = gw.getActiveWindow()
+                if win:
+                    pyautogui.click(win.left + win.width // 2, win.top + win.height // 2)
                 
             key_to_press = "pagedown" if direction == "down" else "pageup"
             pyautogui.press(key_to_press)
