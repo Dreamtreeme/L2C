@@ -116,8 +116,6 @@ def main():
     try:
         # VLM 캡셔닝 바이패스 환경변수 설정 확인
         os.environ["SKIP_VLM_CAPTION"] = "true"
-        os.environ["SKIP_WAIT_STABLE"] = "false"
-        
         for output in app.stream(initial_state, {"recursion_limit": 100}):
             for key, value in output.items():
                 if key == "action":

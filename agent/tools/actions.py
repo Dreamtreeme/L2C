@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse
 import time
 from typing import Dict, Any, List
 import platform
@@ -43,6 +44,23 @@ class ActionTools:
 
     def _action_region(self):
         return getattr(self.perception, "last_region", None) or self.perception._get_browser_region()
+
+    @staticmethod
+    def _same_site_or_url(left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        left_parsed = urlparse(left)
+        right_parsed = urlparse(right)
+        if not left_parsed.netloc or not right_parsed.netloc:
+            return False
+        left_host = left_parsed.netloc.lower().removeprefix("www.")
+        right_host = right_parsed.netloc.lower().removeprefix("www.")
+        if left_host != right_host:
+            return False
+        right_path = right_parsed.path.rstrip("/")
+        if right_path in ("", "/"):
+            return True
+        return left_parsed.path.rstrip("/") == right_path
 
     def _execute(self, action_name: str, func, *args, **kwargs) -> Dict[str, Any]:
         """
@@ -146,33 +164,22 @@ class ActionTools:
             
         return self._execute("press_key", _press)
 
-    def get_current_url(self) -> Dict[str, Any]:
-        """활성 브라우저 주소창의 현재 URL을 읽습니다."""
-        return self._execute("get_current_url", lambda: {"url": self.perception.get_current_url()})
-
-    def open_browser(self, url: str) -> Dict[str, Any]:
-        """기본 브라우저를 열고 지정된 URL로 이동합니다."""
+    def open_browser(self, url: str, current_url: str = "") -> Dict[str, Any]:
+        """기본 브라우저를 열거나, 이미 같은 사이트가 열려 있으면 재사용합니다."""
         def _open():
+            if self._same_site_or_url(current_url, url):
+                return {"opened": False, "url": current_url, "reason": "state_url_already_matches"}
+
+            if self.perception._get_browser_region():
+                browser_url = self.perception.get_current_url()
+                if self._same_site_or_url(browser_url, url):
+                    return {"opened": False, "url": browser_url, "reason": "active_browser_already_matches"}
+
             import webbrowser
             webbrowser.open(url)
-            # webbrowser.open()은 즉시 반환됩니다.
-            # 브라우저가 실제로 뜨고 로딩될 때까지의 대기는
-            # 다음 perception_node의 WaitStable이 화면 변화를 감지하여 처리합니다.
-            return f"Opened browser with URL: {url}"
+            return {"opened": True, "url": url}
 
         return self._execute("open_browser", _open)
-        
-    def get_credentials(self, site: str) -> Dict[str, Any]:
-        """지정된 사이트의 자격 증명(ID/PW)을 가져옵니다."""
-        def _get():
-            from agent.credentials.manager import CredentialManager
-            cm = CredentialManager()
-            creds = cm.get_credentials(site)
-            if creds and creds[0] and creds[1]:
-                return {"username": creds[0], "password": creds[1]}
-            raise ValueError(f"No credentials found for site: {site}")
-
-        return self._execute("get_credentials", _get)
 
     def go_back(self) -> Dict[str, Any]:
         """브라우저의 뒤로가기 동작을 수행합니다."""

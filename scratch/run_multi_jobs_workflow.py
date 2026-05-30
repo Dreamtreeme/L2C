@@ -50,7 +50,6 @@ def main():
     }
     
     os.environ["SKIP_VLM_CAPTION"] = "true"
-    os.environ["SKIP_WAIT_STABLE"] = "false"
     
     logger.info("--- MULTI-JOBS WORKFLOW START ---", goal=initial_state["goal"])
     

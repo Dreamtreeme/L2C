@@ -40,14 +40,6 @@ class open_browser(BaseModel):
     """기본 브라우저를 열고 특정 URL에 접속합니다. 목표가 주어지면 가장 먼저 호출해야 할 수 있습니다."""
     url: str = Field(..., description="접속할 URL (예: https://www.wanted.co.kr)")
 
-class get_credentials(BaseModel):
-    """특정 사이트(예: 'wanted')의 ID/PW를 보안 저장소에서 가져와 반환합니다. 로그인 폼이 보일 때 호출하세요."""
-    site: str = Field(..., description="자격 증명을 가져올 사이트 식별자 (예: 'wanted')")
-
-class get_current_url(BaseModel):
-    """활성 브라우저 주소창의 현재 URL을 읽습니다."""
-    pass
-
 class update_extracted_info(BaseModel):
     """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 병합합니다. 변경된 공고 또는 새 필드만 보내도 됩니다. (예: {'공고목록': [{'회사명': '로이드케이', '직무명': '...', '주요업무': ['A']}]} 형태의 JSON 문자열)"""
     data_json: str = Field(..., description="업데이트할 정보 키-값 딕셔너리의 JSON 문자열")
@@ -99,8 +91,6 @@ def _get_ui_llm_with_tools():
             scroll,
             press_key,
             open_browser,
-            get_credentials,
-            get_current_url,
             update_extracted_info,
             go_back,
             update_plan_progress,
@@ -465,7 +455,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
     return result
 
 
-def _dispatch_ui(action_name: str, args: dict, get_bbox) -> dict:
+def _dispatch_ui(action_name: str, args: dict, get_bbox, current_url: str = "") -> dict:
     """마우스/키보드 물리 조작 도구를 실행합니다."""
     action_tools = _get_action_tools()
     if action_name == "click_marker":
@@ -481,11 +471,7 @@ def _dispatch_ui(action_name: str, args: dict, get_bbox) -> dict:
     elif action_name == "press_key":
         return action_tools.press_key(args["key"])
     elif action_name == "open_browser":
-        return action_tools.open_browser(args["url"])
-    elif action_name == "get_credentials":
-        return action_tools.get_credentials(args["site"])
-    elif action_name == "get_current_url":
-        return action_tools.get_current_url()
+        return action_tools.open_browser(args["url"], current_url=current_url)
     elif action_name == "go_back":
         return action_tools.go_back()
     raise ValueError(f"Unknown UI action: {action_name}")
@@ -562,8 +548,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         raise ValueError(f"Marker ID {marker_id} not found in current screen.")
 
     # 도구 카테고리 라우팅 테이블
-    UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key",
-                     "open_browser", "get_credentials", "get_current_url", "go_back"}
+    UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "go_back"}
     SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "go_back"}
     URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "go_back"}
     STATE_ACTIONS = {"update_plan_progress", "update_extracted_info"}
@@ -580,17 +565,21 @@ def action_node(state: GraphState) -> Dict[str, Any]:
 
         try:
             if action_name in UI_ACTIONS:
-                result = _dispatch_ui(action_name, args, get_bbox)
-                screen_changed = screen_changed or action_name in SCREEN_CHANGING_ACTIONS
-                current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
                 if action_name == "open_browser":
-                    current_url = args["url"]
-                    current_url_stale = True
-                elif action_name == "get_current_url" and result.get("status") == "success":
-                    result_url = result.get("result", {}).get("url") if isinstance(result.get("result"), dict) else ""
-                    if result_url:
-                        current_url = result_url
-                        current_url_stale = False
+                    result = _dispatch_ui(action_name, args, get_bbox, current_url=current_url)
+                else:
+                    result = _dispatch_ui(action_name, args, get_bbox)
+                action_changed_screen = action_name in SCREEN_CHANGING_ACTIONS
+                if action_name == "open_browser":
+                    result_payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+                    action_changed_screen = bool(result_payload.get("opened"))
+                    if not action_changed_screen and not state.get("ui_context"):
+                        action_changed_screen = True
+                    current_url = result_payload.get("url") or args["url"]
+                    current_url_stale = action_changed_screen
+                else:
+                    current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
+                screen_changed = screen_changed or action_changed_screen
 
             elif action_name in STATE_ACTIONS:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
