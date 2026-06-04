@@ -151,6 +151,13 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     markers = filtered_markers
     
     ui_context = _build_ui_context(markers)
+    try:
+        from agent.recipe.state_key import compute_state_key
+
+        reflex_state_key = compute_state_key(current_url, markers)
+    except Exception as e:
+        logger.debug("reflex state_key computation skipped", error=str(e))
+        reflex_state_key = state.get("reflex_state_key", "")
     
     elapsed = time.time() - start_time
     logger.info(f"Perception Node completed in {elapsed:.2f} seconds")
@@ -161,6 +168,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "ui_context": ui_context,
         "current_url": current_url,
         "current_url_stale": current_url_stale,
+        "reflex_state_key": reflex_state_key,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
 
@@ -447,12 +455,130 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
 
     result = {
         "last_action_result": response,
+        "reflex_hit": False,
+        "reflex_expected_next_state": "",
+        "reflex_pending_validation": False,
         "step_durations": [{"node": "reasoning", "duration": elapsed}]
     }
     if error_increment > 0:
         result["error_count"] = state.get("error_count", 0) + error_increment
 
     return result
+
+
+def _reflex_action_args(step: dict, marker_id: int | None) -> dict | None:
+    """저장된 RecipeStep dict를 action_node tool args 형태로 변환한다."""
+    action = step.get("action")
+    param = dict(step.get("param") or {})
+    value = step.get("value")
+
+    if action == "click_marker":
+        if marker_id is None:
+            return None
+        return {"marker_id": marker_id}
+    if action == "type_in_marker":
+        if marker_id is None:
+            return None
+        text = param.get("text") or value
+        if not text:
+            return None
+        return {"marker_id": marker_id, "text": text}
+    if action == "scroll":
+        return {"direction": param.get("direction") or value or "down"}
+    if action == "press_key":
+        key = param.get("key") or value
+        return {"key": key} if key else None
+    if action == "go_back":
+        return {}
+    return None
+
+
+def reflex_node(state: GraphState) -> Dict[str, Any]:
+    """캐시된 Reflex Recipe가 있으면 reasoning을 우회해 같은 tool_call 형태를 만든다."""
+    start_time = time.time()
+    logger.info("Executing Reflex Node")
+
+    try:
+        from agent.recipe.matcher import match_marker
+        from agent.recipe.state_key import compute_state_key
+        from agent.recipe.store import RecipeStore
+
+        markers = state.get("current_markers", []) or []
+        state_key = state.get("reflex_state_key") or compute_state_key(state.get("current_url", ""), markers)
+        recipe = RecipeStore().get_recipe(state_key)
+        if not recipe or not recipe.steps:
+            elapsed = time.time() - start_time
+            logger.info("Reflex miss: no recipe", state_key=state_key[:24])
+            return {
+                "reflex_state_key": state_key,
+                "reflex_hit": False,
+                "reflex_expected_next_state": "",
+                "reflex_pending_validation": False,
+                "step_durations": [{"node": "reflex", "duration": elapsed}],
+            }
+
+        tool_calls = []
+        expected_next = ""
+        for idx, recipe_step in enumerate(recipe.steps):
+            step = recipe_step.model_dump() if hasattr(recipe_step, "model_dump") else recipe_step.dict()
+            action = step.get("action")
+            marker_id = None
+            if action in {"click_marker", "type_in_marker"}:
+                marker_id = match_marker(step, markers, params={"goal": state.get("goal", "")})
+                if marker_id is None:
+                    elapsed = time.time() - start_time
+                    logger.info("Reflex miss: marker did not match", state_key=state_key[:24], action=action)
+                    return {
+                        "reflex_state_key": state_key,
+                        "reflex_hit": False,
+                        "reflex_expected_next_state": "",
+                        "reflex_pending_validation": False,
+                        "step_durations": [{"node": "reflex", "duration": elapsed}],
+                    }
+
+            args = _reflex_action_args(step, marker_id)
+            if args is None:
+                elapsed = time.time() - start_time
+                logger.info("Reflex miss: unsupported or incomplete action", state_key=state_key[:24], action=action)
+                return {
+                    "reflex_state_key": state_key,
+                    "reflex_hit": False,
+                    "reflex_expected_next_state": "",
+                    "reflex_pending_validation": False,
+                    "step_durations": [{"node": "reflex", "duration": elapsed}],
+                }
+            expected_next = step.get("expected_next_state") or expected_next
+            tool_calls.append({"name": action, "args": args, "id": f"reflex_{abs(hash(state_key))}_{idx}"})
+
+        msg = AIMessage(
+            content=f"[reflex] cached {len(tool_calls)} action(s)",
+            tool_calls=tool_calls,
+        )
+        elapsed = time.time() - start_time
+        logger.info(
+            "Reflex hit",
+            state_key=state_key[:24],
+            actions=[call["name"] for call in tool_calls],
+            expected_next=expected_next[:24] if expected_next else "",
+            duration=f"{elapsed:.3f}s",
+        )
+        return {
+            "last_action_result": msg,
+            "reflex_state_key": state_key,
+            "reflex_hit": True,
+            "reflex_expected_next_state": expected_next,
+            "reflex_pending_validation": bool(expected_next),
+            "step_durations": [{"node": "reflex", "duration": elapsed}],
+        }
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.debug("reflex node skipped", error=str(e))
+        return {
+            "reflex_hit": False,
+            "reflex_expected_next_state": "",
+            "reflex_pending_validation": False,
+            "step_durations": [{"node": "reflex", "duration": elapsed}],
+        }
 
 
 def _dispatch_ui(action_name: str, args: dict, get_bbox, current_url: str = "") -> dict:
@@ -514,6 +640,13 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     """Reasoning Node가 선택한 도구(들)를 순차적으로 실행(Action Chaining)합니다."""
     start_time = time.time()
     logger.info("Executing Action Node (with potential Action Chaining)")
+
+    try:
+        from agent.recipe.record import record_ui_step, commit_if_finished
+    except Exception:
+        record_ui_step = commit_if_finished = None
+    recorded_steps: list = []
+    prior_recorded_steps = list(state.get("recorded_steps", []) or [])
 
     ai_msg: AIMessage = state.get("last_action_result")
 
@@ -580,6 +713,8 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 else:
                     current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
                 screen_changed = screen_changed or action_changed_screen
+                if record_ui_step:
+                    record_ui_step(recorded_steps, state, action_name, args, len(prior_recorded_steps) + idx)
 
             elif action_name in STATE_ACTIONS:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
@@ -613,6 +748,9 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
             break  # 에러 발생 시 체인 중단
 
+    if is_finished and commit_if_finished:
+        commit_if_finished(prior_recorded_steps + recorded_steps, state, current_url)
+
     total_elapsed = time.time() - start_time
     logger.info(f"Action Node completed all chained tools in {total_elapsed:.2f} seconds")
 
@@ -628,6 +766,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "current_url":       current_url,
         "current_url_stale": current_url_stale,
         "last_action_screen_changed": screen_changed,
+        "recorded_steps":    recorded_steps,
     }
 
 

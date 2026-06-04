@@ -1,7 +1,9 @@
+import os
+
 from langgraph.graph import StateGraph, START, END
 
 from agent.graph.state import GraphState
-from agent.graph.nodes import perception_node, reasoning_node, action_node
+from agent.graph.nodes import perception_node, reflex_node, reasoning_node, action_node
 from agent.utils.logger import logger
 
 def should_continue(state: GraphState) -> str:
@@ -20,6 +22,35 @@ def should_continue(state: GraphState) -> str:
 
     return "perception"
 
+
+def _reflex_enabled() -> bool:
+    return os.getenv("REFLEX_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def route_after_perception(state: GraphState) -> str:
+    """perception 이후 reflex 재생 또는 기존 reasoning 경로를 선택합니다."""
+    if not _reflex_enabled():
+        return "reasoning"
+
+    if state.get("reflex_pending_validation"):
+        expected = state.get("reflex_expected_next_state", "")
+        current = state.get("reflex_state_key", "")
+        if expected and current != expected:
+            logger.info(
+                "Reflex validation mismatch. Falling back to reasoning.",
+                expected=expected[:24],
+                current=current[:24],
+            )
+            return "reasoning"
+
+    return "reflex"
+
+
+def route_after_reflex(state: GraphState) -> str:
+    """reflex hit이면 action_node로, miss면 reasoning_node로 보냅니다."""
+    return "action" if state.get("reflex_hit") else "reasoning"
+
+
 def build_graph():
     """LangGraph 워크플로우를 구성하고 컴파일된 앱을 반환합니다."""
     
@@ -30,6 +61,7 @@ def build_graph():
     
     # 2. 노드 추가
     workflow.add_node("perception", perception_node)
+    workflow.add_node("reflex", reflex_node)
     workflow.add_node("reasoning", reasoning_node)
     workflow.add_node("action", action_node)
     
@@ -37,8 +69,25 @@ def build_graph():
     # 시작 시 빈 계획 상태로 reasoning 노드로 진입하여 동적 계획 수립 유도
     workflow.add_edge(START, "reasoning")
     
-    # perception 완료 후 reasoning으로 이동
-    workflow.add_edge("perception", "reasoning")
+    # perception 완료 후 REFLEX_ENABLED일 때만 캐시 재생을 먼저 시도
+    workflow.add_conditional_edges(
+        "perception",
+        route_after_perception,
+        {
+            "reflex": "reflex",
+            "reasoning": "reasoning",
+        }
+    )
+
+    # reflex miss는 reasoning 폴백, hit는 기존 action_node 실행 경로 재사용
+    workflow.add_conditional_edges(
+        "reflex",
+        route_after_reflex,
+        {
+            "action": "action",
+            "reasoning": "reasoning",
+        }
+    )
     
     # reasoning 완료 후 action으로 이동
     workflow.add_edge("reasoning", "action")

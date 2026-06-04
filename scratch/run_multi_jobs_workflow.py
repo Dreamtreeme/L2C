@@ -47,6 +47,11 @@ def main():
         "plan": [],
         "current_plan_step": 0,
         "last_action_screen_changed": True,
+        "recorded_steps": [],
+        "reflex_state_key": "",
+        "reflex_hit": False,
+        "reflex_expected_next_state": "",
+        "reflex_pending_validation": False,
     }
     
     os.environ["SKIP_VLM_CAPTION"] = "true"

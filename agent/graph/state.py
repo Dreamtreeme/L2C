@@ -58,3 +58,18 @@ class GraphState(TypedDict):
 
     # 마지막 action이 화면 전환/렌더링 변화를 유발했는지 여부
     last_action_screen_changed: bool
+
+    # [Reflex Recipe / Phase0] 비전 런 중 기록된 (상태->타깃) 스텝. operator.add로 누적.
+    recorded_steps: Annotated[List[Dict[str, Any]], operator.add]
+
+    # [Reflex Recipe] 현재 perception 결과로 계산한 화면-상태 키
+    reflex_state_key: str
+
+    # [Reflex Recipe] 직전 reflex_node가 reasoning을 우회했는지 여부
+    reflex_hit: bool
+
+    # [Reflex Recipe] 반사 액션 직후 기대하는 다음 화면-상태 키
+    reflex_expected_next_state: str
+
+    # [Reflex Recipe] 다음 perception에서 expected_next_state 검증이 필요한지 여부
+    reflex_pending_validation: bool

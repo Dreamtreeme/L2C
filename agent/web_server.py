@@ -101,6 +101,11 @@ async def chat_endpoint(req: ChatRequest):
             current_plan_step=0,
             step_durations=[],
             last_action_screen_changed=True,
+            recorded_steps=[],
+            reflex_state_key="",
+            reflex_hit=False,
+            reflex_expected_next_state="",
+            reflex_pending_validation=False,
         )
         try:
             result = await asyncio.to_thread(qa_reasoning_node, state)

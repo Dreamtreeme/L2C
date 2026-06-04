@@ -86,6 +86,11 @@ def realtime_scraping(company: str = None, tech_stack: str = None) -> str:
             "current_plan_step": 0,
             "step_durations": [],
             "last_action_screen_changed": True,
+            "recorded_steps": [],
+            "reflex_state_key": "",
+            "reflex_hit": False,
+            "reflex_expected_next_state": "",
+            "reflex_pending_validation": False,
         }
 
         logger.info(f"[realtime_scraping] Starting autonomous vision collection graph with goal: {goal}")
