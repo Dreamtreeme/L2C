@@ -151,10 +151,27 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     markers = filtered_markers
     
     ui_context = _build_ui_context(markers)
+    ocr_texts = []
+    ocr_delta_added = []
+    ocr_delta_removed = []
+    reflex_validation_status = ""
     try:
+        from agent.recipe.ocr_delta import diff_marker_texts
         from agent.recipe.state_key import compute_state_key
 
         reflex_state_key = compute_state_key(current_url, markers)
+        marker_delta = diff_marker_texts(state.get("ocr_texts", []), markers)
+        ocr_texts = marker_delta["current"]
+        ocr_delta_added = marker_delta["added"]
+        ocr_delta_removed = marker_delta["removed"]
+        if state.get("reflex_pending_validation"):
+            expected_next = state.get("reflex_expected_next_state", "")
+            if expected_next and reflex_state_key == expected_next:
+                reflex_validation_status = "matched"
+            elif ocr_delta_added or ocr_delta_removed:
+                reflex_validation_status = "changed_unexpected"
+            else:
+                reflex_validation_status = "unchanged"
     except Exception as e:
         logger.debug("reflex state_key computation skipped", error=str(e))
         reflex_state_key = state.get("reflex_state_key", "")
@@ -169,6 +186,10 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "current_url": current_url,
         "current_url_stale": current_url_stale,
         "reflex_state_key": reflex_state_key,
+        "ocr_texts": ocr_texts,
+        "ocr_delta_added": ocr_delta_added,
+        "ocr_delta_removed": ocr_delta_removed,
+        "reflex_validation_status": reflex_validation_status,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
 

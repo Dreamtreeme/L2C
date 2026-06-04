@@ -73,3 +73,11 @@ class GraphState(TypedDict):
 
     # [Reflex Recipe] 다음 perception에서 expected_next_state 검증이 필요한지 여부
     reflex_pending_validation: bool
+
+    # [Reflex Recipe] 이전/현재 OCR canonical 텍스트 집합 및 변화량
+    ocr_texts: List[str]
+    ocr_delta_added: List[str]
+    ocr_delta_removed: List[str]
+
+    # [Reflex Recipe] matched / changed_unexpected / unchanged
+    reflex_validation_status: str

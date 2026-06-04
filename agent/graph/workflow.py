@@ -36,12 +36,22 @@ def route_after_perception(state: GraphState) -> str:
         expected = state.get("reflex_expected_next_state", "")
         current = state.get("reflex_state_key", "")
         if expected and current != expected:
+            status = state.get("reflex_validation_status", "")
             logger.info(
                 "Reflex validation mismatch. Falling back to reasoning.",
                 expected=expected[:24],
                 current=current[:24],
+                status=status,
+                added=state.get("ocr_delta_added", [])[:8],
+                removed=state.get("ocr_delta_removed", [])[:8],
             )
             return "reasoning"
+        logger.info(
+            "Reflex validation matched.",
+            expected=expected[:24] if expected else "",
+            added=state.get("ocr_delta_added", [])[:8],
+            removed=state.get("ocr_delta_removed", [])[:8],
+        )
 
     return "reflex"
 

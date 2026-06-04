@@ -15,6 +15,8 @@ _MULTISPACE = re.compile(r"\s+")
 _NUM_SEG = re.compile(r"/\d+")
 _UUID_SEG = re.compile(r"/[0-9a-f]{8,}(?=/|$)", re.IGNORECASE)
 _VOLATILE_TEXT = re.compile(r"^\d+([,.]\d+)?\s*(명|개|건|원|%|일|시간|분)?$")
+_NUMBER_TOKEN = re.compile(r"(?<![A-Za-z0-9가-힣])\d+([,.]\d+)?(?![A-Za-z0-9가-힣])")
+_NUMBER_WITH_UNIT = re.compile(r"\d+([,.]\d+)?\s*(명|개|건|원|%|일|시간|분)")
 
 
 def normalize_text(text) -> str:
@@ -29,6 +31,17 @@ def normalize_text(text) -> str:
     except Exception:
         pass
     t = _MARKER_NOISE.sub("", raw)
+    t = _MULTISPACE.sub(" ", t).strip()
+    return t
+
+
+def canonical_anchor_text(text) -> str:
+    """상태 판별용 텍스트. 추천수/조회수 같은 동적 숫자는 값 대신 자리표시자로 둔다."""
+    t = normalize_text(text)
+    if not t or _VOLATILE_TEXT.match(t):
+        return ""
+    t = _NUMBER_WITH_UNIT.sub("{n}\\2", t)
+    t = _NUMBER_TOKEN.sub("{n}", t)
     t = _MULTISPACE.sub(" ", t).strip()
     return t
 
@@ -62,8 +75,8 @@ def anchor_signature(markers, top: int = 8) -> str:
     texts = []
     for m in markers or []:
         if isinstance(m, dict):
-            t = normalize_text(m.get("text"))
-            if len(t) >= 2 and not _VOLATILE_TEXT.match(t):
+            t = canonical_anchor_text(m.get("text"))
+            if len(t) >= 2:
                 texts.append(t)
     uniq = sorted(set(texts), key=lambda s: (-len(s), s))[:top]
     uniq = sorted(uniq)

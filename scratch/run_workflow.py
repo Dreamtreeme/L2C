@@ -46,6 +46,10 @@ def main():
         "reflex_hit": False,
         "reflex_expected_next_state": "",
         "reflex_pending_validation": False,
+        "ocr_texts": [],
+        "ocr_delta_added": [],
+        "ocr_delta_removed": [],
+        "reflex_validation_status": "",
     }
     
     import time

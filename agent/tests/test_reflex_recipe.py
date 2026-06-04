@@ -27,6 +27,36 @@ def test_record_ui_step_stays_in_marker_text_space():
     assert "bbox" not in steps[0]["target"]
 
 
+def test_state_key_and_ocr_delta_ignore_dynamic_numeric_changes():
+    from agent.recipe.ocr_delta import diff_marker_texts, marker_text_set
+    from agent.recipe.state_key import compute_state_key
+
+    before = [
+        {"id": 1, "bbox": [0, 0, 10, 10], "text": "추천 0"},
+        {"id": 2, "bbox": [0, 20, 10, 30], "text": "지원하기"},
+        {"id": 3, "bbox": [0, 40, 10, 50], "text": "회사 소개"},
+    ]
+    after_count_change = [
+        {"id": 1, "bbox": [0, 0, 10, 10], "text": "추천 1"},
+        {"id": 2, "bbox": [0, 20, 10, 30], "text": "지원하기"},
+        {"id": 3, "bbox": [0, 40, 10, 50], "text": "회사 소개"},
+    ]
+    after_new_element = after_count_change + [
+        {"id": 4, "bbox": [0, 60, 10, 70], "text": "지원 완료"},
+    ]
+
+    url = "https://www.wanted.co.kr/wd/12345"
+    assert compute_state_key(url, before) == compute_state_key(url, after_count_change)
+
+    count_delta = diff_marker_texts(marker_text_set(before), after_count_change)
+    assert count_delta["added"] == []
+    assert count_delta["removed"] == []
+
+    new_delta = diff_marker_texts(marker_text_set(before), after_new_element)
+    assert new_delta["added"] == ["지원 완료"]
+    assert new_delta["removed"] == []
+
+
 def test_match_marker_uses_region_and_ordinal_tiebreak():
     from agent.recipe.matcher import match_marker
 

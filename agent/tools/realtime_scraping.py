@@ -91,6 +91,10 @@ def realtime_scraping(company: str = None, tech_stack: str = None) -> str:
             "reflex_hit": False,
             "reflex_expected_next_state": "",
             "reflex_pending_validation": False,
+            "ocr_texts": [],
+            "ocr_delta_added": [],
+            "ocr_delta_removed": [],
+            "reflex_validation_status": "",
         }
 
         logger.info(f"[realtime_scraping] Starting autonomous vision collection graph with goal: {goal}")

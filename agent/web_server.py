@@ -106,6 +106,10 @@ async def chat_endpoint(req: ChatRequest):
             reflex_hit=False,
             reflex_expected_next_state="",
             reflex_pending_validation=False,
+            ocr_texts=[],
+            ocr_delta_added=[],
+            ocr_delta_removed=[],
+            reflex_validation_status="",
         )
         try:
             result = await asyncio.to_thread(qa_reasoning_node, state)
