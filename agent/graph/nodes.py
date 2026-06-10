@@ -328,6 +328,79 @@ def _compact_action_args(action_name: str, args: dict) -> dict:
     }
 
 
+def _marker_by_id(markers: list[dict], marker_id: int | None) -> dict | None:
+    for marker in markers or []:
+        if isinstance(marker, dict) and marker.get("id") == marker_id:
+            return marker
+    return None
+
+
+def _action_target_metadata(state: GraphState, action_name: str, args: dict) -> dict | None:
+    if action_name not in {"click_marker", "type_in_marker"}:
+        return None
+    marker = _marker_by_id(state.get("current_markers", []), args.get("marker_id"))
+    if not marker:
+        return {"marker_id": args.get("marker_id"), "missing": True}
+    bbox = marker.get("bbox", [])
+    center = None
+    if isinstance(bbox, list) and len(bbox) == 4:
+        center = [(bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2]
+    return {
+        "marker_id": marker.get("id"),
+        "text": marker.get("text", ""),
+        "bbox": bbox,
+        "center": center,
+    }
+
+
+def _state_snapshot_for_action(state: GraphState, current_url: str) -> dict:
+    recent_images = state.get("recent_images", []) or []
+    screenshot = str(recent_images[-1]) if recent_images else ""
+    return {
+        "state_key": state.get("reflex_state_key", "") or "",
+        "url": current_url or state.get("current_url", "") or "",
+        "screenshot": screenshot,
+        "marked_image": state.get("marked_image", "") or "",
+    }
+
+
+def _action_repeat_key(action_name: str, args: dict, state_key: str) -> tuple[str, str, str]:
+    return (
+        state_key or "",
+        action_name,
+        json.dumps(_compact_action_args(action_name, args), ensure_ascii=False, sort_keys=True),
+    )
+
+
+def _same_state_action_seen(state: GraphState, action_name: str, args: dict, state_key: str) -> bool:
+    if not state_key:
+        return False
+    current_key = _action_repeat_key(action_name, args, state_key)
+    for previous in reversed(state.get("action_history", []) or []):
+        if not isinstance(previous, dict):
+            continue
+        if previous.get("status") not in {"success", "skipped", "error"}:
+            continue
+        previous_key = _action_repeat_key(
+            previous.get("action", ""),
+            previous.get("args", {}) or {},
+            previous.get("state_key", "") or previous.get("before_state_key", ""),
+        )
+        if previous_key == current_key:
+            return True
+        if previous.get("state_key") and previous.get("state_key") != state_key:
+            break
+    return False
+
+
+def _chain_boundary_reached(action_name: str) -> bool:
+    return action_name in {"click_marker", "scroll", "press_key", "open_browser", "go_back"}
+
+
+def _is_allowed_same_screen_ui_chain(previous_ui_action: str | None, action_name: str) -> bool:
+    return previous_ui_action == "type_in_marker" and action_name == "press_key"
+
+
 def _marker_prompt_rank(marker: dict) -> tuple[int, int, int]:
     text = marker.get("text", "")
     bbox = marker.get("bbox", [0, 0, 0, 0])
@@ -693,13 +766,61 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     current_url       = state.get("current_url", "")
     current_url_stale = state.get("current_url_stale", True)
     screen_changed    = False
+    chain_boundary    = False
+    previous_ui_action: str | None = None
 
     # marker_id → bbox 변환 헬퍼
     def get_bbox(marker_id: int):
-        for m in state.get("current_markers", []):
-            if m["id"] == marker_id:
-                return m["bbox"]
+        marker = _marker_by_id(state.get("current_markers", []), marker_id)
+        if marker:
+            return marker["bbox"]
         raise ValueError(f"Marker ID {marker_id} not found in current screen.")
+
+    def enrich_result(
+        result: dict,
+        requested_action: str,
+        action_args: dict,
+        before_snapshot: dict,
+        screen_change_expected: bool = False,
+    ) -> dict:
+        result["args"] = _compact_action_args(requested_action, action_args)
+        result["state_key"] = before_snapshot.get("state_key", "")
+        result["before_state_key"] = before_snapshot.get("state_key", "")
+        result["before_url"] = before_snapshot.get("url", "")
+        result["before_screenshot"] = before_snapshot.get("screenshot", "")
+        result["before_marked_image"] = before_snapshot.get("marked_image", "")
+        result["screen_change_expected"] = screen_change_expected
+        target = _action_target_metadata(state, requested_action, action_args)
+        if target:
+            result["target"] = target
+        if result.get("action") != requested_action:
+            result["requested_action"] = requested_action
+        return result
+
+    def append_guard_result(
+        action_name: str,
+        args: dict,
+        before_snapshot: dict,
+        status: str,
+        reason: str,
+        message: str,
+        step_start: float,
+        increments_error: bool = False,
+    ) -> None:
+        nonlocal error_count
+        result = {
+            "status": status,
+            "action": action_name,
+            "result": message if status != "error" else None,
+            "error": message if status == "error" else None,
+            "reason": reason,
+        }
+        new_actions.append(enrich_result(result, action_name, args, before_snapshot))
+        if increments_error:
+            error_count += 1
+        step_elapsed = time.time() - step_start
+        step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
+        logger.warning(message, action=action_name, reason=reason)
 
     # 도구 카테고리 라우팅 테이블
     UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "go_back"}
@@ -710,15 +831,55 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     for idx, tool_call in enumerate(ai_msg.tool_calls):
         action_name = tool_call["name"]
         args        = tool_call["args"]
+        compact_args = _compact_action_args(action_name, args)
 
         logger.info(
             f"LLM decided to call (chained {idx+1}/{len(ai_msg.tool_calls)}): "
-            f"{action_name} with args: {_compact_action_args(action_name, args)}"
+            f"{action_name} with args: {compact_args}"
         )
         step_start = time.time()
+        before_snapshot = _state_snapshot_for_action(state, current_url)
+        before_state_key = before_snapshot.get("state_key", "")
 
         try:
+            if chain_boundary:
+                append_guard_result(
+                    action_name,
+                    args,
+                    before_snapshot,
+                    "skipped",
+                    "chain_boundary_after_screen_change",
+                    "Skipped chained tool after a screen-changing action; next perception is required.",
+                    step_start,
+                )
+                break
+
             if action_name in UI_ACTIONS:
+                if previous_ui_action and not _is_allowed_same_screen_ui_chain(previous_ui_action, action_name):
+                    append_guard_result(
+                        action_name,
+                        args,
+                        before_snapshot,
+                        "skipped",
+                        "unsafe_ui_action_chain",
+                        f"Skipped unsafe UI chain: {previous_ui_action} -> {action_name}",
+                        step_start,
+                    )
+                    break
+
+                if _same_state_action_seen(state, action_name, args, before_state_key):
+                    append_guard_result(
+                        action_name,
+                        args,
+                        before_snapshot,
+                        "error",
+                        "same_state_repeat_blocked",
+                        "Blocked repeated UI action in the same screen state.",
+                        step_start,
+                        increments_error=True,
+                    )
+                    break
+
                 if action_name == "open_browser":
                     result = _dispatch_ui(action_name, args, get_bbox, current_url=current_url)
                 else:
@@ -734,6 +895,9 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 else:
                     current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
                 screen_changed = screen_changed or action_changed_screen
+                previous_ui_action = action_name
+                if action_changed_screen and _chain_boundary_reached(action_name):
+                    chain_boundary = True
                 if record_ui_step:
                     record_ui_step(recorded_steps, state, action_name, args, len(prior_recorded_steps) + idx)
 
@@ -741,18 +905,19 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
                     action_name, args, current_jd, current_plan, current_plan_step, current_url=current_url
                 )
+                action_changed_screen = False
 
             elif action_name == "finish_task":
                 action_tools = _get_action_tools()
                 result = action_tools.finish_task(args["result"])
                 is_finished = True
                 collected_data.append(args["result"])
+                action_changed_screen = False
 
             else:
                 raise ValueError(f"Unknown tool: {action_name}")
 
-            result["args"] = _compact_action_args(action_name, args)
-            new_actions.append(result)
+            new_actions.append(enrich_result(result, action_name, args, before_snapshot, action_changed_screen))
 
             step_elapsed = time.time() - step_start
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
@@ -764,7 +929,9 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Failed to execute action {action_name}", error=str(e))
             step_elapsed = time.time() - step_start
-            new_actions.append({"action": action_name, "status": "error", "error": str(e), "args": args})
+            before_snapshot = _state_snapshot_for_action(state, current_url)
+            result = {"action": action_name, "status": "error", "error": str(e)}
+            new_actions.append(enrich_result(result, action_name, args, before_snapshot))
             error_count += 1
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
             break  # 에러 발생 시 체인 중단

@@ -108,3 +108,169 @@ def test_action_node_does_not_reopen_same_browser_url(monkeypatch):
     assert result["last_action_screen_changed"] is False
     assert result["current_url_stale"] is False
     assert result["current_url"] == "https://www.wanted.co.kr"
+
+
+def test_action_node_records_target_metadata(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        assert get_bbox(args["marker_id"]) == [10, 20, 110, 80]
+        return {"status": "success", "action": action_name, "result": "ok"}
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    result = nodes.action_node({
+        "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "Data Scientist"}],
+        "current_url": "https://www.wanted.co.kr/search?query=data",
+        "current_url_stale": False,
+        "reflex_state_key": "state-results",
+        "marked_image": "marked.jpg",
+        "recent_images": ["screen.jpg"],
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[{"name": "click_marker", "args": {"marker_id": 1}, "id": "1"}],
+        ),
+    })
+
+    action = result["action_history"][0]
+    assert action["state_key"] == "state-results"
+    assert action["before_url"] == "https://www.wanted.co.kr/search?query=data"
+    assert action["before_screenshot"] == "screen.jpg"
+    assert action["before_marked_image"] == "marked.jpg"
+    assert action["target"] == {
+        "marker_id": 1,
+        "text": "Data Scientist",
+        "bbox": [10, 20, 110, 80],
+        "center": [60, 50],
+    }
+
+
+def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_ui(*_args, **_kwargs):
+        raise AssertionError("repeated action should be blocked before dispatch")
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    result = nodes.action_node({
+        "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "Data Scientist"}],
+        "current_url": "https://www.wanted.co.kr/search?query=data",
+        "current_url_stale": False,
+        "reflex_state_key": "state-results",
+        "action_history": [
+            {
+                "status": "success",
+                "action": "click_marker",
+                "args": {"marker_id": 1},
+                "state_key": "state-results",
+            }
+        ],
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[{"name": "click_marker", "args": {"marker_id": 1}, "id": "1"}],
+        ),
+    })
+
+    action = result["action_history"][0]
+    assert action["status"] == "error"
+    assert action["reason"] == "same_state_repeat_blocked"
+    assert action["target"]["text"] == "Data Scientist"
+    assert result["error_count"] == 1
+    assert result["last_action_screen_changed"] is False
+
+
+def test_action_node_stops_ui_chain_after_screen_boundary_action(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    calls = []
+
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        calls.append((action_name, dict(args)))
+        get_bbox(args["marker_id"])
+        return {"status": "success", "action": action_name, "result": "ok"}
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    result = nodes.action_node({
+        "current_markers": [
+            {"id": 1, "bbox": [10, 20, 110, 80], "text": "first"},
+            {"id": 2, "bbox": [10, 100, 110, 160], "text": "second"},
+        ],
+        "current_url": "https://www.wanted.co.kr/search?query=data",
+        "current_url_stale": False,
+        "reflex_state_key": "state-results",
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "click_marker", "args": {"marker_id": 1}, "id": "1"},
+                {"name": "click_marker", "args": {"marker_id": 2}, "id": "2"},
+            ],
+        ),
+    })
+
+    assert calls == [("click_marker", {"marker_id": 1})]
+    assert result["action_history"][0]["status"] == "success"
+    assert result["action_history"][1]["status"] == "skipped"
+    assert result["action_history"][1]["reason"] == "chain_boundary_after_screen_change"
+    assert result["last_action_screen_changed"] is True
+
+
+def test_action_node_allows_type_then_enter_chain(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    calls = []
+
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        calls.append(action_name)
+        if action_name == "type_in_marker":
+            assert get_bbox(args["marker_id"]) == [10, 20, 110, 80]
+        return {"status": "success", "action": action_name, "result": "ok"}
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    result = nodes.action_node({
+        "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "검색"}],
+        "current_url": "https://www.wanted.co.kr",
+        "current_url_stale": False,
+        "reflex_state_key": "state-home",
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "type_in_marker", "args": {"marker_id": 1, "text": "데이터 분석가"}, "id": "1"},
+                {"name": "press_key", "args": {"key": "enter"}, "id": "2"},
+            ],
+        ),
+    })
+
+    assert calls == ["type_in_marker", "press_key"]
+    assert [a["status"] for a in result["action_history"]] == ["success", "success"]
+    assert result["last_action_screen_changed"] is True
