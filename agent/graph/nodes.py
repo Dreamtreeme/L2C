@@ -1201,6 +1201,16 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
             "step_durations": [{"node": "qa_reasoning", "duration": time.time() - start_time}]
         }
 
+    if os.getenv("COMMANDER_GRAPH_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from agent.graph.commander_workflow import run_commander_graph
+
+        commander_result = run_commander_graph(query)
+        elapsed = time.time() - start_time
+        return {
+            "last_action_result": commander_result.get("final_answer", ""),
+            "is_finished": True,
+            "step_durations": [{"node": "qa_commander_graph", "duration": elapsed}],
+        }
     # 메시지 리스트 초기화 (모듈 레벨 싱글톤 qa_llm_with_tools 사용)
     messages = [
         SystemMessage(content=QA_COMMANDER_SYSTEM_PROMPT),

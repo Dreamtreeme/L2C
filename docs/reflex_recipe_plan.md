@@ -89,3 +89,10 @@ The revised flow is:
 7. Only accepted submissions persist collected job data. Reflex recipe activation is deferred to a later Critic/Memory promotion step and replay test.
 
 This keeps the original principle: code guards structure and safety, while meaning-level decisions such as wrong target, reusable parameter, and recipe candidacy are handled by the feedback loop instead of site-specific hard-coded promotion rules.
+## Top-level commander graph
+
+`agent.graph.commander_workflow` is the explicit LangGraph orchestration layer above the child vision worker. Its route is:
+
+`plan_sites -> select_site -> run_worker -> review_submission -> (prepare_retry | persist_accepted | mark_failed) -> select_site -> query_db -> summarize`.
+
+`COMMANDER_GRAPH_ENABLED=1` routes the existing QA entry point through this graph. The default path still uses the previous QA tool-calling loop until the graph path is exercised enough to become the default.

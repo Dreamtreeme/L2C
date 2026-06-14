@@ -17,4 +17,4 @@ Files per site:
 - `prompt.md`: short child-agent instruction block for that site.
 - `tools.json`: allowed tool policy and Reflex boundaries.
 
-`realtime_scraping` can load these profiles to build site-specific collection goals. Full commander fan-out tools are still a later integration step.
+`realtime_scraping` can load these profiles to build site-specific collection goals. `agent.graph.commander_workflow` now provides the top-level LangGraph fan-out path: plan sites, run a child worker, review the structured submission, retry on feedback, persist accepted data, then query DB evidence for summarization.

@@ -156,37 +156,108 @@ def _append_review_feedback(goal: str, review_feedback: str | None) -> str:
     )
 
 
-def _commit_worker_submission(
-    final_state: dict,
-    *,
-    site: str,
-    keyword: str,
-    run_status: str,
-    hit_recursion_limit: bool,
-    persisted_count: int,
-    feedback_saved: int,
-    review_attempt: int,
-    run_id: str | None = None,
-) -> tuple[dict, dict, str]:
-    from agent.recipe.reviewer import build_worker_submission, review_worker_submission
-    from agent.recipe.submission_store import SubmissionStore
+def _initial_worker_state(goal: str) -> dict:
+    return {
+        "goal": goal,
+        "ui_context": "",
+        "current_url": "",
+        "current_url_stale": True,
+        "current_markers": [],
+        "action_history": [],
+        "recent_images": [],
+        "marked_image": "",
+        "error_count": 0,
+        "is_finished": False,
+        "collected_data": [],
+        "extracted_jd": {},
+        "last_action_result": None,
+        "plan": [],
+        "current_plan_step": 0,
+        "step_durations": [],
+        "last_action_screen_changed": True,
+        "recorded_steps": [],
+        "feedback_episodes": [],
+        "reflex_state_key": "",
+        "reflex_hit": False,
+        "reflex_expected_next_state": "",
+        "reflex_pending_validation": False,
+        "ocr_texts": [],
+        "ocr_delta_added": [],
+        "ocr_delta_removed": [],
+        "reflex_validation_status": "",
+    }
 
+
+def run_worker_once(
+    search_keyword: str,
+    site: str | None = None,
+    review_feedback: str | None = None,
+    review_attempt: int = 0,
+    run_id: str | None = None,
+) -> dict:
+    """Run one child vision worker attempt and return an unreviewed submission payload."""
+    from agent.graph.workflow import build_graph
+    from agent.recipe.reviewer import build_worker_submission
+
+    app = build_graph()
+    site_profile = _load_collection_profile(site)
+    site_entry = site_profile["entry"]
+    site_slug = site_entry.get("slug") or site or "unknown"
+    site_name = site_entry.get("display_name") or site_slug
+    goal = _append_review_feedback(_build_site_goal(search_keyword, site_profile), review_feedback)
+    initial_state = _initial_worker_state(goal)
+
+    logger.info(
+        "[realtime_scraping] Starting worker graph site=%s attempt=%s",
+        site_slug,
+        review_attempt,
+    )
+    recursion_limit = int(os.getenv("VISION_AGENT_RECURSION_LIMIT", str(DEFAULT_RECURSION_LIMIT)))
+    final_state, hit_recursion_limit = _run_graph_with_last_state(app, initial_state, recursion_limit)
+
+    extracted = final_state.get("extracted_jd", {}) or {}
+    is_finished = bool(final_state.get("is_finished", False))
+    run_status = _worker_run_status(hit_recursion_limit, is_finished)
+    feedback_saved = _commit_feedback_episodes(final_state, hit_recursion_limit, is_finished)
     submission = build_worker_submission(
         final_state,
-        site=site,
-        keyword=keyword,
+        site=site_slug,
+        keyword=search_keyword,
         run_status=run_status,
         hit_recursion_limit=hit_recursion_limit,
-        persisted_count=persisted_count,
+        persisted_count=0,
         feedback_saved=feedback_saved,
         review_attempt=review_attempt,
         run_id=run_id,
     )
+
+    return {
+        "submission": submission,
+        "extracted_jd": extracted,
+        "final_state": final_state,
+        "site_slug": site_slug,
+        "site_name": site_name,
+        "keyword": search_keyword,
+        "run_status": run_status,
+        "hit_recursion_limit": hit_recursion_limit,
+        "is_finished": is_finished,
+        "feedback_saved": feedback_saved,
+    }
+
+
+def commit_worker_review(
+    submission: dict,
+    source: str = "realtime_scraping",
+) -> tuple[dict, str]:
+    """Review and persist one worker submission."""
+    from agent.recipe.reviewer import review_worker_submission
+    from agent.recipe.submission_store import SubmissionStore
+
     review = review_worker_submission(submission)
     submission_id = SubmissionStore().commit_submission(
         submission,
         review=review,
-        source="realtime_scraping",
+        source=source,
     )
     logger.info(
         "[realtime_scraping] Worker submission reviewed: id=%s decision=%s confidence=%s",
@@ -194,7 +265,20 @@ def _commit_worker_submission(
         review.get("decision"),
         review.get("confidence"),
     )
-    return submission, review, submission_id
+    return review, submission_id
+
+
+def persist_accepted_worker_result(worker_result: dict, review: dict, source: str = "realtime_scraping") -> tuple[int, dict, dict, str]:
+    """Persist accepted worker data and update the stored submission row."""
+    submission = dict(worker_result.get("submission") or {})
+    if review.get("decision") != "accept" or not worker_result.get("extracted_jd"):
+        return 0, submission, review, ""
+
+    persisted_count = _persist_collected_data(worker_result.get("extracted_jd") or {}, worker_result.get("keyword", ""))
+    submission["persisted_count"] = persisted_count
+    worker_result["submission"] = submission
+    updated_review, submission_id = commit_worker_review(submission, source=source)
+    return persisted_count, submission, updated_review, submission_id
 
 
 def _result_payload(
@@ -227,6 +311,7 @@ def _result_payload(
         indent=2,
     )
 
+
 @tool
 def realtime_scraping(
     company: str = None,
@@ -237,8 +322,7 @@ def realtime_scraping(
     review_attempt: int = 0,
 ) -> str:
     """
-    Run the child vision worker for one collection site, then submit its result
-    through the commander/critic review gate before persisting accepted data.
+    Run the child vision worker, review its structured submission, and persist only accepted data.
     """
     search_keyword = ""
     if query:
@@ -255,76 +339,23 @@ def realtime_scraping(
     logger.info("[realtime_scraping] Invoking vision worker for keyword=%r", search_keyword)
 
     try:
-        from agent.graph.workflow import build_graph
         from agent.recipe.reviewer import render_review_feedback
 
-        app = build_graph()
-        site_profile = _load_collection_profile(site)
-        site_entry = site_profile["entry"]
-        site_slug = site_entry.get("slug") or site or "unknown"
-        site_name = site_entry.get("display_name") or site_slug
         max_review_retries = _worker_review_retries()
         attempt = max(0, int(review_attempt or 0))
         pending_feedback = review_feedback or ""
+        run_id = None
         while True:
-            attempt_run_id = None
-            goal = _append_review_feedback(_build_site_goal(search_keyword, site_profile), pending_feedback)
-            initial_state = {
-                "goal": goal,
-                "ui_context": "",
-                "current_url": "",
-                "current_url_stale": True,
-                "current_markers": [],
-                "action_history": [],
-                "recent_images": [],
-                "marked_image": "",
-                "error_count": 0,
-                "is_finished": False,
-                "collected_data": [],
-                "extracted_jd": {},
-                "last_action_result": None,
-                "plan": [],
-                "current_plan_step": 0,
-                "step_durations": [],
-                "last_action_screen_changed": True,
-                "recorded_steps": [],
-                "feedback_episodes": [],
-                "reflex_state_key": "",
-                "reflex_hit": False,
-                "reflex_expected_next_state": "",
-                "reflex_pending_validation": False,
-                "ocr_texts": [],
-                "ocr_delta_added": [],
-                "ocr_delta_removed": [],
-                "reflex_validation_status": "",
-            }
-
-            logger.info(
-                "[realtime_scraping] Starting worker graph site=%s attempt=%s max_retries=%s",
-                site_slug,
-                attempt,
-                max_review_retries,
-            )
-            recursion_limit = int(os.getenv("VISION_AGENT_RECURSION_LIMIT", str(DEFAULT_RECURSION_LIMIT)))
-            final_state, hit_recursion_limit = _run_graph_with_last_state(app, initial_state, recursion_limit)
-
-            extracted = final_state.get("extracted_jd", {}) or {}
-            is_finished = bool(final_state.get("is_finished", False))
-            run_status = _worker_run_status(hit_recursion_limit, is_finished)
-            feedback_saved = _commit_feedback_episodes(final_state, hit_recursion_limit, is_finished)
-
-            submission, review, submission_id = _commit_worker_submission(
-                final_state,
-                site=site_slug,
-                keyword=search_keyword,
-                run_status=run_status,
-                hit_recursion_limit=hit_recursion_limit,
-                persisted_count=0,
-                feedback_saved=feedback_saved,
+            worker_result = run_worker_once(
+                search_keyword,
+                site=site,
+                review_feedback=pending_feedback,
                 review_attempt=attempt,
-                run_id=attempt_run_id,
+                run_id=run_id,
             )
-            attempt_run_id = submission.get("run_id") or attempt_run_id
+            submission = worker_result["submission"]
+            run_id = submission.get("run_id") or run_id
+            review, submission_id = commit_worker_review(submission)
 
             if review.get("decision") == "revise" and attempt < max_review_retries:
                 pending_feedback = render_review_feedback(review)
@@ -332,22 +363,15 @@ def realtime_scraping(
                 logger.info("[realtime_scraping] Retrying worker after commander feedback: attempt=%s", attempt)
                 continue
 
+            persisted_count, submission, review, persisted_submission_id = persist_accepted_worker_result(worker_result, review)
+            if persisted_submission_id:
+                submission_id = persisted_submission_id
+
             item_count = int(submission.get("collected_count") or 0)
-            persisted_count = 0
-            if extracted and review.get("decision") == "accept":
-                persisted_count = _persist_collected_data(extracted, search_keyword)
-                submission, review, submission_id = _commit_worker_submission(
-                    {**final_state, "extracted_jd": extracted},
-                    site=site_slug,
-                    keyword=search_keyword,
-                    run_status=run_status,
-                    hit_recursion_limit=hit_recursion_limit,
-                    persisted_count=persisted_count,
-                    feedback_saved=feedback_saved,
-                    review_attempt=attempt,
-                    run_id=attempt_run_id,
-                )
-                item_count = int(submission.get("collected_count") or item_count)
+            site_name = worker_result.get("site_name", site or "unknown")
+            site_slug = worker_result.get("site_slug", site or "unknown")
+            hit_recursion_limit = bool(worker_result.get("hit_recursion_limit", False))
+            is_finished = bool(worker_result.get("is_finished", False))
 
             if review.get("decision") == "accept" and persisted_count > 0:
                 completion_type = "partial collection persisted" if hit_recursion_limit and not is_finished else "vision collection persisted"
