@@ -886,8 +886,14 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         from agent.recipe.record import record_ui_step, commit_if_finished
     except Exception:
         record_ui_step = commit_if_finished = None
+    try:
+        from agent.recipe.feedback import record_action_episode
+    except Exception:
+        record_action_episode = None
     recorded_steps: list = []
+    feedback_episodes: list = []
     prior_recorded_steps = list(state.get("recorded_steps", []) or [])
+    prior_feedback_episodes = list(state.get("feedback_episodes", []) or [])
 
     ai_msg: AIMessage = state.get("last_action_result")
 
@@ -962,7 +968,26 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             "error": message if status == "error" else None,
             "reason": reason,
         }
-        new_actions.append(enrich_result(result, action_name, args, before_snapshot))
+        enriched = enrich_result(result, action_name, args, before_snapshot, False)
+        new_actions.append(enriched)
+        if record_action_episode:
+            record_action_episode(
+                feedback_episodes,
+                state,
+                ai_msg,
+                action_name,
+                args,
+                enriched,
+                before_snapshot,
+                {
+                    "current_url": current_url,
+                    "current_url_stale": current_url_stale,
+                    "screen_changed": False,
+                    "extracted_jd": current_jd,
+                    "is_finished": is_finished,
+                },
+                len(prior_feedback_episodes) + len(feedback_episodes),
+            )
         if increments_error:
             error_count += 1
         step_elapsed = time.time() - step_start
@@ -1062,7 +1087,26 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             else:
                 raise ValueError(f"Unknown tool: {action_name}")
 
-            new_actions.append(enrich_result(result, action_name, args, before_snapshot, action_changed_screen))
+            enriched = enrich_result(result, action_name, args, before_snapshot, action_changed_screen)
+            new_actions.append(enriched)
+            if record_action_episode:
+                record_action_episode(
+                    feedback_episodes,
+                    state,
+                    ai_msg,
+                    action_name,
+                    args,
+                    enriched,
+                    before_snapshot,
+                    {
+                        "current_url": current_url,
+                        "current_url_stale": current_url_stale,
+                        "screen_changed": action_changed_screen,
+                        "extracted_jd": current_jd,
+                        "is_finished": is_finished,
+                    },
+                    len(prior_feedback_episodes) + len(feedback_episodes),
+                )
 
             step_elapsed = time.time() - step_start
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
@@ -1076,7 +1120,26 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             step_elapsed = time.time() - step_start
             before_snapshot = _state_snapshot_for_action(state, current_url)
             result = {"action": action_name, "status": "error", "error": str(e)}
-            new_actions.append(enrich_result(result, action_name, args, before_snapshot))
+            enriched = enrich_result(result, action_name, args, before_snapshot, False)
+            new_actions.append(enriched)
+            if record_action_episode:
+                record_action_episode(
+                    feedback_episodes,
+                    state,
+                    ai_msg,
+                    action_name,
+                    args,
+                    enriched,
+                    before_snapshot,
+                    {
+                        "current_url": current_url,
+                        "current_url_stale": current_url_stale,
+                        "screen_changed": False,
+                        "extracted_jd": current_jd,
+                        "is_finished": is_finished,
+                    },
+                    len(prior_feedback_episodes) + len(feedback_episodes),
+                )
             error_count += 1
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
             break  # 에러 발생 시 체인 중단
@@ -1100,6 +1163,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "current_url_stale": current_url_stale,
         "last_action_screen_changed": screen_changed,
         "recorded_steps":    recorded_steps,
+        "feedback_episodes": feedback_episodes,
     }
 
 

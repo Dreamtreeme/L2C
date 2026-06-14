@@ -372,3 +372,42 @@ def test_reflex_routes_to_reasoning_after_validated_hit_by_default(monkeypatch):
 
     monkeypatch.setenv("REFLEX_REASON_AFTER_HIT", "0")
     assert route_after_perception(state) == "reflex"
+
+def test_feedback_episode_records_parameter_candidate_and_observation():
+    from langchain_core.messages import AIMessage
+    from agent.recipe.feedback import record_action_episode
+
+    episodes = []
+    state = {
+        "goal": "AI 엔지니어 채용공고 찾아줘",
+        "current_url": "https://www.wanted.co.kr",
+        "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "검색"}],
+        "ocr_texts": ["검색"],
+    }
+    enriched = {
+        "action": "type_in_marker",
+        "status": "success",
+        "result": "ok",
+        "target": {"marker_id": 1, "text": "검색"},
+    }
+
+    record_action_episode(
+        episodes,
+        state,
+        AIMessage(content="검색어를 입력한다"),
+        "type_in_marker",
+        {"marker_id": 1, "text": "AI 엔지니어"},
+        enriched,
+        {"state_key": "state-home", "url": "https://www.wanted.co.kr", "screenshot": "s.png", "marked_image": "m.png"},
+        {"current_url": "https://www.wanted.co.kr", "current_url_stale": True, "screen_changed": True, "extracted_jd": {}, "is_finished": False},
+        0,
+    )
+
+    assert len(episodes) == 1
+    episode = episodes[0]
+    assert episode["proposal"]["action"] == "type_in_marker"
+    assert episode["proposal"]["llm_thought"] == "검색어를 입력한다"
+    assert episode["proposal"]["parameter_candidates"][0]["slot_candidate"] == "query"
+    assert episode["observation"]["before"]["state_key"] == "state-home"
+    assert episode["observation"]["after"]["screen_changed"] is True
+    assert episode["feedback"]["label"] == "partial"

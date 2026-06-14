@@ -62,6 +62,9 @@ class GraphState(TypedDict):
     # [Reflex Recipe / Phase0] 비전 런 중 기록된 (상태->타깃) 스텝. operator.add로 누적.
     recorded_steps: Annotated[List[Dict[str, Any]], operator.add]
 
+    # [Feedback Loop] 행동 제안 -> 실행 -> 관찰 -> 1차 피드백 에피소드. operator.add로 누적.
+    feedback_episodes: Annotated[List[Dict[str, Any]], operator.add]
+
     # [Reflex Recipe] 현재 perception 결과로 계산한 화면-상태 키
     reflex_state_key: str
 

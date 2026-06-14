@@ -168,6 +168,11 @@ def test_action_node_records_target_metadata(monkeypatch):
         "bbox": [10, 20, 110, 80],
         "center": [60, 50],
     }
+    episode = result["feedback_episodes"][0]
+    assert episode["proposal"]["action"] == "click_marker"
+    assert episode["proposal"]["target"]["text"] == "Data Scientist"
+    assert episode["observation"]["before"]["state_key"] == "state-results"
+    assert episode["feedback"]["label"] == "partial"
 
 
 def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
@@ -210,6 +215,9 @@ def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
     assert action["target"]["text"] == "Data Scientist"
     assert result["error_count"] == 0
     assert result["last_action_screen_changed"] is False
+    repeat_episode = result["feedback_episodes"][0]
+    assert repeat_episode["feedback"]["label"] == "loop_risk"
+    assert repeat_episode["feedback"]["reason"] == "same_state_repeat_blocked"
 
 
 def test_action_node_stops_ui_chain_after_screen_boundary_action(monkeypatch):
@@ -385,6 +393,9 @@ def test_action_node_blocks_same_state_repeat_across_intervening_states(monkeypa
     assert action["reason"] == "same_state_repeat_blocked"
     assert result["error_count"] == 0
     assert result["last_action_screen_changed"] is False
+    repeat_episode = result["feedback_episodes"][0]
+    assert repeat_episode["feedback"]["label"] == "loop_risk"
+    assert repeat_episode["feedback"]["reason"] == "same_state_repeat_blocked"
 
 def test_action_node_blocks_same_state_repeat_when_marker_id_changes_but_target_text_matches(monkeypatch):
     from langchain_core.messages import AIMessage

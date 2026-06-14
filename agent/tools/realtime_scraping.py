@@ -194,6 +194,7 @@ def realtime_scraping(company: str = None, tech_stack: str = None, site: str = N
             "step_durations": [],
             "last_action_screen_changed": True,
             "recorded_steps": [],
+            "feedback_episodes": [],
             "reflex_state_key": "",
             "reflex_hit": False,
             "reflex_expected_next_state": "",
