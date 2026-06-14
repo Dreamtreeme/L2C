@@ -12,6 +12,7 @@ from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT, QA_COMMANDER_SYSTEM
 from agent.utils.logger import logger
 from agent.tools.sqlite_query import sqlite_query
 from agent.tools.realtime_scraping import realtime_scraping
+from agent.tools.site_registry import list_collection_sites, get_collection_site_profile
 
 _perception = None
 _action_tools = None
@@ -112,7 +113,12 @@ def _get_qa_llm_with_tools():
         from langchain_google_genai import ChatGoogleGenerativeAI
 
         qa_llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
-        _qa_llm_with_tools = qa_llm.bind_tools([sqlite_query, realtime_scraping])
+        _qa_llm_with_tools = qa_llm.bind_tools([
+            sqlite_query,
+            list_collection_sites,
+            get_collection_site_profile,
+            realtime_scraping,
+        ])
     return _qa_llm_with_tools
 
 
@@ -1137,8 +1143,8 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
         HumanMessage(content=query)
     ]
 
-    # 최대 7번의 턴(루프) 제한으로 무한 루프 방지
-    max_turns = 7
+    # 5개 사이트를 순차 수집할 수 있도록 여유를 두되 무한 루프는 방지
+    max_turns = 14
     valid_ids = []
     
     for turn in range(max_turns):
@@ -1171,6 +1177,12 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
                         except ValueError:
                             pass
                             
+                elif tool_name == "list_collection_sites":
+                    # 지휘자용 사이트 레지스트리 조회
+                    result_str = list_collection_sites.invoke(tool_args)
+                elif tool_name == "get_collection_site_profile":
+                    # 사이트별 수집 지침 조회
+                    result_str = get_collection_site_profile.invoke(tool_args)
                 elif tool_name == "realtime_scraping":
                     # Playwright 실시간 수집 실행
                     result_str = realtime_scraping.invoke(tool_args)

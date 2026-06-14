@@ -51,3 +51,30 @@ def test_realtime_scraping_goal_uses_requested_site_profile():
     assert "https://www.saramin.co.kr" in goal
     assert "AI 엔지니어" in goal
     assert "원티드(" not in goal
+
+def test_commander_site_tools_expose_classic_sites():
+    import json
+    from agent.tools.site_registry import list_collection_sites
+
+    result = list_collection_sites.invoke({"enabled_only": True})
+    data = json.loads(result)
+    sites = data["sites"]
+    slugs = [site["slug"] for site in sites]
+
+    assert slugs == ["wanted", "jobkorea", "saramin", "worknet", "rocketpunch"]
+    assert all(site["runner"] == "vision_react" for site in sites)
+    assert all(site["classic_adapter"] == site["slug"] for site in sites)
+
+
+def test_commander_site_profile_tool_returns_manual_prompt_and_tools():
+    import json
+    from agent.tools.site_registry import get_collection_site_profile
+
+    result = get_collection_site_profile.invoke({"site": "jobkorea"})
+    data = json.loads(result)
+
+    assert data["site"]["slug"] == "jobkorea"
+    assert data["site"]["classic_adapter"] == "jobkorea"
+    assert data["manual"]["site"] == "jobkorea"
+    assert "click_marker" in data["tools"]["allowed_tools"]
+    assert "JobKorea" in data["prompt"]

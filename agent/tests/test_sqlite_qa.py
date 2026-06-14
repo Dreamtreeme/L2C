@@ -454,9 +454,9 @@ def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
     # realtime_scraping 도구 모킹하여 실제 브라우저 자동화 실행 방지
     from langchain_core.tools import tool
     @tool("realtime_scraping")
-    def mock_realtime_scraping(company: str = None, tech_stack: str = None) -> str:
+    def mock_realtime_scraping(company: str = None, tech_stack: str = None, site: str = None, query: str = None) -> str:
         """실시간 채용 공고를 수집하는 모킹 도구입니다."""
-        return f"실시간 수집 완료: '{company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
+        return f"실시간 수집 완료: '{query or company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
     monkeypatch.setattr("agent.graph.nodes.realtime_scraping", mock_realtime_scraping)
     
     # 1. 팩트 기반 질문 테스트
@@ -482,9 +482,9 @@ def test_hallucination_rejection(setup_test_db, monkeypatch):
     # realtime_scraping 도구 모킹하여 실제 브라우저 자동화 실행 방지
     from langchain_core.tools import tool
     @tool("realtime_scraping")
-    def mock_realtime_scraping(company: str = None, tech_stack: str = None) -> str:
+    def mock_realtime_scraping(company: str = None, tech_stack: str = None, site: str = None, query: str = None) -> str:
         """실시간 채용 공고를 수집하는 모킹 도구입니다."""
-        return f"실시간 수집 완료: '{company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
+        return f"실시간 수집 완료: '{query or company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
     monkeypatch.setattr("agent.graph.nodes.realtime_scraping", mock_realtime_scraping)
     
     # 2. 환각 거절 질문 테스트
