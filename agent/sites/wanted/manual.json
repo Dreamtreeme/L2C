@@ -1,0 +1,36 @@
+{
+  "site": "wanted",
+  "display_name": "원티드",
+  "base_url": "https://www.wanted.co.kr",
+  "default_query_target": "position search",
+  "screen_roles": ["home", "search_overlay", "search_results", "job_detail", "popup"],
+  "common_flow": [
+    "Open the site home page.",
+    "Open the search UI using the visible search icon or search text.",
+    "Type the user query and submit with enter when the search input is focused.",
+    "On search results, identify visible job cards and plan a top-to-bottom unvisited-card traversal.",
+    "Open one unvisited job card by job title, not by reward badge, tag, or generic icon marker.",
+    "On detail, expand '상세 정보 더 보기' when present.",
+    "Scroll down until no new useful job body content appears.",
+    "Return to the results list and continue with the next unvisited card."
+  ],
+  "stable_controls": ["검색", "돋보기", "상세 정보 더 보기", "더보기", "go_back", "scroll_down"],
+  "variable_entities": ["job_card.title", "job_card.company", "job_card.tags", "result_count", "recommended_keywords", "ad_or_popup"],
+  "ignore_elements": ["reward badge", "tag chip", "browser toolbar", "approval prompt", "external assistant approval", "ad unless blocking"],
+  "collection_policy": {
+    "card_identity": ["job title", "company name"],
+    "visit_order": "top_to_bottom_visible_unvisited",
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "혜택", "url"],
+    "finish_condition": "All planned visible cards have been visited or no new unvisited cards are visible."
+  },
+  "reflex_policy": {
+    "safe_actions": ["open_search", "submit_search", "expand_detail", "scroll_down", "go_back"],
+    "unsafe_actions": ["choose_job_card_without_semantic_label", "click_reward_badge", "click_tag_chip"],
+    "reason_after_hit": true
+  },
+  "known_pitfalls": [
+    "Detail pages may hide body text behind '상세 정보 더 보기'.",
+    "Search results and job card order change over time.",
+    "OCR may mark a whole card as a generic interactive icon, so preserve the LLM-selected job title as target_label."
+  ]
+}

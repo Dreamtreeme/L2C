@@ -23,6 +23,7 @@ def test_record_ui_step_stays_in_marker_text_space():
         "text": "지원하기",
         "region": "top-left",
         "ordinal": 0,
+        "evidence_texts": ["공유하기"],
     }
     assert "bbox" not in steps[0]["target"]
 
@@ -268,3 +269,106 @@ def test_reflex_routing_respects_flag_and_validation(monkeypatch):
 
     assert route_after_reflex({"reflex_hit": True}) == "action"
     assert route_after_reflex({"reflex_hit": False}) == "reasoning"
+
+def test_match_marker_uses_evidence_texts_to_disambiguate_repeated_targets():
+    from agent.recipe.matcher import match_marker
+
+    markers = [
+        {"id": 1, "bbox": [100, 100, 180, 130], "text": "Open"},
+        {"id": 2, "bbox": [100, 140, 240, 170], "text": "Alpha Item"},
+        {"id": 3, "bbox": [100, 300, 180, 330], "text": "Open"},
+        {"id": 4, "bbox": [100, 340, 240, 370], "text": "Beta Item"},
+    ]
+    step = {
+        "target": {
+            "text": "Open",
+            "region": "top-left",
+            "ordinal": 0,
+            "evidence_texts": ["Beta Item"],
+        }
+    }
+
+    assert match_marker(step, markers) == 3
+
+
+def test_match_marker_returns_none_when_evidence_is_ambiguous():
+    from agent.recipe.matcher import match_marker
+
+    markers = [
+        {"id": 1, "bbox": [100, 100, 180, 130], "text": "Open"},
+        {"id": 2, "bbox": [100, 140, 240, 170], "text": "Shared Label"},
+        {"id": 3, "bbox": [100, 300, 180, 330], "text": "Open"},
+        {"id": 4, "bbox": [100, 340, 240, 370], "text": "Shared Label"},
+    ]
+    step = {
+        "target": {
+            "text": "Open",
+            "region": "top-left",
+            "ordinal": 0,
+            "evidence_texts": ["Shared Label"],
+        }
+    }
+
+    assert match_marker(step, markers) is None
+
+
+def test_record_ui_step_preserves_llm_selected_card_title():
+    from agent.recipe.record import record_ui_step
+
+    steps = []
+    state = {
+        "goal": "collect jobs",
+        "current_url": "https://www.wanted.co.kr/search?query=iOS",
+        "current_markers": [
+            {"id": 1, "bbox": [10, 10, 120, 40], "text": "Reward 100"},
+            {"id": 2, "bbox": [10, 50, 260, 85], "text": "Senior iOS Developer"},
+            {"id": 3, "bbox": [10, 90, 220, 120], "text": "Example Company"},
+        ],
+    }
+
+    record_ui_step(
+        steps,
+        state,
+        "click_marker",
+        {"marker_id": 1, "target_label": "Senior iOS Developer"},
+        0,
+    )
+
+    assert steps[0]["target"]["text"] == "Reward 100"
+    assert steps[0]["target"]["semantic_label"] == "Senior iOS Developer"
+
+
+def test_match_marker_prefers_llm_selected_card_title():
+    from agent.recipe.matcher import match_marker
+
+    markers = [
+        {"id": 1, "bbox": [100, 100, 180, 130], "text": "Reward 100"},
+        {"id": 2, "bbox": [100, 140, 280, 170], "text": "Alpha iOS Developer"},
+        {"id": 3, "bbox": [100, 300, 180, 330], "text": "Reward 100"},
+        {"id": 4, "bbox": [100, 340, 280, 370], "text": "Beta iOS Developer"},
+    ]
+    step = {
+        "target": {
+            "text": "Reward 100",
+            "semantic_label": "Beta iOS Developer",
+        }
+    }
+
+    assert match_marker(step, markers) == 4
+
+
+def test_reflex_routes_to_reasoning_after_validated_hit_by_default(monkeypatch):
+    from agent.graph.workflow import route_after_perception
+
+    monkeypatch.setenv("REFLEX_ENABLED", "1")
+    monkeypatch.delenv("REFLEX_REASON_AFTER_HIT", raising=False)
+    state = {
+        "reflex_pending_validation": True,
+        "reflex_expected_next_state": "state-detail",
+        "reflex_state_key": "state-detail",
+    }
+
+    assert route_after_perception(state) == "reasoning"
+
+    monkeypatch.setenv("REFLEX_REASON_AFTER_HIT", "0")
+    assert route_after_perception(state) == "reflex"

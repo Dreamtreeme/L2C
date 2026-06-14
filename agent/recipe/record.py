@@ -24,6 +24,98 @@ def _marker(markers, marker_id):
     return None
 
 
+def _bbox(marker: dict) -> list[int]:
+    raw = marker.get("bbox") or [0, 0, 0, 0]
+    if not isinstance(raw, list) or len(raw) != 4:
+        return [0, 0, 0, 0]
+    return [int(v or 0) for v in raw]
+
+
+def _center(marker: dict) -> tuple[int, int]:
+    x1, y1, x2, y2 = _bbox(marker)
+    return ((x1 + x2) // 2, (y1 + y2) // 2)
+
+
+def _has_letter(text: str) -> bool:
+    return any(ch.isalpha() for ch in text or "")
+
+
+def _text_counts(markers: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for marker in markers or []:
+        if not isinstance(marker, dict):
+            continue
+        text = normalize_text(marker.get("text"))
+        key = text.lower().replace(" ", "")
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+
+
+def _collect_evidence_candidates(
+    target_marker: dict,
+    markers: list[dict],
+    counts: dict[str, int],
+    target_text: str,
+    unique_only: bool,
+    max_dx: int,
+    max_dy: int,
+) -> list[tuple[int, int, int, int, str]]:
+    seen = {target_text} if target_text else set()
+    tx, ty = _center(target_marker)
+    scored = []
+    for marker in markers or []:
+        if not isinstance(marker, dict) or marker.get("id") == target_marker.get("id"):
+            continue
+        text = normalize_text(marker.get("text"))
+        key = text.lower().replace(" ", "")
+        if not text or text in seen or len(key) < 2 or not _has_letter(text):
+            continue
+        if unique_only and counts.get(key, 0) != 1:
+            continue
+        x, y = _center(marker)
+        dx = abs(x - tx)
+        dy = abs(y - ty)
+        if dx > max_dx or dy > max_dy:
+            continue
+        seen.add(text)
+        length_bonus = min(len(key), 40)
+        rank = dy * 2 + dx - length_bonus * 4
+        scored.append((rank, dy, dx, marker.get("id", 0), text))
+    return sorted(scored)
+
+
+def _evidence_texts_for_marker(
+    target_marker: dict,
+    markers: list[dict],
+    max_items: int = 6,
+    max_dx: int = 850,
+    max_dy: int = 320,
+) -> list[str]:
+    target_text = normalize_text(target_marker.get("text"))
+    counts = _text_counts(markers)
+    scored = _collect_evidence_candidates(
+        target_marker,
+        markers,
+        counts,
+        target_text,
+        unique_only=True,
+        max_dx=max_dx,
+        max_dy=max_dy,
+    )
+    if not scored:
+        scored = _collect_evidence_candidates(
+            target_marker,
+            markers,
+            counts,
+            target_text,
+            unique_only=False,
+            max_dx=max_dx,
+            max_dy=max_dy,
+        )
+    return [item[-1] for item in scored[:max_items]]
 def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
     """UI 액션 디스패치 직후 호출. recorded_steps에 in-place append (예외 안전)."""
     try:
@@ -47,11 +139,18 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             marker = _marker(markers, args.get("marker_id"))
             if not marker:
                 return
-            step["target"] = {
+            target = {
                 "text": normalize_text(marker.get("text")),
                 "region": marker_region(marker, markers),
                 "ordinal": marker_ordinal(marker, markers),
             }
+            target_label = normalize_text(args.get("target_label") or args.get("semantic_label"))
+            if target_label:
+                target["semantic_label"] = target_label
+            evidence_texts = _evidence_texts_for_marker(marker, markers)
+            if evidence_texts:
+                target["evidence_texts"] = evidence_texts
+            step["target"] = target
             if action_name == "type_in_marker":
                 val = (args.get("text") or "").strip()
                 step["value"] = val

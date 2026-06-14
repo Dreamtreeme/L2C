@@ -57,10 +57,15 @@ class ActionTools:
         right_host = right_parsed.netloc.lower().removeprefix("www.")
         if left_host != right_host:
             return False
-        right_path = right_parsed.path.rstrip("/")
-        if right_path in ("", "/"):
-            return True
-        return left_parsed.path.rstrip("/") == right_path
+        left_path = left_parsed.path.rstrip("/") or "/"
+        right_path = right_parsed.path.rstrip("/") or "/"
+        if right_path == "/":
+            return left_path in {"/", "/search"}
+        if left_path != right_path:
+            return False
+        if right_parsed.query:
+            return left_parsed.query == right_parsed.query
+        return True
 
     def _execute(self, action_name: str, func, *args, **kwargs) -> Dict[str, Any]:
         """
@@ -180,6 +185,60 @@ class ActionTools:
             return {"opened": True, "url": url}
 
         return self._execute("open_browser", _open)
+
+    @staticmethod
+    def _looks_like_browser_window(window: Any) -> bool:
+        title = str(getattr(window, "title", "") or "")
+        if not title:
+            return False
+        lowered = title.lower()
+        browser_keywords = (
+            "chrome",
+            "chromium",
+            "microsoft edge",
+            "firefox",
+            "brave",
+            "whale",
+            "크롬",
+            "엣지",
+            "웨일",
+        )
+        return any(keyword in lowered for keyword in browser_keywords)
+
+    def _find_browser_window(self):
+        active_window = gw.getActiveWindow()
+        if active_window and self._looks_like_browser_window(active_window):
+            return active_window
+
+        for window in gw.getAllWindows():
+            if not self._looks_like_browser_window(window):
+                continue
+            if getattr(window, "isMinimized", False):
+                continue
+            if getattr(window, "width", 1) <= 0 or getattr(window, "height", 1) <= 0:
+                continue
+            return window
+        return None
+
+    def close_browser(self) -> Dict[str, Any]:
+        """열려 있는 브라우저 창을 닫습니다."""
+        def _close():
+            window = self._find_browser_window()
+            if not window:
+                return {"closed": False, "reason": "browser_not_found"}
+
+            title = str(getattr(window, "title", "") or "")
+            try:
+                if getattr(window, "isMinimized", False):
+                    window.restore()
+                window.activate()
+            except Exception as e:
+                logger.debug(f"Browser window activation skipped before close: {e}")
+
+            window.close()
+            return {"closed": True, "title": title}
+
+        return self._execute("close_browser", _close)
 
     def go_back(self) -> Dict[str, Any]:
         """브라우저의 뒤로가기 동작을 수행합니다."""

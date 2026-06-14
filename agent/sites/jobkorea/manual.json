@@ -1,0 +1,32 @@
+{
+  "site": "jobkorea",
+  "display_name": "잡코리아",
+  "base_url": "https://www.jobkorea.co.kr",
+  "default_query_target": "job search",
+  "screen_roles": ["home", "search_results", "job_detail", "detail_tab", "popup"],
+  "common_flow": [
+    "Open the site and search for the user query.",
+    "On results, identify job cards and traverse visible unvisited cards top-to-bottom.",
+    "On detail, prefer the detailed job description tab or section when visible.",
+    "Collect visible text from the main detail and any embedded detailed description area shown on screen.",
+    "Return to the results list and continue with the next unvisited card."
+  ],
+  "stable_controls": ["검색", "상세요강", "모집요강", "go_back", "scroll_down"],
+  "variable_entities": ["job_card.title", "job_card.company", "deadline", "iframe_like_detail_area", "result_count"],
+  "ignore_elements": ["sponsored badge", "company ad", "browser toolbar", "login prompt unless blocking"],
+  "collection_policy": {
+    "card_identity": ["job title", "company name"],
+    "visit_order": "top_to_bottom_visible_unvisited",
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "근무조건", "url"],
+    "finish_condition": "Requested trend sample size is reached or no unvisited cards remain."
+  },
+  "reflex_policy": {
+    "safe_actions": ["submit_search", "open_detail_tab", "scroll_down", "go_back"],
+    "unsafe_actions": ["choose_job_card_without_title", "click_ad"],
+    "reason_after_hit": true
+  },
+  "known_pitfalls": [
+    "Detailed requirement text can be visually separated from the main metadata area.",
+    "The DOM adapter handles iframe text, but the vision runner must rely on what is actually visible after scrolling."
+  ]
+}

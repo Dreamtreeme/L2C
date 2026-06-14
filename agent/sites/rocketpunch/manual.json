@@ -1,0 +1,32 @@
+{
+  "site": "rocketpunch",
+  "display_name": "로켓펀치",
+  "base_url": "https://www.rocketpunch.com",
+  "default_query_target": "job search",
+  "screen_roles": ["home", "search_results", "job_detail", "side_panel_detail", "popup"],
+  "common_flow": [
+    "Open the site and search for the user query.",
+    "On results, identify job cards by company and position.",
+    "If selecting a result opens a side panel, collect visible detail or navigate to the canonical detail page when available.",
+    "Scroll through the detail body and collect requirement and benefit sections.",
+    "Return to results and continue with the next unvisited card."
+  ],
+  "stable_controls": ["검색", "채용", "상세", "go_back", "scroll_down"],
+  "variable_entities": ["job_card.title", "job_card.company", "side_panel_state", "result_count", "tags"],
+  "ignore_elements": ["startup promotion", "tag chip", "browser toolbar", "login prompt unless blocking"],
+  "collection_policy": {
+    "card_identity": ["job title", "company name"],
+    "visit_order": "top_to_bottom_visible_unvisited",
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "혜택", "url"],
+    "finish_condition": "Requested trend sample size is reached or no unvisited cards remain."
+  },
+  "reflex_policy": {
+    "safe_actions": ["submit_search", "scroll_down", "go_back"],
+    "unsafe_actions": ["choose_job_card_without_title", "click_tag_chip"],
+    "reason_after_hit": true
+  },
+  "known_pitfalls": [
+    "Some URLs represent a listing with selectedJobId rather than a dedicated detail page.",
+    "Card text order can matter; preserve both company and job title as semantic identity."
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "site": "worknet",
+  "display_name": "워크넷/고용24",
+  "base_url": "https://www.work24.go.kr",
+  "default_query_target": "job search",
+  "screen_roles": ["home", "search_results", "job_detail", "popup"],
+  "common_flow": [
+    "Open Worknet or Work24 and search for the user query.",
+    "On results, identify job cards or table rows by title and company.",
+    "Visit visible unvisited postings in top-to-bottom order.",
+    "On detail, collect employment conditions and job description sections.",
+    "Return to results and continue."
+  ],
+  "stable_controls": ["검색", "채용정보", "상세", "go_back", "scroll_down"],
+  "variable_entities": ["job_row.title", "job_row.company", "region", "employment_type", "deadline", "result_count"],
+  "ignore_elements": ["public service banner", "browser toolbar", "non-job navigation unless needed"],
+  "collection_policy": {
+    "card_identity": ["job title", "company name", "region"],
+    "visit_order": "top_to_bottom_visible_unvisited",
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "근무지", "고용형태", "url"],
+    "finish_condition": "Requested trend sample size is reached or no unvisited rows remain."
+  },
+  "reflex_policy": {
+    "safe_actions": ["submit_search", "scroll_down", "go_back"],
+    "unsafe_actions": ["change_government_service_context_without_need"],
+    "reason_after_hit": true
+  },
+  "known_pitfalls": [
+    "Worknet and Work24 domains can both appear.",
+    "Result pages may be table-like rather than card-like, so row identity should include title and company."
+  ]
+}

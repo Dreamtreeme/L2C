@@ -22,6 +22,7 @@ _qa_llm_with_tools = None
 class click_marker(BaseModel):
     """화면의 특정 ID 마커를 클릭합니다."""
     marker_id: int = Field(..., description="클릭할 마커의 ID")
+    target_label: Optional[str] = Field(None, description="Visible title or label of the selected card/list item, when the marker is only part of a larger target")
 
 class type_in_marker(BaseModel):
     """특정 id의 마커를 클릭한 후 텍스트를 입력합니다."""
@@ -39,6 +40,10 @@ class press_key(BaseModel):
 class open_browser(BaseModel):
     """기본 브라우저를 열고 특정 URL에 접속합니다. 목표가 주어지면 가장 먼저 호출해야 할 수 있습니다."""
     url: str = Field(..., description="접속할 URL (예: https://www.wanted.co.kr)")
+
+class close_browser(BaseModel):
+    """열려 있는 브라우저 창을 닫습니다."""
+    pass
 
 class update_extracted_info(BaseModel):
     """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 병합합니다. 변경된 공고 또는 새 필드만 보내도 됩니다. (예: {'공고목록': [{'회사명': '로이드케이', '직무명': '...', '주요업무': ['A']}]} 형태의 JSON 문자열)"""
@@ -91,6 +96,7 @@ def _get_ui_llm_with_tools():
             scroll,
             press_key,
             open_browser,
+            close_browser,
             update_extracted_info,
             go_back,
             update_plan_progress,
@@ -345,13 +351,16 @@ def _action_target_metadata(state: GraphState, action_name: str, args: dict) -> 
     center = None
     if isinstance(bbox, list) and len(bbox) == 4:
         center = [(bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2]
-    return {
+    metadata = {
         "marker_id": marker.get("id"),
         "text": marker.get("text", ""),
         "bbox": bbox,
         "center": center,
     }
-
+    target_label = args.get("target_label") or args.get("semantic_label")
+    if target_label:
+        metadata["target_label"] = target_label
+    return metadata
 
 def _state_snapshot_for_action(state: GraphState, current_url: str) -> dict:
     recent_images = state.get("recent_images", []) or []
@@ -364,37 +373,153 @@ def _state_snapshot_for_action(state: GraphState, current_url: str) -> dict:
     }
 
 
-def _action_repeat_key(action_name: str, args: dict, state_key: str) -> tuple[str, str, str]:
-    return (
-        state_key or "",
-        action_name,
-        json.dumps(_compact_action_args(action_name, args), ensure_ascii=False, sort_keys=True),
-    )
+def _repeat_target_text(target: dict | None) -> str:
+    if not isinstance(target, dict):
+        return ""
+    text = target.get("target_label") or target.get("semantic_label") or target.get("text", "")
+    try:
+        from agent.recipe.state_key import normalize_text
+
+        text = normalize_text(text)
+    except Exception:
+        text = str(text or "").strip()
+    return text.lower().replace(" ", "")
+
+
+def _action_repeat_keys(
+    action_name: str,
+    args: dict,
+    state_key: str,
+    target: dict | None = None,
+) -> set[tuple[str, str, str]]:
+    compact_args = _compact_action_args(action_name, args)
+    keys = {
+        (
+            state_key or "",
+            action_name,
+            json.dumps(compact_args, ensure_ascii=False, sort_keys=True),
+        )
+    }
+    if action_name in {"click_marker", "type_in_marker"}:
+        target_text = _repeat_target_text(target)
+        if target_text:
+            semantic_args = dict(compact_args)
+            semantic_args.pop("marker_id", None)
+            semantic_args["marker_text"] = target_text
+            keys.add(
+                (
+                    state_key or "",
+                    action_name,
+                    json.dumps(semantic_args, ensure_ascii=False, sort_keys=True),
+                )
+            )
+    return keys
 
 
 def _same_state_action_seen(state: GraphState, action_name: str, args: dict, state_key: str) -> bool:
     if not state_key:
         return False
-    current_key = _action_repeat_key(action_name, args, state_key)
+    current_keys = _action_repeat_keys(
+        action_name,
+        args,
+        state_key,
+        _action_target_metadata(state, action_name, args),
+    )
     for previous in reversed(state.get("action_history", []) or []):
         if not isinstance(previous, dict):
             continue
         if previous.get("status") not in {"success", "skipped", "error"}:
             continue
-        previous_key = _action_repeat_key(
+        previous_state_key = previous.get("state_key", "") or previous.get("before_state_key", "")
+        if previous_state_key != state_key:
+            continue
+        previous_keys = _action_repeat_keys(
             previous.get("action", ""),
             previous.get("args", {}) or {},
-            previous.get("state_key", "") or previous.get("before_state_key", ""),
+            previous_state_key,
+            previous.get("target"),
         )
-        if previous_key == current_key:
+        if current_keys.intersection(previous_keys):
             return True
-        if previous.get("state_key") and previous.get("state_key") != state_key:
-            break
     return False
 
+def _is_open_browser_noop(action: dict) -> bool:
+    if action.get("action") != "open_browser":
+        return False
+    result = action.get("result")
+    return isinstance(result, dict) and result.get("opened") is False
+
+
+def _recent_forbidden_actions(action_history: list[dict], limit: int = 6) -> list[dict]:
+    forbidden = []
+    seen = set()
+    current_state_key = ""
+
+    for action in reversed(action_history or []):
+        if not isinstance(action, dict):
+            continue
+
+        action_state_key = action.get("state_key", "") or action.get("before_state_key", "")
+        if not current_state_key and action_state_key:
+            current_state_key = action_state_key
+        if current_state_key and action_state_key and action_state_key != current_state_key:
+            break
+
+        reason = action.get("reason", "") or ""
+        forbidden_reason = ""
+        if reason == "same_state_repeat_blocked":
+            forbidden_reason = reason
+        elif reason == "unsafe_ui_action_chain":
+            forbidden_reason = reason
+        elif _is_open_browser_noop(action):
+            forbidden_reason = action.get("result", {}).get("reason", "open_browser_no_screen_change")
+        else:
+            continue
+
+        action_name = action.get("action", "")
+        args = action.get("args", {}) or {}
+        key = (
+            action_name,
+            json.dumps(args, ensure_ascii=False, sort_keys=True),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        forbidden.append({
+            "action": action_name,
+            "args": args,
+            "reason": forbidden_reason,
+        })
+        if len(forbidden) >= limit:
+            break
+
+    return forbidden
+
+
+def _build_forbidden_action_context(action_history: list[dict]) -> str:
+    forbidden = _recent_forbidden_actions(action_history)
+    if not forbidden:
+        return ""
+
+    lines = [
+        "[Execution constraints for the current screen]",
+        "Do not call these exact tool+args again in the current screen state; the executor will skip them:",
+    ]
+    for item in forbidden:
+        lines.append(
+            "- "
+            + item["action"]
+            + " "
+            + json.dumps(item["args"], ensure_ascii=False, sort_keys=True)
+            + f" ({item['reason']})"
+        )
+    lines.append(
+        "Choose a different visible marker, scroll, go back, extract information, or finish the task instead."
+    )
+    return "\n".join(lines)
 
 def _chain_boundary_reached(action_name: str) -> bool:
-    return action_name in {"click_marker", "scroll", "press_key", "open_browser", "go_back"}
+    return action_name in {"click_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
 
 
 def _is_allowed_same_screen_ui_chain(previous_ui_action: str | None, action_name: str) -> bool:
@@ -471,12 +596,16 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     ui_context = state.get("ui_context", "")
     current_url = state.get("current_url", "")
     action_history = state.get("action_history", [])
+    forbidden_action_context = _build_forbidden_action_context(action_history)
+    if forbidden_action_context:
+        forbidden_action_context += "\n\n"
 
     human_prompt_text = (
         f"{plan_context}"
         f"현재까지 누적 수집된 정보:\n{json.dumps(extracted_jd, ensure_ascii=False, indent=2)}\n\n"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
+        f"{forbidden_action_context}"
         f"이전 행동 내역:\n{json.dumps(action_history[-5:], ensure_ascii=False, indent=2)}\n\n"
         f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
         f"계획 단계 전환이 일어났다면 update_plan_progress를 함께 체이닝 호출하여 계획 진행률을 반영하십시오."
@@ -593,7 +722,7 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
     logger.info("Executing Reflex Node")
 
     try:
-        from agent.recipe.matcher import match_marker
+        from agent.recipe.matcher import is_replayable_step, match_marker
         from agent.recipe.state_key import compute_state_key
         from agent.recipe.store import RecipeStore
 
@@ -617,8 +746,19 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
             step = recipe_step.model_dump() if hasattr(recipe_step, "model_dump") else recipe_step.dict()
             action = step.get("action")
             marker_id = None
+            params = {"goal": state.get("goal", "")}
+            if not is_replayable_step(step, params=params):
+                elapsed = time.time() - start_time
+                logger.info("Reflex miss: cached step is not replayable", state_key=state_key[:24], action=action)
+                return {
+                    "reflex_state_key": state_key,
+                    "reflex_hit": False,
+                    "reflex_expected_next_state": "",
+                    "reflex_pending_validation": False,
+                    "step_durations": [{"node": "reflex", "duration": elapsed}],
+                }
             if action in {"click_marker", "type_in_marker"}:
-                marker_id = match_marker(step, markers, params={"goal": state.get("goal", "")})
+                marker_id = match_marker(step, markers, params=params)
                 if marker_id is None:
                     elapsed = time.time() - start_time
                     logger.info("Reflex miss: marker did not match", state_key=state_key[:24], action=action)
@@ -629,7 +769,6 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                         "reflex_pending_validation": False,
                         "step_durations": [{"node": "reflex", "duration": elapsed}],
                     }
-
             args = _reflex_action_args(step, marker_id)
             if args is None:
                 elapsed = time.time() - start_time
@@ -692,6 +831,8 @@ def _dispatch_ui(action_name: str, args: dict, get_bbox, current_url: str = "") 
         return action_tools.press_key(args["key"])
     elif action_name == "open_browser":
         return action_tools.open_browser(args["url"], current_url=current_url)
+    elif action_name == "close_browser":
+        return action_tools.close_browser()
     elif action_name == "go_back":
         return action_tools.go_back()
     raise ValueError(f"Unknown UI action: {action_name}")
@@ -823,9 +964,9 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         logger.warning(message, action=action_name, reason=reason)
 
     # 도구 카테고리 라우팅 테이블
-    UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "go_back"}
-    SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "go_back"}
-    URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "go_back"}
+    UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
+    SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
+    URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "close_browser", "go_back"}
     STATE_ACTIONS = {"update_plan_progress", "update_extracted_info"}
 
     for idx, tool_call in enumerate(ai_msg.tool_calls):
@@ -842,18 +983,17 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         before_state_key = before_snapshot.get("state_key", "")
 
         try:
-            if chain_boundary:
+            if chain_boundary and action_name in UI_ACTIONS:
                 append_guard_result(
                     action_name,
                     args,
                     before_snapshot,
                     "skipped",
                     "chain_boundary_after_screen_change",
-                    "Skipped chained tool after a screen-changing action; next perception is required.",
+                    "Skipped chained UI tool after a screen-changing action; next perception is required.",
                     step_start,
                 )
                 break
-
             if action_name in UI_ACTIONS:
                 if previous_ui_action and not _is_allowed_same_screen_ui_chain(previous_ui_action, action_name):
                     append_guard_result(
@@ -872,11 +1012,10 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         action_name,
                         args,
                         before_snapshot,
-                        "error",
+                        "skipped",
                         "same_state_repeat_blocked",
                         "Blocked repeated UI action in the same screen state.",
                         step_start,
-                        increments_error=True,
                     )
                     break
 
@@ -976,7 +1115,7 @@ def validate_citations(answer: str, valid_ids: List[int]) -> str:
 def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
     """
     지휘자 모델(Gemini 3.5 Flash)이 사용자 질문을 받고
-    RAG 검색 도구 및 실시간 크롤링 도구를 직접 도구 호출(Tool Calling)을 통해 조율하며 최종 답변을 반환합니다.
+    SQLite 검색 도구 및 실시간 크롤링 도구를 직접 도구 호출(Tool Calling)을 통해 조율하며 최종 답변을 반환합니다.
     """
     from shared.config import DB_PATH
     import time

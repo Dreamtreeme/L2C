@@ -27,6 +27,10 @@ def _reflex_enabled() -> bool:
     return os.getenv("REFLEX_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _reason_after_reflex_hit_enabled() -> bool:
+    return os.getenv("REFLEX_REASON_AFTER_HIT", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
 def route_after_perception(state: GraphState) -> str:
     """perception 이후 reflex 재생 또는 기존 reasoning 경로를 선택합니다."""
     if not _reflex_enabled():
@@ -52,6 +56,9 @@ def route_after_perception(state: GraphState) -> str:
             added=state.get("ocr_delta_added", [])[:8],
             removed=state.get("ocr_delta_removed", [])[:8],
         )
+        if _reason_after_reflex_hit_enabled():
+            logger.info("Routing to reasoning after reflex hit for extraction and next-step verification.")
+            return "reasoning"
 
     return "reflex"
 

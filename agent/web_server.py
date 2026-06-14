@@ -18,7 +18,7 @@ from agent.graph.state import GraphState
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="L2C RAG Q&A API Server")
+app = FastAPI(title="L2C Q&A API Server")
 
 cors_origins = [
     origin.strip()
@@ -82,7 +82,7 @@ async def chat_endpoint(req: ChatRequest):
         # 1. 수신 즉시 클라이언트에 확인 응답 — realtime_scraping 트리거 시 수 분 공백 방지
         yield "data: [PROCESSING]\n\n"
 
-        # 2. 지휘자 에이전트 노드 비동기 실행 (RAG 및 실시간 스크래핑을 지휘자가 직접 조율)
+        # 2. 지휘자 에이전트 노드 비동기 실행 (SQLite 조회 및 실시간 스크래핑을 지휘자가 직접 조율)
         state = GraphState(
             goal=query,
             ui_context="",

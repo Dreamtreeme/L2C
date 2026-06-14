@@ -69,6 +69,24 @@ def test_open_browser_skips_when_state_url_already_matches():
     }
 
 
+
+
+def test_open_browser_does_not_reuse_detail_page_for_site_root():
+    from agent.tools.actions import ActionTools
+
+    assert ActionTools._same_site_or_url(
+        "https://www.wanted.co.kr/wd/365869",
+        "https://www.wanted.co.kr",
+    ) is False
+    assert ActionTools._same_site_or_url(
+        "https://www.wanted.co.kr/search?query=iOS",
+        "https://www.wanted.co.kr",
+    ) is True
+    assert ActionTools._same_site_or_url(
+        "https://www.wanted.co.kr/search?query=iOS",
+        "https://www.wanted.co.kr/search?query=data",
+    ) is False
+
 def test_action_node_does_not_reopen_same_browser_url(monkeypatch):
     from langchain_core.messages import AIMessage
     from agent.graph import nodes
@@ -187,10 +205,10 @@ def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
     })
 
     action = result["action_history"][0]
-    assert action["status"] == "error"
+    assert action["status"] == "skipped"
     assert action["reason"] == "same_state_repeat_blocked"
     assert action["target"]["text"] == "Data Scientist"
-    assert result["error_count"] == 1
+    assert result["error_count"] == 0
     assert result["last_action_screen_changed"] is False
 
 
@@ -274,3 +292,245 @@ def test_action_node_allows_type_then_enter_chain(monkeypatch):
     assert calls == ["type_in_marker", "press_key"]
     assert [a["status"] for a in result["action_history"]] == ["success", "success"]
     assert result["last_action_screen_changed"] is True
+
+
+def test_reasoning_prompt_lists_forbidden_same_screen_actions():
+    from agent.graph import nodes
+
+    messages = nodes._build_reasoning_messages({
+        "goal": "collect jobs",
+        "plan": [],
+        "current_plan_step": 0,
+        "extracted_jd": {},
+        "ui_context": "[id: 1] Search",
+        "current_url": "https://www.wanted.co.kr",
+        "marked_image": "",
+        "action_history": [
+            {
+                "status": "success",
+                "action": "open_browser",
+                "args": {"url": "https://www.wanted.co.kr"},
+                "state_key": "state-home",
+                "result": {
+                    "opened": False,
+                    "url": "https://www.wanted.co.kr",
+                    "reason": "state_url_already_matches",
+                },
+            },
+            {
+                "status": "skipped",
+                "action": "open_browser",
+                "args": {"url": "https://www.wanted.co.kr"},
+                "state_key": "state-home",
+                "reason": "same_state_repeat_blocked",
+            },
+        ],
+    }, "")
+
+    human_text = messages[-1].content
+    assert "Execution constraints for the current screen" in human_text
+    assert "open_browser" in human_text
+    assert "https://www.wanted.co.kr" in human_text
+    assert "same_state_repeat_blocked" in human_text
+
+
+def test_action_node_blocks_same_state_repeat_across_intervening_states(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_ui(*_args, **_kwargs):
+        raise AssertionError("same state repeat should be blocked even after visiting another screen")
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    result = nodes.action_node({
+        "current_markers": [{"id": 41, "bbox": [10, 20, 110, 80], "text": "Job card"}],
+        "current_url": "https://www.wanted.co.kr/search?query=iOS",
+        "current_url_stale": False,
+        "reflex_state_key": "state-list",
+        "action_history": [
+            {
+                "status": "success",
+                "action": "click_marker",
+                "args": {"marker_id": 41},
+                "state_key": "state-list",
+            },
+            {
+                "status": "success",
+                "action": "scroll",
+                "args": {"direction": "down"},
+                "state_key": "state-detail",
+            },
+            {
+                "status": "success",
+                "action": "go_back",
+                "args": {},
+                "state_key": "state-detail-bottom",
+            },
+        ],
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="[reflex] cached 1 action(s)",
+            tool_calls=[{"name": "click_marker", "args": {"marker_id": 41}, "id": "1"}],
+        ),
+    })
+
+    action = result["action_history"][0]
+    assert action["status"] == "skipped"
+    assert action["reason"] == "same_state_repeat_blocked"
+    assert result["error_count"] == 0
+    assert result["last_action_screen_changed"] is False
+
+def test_action_node_blocks_same_state_repeat_when_marker_id_changes_but_target_text_matches(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_ui(*_args, **_kwargs):
+        raise AssertionError("semantic repeat should be blocked before dispatch")
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    result = nodes.action_node({
+        "current_markers": [{"id": 42, "bbox": [10, 20, 110, 80], "text": "Job card"}],
+        "current_url": "https://www.wanted.co.kr/search?query=iOS",
+        "current_url_stale": False,
+        "reflex_state_key": "state-list",
+        "action_history": [
+            {
+                "status": "success",
+                "action": "click_marker",
+                "args": {"marker_id": 41},
+                "state_key": "state-list",
+                "target": {"marker_id": 41, "text": "Job card"},
+            }
+        ],
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="[reflex] cached 1 action(s)",
+            tool_calls=[{"name": "click_marker", "args": {"marker_id": 42}, "id": "1"}],
+        ),
+    })
+
+    action = result["action_history"][0]
+    assert action["status"] == "skipped"
+    assert action["reason"] == "same_state_repeat_blocked"
+    assert result["error_count"] == 0
+
+def test_action_node_allows_state_update_after_screen_boundary(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    calls = []
+
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        calls.append(action_name)
+        get_bbox(args["marker_id"])
+        return {"status": "success", "action": action_name, "result": "ok"}
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    result = nodes.action_node({
+        "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "Senior iOS Developer"}],
+        "current_url": "https://www.wanted.co.kr/search?query=iOS",
+        "current_url_stale": False,
+        "reflex_state_key": "state-list",
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": ["open", "collect"],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "click_marker", "args": {"marker_id": 1}, "id": "1"},
+                {"name": "update_plan_progress", "args": {"current_step": 1}, "id": "2"},
+            ],
+        ),
+    })
+
+    assert calls == ["click_marker"]
+    assert [action["status"] for action in result["action_history"]] == ["success", "success"]
+    assert result["current_plan_step"] == 1
+
+
+def test_close_browser_closes_visible_browser_window(monkeypatch):
+    from agent.tools import actions
+    from agent.tools.actions import ActionTools
+
+    calls = []
+
+    class FakeWindow:
+        title = "Wanted - Google Chrome"
+        isMinimized = False
+        width = 1200
+        height = 800
+
+        def activate(self):
+            calls.append("activate")
+
+        def close(self):
+            calls.append("close")
+
+    fake_window = FakeWindow()
+
+    class FakeGW:
+        def getActiveWindow(self):
+            return None
+
+        def getAllWindows(self):
+            return [fake_window]
+
+    monkeypatch.setattr(actions, "gw", FakeGW())
+
+    action_tools = object.__new__(ActionTools)
+    result = action_tools.close_browser()
+
+    assert result["status"] == "success"
+    assert result["result"] == {"closed": True, "title": "Wanted - Google Chrome"}
+    assert calls == ["activate", "close"]
+
+
+def test_action_node_executes_close_browser(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        assert action_name == "close_browser"
+        assert args == {}
+        return {"status": "success", "action": "close_browser", "result": {"closed": True}}
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+
+    result = nodes.action_node({
+        "current_markers": [],
+        "current_url": "https://www.wanted.co.kr",
+        "current_url_stale": False,
+        "reflex_state_key": "state-home",
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[{"name": "close_browser", "args": {}, "id": "1"}],
+        ),
+    })
+
+    action = result["action_history"][0]
+    assert action["status"] == "success"
+    assert action["action"] == "close_browser"
+    assert result["last_action_screen_changed"] is True
+    assert result["current_url_stale"] is True

@@ -1,0 +1,32 @@
+{
+  "site": "saramin",
+  "display_name": "사람인",
+  "base_url": "https://www.saramin.co.kr",
+  "default_query_target": "job search",
+  "screen_roles": ["home", "search_results", "job_detail", "popup"],
+  "common_flow": [
+    "Open the site and search for the user query.",
+    "On results, identify job postings by title and company.",
+    "Visit visible unvisited cards in a stable top-to-bottom order.",
+    "On detail, scroll through the job detail body until major requirement sections are collected.",
+    "Return to results and continue."
+  ],
+  "stable_controls": ["검색", "입사지원", "상세", "go_back", "scroll_down"],
+  "variable_entities": ["job_card.title", "job_card.company", "posting_badges", "deadline", "result_count"],
+  "ignore_elements": ["recommended content", "banner ad", "login prompt unless blocking", "browser toolbar"],
+  "collection_policy": {
+    "card_identity": ["job title", "company name"],
+    "visit_order": "top_to_bottom_visible_unvisited",
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "근무조건", "url"],
+    "finish_condition": "Requested trend sample size is reached or no useful unvisited cards remain."
+  },
+  "reflex_policy": {
+    "safe_actions": ["submit_search", "scroll_down", "go_back"],
+    "unsafe_actions": ["choose_job_card_without_title", "click_recommendation_as_job"],
+    "reason_after_hit": true
+  },
+  "known_pitfalls": [
+    "Some detail content can be embedded or protected in ways that make DOM extraction hard; the vision runner should collect visible sections directly.",
+    "Search result cards include many badges that should not be treated as the selected job identity."
+  ]
+}

@@ -15,8 +15,10 @@ class RecipeTarget(BaseModel):
     """클릭/입력 대상 마커의 디스크립터 (재생 시 현재 마커와 매칭하는 기준)."""
 
     text: str = Field("", description="정규화된 OCR 텍스트")
+    semantic_label: Optional[str] = Field(None, description="LLM supplied title or label for the selected card/list item")
     region: Optional[str] = Field(None, description="화면 영역 힌트(타이브레이크용)")
     ordinal: Optional[int] = Field(None, description="동일 텍스트 다수일 때 순서 타이브레이크")
+    evidence_texts: List[str] = Field(default_factory=list, description="Nearby OCR texts used as generic replay evidence")
 
 
 class RecipeStep(BaseModel):

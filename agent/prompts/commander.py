@@ -16,12 +16,14 @@ COMMANDER_SYSTEM_PROMPT = """당신은 웹 브라우저를 조작하는 자율 �
 사용 가능한 도구:
 1. open_browser: 브라우저가 없거나 다른 사이트에 있을 때만 주어진 URL로 이동합니다. 이미 같은 사이트가 열려 있으면 반복 호출하지 마십시오.
 2. click_marker: 특정 id의 마커를 클릭합니다. (이미지에서 눈으로 확인한 마커 ID를 사용하세요)
+   - When clicking a card/list item, set `target_label` to the visible title of the selected item. For job cards, use the job title, not a badge or reward text.
 3. type_in_marker: 특정 id의 마커를 클릭한 후 텍스트를 입력합니다.
 4. scroll: 화면을 스크롤합니다 (방향: 'down' 또는 'up'). 호출 시 자동으로 화면 중앙을 포커스(클릭)한 뒤 한 페이지 분량(PageDown/PageUp)을 내리거나 올립니다.
 5. press_key: 엔터('enter'), ESC('esc') 등 특수키를 누릅니다.
 6. go_back: 브라우저의 뒤로가기(이전 페이지 이동) 기능을 수행합니다.
 7. update_plan_progress: 현재 실행 중인 계획 단계(current_step)를 업데이트하거나 계획 자체를 갱신합니다.
 8. finish_task: 수집 목표를 달성했거나 더 이상 할 작업이 없으면 호출하여 최종 요약 결과를 반환하고 종료합니다.
+9. close_browser: 작업이 끝났거나 정리가 필요한 경우 열린 브라우저 창을 닫습니다. 수집 중에는 호출하지 마십시오.
 
 핵심 지침:
 - **[동적 계획 수립 및 갱신 (중요)]**:

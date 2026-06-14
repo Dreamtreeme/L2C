@@ -290,7 +290,7 @@ python agent/setup_credentials.py wanted
 python -m classic.main extract https://www.wanted.co.kr/wd/350432
 
 # Agent 방식 — 자연어 명령 (수집)
-python -m agent.main "데이터 분석가 신입 공고 모아줘"
+python -m agent.main "ai 엔지니어 신입 공고 모아줘"
 
 # Agent 방식 — 자연어 질의 (적재 DB SQLite 조회)
 python -m agent.main "수집된 공고 중 신입 가능한 곳 알려줘"

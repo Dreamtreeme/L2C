@@ -8,7 +8,7 @@ from shared.db.database import Database
 from agent.graph.nodes import qa_reasoning_node
 from agent.graph.state import GraphState
 
-TEST_DB_PATH = Path("data/test_rag_jobs.db")
+TEST_DB_PATH = Path("data/test_qa_jobs.db")
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_test_db():
@@ -103,6 +103,9 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
         def stream(self, state, config=None, stream_mode=None):
             assert config["recursion_limit"] == 60
             assert stream_mode == "values"
+            assert "사람인" in state["goal"]
+            assert "테스트컴퍼니" in state["goal"]
+            assert "원티드(" not in state["goal"]
             yield {
                 **state,
                 "is_finished": True,
@@ -115,7 +118,7 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
                             "주요업무": "테스트 자동화 구축",
                             "자격요건": "Python 3년 이상",
                             "우대사항": "CI/CD 경험",
-                            "url": "https://www.wanted.co.kr/wd/99999",
+                            "url": "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=99999",
                         }
                     ]
                 },
@@ -125,23 +128,52 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
         return FakeGraphApp()
 
     monkeypatch.setattr("agent.graph.workflow.build_graph", mock_build_graph)
+
     
 
     
     from agent.tools.realtime_scraping import realtime_scraping
     
-    result = realtime_scraping.invoke({"company": "테스트컴퍼니"})
+    result = realtime_scraping.invoke({"company": "테스트컴퍼니", "site": "saramin"})
     assert "적재 완료" in result or "업데이트" in result
+    assert "사람인" in result
     assert "테스트컴퍼니" in result or "1건" in result
     
     # DB에 실제 적재되었는지 검증
     db = Database(TEST_DB_PATH)
     conn = sqlite3.connect(TEST_DB_PATH)
-    cursor = conn.execute("SELECT company_name, position FROM jobs WHERE url = 'https://www.wanted.co.kr/wd/99999'")
+    cursor = conn.execute("SELECT company_name, position FROM jobs WHERE url = 'https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=99999'")
     row = cursor.fetchone()
     conn.close()
     assert row is not None, "Vision agent 수집 데이터가 DB에 적재되지 않았습니다."
     assert row[0] == "테스트컴퍼니"
+
+
+def test_realtime_scraping_closes_browser_after_run(setup_test_db, monkeypatch):
+    import agent.graph.nodes as nodes
+
+    monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
+
+    closed = []
+
+    class FakeActionTools:
+        def close_browser(self):
+            closed.append("close_browser")
+            return {"status": "success", "action": "close_browser", "result": {"closed": True}}
+
+    class FakeGraphApp:
+        def stream(self, state, config=None, stream_mode=None):
+            yield {**state, "is_finished": True, "extracted_jd": {}}
+
+    monkeypatch.setattr(nodes, "_action_tools", FakeActionTools(), raising=False)
+    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeGraphApp())
+
+    from agent.tools.realtime_scraping import realtime_scraping
+
+    result = realtime_scraping.invoke({"company": "cleanup-test"})
+
+    assert "cleanup-test" in result
+    assert closed == ["close_browser"]
 
 
 def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_db, monkeypatch):
@@ -159,6 +191,36 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
             yield {
                 **state,
                 "is_finished": False,
+                "current_url": "https://www.wanted.co.kr/wd/88888",
+                "recorded_steps": [
+                    {
+                        "seq": 0,
+                        "state_key": "state-a",
+                        "url_template": "wanted.co.kr/search?query",
+                        "action": "click_marker",
+                        "target": {"text": "Data Engineer", "region": "middle-left", "ordinal": 0},
+                        "param": {},
+                        "expected_next_state": "state-b",
+                    },
+                    {
+                        "seq": 1,
+                        "state_key": "state-b",
+                        "url_template": "wanted.co.kr/wd/{id}",
+                        "action": "go_back",
+                        "target": None,
+                        "param": {},
+                        "expected_next_state": "state-c",
+                    },
+                    {
+                        "seq": 2,
+                        "state_key": "state-c",
+                        "url_template": "wanted.co.kr/search?query",
+                        "action": "scroll",
+                        "target": None,
+                        "param": {"direction": "down"},
+                        "expected_next_state": "state-d",
+                    },
+                ],
                 "extracted_jd": {
                     "공고목록": [
                         {
@@ -178,6 +240,12 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
 
     monkeypatch.setattr("agent.graph.workflow.build_graph", mock_build_graph)
 
+    committed = {}
+    monkeypatch.setattr(
+        "agent.recipe.record.commit_if_finished",
+        lambda steps, state, current_url: committed.update(steps=steps, current_url=current_url),
+    )
+
     from agent.tools.realtime_scraping import realtime_scraping
 
     result = realtime_scraping.invoke({"company": "부분수집컴퍼니"})
@@ -190,6 +258,9 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     conn.close()
     assert row is not None
     assert row[0] == "부분수집컴퍼니"
+    assert committed["current_url"] == "https://www.wanted.co.kr/wd/88888"
+    assert [step["action"] for step in committed["steps"]] == ["click_marker", "go_back"]
+    assert committed["steps"][0]["state_key"] == "state-a"
 
 
 def test_browser_back_marker_detection():
