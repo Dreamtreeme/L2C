@@ -73,3 +73,19 @@
 
 ## 8. 의존성 순서
 `recipe_schema` → `state_key` + `matcher` → `store`(+DB 마이그레이션) → Phase 0 기록 훅 → Phase 1 `reflex_node`/라우터 → 측정 → Phase 2 → Phase 3.
+
+## Current implementation update: worker submission review gate
+
+The current implementation no longer promotes a successful autonomous run directly into the active `recipes` table.
+
+The revised flow is:
+
+1. The child vision worker runs the existing `reasoning -> action -> perception/reflex` graph.
+2. Each action still records `feedback_episodes` and `recorded_steps` as evidence.
+3. At run end, `realtime_scraping` builds a structured `WorkerSubmission`.
+4. The submission is shape-validated first. This script layer checks only required structure and observable facts, not semantic recipe quality.
+5. `CommanderReview` decides `accept`, `revise`, or `reject`. Semantic LLM review can be enabled with `VISION_WORKER_REVIEW_MODE=llm`; otherwise the shape review is used.
+6. If the review says `revise`, the next worker attempt receives `feedback_to_worker` in its goal prompt.
+7. Only accepted submissions persist collected job data. Reflex recipe activation is deferred to a later Critic/Memory promotion step and replay test.
+
+This keeps the original principle: code guards structure and safety, while meaning-level decisions such as wrong target, reusable parameter, and recipe candidacy are handled by the feedback loop instead of site-specific hard-coded promotion rules.

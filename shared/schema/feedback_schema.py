@@ -71,3 +71,44 @@ class FeedbackEpisode(BaseModel):
     proposal: ActionProposal
     observation: ActionObservation
     feedback: ActionFeedback
+
+IssueSeverity = Literal["error", "warning"]
+ReviewDecision = Literal["accept", "revise", "reject"]
+
+
+class SubmissionIssue(BaseModel):
+    """Shape-level issue found before semantic review."""
+
+    field: str
+    reason: str
+    severity: IssueSeverity = "error"
+
+
+class WorkerSubmission(BaseModel):
+    """A child vision worker's structured handoff to the commander/critic layer."""
+
+    run_id: str = ""
+    goal: str = ""
+    site: str = ""
+    keyword: str = ""
+    run_status: str = ""
+    review_attempt: int = 0
+    is_finished: bool = False
+    hit_recursion_limit: bool = False
+    collected_count: int = 0
+    persisted_count: int = 0
+    feedback_saved: int = 0
+    recorded_steps: List[Dict[str, Any]] = Field(default_factory=list)
+    feedback_episodes: List[Dict[str, Any]] = Field(default_factory=list)
+    extracted_summary: Dict[str, Any] = Field(default_factory=dict)
+    worker_notes: str = ""
+
+
+class CommanderReview(BaseModel):
+    """Commander/Critic verdict for one worker submission."""
+
+    decision: ReviewDecision
+    reasons: List[str] = Field(default_factory=list)
+    feedback_to_worker: str = ""
+    recipe_candidate: bool = False
+    confidence: float = Field(0.0, ge=0.0, le=1.0)

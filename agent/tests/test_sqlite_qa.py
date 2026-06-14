@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import sqlite3
@@ -135,10 +136,11 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     from agent.tools.realtime_scraping import realtime_scraping
     
     result = realtime_scraping.invoke({"company": "테스트컴퍼니", "site": "saramin"})
-    assert "적재 완료" in result or "업데이트" in result
-    assert "사람인" in result
-    assert "테스트컴퍼니" in result or "1건" in result
-    
+    payload = json.loads(result)
+    assert payload["review"]["decision"] == "accept"
+    assert payload["site"] == "saramin"
+    assert payload["persisted_count"] == 1
+    assert "테스트컴퍼니" in payload["message"]
     # DB에 실제 적재되었는지 검증
     db = Database(TEST_DB_PATH)
     conn = sqlite3.connect(TEST_DB_PATH)
@@ -249,19 +251,25 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     from agent.tools.realtime_scraping import realtime_scraping
 
     result = realtime_scraping.invoke({"company": "부분수집컴퍼니"})
-    assert "부분 수집" in result
-    assert "1건" in result
-
+    payload = json.loads(result)
+    assert payload["review"]["decision"] == "accept"
+    assert payload["hit_recursion_limit"] is True
+    assert payload["persisted_count"] == 1
     conn = sqlite3.connect(TEST_DB_PATH)
     cursor = conn.execute("SELECT company_name, position FROM jobs WHERE url = 'https://www.wanted.co.kr/wd/88888'")
     row = cursor.fetchone()
+    submission_row = conn.execute(
+        "SELECT review_decision, payload_json FROM worker_submissions WHERE keyword = ? ORDER BY review_attempt DESC, updated_at DESC LIMIT 1",
+        ("부분수집컴퍼니",),
+    ).fetchone()
     conn.close()
     assert row is not None
     assert row[0] == "부분수집컴퍼니"
-    assert committed["current_url"] == "https://www.wanted.co.kr/wd/88888"
-    assert [step["action"] for step in committed["steps"]] == ["click_marker", "go_back"]
-    assert committed["steps"][0]["state_key"] == "state-a"
-
+    assert submission_row is not None
+    assert submission_row[0] == "accept"
+    submission_payload = json.loads(submission_row[1])
+    assert [step["action"] for step in submission_payload["recorded_steps"]] == ["click_marker", "go_back", "scroll"]
+    assert submission_payload["recorded_steps"][0]["state_key"] == "state-a"
 
 def test_browser_back_marker_detection():
     from agent.graph.nodes import _is_browser_back_marker_bbox

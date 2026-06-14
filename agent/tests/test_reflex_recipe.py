@@ -458,11 +458,15 @@ def test_database_initializes_feedback_episode_table(tmp_path):
     conn = sqlite3.connect(db_path)
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     columns = [row[1] for row in conn.execute("PRAGMA table_info(feedback_episodes)").fetchall()]
+    submission_columns = [row[1] for row in conn.execute("PRAGMA table_info(worker_submissions)").fetchall()]
     conn.close()
 
     assert "feedback_episodes" in tables
+    assert "worker_submissions" in tables
     assert "episode_id" in columns
     assert "feedback_label" in columns
+    assert "submission_id" in submission_columns
+    assert "review_decision" in submission_columns
 
 
 def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch):
@@ -484,3 +488,84 @@ def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch
     assert saved == 1
     assert seen["run_status"] == "recursion_limit"
     assert seen["source"] == "realtime_scraping"
+
+
+def test_worker_submission_shape_review_requests_revision():
+    from agent.recipe.reviewer import build_worker_submission, review_worker_submission
+
+    submission = build_worker_submission(
+        {
+            "goal": "collect AI engineer jobs",
+            "current_url": "https://www.wanted.co.kr/search?query=ai",
+            "extracted_jd": {},
+            "recorded_steps": [],
+            "feedback_episodes": [],
+        },
+        site="wanted",
+        keyword="ai engineer",
+        run_status="stopped",
+    )
+
+    review = review_worker_submission(submission)
+
+    assert review["decision"] == "revise"
+    assert review["recipe_candidate"] is False
+    assert "extracted_summary" in review["feedback_to_worker"]
+
+
+def test_worker_submission_review_accepts_structured_data(monkeypatch):
+    from agent.recipe.reviewer import build_worker_submission, review_worker_submission
+
+    monkeypatch.setenv("VISION_WORKER_REVIEW_MODE", "shape")
+    submission = build_worker_submission(
+        {
+            "goal": "collect AI engineer jobs",
+            "current_url": "https://www.wanted.co.kr/wd/1",
+            "extracted_jd": {
+                "jobs": [
+                    {
+                        "company_name": "Acme",
+                        "position": "AI Engineer",
+                        "url": "https://www.wanted.co.kr/wd/1",
+                    }
+                ]
+            },
+            "recorded_steps": [
+                {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
+            ],
+            "feedback_episodes": [_sample_feedback_episode()],
+        },
+        site="wanted",
+        keyword="ai engineer",
+        run_status="finished",
+    )
+
+    review = review_worker_submission(submission)
+
+    assert review["decision"] == "accept"
+    assert review["recipe_candidate"] is True
+
+
+def test_submission_store_commits_and_reads_recent(tmp_path):
+    from agent.recipe.submission_store import SubmissionStore
+
+    submission = {
+        "run_id": "worker-run-1",
+        "goal": "collect jobs",
+        "site": "wanted",
+        "keyword": "ai engineer",
+        "run_status": "finished",
+        "review_attempt": 0,
+        "collected_count": 1,
+    }
+    review = {"decision": "accept", "confidence": 0.7, "feedback_to_worker": ""}
+    store = SubmissionStore(tmp_path / "submissions.db")
+
+    submission_id = store.commit_submission(submission, review=review, source="test")
+    rows = store.list_recent(limit=5)
+
+    assert submission_id == "worker-run-1:0"
+    assert len(rows) == 1
+    assert rows[0]["review_decision"] == "accept"
+    assert rows[0]["payload"]["keyword"] == "ai engineer"
+    assert rows[0]["review"]["confidence"] == 0.7

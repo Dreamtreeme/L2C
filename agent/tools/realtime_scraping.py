@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from typing import Any
@@ -84,16 +85,6 @@ def _run_graph_with_last_state(app: Any, initial_state: dict, recursion_limit: i
         return last_state, True
 
 
-def _completed_partial_recorded_steps(final_state: dict) -> list[dict]:
-    """Keep only completed UI collection segments; drop the unfinished tail that hit recursion_limit."""
-    recorded_steps = list(final_state.get("recorded_steps", []) or [])
-    last_return_index = -1
-    for idx, step in enumerate(recorded_steps):
-        if isinstance(step, dict) and step.get("action") == "go_back":
-            last_return_index = idx
-    if last_return_index < 0:
-        return []
-    return recorded_steps[: last_return_index + 1]
 
 
 def _close_browser_after_run() -> None:
@@ -108,35 +99,9 @@ def _close_browser_after_run() -> None:
             logger.info("[realtime_scraping] Browser cleanup skipped: action tools were not initialized")
             return
         result = action_tools.close_browser()
-        logger.info(f"[realtime_scraping] Browser cleanup completed: {result}")
+        logger.info("[realtime_scraping] Browser cleanup completed: %s", result)
     except Exception as e:
-        logger.debug(f"[realtime_scraping] Browser cleanup skipped: {e}")
-
-
-def _commit_reflex_recipe_for_partial_success(
-    final_state: dict,
-    persisted_count: int,
-    hit_recursion_limit: bool,
-    is_finished: bool,
-) -> None:
-    if not hit_recursion_limit or is_finished or persisted_count <= 0:
-        return
-    recorded_steps = _completed_partial_recorded_steps(final_state)
-    if not recorded_steps:
-        logger.info("[realtime_scraping] Reflex partial recipe commit skipped: no completed segment")
-        return
-    try:
-        from agent.recipe import record
-
-        record.commit_if_finished(recorded_steps, final_state, final_state.get("current_url", ""))
-        logger.info(
-            "[realtime_scraping] Reflex recipe committed from partial success: steps=%s, persisted_count=%s",
-            len(recorded_steps),
-            persisted_count,
-        )
-    except Exception as e:
-        logger.debug(f"[realtime_scraping] Reflex partial recipe commit skipped: {e}")
-
+        logger.debug("[realtime_scraping] Browser cleanup skipped: %s", e)
 
 def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_finished: bool) -> int:
     """Persist feedback episodes for later Critic/Recipe Memory promotion. Best-effort."""
@@ -163,17 +128,118 @@ def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_f
         logger.debug(f"[realtime_scraping] Feedback episode commit skipped: {e}")
         return 0
 
+
+
+def _worker_run_status(hit_recursion_limit: bool, is_finished: bool) -> str:
+    if is_finished:
+        return "finished"
+    if hit_recursion_limit:
+        return "recursion_limit"
+    return "stopped"
+
+
+def _worker_review_retries() -> int:
+    try:
+        return max(0, int(os.getenv("VISION_WORKER_REVIEW_RETRIES", "1")))
+    except ValueError:
+        return 1
+
+
+def _append_review_feedback(goal: str, review_feedback: str | None) -> str:
+    if not review_feedback:
+        return goal
+    return (
+        goal
+        + "\n\n[Commander review feedback from the previous attempt]\n"
+        + review_feedback.strip()
+        + "\nRevise the next actions and final submission to address this feedback."
+    )
+
+
+def _commit_worker_submission(
+    final_state: dict,
+    *,
+    site: str,
+    keyword: str,
+    run_status: str,
+    hit_recursion_limit: bool,
+    persisted_count: int,
+    feedback_saved: int,
+    review_attempt: int,
+    run_id: str | None = None,
+) -> tuple[dict, dict, str]:
+    from agent.recipe.reviewer import build_worker_submission, review_worker_submission
+    from agent.recipe.submission_store import SubmissionStore
+
+    submission = build_worker_submission(
+        final_state,
+        site=site,
+        keyword=keyword,
+        run_status=run_status,
+        hit_recursion_limit=hit_recursion_limit,
+        persisted_count=persisted_count,
+        feedback_saved=feedback_saved,
+        review_attempt=review_attempt,
+        run_id=run_id,
+    )
+    review = review_worker_submission(submission)
+    submission_id = SubmissionStore().commit_submission(
+        submission,
+        review=review,
+        source="realtime_scraping",
+    )
+    logger.info(
+        "[realtime_scraping] Worker submission reviewed: id=%s decision=%s confidence=%s",
+        submission_id,
+        review.get("decision"),
+        review.get("confidence"),
+    )
+    return submission, review, submission_id
+
+
+def _result_payload(
+    *,
+    message: str,
+    site_name: str,
+    site_slug: str,
+    keyword: str,
+    item_count: int,
+    persisted_count: int,
+    submission_id: str,
+    review: dict,
+    hit_recursion_limit: bool,
+    is_finished: bool,
+) -> str:
+    return json.dumps(
+        {
+            "message": message,
+            "site": site_slug,
+            "site_name": site_name,
+            "keyword": keyword,
+            "item_count": item_count,
+            "persisted_count": persisted_count,
+            "submission_id": submission_id,
+            "review": review,
+            "hit_recursion_limit": hit_recursion_limit,
+            "is_finished": is_finished,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
 @tool
-def realtime_scraping(company: str = None, tech_stack: str = None, site: str = None, query: str = None) -> str:
+def realtime_scraping(
+    company: str = None,
+    tech_stack: str = None,
+    site: str = None,
+    query: str = None,
+    review_feedback: str = None,
+    review_attempt: int = 0,
+) -> str:
     """
-    비전 기반 자율 에이전트를 구동하여 특정 기업(company), 기술 스택(tech_stack), 자유 검색어(query)에 맞는
-    최신 채용 공고를 실시간으로 수집하고 데이터베이스에 적재하는 도구입니다.
-    내부적으로 SoM(Set-of-Mark) 마커 기반 화면 인식 → LLM 추론 → 물리 조작의
-    자율 수집 LangGraph 워크플로우를 기동하며, 모든 도구 호출 궤적이
-    LangSmith에 저장되어 Playwright 스크립트 자동 생성의 학습 데이터로 환원됩니다.
-    데이터베이스에 정보가 없거나 부족할 때 호출되어 실시간 비전 수집으로 DB를 동적으로 보강합니다.
+    Run the child vision worker for one collection site, then submit its result
+    through the commander/critic review gate before persisting accepted data.
     """
-    # 검색 키워드 조합
     search_keyword = ""
     if query:
         search_keyword = query
@@ -184,97 +250,132 @@ def realtime_scraping(company: str = None, tech_stack: str = None, site: str = N
     elif tech_stack:
         search_keyword = tech_stack
     else:
-        return "수집 실패: 검색 키워드(company, tech_stack, query)가 모두 누락되었습니다."
+        return json.dumps({"message": "collection failed: missing search keyword", "review": {"decision": "reject"}}, ensure_ascii=False)
 
-    logger.info(f"[realtime_scraping] Invoking vision agent graph for keyword: '{search_keyword}'")
+    logger.info("[realtime_scraping] Invoking vision worker for keyword=%r", search_keyword)
 
     try:
-        # 비전 자율 수집 LangGraph 워크플로우 빌드 및 기동
         from agent.graph.workflow import build_graph
+        from agent.recipe.reviewer import render_review_feedback
 
         app = build_graph()
-
-        # 검색 키워드와 사이트 프로필을 기반으로 자율 수집 목표(goal) 구성
         site_profile = _load_collection_profile(site)
         site_entry = site_profile["entry"]
-        site_name = site_entry.get("display_name") or site_entry.get("slug")
-        goal = _build_site_goal(search_keyword, site_profile)
+        site_slug = site_entry.get("slug") or site or "unknown"
+        site_name = site_entry.get("display_name") or site_slug
+        max_review_retries = _worker_review_retries()
+        attempt = max(0, int(review_attempt or 0))
+        pending_feedback = review_feedback or ""
+        while True:
+            attempt_run_id = None
+            goal = _append_review_feedback(_build_site_goal(search_keyword, site_profile), pending_feedback)
+            initial_state = {
+                "goal": goal,
+                "ui_context": "",
+                "current_url": "",
+                "current_url_stale": True,
+                "current_markers": [],
+                "action_history": [],
+                "recent_images": [],
+                "marked_image": "",
+                "error_count": 0,
+                "is_finished": False,
+                "collected_data": [],
+                "extracted_jd": {},
+                "last_action_result": None,
+                "plan": [],
+                "current_plan_step": 0,
+                "step_durations": [],
+                "last_action_screen_changed": True,
+                "recorded_steps": [],
+                "feedback_episodes": [],
+                "reflex_state_key": "",
+                "reflex_hit": False,
+                "reflex_expected_next_state": "",
+                "reflex_pending_validation": False,
+                "ocr_texts": [],
+                "ocr_delta_added": [],
+                "ocr_delta_removed": [],
+                "reflex_validation_status": "",
+            }
 
-        # 초기 상태 구성 (GraphState 스키마에 맞춤)
-        initial_state = {
-            "goal": goal,
-            "ui_context": "",
-            "current_url": "",
-            "current_url_stale": True,
-            "current_markers": [],
-            "action_history": [],
-            "recent_images": [],
-            "marked_image": "",
-            "error_count": 0,
-            "is_finished": False,
-            "collected_data": [],
-            "extracted_jd": {},
-            "last_action_result": None,
-            "plan": [],
-            "current_plan_step": 0,
-            "step_durations": [],
-            "last_action_screen_changed": True,
-            "recorded_steps": [],
-            "feedback_episodes": [],
-            "reflex_state_key": "",
-            "reflex_hit": False,
-            "reflex_expected_next_state": "",
-            "reflex_pending_validation": False,
-            "ocr_texts": [],
-            "ocr_delta_added": [],
-            "ocr_delta_removed": [],
-            "reflex_validation_status": "",
-        }
-
-        logger.info(f"[realtime_scraping] Starting autonomous vision collection graph for site={site_entry.get('slug')} with goal: {goal}")
-
-        recursion_limit = int(os.getenv("VISION_AGENT_RECURSION_LIMIT", str(DEFAULT_RECURSION_LIMIT)))
-
-        # LangGraph 앱 실행 (동기 stream)
-        # 모든 perception → reasoning → action 루프가 자율적으로 순환하며
-        # 도구 호출 궤적이 LangSmith 트레이스에 자동 기록됨
-        final_state, hit_recursion_limit = _run_graph_with_last_state(app, initial_state, recursion_limit)
-
-        # 수집 결과 분석
-        collected = final_state.get("collected_data", [])
-        extracted = final_state.get("extracted_jd", {})
-        is_finished = final_state.get("is_finished", False)
-        _commit_feedback_episodes(final_state, hit_recursion_limit, is_finished)
-
-        if extracted:
-            # 수집된 데이터를 DB에 전처리 및 적재
-            persisted_count = _persist_collected_data(extracted, search_keyword)
-            _commit_reflex_recipe_for_partial_success(
-                final_state,
-                persisted_count,
-                hit_recursion_limit,
-                is_finished,
-            )
-
-            item_count = len(extracted.get("공고목록", [])) if isinstance(extracted.get("공고목록"), list) else 1
             logger.info(
-                f"[realtime_scraping] Vision agent collection completed. "
-                f"Items: {item_count}, persisted: {persisted_count}, finished: {is_finished}"
+                "[realtime_scraping] Starting worker graph site=%s attempt=%s max_retries=%s",
+                site_slug,
+                attempt,
+                max_review_retries,
             )
-            completion_type = "부분 수집 및 적재 완료" if hit_recursion_limit and not is_finished else "실시간 비전 자율 수집 및 적재 완료"
-            return (
-                f"{completion_type}: '{search_keyword}' 키워드로 "
-                f"{site_name}에서 총 {item_count}건 중 {persisted_count}건의 채용 공고 정보가 데이터베이스에 업데이트되었습니다."
+            recursion_limit = int(os.getenv("VISION_AGENT_RECURSION_LIMIT", str(DEFAULT_RECURSION_LIMIT)))
+            final_state, hit_recursion_limit = _run_graph_with_last_state(app, initial_state, recursion_limit)
+
+            extracted = final_state.get("extracted_jd", {}) or {}
+            is_finished = bool(final_state.get("is_finished", False))
+            run_status = _worker_run_status(hit_recursion_limit, is_finished)
+            feedback_saved = _commit_feedback_episodes(final_state, hit_recursion_limit, is_finished)
+
+            submission, review, submission_id = _commit_worker_submission(
+                final_state,
+                site=site_slug,
+                keyword=search_keyword,
+                run_status=run_status,
+                hit_recursion_limit=hit_recursion_limit,
+                persisted_count=0,
+                feedback_saved=feedback_saved,
+                review_attempt=attempt,
+                run_id=attempt_run_id,
             )
-        if hit_recursion_limit:
-            return f"실시간 수집 중단: {site_name}에서 '{search_keyword}' 수집 중 recursion limit에 도달했고 저장 가능한 공고가 없습니다."
-        else:
-            logger.warning(f"[realtime_scraping] Vision agent finished but no data collected for '{search_keyword}'")
-            return f"실시간 수집 완료: {site_name}에서 '{search_keyword}'에 매칭되는 유효한 채용 정보를 찾지 못했습니다."
+            attempt_run_id = submission.get("run_id") or attempt_run_id
+
+            if review.get("decision") == "revise" and attempt < max_review_retries:
+                pending_feedback = render_review_feedback(review)
+                attempt += 1
+                logger.info("[realtime_scraping] Retrying worker after commander feedback: attempt=%s", attempt)
+                continue
+
+            item_count = int(submission.get("collected_count") or 0)
+            persisted_count = 0
+            if extracted and review.get("decision") == "accept":
+                persisted_count = _persist_collected_data(extracted, search_keyword)
+                submission, review, submission_id = _commit_worker_submission(
+                    {**final_state, "extracted_jd": extracted},
+                    site=site_slug,
+                    keyword=search_keyword,
+                    run_status=run_status,
+                    hit_recursion_limit=hit_recursion_limit,
+                    persisted_count=persisted_count,
+                    feedback_saved=feedback_saved,
+                    review_attempt=attempt,
+                    run_id=attempt_run_id,
+                )
+                item_count = int(submission.get("collected_count") or item_count)
+
+            if review.get("decision") == "accept" and persisted_count > 0:
+                completion_type = "partial collection persisted" if hit_recursion_limit and not is_finished else "vision collection persisted"
+                message = f"{completion_type}: keyword={search_keyword!r}, site={site_name}, collected={item_count}, persisted={persisted_count}"
+            elif review.get("decision") == "revise":
+                feedback_text = review.get("feedback_to_worker") or "; ".join(review.get("reasons") or [])
+                message = f"worker submission needs revision: {feedback_text}"
+            elif hit_recursion_limit:
+                message = f"collection stopped at recursion limit without accepted data: site={site_name}, keyword={search_keyword!r}"
+            else:
+                message = f"collection finished without accepted data: site={site_name}, keyword={search_keyword!r}"
+
+            return _result_payload(
+                message=message,
+                site_name=site_name,
+                site_slug=site_slug,
+                keyword=search_keyword,
+                item_count=item_count,
+                persisted_count=persisted_count,
+                submission_id=submission_id,
+                review=review,
+                hit_recursion_limit=hit_recursion_limit,
+                is_finished=is_finished,
+            )
 
     except Exception as e:
-        logger.error(f"[realtime_scraping] Vision agent execution error: {e}", exc_info=True)
-        return f"실시간 수집 오류: {e}"
+        logger.error("[realtime_scraping] Vision worker execution error: %s", e, exc_info=True)
+        return json.dumps({"message": f"collection error: {e}", "review": {"decision": "reject"}}, ensure_ascii=False)
     finally:
         _close_browser_after_run()
 

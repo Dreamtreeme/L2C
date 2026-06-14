@@ -168,29 +168,15 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
 
 
 def commit_if_finished(recorded_steps, state, current_url) -> None:
-    """finish_task로 런 종료 시 recorded_steps를 SiteRecipe로 검증·저장 (예외 안전)."""
+    """Defer active Reflex promotion to commander-reviewed worker submissions."""
     try:
         steps = list(recorded_steps or [])
         if not steps:
             return
-        for i, step in enumerate(steps):
-            for later in steps[i + 1:]:
-                if later.get("state_key") != step.get("state_key"):
-                    step["expected_next_state"] = later.get("state_key")
-                    break
-        site = site_of(current_url) or (steps[0].get("url_template", "").split("/")[0]) or "unknown"
-        goal = state.get("goal", "") or ""
-
-        # pydantic 검증을 거쳐 정형화한 뒤 저장
-        from shared.schema.recipe_schema import RecipeStep, SiteRecipe
-        from agent.recipe.store import RecipeStore
-
-        recipe = SiteRecipe(site=site, goal=goal, steps=[RecipeStep(**s) for s in steps])
-        dumped_steps = [
-            s.model_dump() if hasattr(s, "model_dump") else s.dict()
-            for s in recipe.steps
-        ]
-        saved = RecipeStore().commit_recipe(recipe.site, recipe.goal, dumped_steps)
-        logger.info("reflex recipe recorded", site=site, steps=len(steps), saved_states=saved)
+        logger.info(
+            "reflex recipe promotion deferred to worker submission review",
+            steps=len(steps),
+            current_url=current_url,
+        )
     except Exception as e:
         logger.debug("reflex commit_if_finished skipped", error=str(e))
