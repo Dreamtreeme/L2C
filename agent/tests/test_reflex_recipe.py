@@ -411,3 +411,76 @@ def test_feedback_episode_records_parameter_candidate_and_observation():
     assert episode["observation"]["before"]["state_key"] == "state-home"
     assert episode["observation"]["after"]["screen_changed"] is True
     assert episode["feedback"]["label"] == "partial"
+
+def _sample_feedback_episode(seq=0):
+    return {
+        "seq": seq,
+        "goal": "AI 엔지니어 채용공고 찾아줘",
+        "site": "wanted.co.kr",
+        "page_state_key": "state-home",
+        "proposal": {
+            "action": "type_in_marker",
+            "args": {"marker_id": 1, "text": "AI 엔지니어"},
+            "parameter_candidates": [{"slot_candidate": "query", "value": "AI 엔지니어", "confidence": 0.45}],
+        },
+        "observation": {
+            "before": {"state_key": "state-home", "url": "https://www.wanted.co.kr"},
+            "after": {"screen_changed": True},
+            "result": {"status": "success", "action": "type_in_marker"},
+        },
+        "feedback": {"label": "partial", "reason": "screen-changing action executed", "confidence": 0.45},
+    }
+
+
+def test_feedback_store_commits_and_reads_recent(tmp_path):
+    from agent.recipe.feedback_store import FeedbackStore
+
+    store = FeedbackStore(tmp_path / "feedback.db")
+    saved = store.commit_episodes([_sample_feedback_episode()], run_id="run-1", run_status="finished", source="test")
+
+    assert saved == 1
+    rows = store.list_recent(limit=5)
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == "run-1"
+    assert rows[0]["run_status"] == "finished"
+    assert rows[0]["site"] == "wanted.co.kr"
+    assert rows[0]["action"] == "type_in_marker"
+    assert rows[0]["feedback_label"] == "partial"
+    assert rows[0]["payload"]["proposal"]["parameter_candidates"][0]["slot_candidate"] == "query"
+
+
+def test_database_initializes_feedback_episode_table(tmp_path):
+    from shared.db.database import Database
+
+    db_path = tmp_path / "jobs.db"
+    Database(db_path)
+
+    conn = sqlite3.connect(db_path)
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(feedback_episodes)").fetchall()]
+    conn.close()
+
+    assert "feedback_episodes" in tables
+    assert "episode_id" in columns
+    assert "feedback_label" in columns
+
+
+def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch):
+    from agent.tools.realtime_scraping import _commit_feedback_episodes
+
+    seen = {}
+
+    class FakeStore:
+        def commit_episodes(self, episodes, run_status="", source=""):
+            seen["episodes"] = episodes
+            seen["run_status"] = run_status
+            seen["source"] = source
+            return len(episodes)
+
+    monkeypatch.setattr("agent.recipe.feedback_store.FeedbackStore", lambda: FakeStore())
+
+    saved = _commit_feedback_episodes({"feedback_episodes": [_sample_feedback_episode()]}, True, False)
+
+    assert saved == 1
+    assert seen["run_status"] == "recursion_limit"
+    assert seen["source"] == "realtime_scraping"

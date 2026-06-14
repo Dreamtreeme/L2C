@@ -137,6 +137,32 @@ def _commit_reflex_recipe_for_partial_success(
     except Exception as e:
         logger.debug(f"[realtime_scraping] Reflex partial recipe commit skipped: {e}")
 
+
+def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_finished: bool) -> int:
+    """Persist feedback episodes for later Critic/Recipe Memory promotion. Best-effort."""
+    episodes = list(final_state.get("feedback_episodes", []) or [])
+    if not episodes:
+        return 0
+    run_status = "finished" if is_finished else "recursion_limit" if hit_recursion_limit else "stopped"
+    try:
+        from agent.recipe.feedback_store import FeedbackStore
+
+        saved = FeedbackStore().commit_episodes(
+            episodes,
+            run_status=run_status,
+            source="realtime_scraping",
+        )
+        logger.info(
+            "[realtime_scraping] Feedback episodes committed: episodes=%s, saved=%s, status=%s",
+            len(episodes),
+            saved,
+            run_status,
+        )
+        return saved
+    except Exception as e:
+        logger.debug(f"[realtime_scraping] Feedback episode commit skipped: {e}")
+        return 0
+
 @tool
 def realtime_scraping(company: str = None, tech_stack: str = None, site: str = None, query: str = None) -> str:
     """
@@ -218,6 +244,7 @@ def realtime_scraping(company: str = None, tech_stack: str = None, site: str = N
         collected = final_state.get("collected_data", [])
         extracted = final_state.get("extracted_jd", {})
         is_finished = final_state.get("is_finished", False)
+        _commit_feedback_episodes(final_state, hit_recursion_limit, is_finished)
 
         if extracted:
             # 수집된 데이터를 DB에 전처리 및 적재
