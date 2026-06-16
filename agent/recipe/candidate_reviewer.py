@@ -128,3 +128,44 @@ def review_and_apply_candidate(
     out["candidate_id"] = candidate_id
     out["promoted_count"] = promoted_count
     return out
+
+
+def _process_mode(mode: str | None) -> str:
+    return "promote" if str(mode or "").strip().lower() == "promote" else "review"
+
+
+def process_recipe_candidates(
+    limit: int = 5,
+    mode: str = "review",
+    status: str = "pending_replay",
+    db_path=None,
+    critic: CriticFn | None = None,
+) -> dict[str, Any]:
+    """Run the LLM Critic gate for stored candidates.
+
+    The script layer only selects candidate rows by status and forwards each row
+    to the Critic gate. It does not judge recipe quality itself.
+    """
+    from agent.recipe.candidate_store import RecipeCandidateStore
+
+    normalized_mode = _process_mode(mode)
+    safe_limit = max(0, int(limit or 0))
+    candidates = RecipeCandidateStore(db_path).list_recent(limit=safe_limit, status=status or None)
+    results = [
+        review_and_apply_candidate(
+            candidate["candidate_id"],
+            db_path=db_path,
+            critic=critic,
+            allow_promote=(normalized_mode == "promote"),
+        )
+        for candidate in candidates
+    ]
+    return {
+        "mode": normalized_mode,
+        "status": status,
+        "requested_limit": safe_limit,
+        "candidate_count": len(candidates),
+        "processed_count": len(results),
+        "promoted_count": sum(int(result.get("promoted_count") or 0) for result in results),
+        "results": results,
+    }

@@ -823,3 +823,111 @@ def test_realtime_recipe_learning_mode_promote_attaches_critic_review(monkeypatc
 
     assert submission["recipe_learning_mode"] == "promote"
     assert submission["recipe_candidate_review"]["promoted_count"] == 1
+
+
+def test_process_recipe_candidates_review_mode_does_not_promote(tmp_path):
+    from agent.recipe.candidate_reviewer import process_recipe_candidates
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    db_path = tmp_path / "batch.db"
+    store = RecipeCandidateStore(db_path)
+    candidate_ids = []
+    for idx in range(2):
+        submission = _sample_recipe_candidate_submission()
+        submission["run_id"] = f"worker-run-batch-{idx}"
+        submission["recorded_steps"][0]["state_key"] = f"state-{idx}"
+        candidate_ids.append(
+            store.commit_candidate(
+                submission,
+                review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+                source="test",
+                submission_id=f"worker-run-batch-{idx}:0",
+            )
+        )
+
+    seen = []
+
+    def critic(payload):
+        seen.append(payload["candidate_id"])
+        return {
+            "decision": "accept",
+            "reasons": ["critic accepted replay evidence"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "confidence": 0.9,
+        }
+
+    result = process_recipe_candidates(limit=10, mode="review", db_path=db_path, critic=critic)
+
+    assert result["mode"] == "review"
+    assert result["processed_count"] == 2
+    assert result["promoted_count"] == 0
+    assert set(seen) == set(candidate_ids)
+    assert RecipeStore(db_path).get_by_site("wanted") == []
+    for candidate_id in candidate_ids:
+        candidate = store.get_candidate(candidate_id)
+        assert candidate["status"] == "accepted"
+        assert candidate["validation"]["allow_promote"] is False
+        assert candidate["validation"]["promoted_count"] == 0
+
+
+def test_process_recipe_candidates_promote_mode_writes_active_recipe(tmp_path):
+    from agent.recipe.candidate_reviewer import process_recipe_candidates
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    db_path = tmp_path / "batch.db"
+    store = RecipeCandidateStore(db_path)
+    candidate_id = store.commit_candidate(
+        _sample_recipe_candidate_submission(),
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-batch:0",
+    )
+
+    result = process_recipe_candidates(
+        limit=5,
+        mode="promote",
+        db_path=db_path,
+        critic=lambda payload: {
+            "decision": "accept",
+            "reasons": ["critic promoted replay evidence"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "confidence": 0.88,
+        },
+    )
+
+    candidate = store.get_candidate(candidate_id)
+    recipes = RecipeStore(db_path).get_by_site("wanted")
+
+    assert result["mode"] == "promote"
+    assert result["processed_count"] == 1
+    assert result["promoted_count"] == 1
+    assert candidate["status"] == "accepted"
+    assert candidate["validation"]["allow_promote"] is True
+    assert recipes[0]["steps"][0]["state_key"] == "state-a"
+
+
+def test_review_recipe_candidates_tool_returns_batch_json(monkeypatch):
+    import json
+
+    import agent.recipe.candidate_reviewer as reviewer
+    from agent.tools.recipe_learning import review_recipe_candidates
+
+    seen = {}
+
+    def fake_process_recipe_candidates(limit=5, mode="review", status="pending_replay"):
+        seen.update({"limit": limit, "mode": mode, "status": status})
+        return {"mode": mode, "requested_limit": limit, "status": status, "processed_count": 0}
+
+    monkeypatch.setattr(reviewer, "process_recipe_candidates", fake_process_recipe_candidates)
+
+    payload = json.loads(
+        review_recipe_candidates.invoke({"mode": "promote", "limit": 2, "status": "accepted"})
+    )
+
+    assert seen == {"limit": 2, "mode": "promote", "status": "accepted"}
+    assert payload["mode"] == "promote"
+    assert payload["requested_limit"] == 2

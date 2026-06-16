@@ -114,3 +114,16 @@ The candidate promotion gate is LLM-led. Code only packages the candidate row, w
 `plan_sites -> select_site -> run_worker -> review_submission -> (prepare_retry | persist_accepted | mark_failed) -> select_site -> query_db -> summarize`.
 
 `COMMANDER_GRAPH_ENABLED=1` routes the existing QA entry point through this graph. The default path still uses the previous QA tool-calling loop until the graph path is exercised enough to become the default.
+
+### Batch candidate review tool
+
+When `VISION_RECIPE_LEARNING_MODE=record`, accepted worker submissions are stored as `recipe_candidates` with `pending_replay` status only. They are not reviewed or promoted during the collection run.
+
+The commander can later call `review_recipe_candidates`:
+
+- `mode="review"`: load stored candidates, send each one through the Critic LLM gate, and store the Critic decision in `validation_json`. Active `recipes` are not modified even if the Critic returns `accept`.
+- `mode="promote"`: run the same Critic gate and allow only `accept` plus `promote_to_active_recipe=true` to write the candidate steps into active `recipes`.
+
+If candidates were already dry-reviewed with `mode="review"`, call the tool with `status="accepted"` when doing a later promotion pass.
+
+This keeps script code limited to candidate selection and result persistence. Reuse quality, wrong-target judgment, parameter/generic-step judgment, and promotion are still feedback-loop decisions made by the Critic.

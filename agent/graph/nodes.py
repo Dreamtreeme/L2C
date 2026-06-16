@@ -13,6 +13,7 @@ from agent.utils.logger import logger
 from agent.tools.sqlite_query import sqlite_query
 from agent.tools.realtime_scraping import realtime_scraping
 from agent.tools.site_registry import list_collection_sites, get_collection_site_profile
+from agent.tools.recipe_learning import review_recipe_candidates
 
 _perception = None
 _action_tools = None
@@ -118,6 +119,7 @@ def _get_qa_llm_with_tools():
             list_collection_sites,
             get_collection_site_profile,
             realtime_scraping,
+            review_recipe_candidates,
         ])
     return _qa_llm_with_tools
 
@@ -1260,6 +1262,8 @@ def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
                 elif tool_name == "realtime_scraping":
                     # Playwright 실시간 수집 실행
                     result_str = realtime_scraping.invoke(tool_args)
+                elif tool_name == "review_recipe_candidates":
+                    result_str = review_recipe_candidates.invoke(tool_args)
                 else:
                     result_str = f"알 수 없는 도구: {tool_name}"
                 
