@@ -100,6 +100,13 @@ This keeps the original principle: code guards structure and safety, while meani
 
 The candidate promotion gate is LLM-led. Code only packages the candidate row, worker submission, recorded steps, and previous commander review into the `RecipeCandidateReview` prompt shape. It does not score target quality, generalizability, expected next state, or whether a UI action is reusable. The Critic LLM returns `accept`, `revise`, or `reject`; only `accept` with `promote_to_active_recipe=true` writes to active `recipes`.
 
+`VISION_RECIPE_LEARNING_MODE` controls how far this path runs:
+
+- `off`: do not store recipe candidates.
+- `record`: store accepted candidates only. This is the default.
+- `review`: store candidates and run Critic review, but do not promote active recipes.
+- `promote`: store candidates, run Critic review, and allow Critic-approved promotion into active `recipes`.
+
 ## Top-level commander graph
 
 `agent.graph.commander_workflow` is the explicit LangGraph orchestration layer above the child vision worker. Its route is:

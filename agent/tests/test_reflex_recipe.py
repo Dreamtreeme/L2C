@@ -745,3 +745,81 @@ def test_candidate_reviewer_invalid_llm_shape_falls_back_to_revise(tmp_path):
     assert review["promote_to_active_recipe"] is False
     assert candidate["status"] == "revise"
     assert "critic_review_failed" in candidate["validation"]["review"]["reasons"][0]
+
+def _sample_worker_result_for_learning_mode():
+    return {
+        "submission": _sample_recipe_candidate_submission(),
+        "extracted_jd": {
+            "jobs": [
+                {"company_name": "Acme", "position": "AI Engineer", "url": "https://example.com/jobs/1"}
+            ]
+        },
+        "keyword": "ai engineer",
+    }
+
+
+def test_realtime_recipe_learning_mode_off_skips_candidate(monkeypatch):
+    from agent.tools import realtime_scraping as rs
+
+    monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "off")
+    monkeypatch.setattr(rs, "_persist_collected_data", lambda extracted, keyword: 1)
+    called = []
+    monkeypatch.setattr(rs, "_commit_recipe_candidate", lambda *args, **kwargs: called.append(args) or ("candidate-1", {}))
+    monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
+
+    persisted_count, submission, _review, _submission_id = rs.persist_accepted_worker_result(
+        _sample_worker_result_for_learning_mode(),
+        {"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+    )
+
+    assert persisted_count == 1
+    assert called == []
+    assert "recipe_candidate_id" not in submission
+
+
+def test_realtime_recipe_learning_mode_record_saves_candidate_without_critic(monkeypatch):
+    from agent.tools import realtime_scraping as rs
+
+    monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "record")
+    monkeypatch.setattr(rs, "_persist_collected_data", lambda extracted, keyword: 1)
+    seen = {}
+    def fake_commit_recipe_candidate(submission, review, source, submission_id, mode):
+        seen["mode"] = mode
+        return "candidate-1", {}
+
+    monkeypatch.setattr(rs, "_commit_recipe_candidate", fake_commit_recipe_candidate)
+    monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
+
+    _count, submission, _review, _submission_id = rs.persist_accepted_worker_result(
+        _sample_worker_result_for_learning_mode(),
+        {"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+    )
+
+    assert seen["mode"] == "record"
+    assert submission["recipe_candidate_id"] == "candidate-1"
+    assert submission["recipe_learning_mode"] == "record"
+    assert "recipe_candidate_review" not in submission
+
+
+def test_realtime_recipe_learning_mode_promote_attaches_critic_review(monkeypatch):
+    from agent.tools import realtime_scraping as rs
+
+    monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "promote")
+    monkeypatch.setattr(rs, "_persist_collected_data", lambda extracted, keyword: 1)
+    monkeypatch.setattr(
+        rs,
+        "_commit_recipe_candidate",
+        lambda submission, review, source, submission_id, mode: (
+            "candidate-1",
+            {"decision": "accept", "promote_to_active_recipe": True, "promoted_count": 1},
+        ),
+    )
+    monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
+
+    _count, submission, _review, _submission_id = rs.persist_accepted_worker_result(
+        _sample_worker_result_for_learning_mode(),
+        {"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+    )
+
+    assert submission["recipe_learning_mode"] == "promote"
+    assert submission["recipe_candidate_review"]["promoted_count"] == 1

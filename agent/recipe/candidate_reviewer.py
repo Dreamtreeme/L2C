@@ -99,6 +99,7 @@ def review_and_apply_candidate(
     candidate_id: str,
     db_path=None,
     critic: CriticFn | None = None,
+    allow_promote: bool = True,
 ) -> dict[str, Any]:
     from agent.recipe.candidate_store import RecipeCandidateStore
     from agent.recipe.store import RecipeStore
@@ -110,7 +111,7 @@ def review_and_apply_candidate(
 
     review = review_candidate(candidate, critic=critic)
     promoted_count = 0
-    if review.get("decision") == "accept" and review.get("promote_to_active_recipe"):
+    if allow_promote and review.get("decision") == "accept" and review.get("promote_to_active_recipe"):
         promoted_count = RecipeStore(db_path).commit_recipe(
             candidate.get("site", "") or "unknown",
             candidate.get("goal", "") or "",
@@ -120,6 +121,7 @@ def review_and_apply_candidate(
     validation = {
         "review": review,
         "promoted_count": promoted_count,
+        "allow_promote": allow_promote,
     }
     candidate_store.update_status(candidate_id, _status_for_review(review), validation=validation)
     out = dict(review)
