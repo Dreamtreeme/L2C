@@ -268,6 +268,27 @@ def commit_worker_review(
     return review, submission_id
 
 
+def _commit_recipe_candidate(submission: dict, review: dict, source: str, submission_id: str) -> str:
+    """Persist a reviewed Reflex recipe candidate without activating it."""
+    if not review.get("recipe_candidate"):
+        return ""
+    try:
+        from agent.recipe.candidate_store import RecipeCandidateStore
+
+        candidate_id = RecipeCandidateStore().commit_candidate(
+            submission,
+            review=review,
+            source=source,
+            submission_id=submission_id,
+        )
+        if candidate_id:
+            logger.info("[realtime_scraping] Recipe candidate stored: id=%s", candidate_id)
+        return candidate_id
+    except Exception as e:
+        logger.debug("[realtime_scraping] Recipe candidate commit skipped: %s", e)
+        return ""
+
+
 def persist_accepted_worker_result(worker_result: dict, review: dict, source: str = "realtime_scraping") -> tuple[int, dict, dict, str]:
     """Persist accepted worker data and update the stored submission row."""
     submission = dict(worker_result.get("submission") or {})
@@ -284,6 +305,9 @@ def persist_accepted_worker_result(worker_result: dict, review: dict, source: st
         review=review,
         source=source,
     )
+    candidate_id = _commit_recipe_candidate(submission, review, source, submission_id)
+    if candidate_id:
+        submission["recipe_candidate_id"] = candidate_id
     return persisted_count, submission, review, submission_id
 
 

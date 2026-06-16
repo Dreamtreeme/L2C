@@ -96,6 +96,8 @@ This keeps the original principle: code guards structure and safety, while meani
 
 `worker_submissions.payload_json.feedback_episodes` is the immutable submission snapshot that the commander reviewed. It intentionally duplicates the run evidence so a review decision can be audited even if the event log is queried or compacted differently later.
 
+`recipe_candidates` stores accepted submissions that the commander marked as replay candidates. These rows are pending replay tests only; they do not activate Reflex behavior and do not write to the active `recipes` table.
+
 ## Top-level commander graph
 
 `agent.graph.commander_workflow` is the explicit LangGraph orchestration layer above the child vision worker. Its route is:

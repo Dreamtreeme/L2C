@@ -256,6 +256,9 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
         "SELECT review_decision, payload_json FROM worker_submissions WHERE keyword = ? ORDER BY review_attempt DESC, updated_at DESC LIMIT 1",
         ("부분수집컴퍼니",),
     ).fetchone()
+    candidate_row = conn.execute(
+        "SELECT status, steps_json FROM recipe_candidates ORDER BY updated_at DESC LIMIT 1"
+    ).fetchone()
     conn.close()
     assert row is not None
     assert row[0] == "부분수집컴퍼니"
@@ -264,6 +267,11 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     submission_payload = json.loads(submission_row[1])
     assert [step["action"] for step in submission_payload["recorded_steps"]] == ["click_marker", "go_back", "scroll"]
     assert submission_payload["recorded_steps"][0]["state_key"] == "state-a"
+    assert candidate_row is not None
+    assert candidate_row[0] == "pending_replay"
+    candidate_steps = json.loads(candidate_row[1])
+    assert [step["action"] for step in candidate_steps] == ["click_marker", "go_back", "scroll"]
+
 
 def test_browser_back_marker_detection():
     from agent.graph.nodes import _is_browser_back_marker_bbox

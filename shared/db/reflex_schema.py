@@ -49,11 +49,37 @@ WORKER_SUBMISSIONS_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_worker_submissions_site ON worker_submissions(site, review_decision);",
 )
 
+RECIPE_CANDIDATES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS recipe_candidates (
+    candidate_id      TEXT PRIMARY KEY,
+    run_id            TEXT NOT NULL,
+    submission_id     TEXT NOT NULL,
+    source            TEXT,
+    site              TEXT,
+    goal              TEXT,
+    keyword           TEXT,
+    status            TEXT NOT NULL DEFAULT 'pending_replay',
+    review_confidence REAL,
+    steps_json        TEXT NOT NULL,
+    payload_json      TEXT NOT NULL,
+    review_json       TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+"""
+
+RECIPE_CANDIDATES_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_run ON recipe_candidates(run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_site_status ON recipe_candidates(site, status);",
+)
+
 REFLEX_MEMORY_SCHEMA = "\n".join(
     [
         FEEDBACK_EPISODES_TABLE_SQL,
         *FEEDBACK_EPISODES_INDEX_SQL,
         WORKER_SUBMISSIONS_TABLE_SQL,
         *WORKER_SUBMISSIONS_INDEX_SQL,
+        RECIPE_CANDIDATES_TABLE_SQL,
+        *RECIPE_CANDIDATES_INDEX_SQL,
     ]
 )

@@ -1,4 +1,4 @@
-"""SQLite store for commander-reviewed worker submissions."""
+"""SQLite store for commander-reviewed Reflex recipe candidates."""
 
 from __future__ import annotations
 
@@ -6,74 +6,82 @@ from datetime import datetime
 from typing import Any
 
 from agent.recipe.sqlite_store import SQLiteStore
-from shared.db.reflex_schema import WORKER_SUBMISSIONS_INDEX_SQL, WORKER_SUBMISSIONS_TABLE_SQL
+from shared.db.reflex_schema import RECIPE_CANDIDATES_INDEX_SQL, RECIPE_CANDIDATES_TABLE_SQL
 
 
-class SubmissionStore(SQLiteStore):
+class RecipeCandidateStore(SQLiteStore):
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
-            conn.execute(WORKER_SUBMISSIONS_TABLE_SQL)
-            for sql in WORKER_SUBMISSIONS_INDEX_SQL:
+            conn.execute(RECIPE_CANDIDATES_TABLE_SQL)
+            for sql in RECIPE_CANDIDATES_INDEX_SQL:
                 conn.execute(sql)
 
-    def commit_submission(
+    def commit_candidate(
         self,
         submission: dict[str, Any],
         review: dict[str, Any] | None = None,
         source: str = "vision_worker",
+        submission_id: str = "",
+        status: str = "pending_replay",
     ) -> str:
         review = review or {}
+        if review.get("decision") != "accept" or not review.get("recipe_candidate"):
+            return ""
+        steps = [step for step in submission.get("recorded_steps", []) or [] if isinstance(step, dict)]
+        if not steps:
+            return ""
+
         run_id = submission.get("run_id") or "run-unknown"
         attempt = int(submission.get("review_attempt") or 0)
-        submission_id = f"{run_id}:{attempt}"
+        candidate_id = submission_id or f"{run_id}:{attempt}"
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
             existing = conn.execute(
-                "SELECT created_at FROM worker_submissions WHERE submission_id=?",
-                (submission_id,),
+                "SELECT created_at FROM recipe_candidates WHERE candidate_id=?",
+                (candidate_id,),
             ).fetchone()
             created_at = existing["created_at"] if existing else now
             conn.execute(
                 """
-                INSERT OR REPLACE INTO worker_submissions (
-                    submission_id, run_id, source, site, goal, keyword, run_status,
-                    review_attempt, review_decision, review_confidence, feedback_to_worker,
-                    payload_json, review_json, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                INSERT OR REPLACE INTO recipe_candidates (
+                    candidate_id, run_id, submission_id, source, site, goal, keyword,
+                    status, review_confidence, steps_json, payload_json, review_json,
+                    created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
-                    submission_id,
+                    candidate_id,
                     run_id,
+                    submission_id or candidate_id,
                     source,
                     submission.get("site", "") or "",
                     submission.get("goal", "") or "",
                     submission.get("keyword", "") or "",
-                    submission.get("run_status", "") or "",
-                    attempt,
-                    review.get("decision", "") or "",
+                    status,
                     float(review.get("confidence") or 0.0),
-                    review.get("feedback_to_worker", "") or "",
+                    self.dump_json(steps),
                     self.dump_json(submission),
                     self.dump_json(review),
                     created_at,
                     now,
                 ),
             )
-        return submission_id
+        return candidate_id
 
-    def list_recent(self, limit: int = 20, decision: str | None = None) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM worker_submissions"
+    def list_recent(self, limit: int = 20, status: str | None = None) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM recipe_candidates"
         params: list[Any] = []
-        if decision:
-            sql += " WHERE review_decision=?"
-            params.append(decision)
-        sql += " ORDER BY updated_at DESC, submission_id DESC LIMIT ?"
+        if status:
+            sql += " WHERE status=?"
+            params.append(status)
+        sql += " ORDER BY updated_at DESC, candidate_id DESC LIMIT ?"
         params.append(limit)
         with self._conn() as conn:
             rows = conn.execute(sql, params).fetchall()
         out = []
         for row in rows:
             item = dict(row)
+            item["steps"] = self.load_json(item.pop("steps_json", ""), [])
             item["payload"] = self.load_json(item.pop("payload_json", ""), {})
             item["review"] = self.load_json(item.pop("review_json", ""), {})
             out.append(item)

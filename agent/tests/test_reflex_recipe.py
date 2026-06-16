@@ -459,14 +459,18 @@ def test_database_initializes_feedback_episode_table(tmp_path):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     columns = [row[1] for row in conn.execute("PRAGMA table_info(feedback_episodes)").fetchall()]
     submission_columns = [row[1] for row in conn.execute("PRAGMA table_info(worker_submissions)").fetchall()]
+    candidate_columns = [row[1] for row in conn.execute("PRAGMA table_info(recipe_candidates)").fetchall()]
     conn.close()
 
     assert "feedback_episodes" in tables
     assert "worker_submissions" in tables
+    assert "recipe_candidates" in tables
     assert "episode_id" in columns
     assert "feedback_label" in columns
     assert "submission_id" in submission_columns
     assert "review_decision" in submission_columns
+    assert "candidate_id" in candidate_columns
+    assert "steps_json" in candidate_columns
 
 
 def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch):
@@ -569,3 +573,45 @@ def test_submission_store_commits_and_reads_recent(tmp_path):
     assert rows[0]["review_decision"] == "accept"
     assert rows[0]["payload"]["keyword"] == "ai engineer"
     assert rows[0]["review"]["confidence"] == 0.7
+
+
+def test_recipe_candidate_store_commits_reviewed_candidate(tmp_path):
+    from agent.recipe.candidate_store import RecipeCandidateStore
+
+    submission = {
+        "run_id": "worker-run-1",
+        "goal": "collect jobs",
+        "site": "wanted",
+        "keyword": "ai engineer",
+        "review_attempt": 0,
+        "recorded_steps": [
+            {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
+        ],
+    }
+    review = {"decision": "accept", "recipe_candidate": True, "confidence": 0.7}
+    store = RecipeCandidateStore(tmp_path / "candidates.db")
+
+    candidate_id = store.commit_candidate(submission, review=review, source="test", submission_id="worker-run-1:0")
+    rows = store.list_recent(limit=5)
+
+    assert candidate_id == "worker-run-1:0"
+    assert len(rows) == 1
+    assert rows[0]["status"] == "pending_replay"
+    assert rows[0]["site"] == "wanted"
+    assert rows[0]["steps"][0]["state_key"] == "state-a"
+    assert rows[0]["payload"]["keyword"] == "ai engineer"
+    assert rows[0]["review"]["recipe_candidate"] is True
+
+
+def test_recipe_candidate_store_skips_non_candidates(tmp_path):
+    from agent.recipe.candidate_store import RecipeCandidateStore
+
+    store = RecipeCandidateStore(tmp_path / "candidates.db")
+    candidate_id = store.commit_candidate(
+        {"run_id": "worker-run-1", "review_attempt": 0, "recorded_steps": [{"state_key": "state-a"}]},
+        review={"decision": "accept", "recipe_candidate": False},
+        source="test",
+    )
+
+    assert candidate_id == ""
+    assert store.list_recent(limit=5) == []
