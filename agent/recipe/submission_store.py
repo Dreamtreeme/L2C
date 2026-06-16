@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from shared.db.reflex_schema import WORKER_SUBMISSIONS_INDEX_SQL, WORKER_SUBMISSIONS_TABLE_SQL
+
 
 class SubmissionStore:
     def __init__(self, db_path=None):
@@ -31,29 +33,9 @@ class SubmissionStore:
 
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS worker_submissions (
-                    submission_id      TEXT PRIMARY KEY,
-                    run_id             TEXT NOT NULL,
-                    source             TEXT,
-                    site               TEXT,
-                    goal               TEXT,
-                    keyword            TEXT,
-                    run_status         TEXT,
-                    review_attempt     INTEGER NOT NULL DEFAULT 0,
-                    review_decision    TEXT,
-                    review_confidence  REAL,
-                    feedback_to_worker TEXT,
-                    payload_json       TEXT NOT NULL,
-                    review_json        TEXT,
-                    created_at         TEXT NOT NULL,
-                    updated_at         TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_worker_submissions_run ON worker_submissions(run_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_worker_submissions_site ON worker_submissions(site, review_decision)")
+            conn.execute(WORKER_SUBMISSIONS_TABLE_SQL)
+            for sql in WORKER_SUBMISSIONS_INDEX_SQL:
+                conn.execute(sql)
 
     @staticmethod
     def _dump(payload: dict[str, Any] | None) -> str:

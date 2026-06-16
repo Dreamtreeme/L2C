@@ -139,11 +139,11 @@ def prepare_retry_node(state: CommanderState) -> dict:
 def persist_accepted_node(state: CommanderState) -> dict:
     worker_result = dict(state.get("current_worker_result") or {})
     review = dict(state.get("current_review") or {})
-    persisted_count, submission, updated_review, submission_id = persist_accepted_worker_result(worker_result, review, source="commander_graph")
+    persisted_count, submission, persisted_review, submission_id = persist_accepted_worker_result(worker_result, review, source="commander_graph")
     return {
         "current_worker_result": worker_result,
         "current_submission": submission,
-        "current_review": updated_review,
+        "current_review": persisted_review,
         "current_submission_id": submission_id or state.get("current_submission_id", ""),
         "accepted_sites": [state.get("current_site", "")],
         "current_site_index": int(state.get("current_site_index", 0) or 0) + 1,

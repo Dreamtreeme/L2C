@@ -242,12 +242,6 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
 
     monkeypatch.setattr("agent.graph.workflow.build_graph", mock_build_graph)
 
-    committed = {}
-    monkeypatch.setattr(
-        "agent.recipe.record.commit_if_finished",
-        lambda steps, state, current_url: committed.update(steps=steps, current_url=current_url),
-    )
-
     from agent.tools.realtime_scraping import realtime_scraping
 
     result = realtime_scraping.invoke({"company": "부분수집컴퍼니"})

@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from shared.db.reflex_schema import FEEDBACK_EPISODES_INDEX_SQL, FEEDBACK_EPISODES_TABLE_SQL
+
 
 class FeedbackStore:
     def __init__(self, db_path=None):
@@ -36,28 +38,9 @@ class FeedbackStore:
 
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS feedback_episodes (
-                    episode_id         TEXT PRIMARY KEY,
-                    run_id             TEXT NOT NULL,
-                    run_status         TEXT,
-                    source             TEXT,
-                    site               TEXT,
-                    goal               TEXT,
-                    page_state_key     TEXT,
-                    action             TEXT,
-                    feedback_label     TEXT,
-                    feedback_reason    TEXT,
-                    feedback_confidence REAL,
-                    payload_json       TEXT NOT NULL,
-                    created_at         TEXT NOT NULL
-                )
-                """
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_run ON feedback_episodes(run_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_site_label ON feedback_episodes(site, feedback_label)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_action ON feedback_episodes(action)")
+            conn.execute(FEEDBACK_EPISODES_TABLE_SQL)
+            for sql in FEEDBACK_EPISODES_INDEX_SQL:
+                conn.execute(sql)
 
     @staticmethod
     def _dump_episode(episode: dict[str, Any]) -> str:

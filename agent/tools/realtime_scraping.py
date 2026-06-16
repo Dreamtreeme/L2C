@@ -277,8 +277,14 @@ def persist_accepted_worker_result(worker_result: dict, review: dict, source: st
     persisted_count = _persist_collected_data(worker_result.get("extracted_jd") or {}, worker_result.get("keyword", ""))
     submission["persisted_count"] = persisted_count
     worker_result["submission"] = submission
-    updated_review, submission_id = commit_worker_review(submission, source=source)
-    return persisted_count, submission, updated_review, submission_id
+    from agent.recipe.submission_store import SubmissionStore
+
+    submission_id = SubmissionStore().commit_submission(
+        submission,
+        review=review,
+        source=source,
+    )
+    return persisted_count, submission, review, submission_id
 
 
 def _result_payload(

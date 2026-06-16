@@ -89,6 +89,13 @@ The revised flow is:
 7. Only accepted submissions persist collected job data. Reflex recipe activation is deferred to a later Critic/Memory promotion step and replay test.
 
 This keeps the original principle: code guards structure and safety, while meaning-level decisions such as wrong target, reusable parameter, and recipe candidacy are handled by the feedback loop instead of site-specific hard-coded promotion rules.
+
+### Stored evidence roles
+
+`feedback_episodes` is the event log for action-level evidence. It is optimized for later analysis by run, site, action, and feedback label.
+
+`worker_submissions.payload_json.feedback_episodes` is the immutable submission snapshot that the commander reviewed. It intentionally duplicates the run evidence so a review decision can be audited even if the event log is queried or compacted differently later.
+
 ## Top-level commander graph
 
 `agent.graph.commander_workflow` is the explicit LangGraph orchestration layer above the child vision worker. Its route is:
