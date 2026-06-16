@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS recipe_candidates (
     steps_json        TEXT NOT NULL,
     payload_json      TEXT NOT NULL,
     review_json       TEXT,
+    validation_json   TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );

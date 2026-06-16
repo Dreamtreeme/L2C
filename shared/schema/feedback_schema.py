@@ -112,3 +112,12 @@ class CommanderReview(BaseModel):
     feedback_to_worker: str = ""
     recipe_candidate: bool = False
     confidence: float = Field(0.0, ge=0.0, le=1.0)
+
+class RecipeCandidateReview(BaseModel):
+    """Critic verdict for a pending Reflex recipe candidate."""
+
+    decision: ReviewDecision
+    reasons: List[str] = Field(default_factory=list)
+    feedback_to_worker: str = ""
+    promote_to_active_recipe: bool = False
+    confidence: float = Field(0.0, ge=0.0, le=1.0)

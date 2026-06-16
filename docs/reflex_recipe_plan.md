@@ -96,7 +96,9 @@ This keeps the original principle: code guards structure and safety, while meani
 
 `worker_submissions.payload_json.feedback_episodes` is the immutable submission snapshot that the commander reviewed. It intentionally duplicates the run evidence so a review decision can be audited even if the event log is queried or compacted differently later.
 
-`recipe_candidates` stores accepted submissions that the commander marked as replay candidates. These rows are pending replay tests only; they do not activate Reflex behavior and do not write to the active `recipes` table.
+`recipe_candidates` stores accepted submissions that the commander marked as replay candidates. These rows are pending Critic review only; they do not activate Reflex behavior by themselves and do not write to the active `recipes` table.
+
+The candidate promotion gate is LLM-led. Code only packages the candidate row, worker submission, recorded steps, and previous commander review into the `RecipeCandidateReview` prompt shape. It does not score target quality, generalizability, expected next state, or whether a UI action is reusable. The Critic LLM returns `accept`, `revise`, or `reject`; only `accept` with `promote_to_active_recipe=true` writes to active `recipes`.
 
 ## Top-level commander graph
 

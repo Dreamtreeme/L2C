@@ -471,6 +471,7 @@ def test_database_initializes_feedback_episode_table(tmp_path):
     assert "review_decision" in submission_columns
     assert "candidate_id" in candidate_columns
     assert "steps_json" in candidate_columns
+    assert "validation_json" in candidate_columns
 
 
 def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch):
@@ -615,3 +616,132 @@ def test_recipe_candidate_store_skips_non_candidates(tmp_path):
 
     assert candidate_id == ""
     assert store.list_recent(limit=5) == []
+
+def _sample_recipe_candidate_submission():
+    return {
+        "run_id": "worker-run-critic",
+        "goal": "collect jobs",
+        "site": "wanted",
+        "keyword": "ai engineer",
+        "review_attempt": 0,
+        "recorded_steps": [
+            {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
+        ],
+    }
+
+
+def test_recipe_candidate_status_update_records_llm_validation(tmp_path):
+    from agent.recipe.candidate_store import RecipeCandidateStore
+
+    store = RecipeCandidateStore(tmp_path / "candidates.db")
+    candidate_id = store.commit_candidate(
+        _sample_recipe_candidate_submission(),
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-critic:0",
+    )
+
+    assert store.update_status(
+        candidate_id,
+        "revise",
+        validation={"review": {"decision": "revise", "reasons": ["needs clearer evidence"]}},
+    ) is True
+    row = store.get_candidate(candidate_id)
+
+    assert row["status"] == "revise"
+    assert row["validation"]["review"]["decision"] == "revise"
+
+
+def test_candidate_reviewer_promotes_only_when_llm_accepts(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    store = RecipeCandidateStore(tmp_path / "critic.db")
+    candidate_id = store.commit_candidate(
+        _sample_recipe_candidate_submission(),
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-critic:0",
+    )
+
+    seen = {}
+
+    def critic(payload):
+        seen["payload"] = payload
+        return {
+            "decision": "accept",
+            "reasons": ["critic chose to promote"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "confidence": 0.82,
+        }
+
+    review = review_and_apply_candidate(candidate_id, db_path=tmp_path / "critic.db", critic=critic)
+    candidate = store.get_candidate(candidate_id)
+    recipes = RecipeStore(tmp_path / "critic.db").get_by_site("wanted")
+
+    assert seen["payload"]["candidate_id"] == candidate_id
+    assert seen["payload"]["steps"][0]["state_key"] == "state-a"
+    assert review["decision"] == "accept"
+    assert review["promoted_count"] == 1
+    assert candidate["status"] == "accepted"
+    assert candidate["validation"]["promoted_count"] == 1
+    assert recipes[0]["steps"][0]["state_key"] == "state-a"
+
+
+def test_candidate_reviewer_revise_does_not_promote(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    store = RecipeCandidateStore(tmp_path / "critic.db")
+    candidate_id = store.commit_candidate(
+        _sample_recipe_candidate_submission(),
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-critic:0",
+    )
+
+    review = review_and_apply_candidate(
+        candidate_id,
+        db_path=tmp_path / "critic.db",
+        critic=lambda payload: {
+            "decision": "revise",
+            "reasons": ["critic requested another worker pass"],
+            "feedback_to_worker": "collect clearer action rationale",
+            "promote_to_active_recipe": False,
+            "confidence": 0.6,
+        },
+    )
+    candidate = store.get_candidate(candidate_id)
+
+    assert review["decision"] == "revise"
+    assert review["promoted_count"] == 0
+    assert candidate["status"] == "revise"
+    assert RecipeStore(tmp_path / "critic.db").get_by_site("wanted") == []
+
+
+def test_candidate_reviewer_invalid_llm_shape_falls_back_to_revise(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+
+    store = RecipeCandidateStore(tmp_path / "critic.db")
+    candidate_id = store.commit_candidate(
+        _sample_recipe_candidate_submission(),
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-critic:0",
+    )
+
+    review = review_and_apply_candidate(
+        candidate_id,
+        db_path=tmp_path / "critic.db",
+        critic=lambda payload: {"not_the_schema": True},
+    )
+    candidate = store.get_candidate(candidate_id)
+
+    assert review["decision"] == "revise"
+    assert review["promote_to_active_recipe"] is False
+    assert candidate["status"] == "revise"
+    assert "critic_review_failed" in candidate["validation"]["review"]["reasons"][0]
