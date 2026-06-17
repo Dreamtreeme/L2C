@@ -31,6 +31,7 @@ class PerceptionEngine:
         self.scale_x = 1.0
         self.scale_y = 1.0
         self.last_region = None
+        self._browser_window_id = None
         self._last_url = ""
         self._analysis_cache: Dict[str, Dict[str, Any]] = {}
         self._analysis_cache_order: list[str] = []
@@ -49,40 +50,99 @@ class PerceptionEngine:
         except ValueError:
             return default
 
-    def _get_browser_region(self) -> Optional[Dict[str, int]]:
-        """
-        열려있는 창 중에서 브라우저(Chrome, Edge, Whale)를 찾아 해당 영역을 반환합니다.
-        """
-        keywords = ["Chrome", "Edge", "Whale", "크롬", "엣지", "웨일"]
-        
-        for win in gw.getAllWindows():
-            # 최소화되어 있거나 숨겨진 창은 제외
-            if not win.visible or win.isMinimized:
-                continue
-                
-            if any(k in win.title for k in keywords):
-                # 브라우저를 맨 앞으로 가져오기 (포커스 활성화)
-                try:
-                    win.activate()
-                except Exception as e:
-                    logger.debug("Failed to activate window (bring to front)", error=str(e))
-                    
-                # Windows 10/11의 DWM(Desktop Window Manager)은 
-                # 창 주변의 투명한 그림자 영역(약 8px)까지 창 크기로 인식합니다.
-                # 배경이 찍히는 것을 막기 위해 이 보이지 않는 테두리를 잘라냅니다.
-                border = 8
-                
-                # 최대화 상태일 때 상단 여백도 조정 필요 (-8로 넘어오는 경우가 많음)
-                top = win.top + border if win.isMaximized else win.top
-                
-                return {
-                    "top": top,
-                    "left": win.left + border,
-                    "width": win.width - (border * 2),
-                    "height": win.height - border - (border if win.isMaximized else 0)
-                }
+    @staticmethod
+    def _window_id(window) -> int | None:
+        return getattr(window, "_hWnd", None) or getattr(window, "hWnd", None)
+
+    @staticmethod
+    def _is_visible_window(window) -> bool:
+        return (
+            bool(getattr(window, "visible", True))
+            and not bool(getattr(window, "isMinimized", False))
+            and int(getattr(window, "width", 0) or 0) > 0
+            and int(getattr(window, "height", 0) or 0) > 0
+        )
+
+    @staticmethod
+    def _looks_like_browser_window(window) -> bool:
+        title = str(getattr(window, "title", "") or "")
+        if not title:
+            return False
+        lowered = title.lower()
+        keywords = (
+            "chrome",
+            "chromium",
+            "microsoft edge",
+            "firefox",
+            "brave",
+            "whale",
+            "네이버 웨일",
+            "웨일",
+            "크롬",
+        )
+        return any(keyword in lowered for keyword in keywords)
+
+    def bind_browser_window(self, window) -> bool:
+        window_id = self._window_id(window)
+        if not window_id:
+            return False
+        self._browser_window_id = window_id
+        logger.info(
+            "Bound perception to browser window",
+            window_id=window_id,
+            title=str(getattr(window, "title", "") or "")[:120],
+        )
+        return True
+
+    def clear_browser_window(self) -> None:
+        self._browser_window_id = None
+        self.last_region = None
+
+    def _browser_region_from_window(self, win) -> Dict[str, int]:
+        try:
+            win.activate()
+        except Exception as e:
+            logger.debug("Failed to activate window (bring to front)", error=str(e))
+
+        border = 8
+        top = win.top + border if win.isMaximized else win.top
+        return {
+            "top": top,
+            "left": win.left + border,
+            "width": win.width - (border * 2),
+            "height": win.height - border - (border if win.isMaximized else 0),
+        }
+
+    def _find_browser_window(self):
+        windows = [win for win in gw.getAllWindows() if self._is_visible_window(win)]
+        preferred_id = self._browser_window_id
+        if preferred_id:
+            for win in windows:
+                if self._window_id(win) == preferred_id and self._looks_like_browser_window(win):
+                    return win
+            logger.info("Preferred browser window disappeared; clearing binding", window_id=preferred_id)
+            self.clear_browser_window()
+
+        active = gw.getActiveWindow()
+        if active and self._is_visible_window(active) and self._looks_like_browser_window(active):
+            self.bind_browser_window(active)
+            return active
+
+        for win in windows:
+            if self._looks_like_browser_window(win):
+                self.bind_browser_window(win)
+                return win
         return None
 
+    def _get_browser_region(self) -> Optional[Dict[str, int]]:
+        """
+        Return the bound browser window region when available.
+        If no browser is bound yet, bind the active visible browser first, then fall back to any visible browser.
+        """
+        win = self._find_browser_window()
+        if not win:
+            return None
+        return self._browser_region_from_window(win)
     def capture_screen(self, filename: Optional[str] = None, initial_wait_sec: Optional[float] = None) -> Path:
         """
         화면이 안정화될 때까지 기다린 후 브라우저 창 영역을 캡처합니다.

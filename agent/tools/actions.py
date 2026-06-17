@@ -1,4 +1,6 @@
 import os
+import subprocess
+from pathlib import Path
 from urllib.parse import urlparse
 import time
 from typing import Dict, Any, List
@@ -42,6 +44,119 @@ class ActionTools:
         if seconds > 0:
             time.sleep(seconds)
 
+    def _window_id(self, window: Any) -> int | None:
+        helper = getattr(self.perception, "_window_id", None)
+        if helper:
+            return helper(window)
+        return getattr(window, "_hWnd", None) or getattr(window, "hWnd", None)
+
+    def _browser_windows(self) -> list[Any]:
+        looks_like = getattr(self.perception, "_looks_like_browser_window", self._looks_like_browser_window)
+        is_visible = getattr(
+            self.perception,
+            "_is_visible_window",
+            lambda win: not bool(getattr(win, "isMinimized", False))
+            and int(getattr(win, "width", 0) or 0) > 0
+            and int(getattr(win, "height", 0) or 0) > 0,
+        )
+        return [win for win in gw.getAllWindows() if is_visible(win) and looks_like(win)]
+
+    def _browser_window_ids(self) -> set[int]:
+        return {window_id for window_id in (self._window_id(win) for win in self._browser_windows()) if window_id}
+
+    def _bound_browser_window_exists(self) -> bool:
+        preferred_id = getattr(self.perception, "_browser_window_id", None)
+        if not preferred_id:
+            return False
+        return preferred_id in self._browser_window_ids()
+
+    def _bind_browser_window(self, window: Any | None) -> bool:
+        if not window:
+            return False
+        binder = getattr(self.perception, "bind_browser_window", None)
+        if binder:
+            return bool(binder(window))
+        return False
+
+    def _bind_new_or_active_browser_window(self, before_ids: set[int] | None = None) -> bool:
+        before_ids = before_ids or set()
+        windows = self._browser_windows()
+        active = gw.getActiveWindow()
+        active_id = self._window_id(active) if active else None
+        new_windows = [win for win in windows if self._window_id(win) not in before_ids]
+
+        target = None
+        if active_id and any(self._window_id(win) == active_id for win in new_windows):
+            target = active
+        elif new_windows:
+            target = new_windows[-1]
+        elif active and any(self._window_id(win) == active_id for win in windows):
+            target = active
+        elif windows:
+            target = windows[0]
+        return self._bind_browser_window(target)
+
+    def _browser_executable(self) -> Path | None:
+        configured = os.getenv("VISION_BROWSER_EXECUTABLE", "").strip().strip('"')
+        if configured:
+            path = Path(configured)
+            if path.exists():
+                return path
+
+        candidates = []
+        for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+            base = os.getenv(env_name)
+            if not base:
+                continue
+            base_path = Path(base)
+            candidates.extend(
+                [
+                    base_path / "Google" / "Chrome" / "Application" / "chrome.exe",
+                    base_path / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+                ]
+            )
+        for path in candidates:
+            if path.exists():
+                return path
+        return None
+
+    def _open_url_in_new_window(self, url: str) -> dict[str, Any]:
+        before_ids = self._browser_window_ids()
+        browser_exe = self._browser_executable()
+        launcher = "webbrowser.open_new"
+        if browser_exe:
+            subprocess.Popen(
+                [str(browser_exe), "--new-window", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            launcher = str(browser_exe)
+        else:
+            import webbrowser
+            webbrowser.open_new(url)
+
+        self._sleep(self._env_float("VISION_BROWSER_OPEN_WAIT_SEC", 0.8))
+        bound = self._bind_new_or_active_browser_window(before_ids)
+        return {"opened": True, "url": url, "reason": "new_browser_window", "launcher": launcher, "bound_window": bound}
+
+    def _navigate_bound_browser(self, url: str) -> dict[str, Any]:
+        region = self.perception._get_browser_region()
+        if not region:
+            return self._open_url_in_new_window(url)
+
+        modifier = "command" if platform.system() == "Darwin" else "ctrl"
+        old_pause = pyautogui.PAUSE
+        key_pause = self._env_float("VISION_URL_KEY_PAUSE_SEC", 0.015)
+        pyautogui.PAUSE = min(old_pause, key_pause)
+        try:
+            pyautogui.hotkey(modifier, "l")
+            pyperclip.copy(url)
+            self._sleep(self._cfg_float("clipboard_delay_sec", "VISION_ACTION_CLIPBOARD_DELAY_SEC", 0.02))
+            pyautogui.hotkey(modifier, "v")
+            pyautogui.press("enter")
+        finally:
+            pyautogui.PAUSE = old_pause
+        return {"opened": True, "url": url, "reason": "dedicated_browser_navigated"}
     def _action_region(self):
         return getattr(self.perception, "last_region", None) or self.perception._get_browser_region()
 
@@ -170,40 +285,21 @@ class ActionTools:
         return self._execute("press_key", _press)
 
     def open_browser(self, url: str, current_url: str = "") -> Dict[str, Any]:
-        """기본 브라우저를 열거나, 이미 같은 사이트가 열려 있으면 재사용합니다."""
+        """Open the first target in a dedicated browser window, then navigate only that bound window."""
         def _open():
             if self._same_site_or_url(current_url, url):
                 return {"opened": False, "url": current_url, "reason": "state_url_already_matches"}
 
-            if self.perception._get_browser_region():
-                browser_url = self.perception.get_current_url()
-                if self._same_site_or_url(browser_url, url):
-                    return {"opened": False, "url": browser_url, "reason": "active_browser_already_matches"}
+            if self._bound_browser_window_exists():
+                return self._navigate_bound_browser(url)
 
-            import webbrowser
-            webbrowser.open(url)
-            return {"opened": True, "url": url}
+            return self._open_url_in_new_window(url)
 
         return self._execute("open_browser", _open)
 
     @staticmethod
     def _looks_like_browser_window(window: Any) -> bool:
-        title = str(getattr(window, "title", "") or "")
-        if not title:
-            return False
-        lowered = title.lower()
-        browser_keywords = (
-            "chrome",
-            "chromium",
-            "microsoft edge",
-            "firefox",
-            "brave",
-            "whale",
-            "크롬",
-            "엣지",
-            "웨일",
-        )
-        return any(keyword in lowered for keyword in browser_keywords)
+        return PerceptionEngine._looks_like_browser_window(window)
 
     def _find_browser_window(self):
         active_window = gw.getActiveWindow()
@@ -236,6 +332,8 @@ class ActionTools:
                 logger.debug(f"Browser window activation skipped before close: {e}")
 
             window.close()
+            if hasattr(self, "perception") and hasattr(self.perception, "clear_browser_window"):
+                self.perception.clear_browser_window()
             return {"closed": True, "title": title}
 
         return self._execute("close_browser", _close)

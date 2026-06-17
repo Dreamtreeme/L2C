@@ -545,3 +545,118 @@ def test_action_node_executes_close_browser(monkeypatch):
     assert action["action"] == "close_browser"
     assert result["last_action_screen_changed"] is True
     assert result["current_url_stale"] is True
+
+def test_open_browser_uses_new_window_when_no_browser_is_bound(monkeypatch):
+    from pathlib import Path
+
+    from agent.tools import actions
+    from agent.tools.actions import ActionTools
+
+    launched = []
+    bound_calls = []
+
+    class FakePerception:
+        _browser_window_id = None
+
+    def fake_popen(args, stdout=None, stderr=None):
+        launched.append(args)
+        return object()
+
+    action_tools = object.__new__(ActionTools)
+    action_tools.perception = FakePerception()
+    action_tools.clipboard_delay_sec = 0
+
+    monkeypatch.setattr(action_tools, "_browser_window_ids", lambda: set())
+    browser_exe = Path("C:/Chrome/chrome.exe")
+    monkeypatch.setattr(action_tools, "_browser_executable", lambda: browser_exe)
+    monkeypatch.setattr(action_tools, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(action_tools, "_bind_new_or_active_browser_window", lambda before_ids: bound_calls.append(before_ids) or True)
+    monkeypatch.setattr(actions.subprocess, "Popen", fake_popen)
+
+    result = action_tools.open_browser("https://www.wanted.co.kr", current_url="")
+
+    assert result["status"] == "success"
+    assert result["result"]["opened"] is True
+    assert result["result"]["reason"] == "new_browser_window"
+    assert launched == [[str(browser_exe), "--new-window", "https://www.wanted.co.kr"]]
+    assert bound_calls == [set()]
+
+
+def test_open_browser_navigates_bound_window_instead_of_opening_another(monkeypatch):
+    from agent.tools import actions
+    from agent.tools.actions import ActionTools
+
+    calls = []
+
+    class FakePerception:
+        _browser_window_id = 10
+
+        def _get_browser_region(self):
+            calls.append("region")
+            return {"left": 0, "top": 0, "width": 1000, "height": 800}
+
+    class FakePyAutoGUI:
+        PAUSE = 0.1
+
+        def hotkey(self, *keys):
+            calls.append(("hotkey", keys))
+
+        def press(self, key):
+            calls.append(("press", key))
+
+    fake_pyautogui = FakePyAutoGUI()
+    copied = []
+    action_tools = object.__new__(ActionTools)
+    action_tools.perception = FakePerception()
+    action_tools.clipboard_delay_sec = 0
+
+    monkeypatch.setattr(action_tools, "_browser_window_ids", lambda: {10})
+    monkeypatch.setattr(action_tools, "_open_url_in_new_window", lambda url: (_ for _ in ()).throw(AssertionError("should reuse bound window")))
+    monkeypatch.setattr(action_tools, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(actions, "pyautogui", fake_pyautogui)
+    monkeypatch.setattr(actions.pyperclip, "copy", lambda text: copied.append(text))
+
+    result = action_tools.open_browser("https://www.wanted.co.kr/search?query=ai", current_url="https://www.wanted.co.kr")
+
+    assert result["status"] == "success"
+    assert result["result"] == {
+        "opened": True,
+        "url": "https://www.wanted.co.kr/search?query=ai",
+        "reason": "dedicated_browser_navigated",
+    }
+    assert copied == ["https://www.wanted.co.kr/search?query=ai"]
+    assert calls == ["region", ("hotkey", ("ctrl", "l")), ("hotkey", ("ctrl", "v")), ("press", "enter")]
+
+
+def test_perception_prefers_bound_browser_window(monkeypatch):
+    from agent.tools import perception
+    from agent.tools.perception import PerceptionEngine
+
+    class FakeWindow:
+        def __init__(self, hwnd, title):
+            self._hWnd = hwnd
+            self.title = title
+            self.visible = True
+            self.isMinimized = False
+            self.width = 1200
+            self.height = 800
+            self.top = 10
+            self.left = 20
+            self.isMaximized = False
+
+    unrelated = FakeWindow(1, "Spreadsheet - Google Chrome")
+    wanted = FakeWindow(2, "Wanted - Google Chrome")
+
+    class FakeGW:
+        def getAllWindows(self):
+            return [unrelated, wanted]
+
+        def getActiveWindow(self):
+            return unrelated
+
+    monkeypatch.setattr(perception, "gw", FakeGW())
+    engine = object.__new__(PerceptionEngine)
+    engine._browser_window_id = 2
+    engine.last_region = None
+
+    assert engine._find_browser_window() is wanted

@@ -103,7 +103,7 @@ def _close_browser_after_run() -> None:
     except Exception as e:
         logger.debug("[realtime_scraping] Browser cleanup skipped: %s", e)
 
-def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_finished: bool) -> int:
+def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_finished: bool, run_id: str = "") -> int:
     """Persist feedback episodes for later Critic/Recipe Memory promotion. Best-effort."""
     episodes = list(final_state.get("feedback_episodes", []) or [])
     if not episodes:
@@ -114,6 +114,7 @@ def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_f
 
         saved = FeedbackStore().commit_episodes(
             episodes,
+            run_id=run_id or None,
             run_status=run_status,
             source="realtime_scraping",
         )
@@ -197,13 +198,14 @@ def run_worker_once(
 ) -> dict:
     """Run one child vision worker attempt and return an unreviewed submission payload."""
     from agent.graph.workflow import build_graph
-    from agent.recipe.reviewer import build_worker_submission
+    from agent.recipe.reviewer import build_worker_submission, new_worker_run_id
 
     app = build_graph()
     site_profile = _load_collection_profile(site)
     site_entry = site_profile["entry"]
     site_slug = site_entry.get("slug") or site or "unknown"
     site_name = site_entry.get("display_name") or site_slug
+    run_id = run_id or new_worker_run_id()
     goal = _append_review_feedback(_build_site_goal(search_keyword, site_profile), review_feedback)
     initial_state = _initial_worker_state(goal)
 
@@ -218,7 +220,7 @@ def run_worker_once(
     extracted = final_state.get("extracted_jd", {}) or {}
     is_finished = bool(final_state.get("is_finished", False))
     run_status = _worker_run_status(hit_recursion_limit, is_finished)
-    feedback_saved = _commit_feedback_episodes(final_state, hit_recursion_limit, is_finished)
+    feedback_saved = _commit_feedback_episodes(final_state, hit_recursion_limit, is_finished, run_id=run_id)
     submission = build_worker_submission(
         final_state,
         site=site_slug,

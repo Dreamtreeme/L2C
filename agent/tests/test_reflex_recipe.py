@@ -480,17 +480,19 @@ def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch
     seen = {}
 
     class FakeStore:
-        def commit_episodes(self, episodes, run_status="", source=""):
+        def commit_episodes(self, episodes, run_id=None, run_status="", source=""):
             seen["episodes"] = episodes
+            seen["run_id"] = run_id
             seen["run_status"] = run_status
             seen["source"] = source
             return len(episodes)
 
     monkeypatch.setattr("agent.recipe.feedback_store.FeedbackStore", lambda: FakeStore())
 
-    saved = _commit_feedback_episodes({"feedback_episodes": [_sample_feedback_episode()]}, True, False)
+    saved = _commit_feedback_episodes({"feedback_episodes": [_sample_feedback_episode()]}, True, False, run_id="worker-run-1")
 
     assert saved == 1
+    assert seen["run_id"] == "worker-run-1"
     assert seen["run_status"] == "recursion_limit"
     assert seen["source"] == "realtime_scraping"
 

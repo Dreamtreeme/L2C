@@ -70,6 +70,10 @@ def _job_summary(jobs: list[dict[str, Any]], limit: int = 5) -> list[dict[str, A
     return out
 
 
+def new_worker_run_id() -> str:
+    return f"worker-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+
 def build_worker_submission(
     final_state: dict[str, Any],
     *,
@@ -87,7 +91,7 @@ def build_worker_submission(
     jobs = _job_items(extracted_jd)
     current_url = final_state.get("current_url", "") or ""
     resolved_site = site or site_of(current_url) or "unknown"
-    run_id = run_id or f"worker-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    run_id = run_id or new_worker_run_id()
     submission = WorkerSubmission(
         run_id=run_id,
         goal=final_state.get("goal", "") or "",
