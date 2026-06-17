@@ -172,6 +172,33 @@ class SomEngine:
 
         return self._normalize_ocr_results(self._run_paddle_ocr_once(image_path), scale=scale)
 
+
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return max(0.0, float(os.getenv(name, str(default))))
+        except ValueError:
+            return default
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return max(0, int(os.getenv(name, str(default))))
+        except ValueError:
+            return default
+
+    def _ocr_scale_for_image(self, width: int, height: int) -> float:
+        if os.getenv("SOM_OCR_RESIZE", "true").strip().lower() in {"0", "false", "no", "off"}:
+            return 1.0
+        min_width = self._env_int("SOM_OCR_RESIZE_MIN_WIDTH", 3000)
+        if width < min_width:
+            return 1.0
+        requested = self._env_float("SOM_OCR_SCALE", 1.5)
+        max_width = self._env_int("SOM_OCR_MAX_WIDTH", 4800)
+        if requested <= 1.0 or max_width <= 0:
+            return 1.0
+        return max(1.0, min(requested, max_width / width))
+
     def _run_yolo(self, inference_img, scale: float) -> List[Dict]:
         """YOLOv8으로 아이콘/버튼을 검출하고 원본 이미지 좌표로 복원하여 반환합니다."""
         raw_boxes = []
@@ -307,44 +334,49 @@ class SomEngine:
 
         original_w, original_h = img.size
 
-        # 추론용 리사이즈 (PaddleOCR & YOLO 효율 최적화)
+        # YOLO keeps the small inference image; OCR gets a separate upscaled image.
         try:
             max_dim = int(os.getenv("SOM_INFERENCE_MAX_DIM", "1024"))
         except ValueError:
             max_dim = 1024
         if original_w > max_dim or original_h > max_dim:
-            scale = max_dim / max(original_w, original_h)
+            yolo_scale = max_dim / max(original_w, original_h)
             inference_img = img.resize(
-                (int(original_w * scale), int(original_h * scale)),
+                (int(original_w * yolo_scale), int(original_h * yolo_scale)),
                 Image.Resampling.BILINEAR,
             )
-            logger.debug("Resized image for inference", scale=scale,
+            logger.debug("Resized image for YOLO inference", scale=yolo_scale,
                          original=(original_w, original_h),
                          target=inference_img.size)
         else:
-            scale = 1.0
+            yolo_scale = 1.0
             inference_img = img
 
+        ocr_scale = self._ocr_scale_for_image(original_w, original_h)
         ocr_image_path = image_path
-        if scale != 1.0:
+        if ocr_scale != 1.0:
             import tempfile
 
+            ocr_img = img.resize(
+                (int(original_w * ocr_scale), int(original_h * ocr_scale)),
+                Image.Resampling.BICUBIC,
+            )
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 ocr_image_path = Path(tmp.name)
-            inference_img.save(ocr_image_path, "JPEG", quality=85)
+            ocr_img.save(ocr_image_path, "JPEG", quality=90)
+            logger.info("Resized image for OCR", scale=round(ocr_scale, 3), original=(original_w, original_h), target=ocr_img.size)
 
-        # 1 & 2. 검출
         try:
-            raw_boxes = self._run_paddle_ocr(ocr_image_path, scale=scale)
+            raw_boxes = self._run_paddle_ocr(ocr_image_path, scale=ocr_scale)
         finally:
             if ocr_image_path != image_path:
                 try:
                     ocr_image_path.unlink(missing_ok=True)
                 except Exception:
                     pass
-        raw_boxes += self._run_yolo(inference_img, scale)
+        raw_boxes += self._run_yolo(inference_img, yolo_scale)
 
-        # 3. 중복 제거 & 정렬
+        # 3. Overlap filter and ordering
         final_elements = self._filter_overlaps(raw_boxes)
 
         # 4. 마킹 이미지 합성

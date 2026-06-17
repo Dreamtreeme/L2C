@@ -578,8 +578,38 @@ def test_open_browser_uses_new_window_when_no_browser_is_bound(monkeypatch):
     assert result["status"] == "success"
     assert result["result"]["opened"] is True
     assert result["result"]["reason"] == "new_browser_window"
-    assert launched == [[str(browser_exe), "--new-window", "--window-size=1976,2129", "https://www.wanted.co.kr"]]
+    assert launched == [[str(browser_exe), "--new-window", "https://www.wanted.co.kr"]]
     assert bound_calls == [set()]
+
+
+def test_open_browser_window_size_is_opt_in(monkeypatch):
+    from pathlib import Path
+
+    from agent.tools import actions
+    from agent.tools.actions import ActionTools
+
+    launched = []
+
+    class FakePerception:
+        _browser_window_id = None
+
+    def fake_popen(args, stdout=None, stderr=None):
+        launched.append(args)
+        return object()
+
+    action_tools = object.__new__(ActionTools)
+    action_tools.perception = FakePerception()
+    monkeypatch.setenv("VISION_BROWSER_WINDOW_SIZE", "1")
+    monkeypatch.setattr(action_tools, "_browser_window_ids", lambda: set())
+    monkeypatch.setattr(action_tools, "_browser_executable", lambda: Path("C:/Chrome/chrome.exe"))
+    monkeypatch.setattr(action_tools, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(action_tools, "_bind_new_or_active_browser_window", lambda before_ids: True)
+    monkeypatch.setattr(actions.subprocess, "Popen", fake_popen)
+
+    result = action_tools.open_browser("https://www.wanted.co.kr", current_url="")
+
+    assert result["status"] == "success"
+    assert launched == [[str(Path("C:/Chrome/chrome.exe")), "--new-window", "--window-size=1976,2129", "https://www.wanted.co.kr"]]
 
 
 def test_open_browser_navigates_bound_window_instead_of_opening_another(monkeypatch):

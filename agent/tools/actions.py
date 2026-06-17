@@ -128,7 +128,7 @@ class ActionTools:
         return None
 
     def _browser_window_cli_args(self) -> list[str]:
-        if os.getenv("VISION_BROWSER_WINDOW_SIZE", "1").strip().lower() in {"0", "false", "no", "off"}:
+        if os.getenv("VISION_BROWSER_WINDOW_SIZE", "0").strip().lower() in {"0", "false", "no", "off"}:
             return []
         width = self._env_int("VISION_BROWSER_WINDOW_WIDTH", 1976)
         height = self._env_int("VISION_BROWSER_WINDOW_HEIGHT", 2129)

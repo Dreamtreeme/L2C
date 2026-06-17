@@ -125,3 +125,53 @@ def test_som_engine_falls_back_when_ocr_worker_fails(monkeypatch, tmp_path):
     boxes = engine._run_paddle_ocr(image_path)
 
     assert boxes[0]["text"] == "fallback"
+
+def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
+    from agent.tools.som_engine import SomEngine
+
+    engine = object.__new__(SomEngine)
+    monkeypatch.delenv("SOM_OCR_RESIZE", raising=False)
+    monkeypatch.delenv("SOM_OCR_SCALE", raising=False)
+    monkeypatch.delenv("SOM_OCR_MAX_WIDTH", raising=False)
+
+    assert engine._ocr_scale_for_image(1976, 1200) == 1.0
+    assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(4800 / 3846, 3)
+
+    monkeypatch.setenv("SOM_OCR_SCALE", "1.1")
+    assert engine._ocr_scale_for_image(3846, 2094) == 1.1
+
+    monkeypatch.setenv("SOM_OCR_RESIZE", "0")
+    assert engine._ocr_scale_for_image(3846, 2094) == 1.0
+
+
+def test_som_engine_uses_separate_ocr_resize_from_yolo(monkeypatch, tmp_path):
+    from agent.tools.som_engine import SomEngine
+
+    image_path = tmp_path / "screen.jpg"
+    Image.new("RGB", (3200, 1200), "white").save(image_path)
+
+    engine = object.__new__(SomEngine)
+    seen = {}
+    monkeypatch.setenv("SOM_INFERENCE_MAX_DIM", "1024")
+    monkeypatch.setenv("SOM_OCR_SCALE", "1.5")
+    monkeypatch.setenv("SOM_OCR_MAX_WIDTH", "4800")
+
+    def fake_ocr(path, scale=1.0):
+        seen["ocr_path"] = Path(path)
+        seen["ocr_scale"] = scale
+        return [{"bbox": [10, 10, 60, 30], "type": "text", "text": "Search", "conf": 0.9}]
+
+    def fake_yolo(_img, scale):
+        seen["yolo_scale"] = scale
+        return []
+
+    monkeypatch.setattr(engine, "_run_paddle_ocr", fake_ocr)
+    monkeypatch.setattr(engine, "_run_yolo", fake_yolo)
+
+    _marked, _coords, bboxes, elements = engine.process_image(image_path, output_filename="marked.jpg")
+
+    assert seen["ocr_path"] != image_path
+    assert seen["ocr_scale"] == 1.5
+    assert round(seen["yolo_scale"], 3) == round(1024 / 3200, 3)
+    assert bboxes[0] == [10, 10, 60, 30]
+    assert elements[0]["text"] == "Search"
