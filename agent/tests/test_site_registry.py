@@ -78,3 +78,31 @@ def test_commander_site_profile_tool_returns_manual_prompt_and_tools():
     assert data["manual"]["site"] == "jobkorea"
     assert "click_marker" in data["tools"]["allowed_tools"]
     assert "JobKorea" in data["prompt"]
+
+def test_realtime_scraping_normalizes_user_query_for_search_keyword():
+    from agent.sites import load_site_profile
+    from agent.tools.realtime_scraping import _normalize_search_keyword
+
+    profile = load_site_profile("wanted")
+    query = "\uc6d0\ud2f0\ub4dc\uc5d0\uc11c ai\uc751\uc6a9\uc5d4\uc9c0\ub2c8\uc5b4 \ucc44\uc6a9\uacf5\uace0 \ucc3e\uc544\uc918"
+
+    assert _normalize_search_keyword(query, profile) == "ai\uc751\uc6a9\uc5d4\uc9c0\ub2c8\uc5b4"
+
+
+def test_realtime_scraping_direct_search_url_encodes_keyword():
+    from urllib.parse import parse_qs, urlparse
+
+    from agent.sites import load_site_profile
+    from agent.tools.realtime_scraping import _build_direct_search_url, _build_site_goal
+
+    profile = load_site_profile("wanted")
+    keyword = "AI \uc751\uc6a9 \uc5d4\uc9c0\ub2c8\uc5b4"
+    url = _build_direct_search_url(keyword, profile)
+    parsed = urlparse(url)
+
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "www.wanted.co.kr"
+    assert parsed.path == "/search"
+    assert parse_qs(parsed.query)["query"] == [keyword]
+    assert parse_qs(parsed.query)["tab"] == ["position"]
+    assert "Code-generated search URL" in _build_site_goal(keyword, profile, url)

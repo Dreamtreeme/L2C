@@ -1,7 +1,9 @@
 import json
 import logging
 import os
+import re
 from typing import Any
+from urllib.parse import urlencode
 
 from langchain_core.tools import tool
 from langgraph.errors import GraphRecursionError
@@ -32,7 +34,73 @@ def _join_manual_items(items) -> str:
     return "; ".join(str(item) for item in items if item)
 
 
-def _build_site_goal(search_keyword: str, profile: dict) -> str:
+_KOREAN_SITE_PARTICLES = r"(?:\uc5d0\uc11c\uc758|\uc5d0\uc11c|\uc758|\ub85c|\uc73c\ub85c)?"
+_QUERY_FILLER_PATTERNS = [
+    r"\ucc44\uc6a9\s*\uacf5\uace0",
+    r"\uacf5\uace0",
+    r"\ucc3e\uc544\s*\uc918",
+    r"\ucc3e\uc544\uc8fc\uc138\uc694",
+    r"\uac80\uc0c9\s*(?:\ud574\s*\uc918|\ud574\uc918|\ud574\uc8fc\uc138\uc694|\ud574\uc11c|\ud558\uace0|\ud558\uc138\uc694)",
+    r"\uc54c\ub824\s*\uc918",
+    r"\uc54c\ub824\uc8fc\uc138\uc694",
+    r"\uc218\uc9d1\s*(?:\ud574\s*\uc918|\ud574\uc918|\ud574\uc8fc\uc138\uc694|\ud574\uc11c|\ud558\uace0|\ud558\uc138\uc694)",
+    r"\ud2b8\ub80c\ub4dc",
+    r"\ud2b8\ub79c\ub4dc",
+]
+
+
+def _profile_site_terms(profile: dict) -> list[str]:
+    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
+    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
+    terms = [
+        entry.get("slug"),
+        entry.get("display_name"),
+        manual.get("site"),
+        manual.get("display_name"),
+    ]
+    terms.extend(entry.get("domains", []) or [])
+    base_url = entry.get("base_url") or manual.get("base_url")
+    if base_url:
+        terms.append(str(base_url).replace("https://", "").replace("http://", "").strip("/"))
+    cleaned = {str(term).strip() for term in terms if str(term or "").strip()}
+    return sorted(cleaned, key=len, reverse=True)
+
+
+def _normalize_search_keyword(raw_query: str, profile: dict) -> str:
+    """Convert a user request into the actual search phrase passed to the worker."""
+    original = str(raw_query or "").strip()
+    if not original:
+        return ""
+
+    keyword = re.sub(r"https?://\S+", " ", original, flags=re.IGNORECASE)
+    for term in _profile_site_terms(profile):
+        keyword = re.sub(
+            rf"{re.escape(term)}\s*{_KOREAN_SITE_PARTICLES}",
+            " ",
+            keyword,
+            flags=re.IGNORECASE,
+        )
+    for pattern in _QUERY_FILLER_PATTERNS:
+        keyword = re.sub(pattern, " ", keyword, flags=re.IGNORECASE)
+    keyword = re.sub(r"[\"'`]+", " ", keyword)
+    keyword = re.sub(r"[?!.,;:()\[\]{}<>]+", " ", keyword)
+    keyword = re.sub(r"\s+", " ", keyword).strip(" -_/")
+    return keyword or original
+
+
+def _build_direct_search_url(search_keyword: str, profile: dict) -> str:
+    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
+    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
+    slug = str(entry.get("slug") or manual.get("site") or "").strip().lower()
+    base_url = str(entry.get("base_url") or manual.get("base_url") or "").rstrip("/")
+    if not search_keyword or not base_url:
+        return ""
+    if slug == "wanted":
+        return f"{base_url}/search?{urlencode({'query': search_keyword, 'tab': 'position'})}"
+    return ""
+
+
+def _build_site_goal(search_keyword: str, profile: dict, direct_search_url: str = "") -> str:
     entry = profile["entry"]
     manual = profile["manual"]
     tools = profile["tools"]
@@ -47,12 +115,21 @@ def _build_site_goal(search_keyword: str, profile: dict) -> str:
     unsafe_reflex = _join_manual_items(manual.get("reflex_policy", {}).get("unsafe_actions", []))
     allowed_tools = _join_manual_items(tools.get("allowed_tools", []))
     site_prompt = profile.get("prompt", "").strip()
+    direct_search_section = ""
+    if direct_search_url:
+        direct_search_section = (
+            "[Code-generated search URL]\n"
+            f"{direct_search_url}\n"
+            "Use this exact URL with open_browser when direct search navigation is useful. "
+            "Do not hand-encode Korean query text.\n\n"
+        )
 
     return (
         f"{site_name}({base_url})에서 '{search_keyword}' 채용공고를 검색하고 수집하세요. "
         "검색 결과 화면에 도달하면 공고 수와 카드/행 목록을 확인하고, "
         "방문할 공고별 순회 계획을 세운 뒤 상세 페이지를 하나씩 방문하세요. "
         "상세 페이지에서 필요한 정보를 수집한 뒤 목록으로 돌아와 이미 클릭한 공고는 제외하고 다음 공고를 선택하세요.\n\n"
+        f"{direct_search_section}"
         f"[사이트 공통 흐름]\n{common_flow}\n\n"
         f"[안정적인 UI/Reflex 후보]\n{stable_controls}\n\n"
         f"[목표나 실행 시점에 따라 달라지는 UI]\n{variable_entities}\n\n"
@@ -206,7 +283,10 @@ def run_worker_once(
     site_slug = site_entry.get("slug") or site or "unknown"
     site_name = site_entry.get("display_name") or site_slug
     run_id = run_id or new_worker_run_id()
-    goal = _append_review_feedback(_build_site_goal(search_keyword, site_profile), review_feedback)
+    raw_search_keyword = search_keyword
+    search_keyword = _normalize_search_keyword(search_keyword, site_profile)
+    direct_search_url = _build_direct_search_url(search_keyword, site_profile)
+    goal = _append_review_feedback(_build_site_goal(search_keyword, site_profile, direct_search_url), review_feedback)
     initial_state = _initial_worker_state(goal)
 
     logger.info(
@@ -240,6 +320,7 @@ def run_worker_once(
         "site_slug": site_slug,
         "site_name": site_name,
         "keyword": search_keyword,
+        "raw_keyword": raw_search_keyword,
         "run_status": run_status,
         "hit_recursion_limit": hit_recursion_limit,
         "is_finished": is_finished,
@@ -426,25 +507,26 @@ def realtime_scraping(
             item_count = int(submission.get("collected_count") or 0)
             site_name = worker_result.get("site_name", site or "unknown")
             site_slug = worker_result.get("site_slug", site or "unknown")
+            effective_keyword = worker_result.get("keyword") or search_keyword
             hit_recursion_limit = bool(worker_result.get("hit_recursion_limit", False))
             is_finished = bool(worker_result.get("is_finished", False))
 
             if review.get("decision") == "accept" and persisted_count > 0:
                 completion_type = "partial collection persisted" if hit_recursion_limit and not is_finished else "vision collection persisted"
-                message = f"{completion_type}: keyword={search_keyword!r}, site={site_name}, collected={item_count}, persisted={persisted_count}"
+                message = f"{completion_type}: keyword={effective_keyword!r}, site={site_name}, collected={item_count}, persisted={persisted_count}"
             elif review.get("decision") == "revise":
                 feedback_text = review.get("feedback_to_worker") or "; ".join(review.get("reasons") or [])
                 message = f"worker submission needs revision: {feedback_text}"
             elif hit_recursion_limit:
-                message = f"collection stopped at recursion limit without accepted data: site={site_name}, keyword={search_keyword!r}"
+                message = f"collection stopped at recursion limit without accepted data: site={site_name}, keyword={effective_keyword!r}"
             else:
-                message = f"collection finished without accepted data: site={site_name}, keyword={search_keyword!r}"
+                message = f"collection finished without accepted data: site={site_name}, keyword={effective_keyword!r}"
 
             return _result_payload(
                 message=message,
                 site_name=site_name,
                 site_slug=site_slug,
-                keyword=search_keyword,
+                keyword=effective_keyword,
                 item_count=item_count,
                 persisted_count=persisted_count,
                 submission_id=submission_id,

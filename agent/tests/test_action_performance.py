@@ -578,7 +578,7 @@ def test_open_browser_uses_new_window_when_no_browser_is_bound(monkeypatch):
     assert result["status"] == "success"
     assert result["result"]["opened"] is True
     assert result["result"]["reason"] == "new_browser_window"
-    assert launched == [[str(browser_exe), "--new-window", "https://www.wanted.co.kr"]]
+    assert launched == [[str(browser_exe), "--new-window", "--window-size=1976,2129", "https://www.wanted.co.kr"]]
     assert bound_calls == [set()]
 
 

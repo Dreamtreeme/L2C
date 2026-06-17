@@ -37,6 +37,13 @@ class ActionTools:
         except ValueError:
             return default
 
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return max(0, int(os.getenv(name, str(default))))
+        except ValueError:
+            return default
+
     def _cfg_float(self, attr: str, env_name: str, default: float) -> float:
         return getattr(self, attr, self._env_float(env_name, default))
 
@@ -120,13 +127,22 @@ class ActionTools:
                 return path
         return None
 
+    def _browser_window_cli_args(self) -> list[str]:
+        if os.getenv("VISION_BROWSER_WINDOW_SIZE", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return []
+        width = self._env_int("VISION_BROWSER_WINDOW_WIDTH", 1976)
+        height = self._env_int("VISION_BROWSER_WINDOW_HEIGHT", 2129)
+        if width <= 0 or height <= 0:
+            return []
+        return [f"--window-size={width},{height}"]
+
     def _open_url_in_new_window(self, url: str) -> dict[str, Any]:
         before_ids = self._browser_window_ids()
         browser_exe = self._browser_executable()
         launcher = "webbrowser.open_new"
         if browser_exe:
             subprocess.Popen(
-                [str(browser_exe), "--new-window", url],
+                [str(browser_exe), "--new-window", *self._browser_window_cli_args(), url],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
