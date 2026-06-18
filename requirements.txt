@@ -36,8 +36,4 @@ ultralytics>=8.0.0
 huggingface-hub>=0.19.0
 opencv-python>=4.8.0
 numpy>=1.24.0
-
-# The code uses PaddleOCR 2.x APIs. CPU Paddle is the default runtime.
-# For CUDA, replace paddlepaddle with the matching paddlepaddle-gpu package.
-paddlepaddle>=2.5.0,<3.0.0
-paddleocr>=2.7.0,<3.0.0
+easyocr>=1.7.0,<2.0.0

@@ -1,196 +1,81 @@
 import os
-import json
-import subprocess
-import sys
+import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Any, Dict, List, Tuple
+
 from PIL import Image, ImageDraw, ImageFont
 
 from agent.utils.logger import logger
 
-class SomEngine:
-    """
-    순수 비전 기반 Set-of-Marks (SoM) 엔진입니다.
-    화면 내의 클릭 가능한 요소(아이콘, 버튼, 텍스트)를 YOLOv8과 PaddleOCR로 검출하고,
-    화면에 숫자 마커 라벨을 합성한 이미지와 해당 마커의 물리 좌표 매핑을 제공합니다.
-    """
 
+class SomEngine:
     def __init__(self):
         self.root_dir = Path(__file__).resolve().parent.parent.parent
+        yolo_config_dir = Path(os.getenv("YOLO_CONFIG_DIR", self.root_dir / ".cache" / "ultralytics"))
+        yolo_config_dir.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("YOLO_CONFIG_DIR", str(yolo_config_dir))
+
+        self.easyocr_dir = Path(os.getenv("EASYOCR_MODULE_PATH", self.root_dir / ".cache" / "easyocr"))
+        self.easyocr_dir.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("EASYOCR_MODULE_PATH", str(self.easyocr_dir))
+
         self.model_dir = self.root_dir / "models" / "omniparser"
         self.model_path = self.model_dir / "icon_detect" / "model.pt"
 
         self._ensure_model_downloaded()
-        self._ocr_worker = None
 
         from ultralytics import YOLO
-        logger.info("Loading local YOLOv8 OmniParser model...", model_path=str(self.model_path))
+
+        logger.info("Loading local YOLOv8 OmniParser model", model_path=str(self.model_path))
         self.yolo_model = YOLO(str(self.model_path))
 
-        logger.info("SomEngine will invoke PaddleOCR (GPU/Isolated Subprocess) for text detection.")
-        logger.info("SomEngine initialization complete.")
+        try:
+            import easyocr
+            import torch
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("EasyOCR dependencies are not installed. Run `pip install -r requirements.txt`.") from exc
 
-    def __del__(self):
-        self._stop_ocr_worker()
+        use_gpu = torch.cuda.is_available()
+        logger.info("Loading EasyOCR reader", gpu=use_gpu, cache_dir=str(self.easyocr_dir))
+        self.ocr_reader = easyocr.Reader(
+            ["ko", "en"],
+            gpu=use_gpu,
+            model_storage_directory=str(self.easyocr_dir),
+            user_network_directory=str(self.easyocr_dir),
+            verbose=False,
+        )
+        logger.info("SomEngine initialization complete")
 
-    def _ensure_model_downloaded(self):
-        """OmniParser YOLOv8 가중치 파일이 로컬에 없으면 Hugging Face에서 자동 다운로드합니다."""
-        if not self.model_path.exists():
-            logger.info("YOLOv8 weights not found locally. Triggering Hugging Face download...")
-            os.makedirs(self.model_dir, exist_ok=True)
-            from huggingface_hub import hf_hub_download
-            try:
-                downloaded_path = hf_hub_download(
-                    repo_id="microsoft/OmniParser-v2.0",
-                    filename="icon_detect/model.pt",
-                    local_dir=str(self.model_dir)
-                )
-                logger.info("Model weights downloaded successfully.", downloaded_path=downloaded_path)
-            except Exception as e:
-                logger.error("Failed to download model weights from Hugging Face.", error=str(e))
-                raise
+    def _ensure_model_downloaded(self) -> None:
+        if self.model_path.exists():
+            return
 
-    # ------------------------------------------------------------------ #
-    #  기하 연산 헬퍼                                                       #
-    # ------------------------------------------------------------------ #
+        logger.info("YOLOv8 weights not found locally. Triggering Hugging Face download")
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        from huggingface_hub import hf_hub_download
+
+        try:
+            downloaded_path = hf_hub_download(
+                repo_id="microsoft/OmniParser-v2.0",
+                filename="icon_detect/model.pt",
+                local_dir=str(self.model_dir),
+            )
+            logger.info("Model weights downloaded successfully", downloaded_path=downloaded_path)
+        except Exception as exc:
+            logger.error("Failed to download model weights from Hugging Face", error=str(exc))
+            raise
 
     def _get_area(self, box: List[float]) -> float:
         return (box[2] - box[0]) * (box[3] - box[1])
 
     def _get_intersection_area(self, box1: List[float], box2: List[float]) -> float:
-        x_left  = max(box1[0], box2[0])
-        y_top   = max(box1[1], box2[1])
+        x_left = max(box1[0], box2[0])
+        y_top = max(box1[1], box2[1])
         x_right = min(box1[2], box2[2])
-        y_bot   = min(box1[3], box2[3])
-        if x_right < x_left or y_bot < y_top:
+        y_bottom = min(box1[3], box2[3])
+        if x_right < x_left or y_bottom < y_top:
             return 0.0
-        return (x_right - x_left) * (y_bot - y_top)
-
-    # ------------------------------------------------------------------ #
-    #  단계별 private 메서드                                                #
-    # ------------------------------------------------------------------ #
-
-    def _run_paddle_ocr_once(self, image_path: Path) -> List[Dict]:
-        """PaddleOCR 1회성 서브프로세스를 실행하여 원본 OCR 결과를 반환합니다."""
-        runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
-        logger.debug("Invoking PaddleOCR runner", script=str(runner_script), image=str(image_path))
-
-        res = subprocess.run(
-            [sys.executable, str(runner_script), str(image_path)],
-            capture_output=True, text=True, encoding="utf-8", errors="ignore",
-        )
-
-        output_str = res.stdout.strip()
-        marker = "__OCR_JSON_START__"
-        if marker in output_str:
-            json_str = output_str.split(marker)[-1].strip()
-            ocr_results = json.loads(json_str) if json_str else []
-        else:
-            logger.warning(
-                "OCR JSON marker not found in output",
-                returncode=res.returncode,
-                stdout=output_str,
-                stderr=res.stderr.strip(),
-            )
-            ocr_results = []
-
-        return ocr_results
-
-    def _start_ocr_worker(self):
-        if self._ocr_worker and self._ocr_worker.poll() is None:
-            return self._ocr_worker
-
-        runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
-        logger.info("Starting persistent PaddleOCR worker", script=str(runner_script))
-        self._ocr_worker = subprocess.Popen(
-            [sys.executable, str(runner_script), "--worker"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-            bufsize=1,
-        )
-        return self._ocr_worker
-
-    def _stop_ocr_worker(self) -> None:
-        worker = getattr(self, "_ocr_worker", None)
-        self._ocr_worker = None
-        if not worker:
-            return
-        try:
-            if worker.poll() is None:
-                worker.terminate()
-        except Exception:
-            pass
-
-    def _run_paddle_ocr_worker(self, image_path: Path) -> List[Dict]:
-        worker = self._start_ocr_worker()
-        if not worker.stdin or not worker.stdout:
-            raise RuntimeError("PaddleOCR worker pipes are unavailable")
-
-        request = json.dumps({"image_path": str(image_path)}, ensure_ascii=False)
-        worker.stdin.write(request + "\n")
-        worker.stdin.flush()
-
-        while True:
-            line = worker.stdout.readline()
-            if line == "":
-                stderr = ""
-                if worker.stderr:
-                    try:
-                        stderr = worker.stderr.read().strip()
-                    except Exception:
-                        stderr = ""
-                detail = f": {stderr}" if stderr else ""
-                raise RuntimeError(f"PaddleOCR worker exited before returning a result{detail}")
-            line = line.strip()
-            if not line or not line.startswith("__OCR_JSON_RESULT__"):
-                continue
-            payload = line.removeprefix("__OCR_JSON_RESULT__").strip()
-            return json.loads(payload) if payload else []
-
-    def _normalize_ocr_results(self, ocr_results: List[Dict], scale: float = 1.0) -> List[Dict]:
-        raw_boxes = []
-        for item in ocr_results:
-            if item["confidence"] < 0.2:
-                continue
-            bbox = item["bbox"]
-            if scale != 1.0:
-                bbox = [coord / scale for coord in bbox]
-            raw_boxes.append({
-                "bbox": bbox,
-                "type": "text",
-                "text": item["text"],
-                "conf": item["confidence"],
-            })
-
-        logger.debug("PaddleOCR element detection complete", count=len(raw_boxes))
-        return raw_boxes
-
-    def _run_paddle_ocr(self, image_path: Path, scale: float = 1.0) -> List[Dict]:
-        """PaddleOCR 워커를 재사용하여 텍스트 박스 목록을 반환합니다."""
-        use_worker = os.getenv("SOM_OCR_WORKER_REUSE", "true").lower() == "true"
-        if use_worker:
-            try:
-                return self._normalize_ocr_results(self._run_paddle_ocr_worker(image_path), scale=scale)
-            except Exception as worker_err:
-                logger.warning(
-                    "Persistent PaddleOCR worker failed; falling back to one-shot runner",
-                    error=str(worker_err),
-                )
-                self._stop_ocr_worker()
-
-        return self._normalize_ocr_results(self._run_paddle_ocr_once(image_path), scale=scale)
-
-
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        try:
-            return max(0.0, float(os.getenv(name, str(default))))
-        except ValueError:
-            return default
+        return (x_right - x_left) * (y_bottom - y_top)
 
     @staticmethod
     def _env_int(name: str, default: int) -> int:
@@ -202,43 +87,64 @@ class SomEngine:
     def _ocr_scale_for_image(self, width: int, height: int) -> float:
         if os.getenv("SOM_OCR_RESIZE", "true").strip().lower() in {"0", "false", "no", "off"}:
             return 1.0
-        min_width = self._env_int("SOM_OCR_RESIZE_MIN_WIDTH", 3000)
-        if width < min_width:
+        max_dim = self._env_int("SOM_OCR_MAX_DIM", 1280)
+        if max_dim <= 0:
             return 1.0
-        requested = self._env_float("SOM_OCR_SCALE", 1.5)
-        max_width = self._env_int("SOM_OCR_MAX_WIDTH", 4800)
-        if requested <= 1.0 or max_width <= 0:
+        longest = max(width, height)
+        if longest <= max_dim:
             return 1.0
-        return max(1.0, min(requested, max_width / width))
+        return max_dim / longest
 
-    def _run_yolo(self, inference_img, scale: float) -> List[Dict]:
-        """YOLOv8으로 아이콘/버튼을 검출하고 원본 이미지 좌표로 복원하여 반환합니다."""
+    def _normalize_easyocr_results(self, ocr_results: List, scale: float = 1.0) -> List[Dict]:
+        raw_boxes = []
+        for bbox, text, confidence in ocr_results:
+            if confidence < 0.2:
+                continue
+
+            xs = [point[0] / scale for point in bbox]
+            ys = [point[1] / scale for point in bbox]
+            raw_boxes.append(
+                {
+                    "bbox": [float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))],
+                    "type": "text",
+                    "text": text,
+                    "conf": float(confidence),
+                }
+            )
+
+        logger.debug("EasyOCR element detection complete", count=len(raw_boxes))
+        return raw_boxes
+
+    def _run_easy_ocr(self, image_path: Path, scale: float = 1.0) -> List[Dict]:
+        import numpy as np
+
+        with Image.open(image_path) as img:
+            image_array = np.array(img.convert("L"))
+        return self._normalize_easyocr_results(self.ocr_reader.readtext(image_array), scale=scale)
+
+    def _run_yolo(self, inference_img: Image.Image, scale: float) -> List[Dict]:
         raw_boxes = []
         try:
             yolo_results = self.yolo_model(inference_img, conf=0.15, verbose=False)
             if yolo_results and len(yolo_results) > 0:
                 for box in yolo_results[0].boxes:
                     coords = box.xyxy[0].cpu().numpy().tolist()
-                    conf   = float(box.conf.item())
-                    # 추론용 리사이즈 좌표 → 원본 크기로 복원
-                    coords_scaled = [c / scale for c in coords]
-                    raw_boxes.append({
-                        "bbox": coords_scaled,
-                        "type": "icon",
-                        "text": "icon",
-                        "conf": conf,
-                    })
+                    confidence = float(box.conf.item())
+                    raw_boxes.append(
+                        {
+                            "bbox": [coord / scale for coord in coords],
+                            "type": "icon",
+                            "text": "icon",
+                            "conf": confidence,
+                        }
+                    )
             logger.debug("YOLOv8 element detection complete", count=len(raw_boxes))
-        except Exception as e:
-            logger.error("YOLOv8 inference failed", error=str(e))
+        except Exception as exc:
+            logger.error("YOLOv8 inference failed", error=str(exc))
         return raw_boxes
 
     def _filter_overlaps(self, raw_boxes: List[Dict]) -> List[Dict]:
-        """
-        작은 박스 기준 overlap 비율 > 80% 인 중복 박스를 제거합니다.
-        넓이 내림차순 정렬 후 상단→하단, 좌→우 순서로 최종 정렬합니다.
-        """
-        sorted_boxes = sorted(raw_boxes, key=lambda b: self._get_area(b["bbox"]), reverse=True)
+        sorted_boxes = sorted(raw_boxes, key=lambda item: self._get_area(item["bbox"]), reverse=True)
         final_elements = []
 
         for box in sorted_boxes:
@@ -249,18 +155,18 @@ class SomEngine:
 
             is_duplicate = False
             for kept in final_elements:
-                inter = self._get_intersection_area(bbox, kept["bbox"])
-                if inter > 0:
-                    smaller_area = min(area, self._get_area(kept["bbox"]))
-                    if inter / smaller_area > 0.8:
-                        is_duplicate = True
-                        break
+                intersection = self._get_intersection_area(bbox, kept["bbox"])
+                if intersection <= 0:
+                    continue
+                smaller_area = min(area, self._get_area(kept["bbox"]))
+                if intersection / smaller_area > 0.8:
+                    is_duplicate = True
+                    break
 
             if not is_duplicate:
                 final_elements.append(box)
 
-        # 상단→하단, 좌→우 재정렬 (마커 번호 직관성)
-        final_elements.sort(key=lambda e: (e["bbox"][1] // 20, e["bbox"][0]))
+        final_elements.sort(key=lambda item: (item["bbox"][1] // 20, item["bbox"][0]))
         logger.info("Overlap filtering complete", before=len(raw_boxes), after=len(final_elements))
         return final_elements
 
@@ -269,18 +175,12 @@ class SomEngine:
         img: Image.Image,
         final_elements: List[Dict],
     ) -> Tuple[Image.Image, Dict[int, List[int]], Dict[int, List[int]]]:
-        """
-        마킹 이미지를 합성하고 marker_coords / marker_bboxes 딕셔너리를 반환합니다.
-
-        Returns:
-            (marked_img, marker_coords, marker_bboxes)
-        """
         marked_img = img.copy()
         draw = ImageDraw.Draw(marked_img)
 
         try:
             font = ImageFont.truetype("arial.ttf", 16)
-        except IOError:
+        except OSError:
             font = ImageFont.load_default()
 
         marker_coords: Dict[int, List[int]] = {}
@@ -290,18 +190,15 @@ class SomEngine:
             bbox = elem["bbox"]
             xmin, ymin, xmax, ymax = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
 
-            x_center = (xmin + xmax) // 2
-            y_center = (ymin + ymax) // 2
-            marker_coords[marker_id] = [x_center, y_center]
+            marker_coords[marker_id] = [(xmin + xmax) // 2, (ymin + ymax) // 2]
             marker_bboxes[marker_id] = [xmin, ymin, xmax, ymax]
 
-            # 경계 박스 (네온 오렌지)
             draw.rectangle([xmin, ymin, xmax, ymax], outline=(255, 127, 80), width=2)
 
-            # 번호 태그
             label_text = f"[{marker_id}]"
             left, top, right, bottom = font.getbbox(label_text)
-            text_w, text_h = right - left, bottom - top
+            text_w = right - left
+            text_h = bottom - top
 
             tag_xmin = xmin
             tag_ymin = max(0, ymin - text_h - 4)
@@ -313,53 +210,39 @@ class SomEngine:
 
         return marked_img, marker_coords, marker_bboxes
 
-    # ------------------------------------------------------------------ #
-    #  공개 인터페이스                                                      #
-    # ------------------------------------------------------------------ #
-
     def process_image(
         self,
         image_path: Path,
         output_filename: str = "marked_screen.png",
     ) -> Tuple[Path, Dict[int, List[int]], Dict[int, List[int]], List[Dict[str, Any]]]:
-        """
-        스크린샷을 분석하여 마킹 이미지와 좌표 테이블을 반환합니다.
-
-        Pipeline:
-            1. PaddleOCR  → 텍스트 박스
-            2. YOLOv8     → 아이콘/버튼 박스
-            3. Overlap filter (NMS-variant)
-            4. 마킹 이미지 합성
-
-        Returns:
-            (marked_image_path, marker_coords, marker_bboxes, final_elements)
-        """
         if not image_path.exists():
             raise FileNotFoundError(f"Image not found at: {image_path}")
 
-        # 원본 이미지 로드
         try:
             img = Image.open(image_path)
-        except Exception as load_err:
-            logger.error("Failed to load image for processing", error=str(load_err))
+        except Exception as exc:
+            logger.error("Failed to load image for processing", error=str(exc))
             raise
 
         original_w, original_h = img.size
 
-        # YOLO keeps the small inference image; OCR gets a separate upscaled image.
         try:
-            max_dim = int(os.getenv("SOM_INFERENCE_MAX_DIM", "1024"))
+            yolo_max_dim = int(os.getenv("SOM_INFERENCE_MAX_DIM", "1024"))
         except ValueError:
-            max_dim = 1024
-        if original_w > max_dim or original_h > max_dim:
-            yolo_scale = max_dim / max(original_w, original_h)
+            yolo_max_dim = 1024
+
+        if original_w > yolo_max_dim or original_h > yolo_max_dim:
+            yolo_scale = yolo_max_dim / max(original_w, original_h)
             inference_img = img.resize(
                 (int(original_w * yolo_scale), int(original_h * yolo_scale)),
                 Image.Resampling.BILINEAR,
             )
-            logger.debug("Resized image for YOLO inference", scale=yolo_scale,
-                         original=(original_w, original_h),
-                         target=inference_img.size)
+            logger.debug(
+                "Resized image for YOLO inference",
+                scale=yolo_scale,
+                original=(original_w, original_h),
+                target=inference_img.size,
+            )
         else:
             yolo_scale = 1.0
             inference_img = img
@@ -367,34 +250,33 @@ class SomEngine:
         ocr_scale = self._ocr_scale_for_image(original_w, original_h)
         ocr_image_path = image_path
         if ocr_scale != 1.0:
-            import tempfile
-
             ocr_img = img.resize(
                 (int(original_w * ocr_scale), int(original_h * ocr_scale)),
-                Image.Resampling.BICUBIC,
+                Image.Resampling.BILINEAR,
             )
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 ocr_image_path = Path(tmp.name)
-            ocr_img.save(ocr_image_path, "JPEG", quality=90)
-            logger.info("Resized image for OCR", scale=round(ocr_scale, 3), original=(original_w, original_h), target=ocr_img.size)
+            ocr_img.save(ocr_image_path, "JPEG", quality=85)
+            logger.info(
+                "Resized image for OCR inference",
+                scale=round(ocr_scale, 3),
+                original=(original_w, original_h),
+                target=ocr_img.size,
+            )
 
         try:
-            raw_boxes = self._run_paddle_ocr(ocr_image_path, scale=ocr_scale)
+            raw_boxes = self._run_easy_ocr(ocr_image_path, scale=ocr_scale)
         finally:
             if ocr_image_path != image_path:
                 try:
                     ocr_image_path.unlink(missing_ok=True)
                 except Exception:
                     pass
+
         raw_boxes += self._run_yolo(inference_img, yolo_scale)
-
-        # 3. Overlap filter and ordering
         final_elements = self._filter_overlaps(raw_boxes)
-
-        # 4. 마킹 이미지 합성
         marked_img, marker_coords, marker_bboxes = self._draw_markers(img, final_elements)
 
-        # 저장
         output_path = image_path.parent / output_filename
         if marked_img.mode != "RGB":
             marked_img = marked_img.convert("RGB")

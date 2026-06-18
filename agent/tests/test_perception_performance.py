@@ -80,71 +80,46 @@ def test_capture_screen_reuses_region_for_wait(monkeypatch, tmp_path):
     assert region_calls["count"] == 1
 
 
-def test_som_engine_reuses_ocr_worker_and_scales_boxes(monkeypatch, tmp_path):
+def test_som_engine_normalizes_easyocr_results_and_scales_boxes():
     from agent.tools.som_engine import SomEngine
 
-    image_path = tmp_path / "ocr.jpg"
-    Image.new("RGB", (10, 10), "white").save(image_path)
-
     engine = object.__new__(SomEngine)
-    engine._ocr_worker = None
-    monkeypatch.setenv("SOM_OCR_WORKER_REUSE", "true")
-    monkeypatch.setattr(engine, "_run_paddle_ocr_worker", lambda _path: [
-        {"text": "검색", "confidence": 0.9, "bbox": [2.0, 4.0, 6.0, 8.0]},
-        {"text": "노이즈", "confidence": 0.1, "bbox": [0.0, 0.0, 1.0, 1.0]},
-    ])
+    results = [
+        ([[2.0, 4.0], [6.0, 4.0], [6.0, 8.0], [2.0, 8.0]], "Search", 0.9),
+        ([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], "noise", 0.1),
+    ]
 
-    boxes = engine._run_paddle_ocr(image_path, scale=0.5)
+    boxes = engine._normalize_easyocr_results(results, scale=0.5)
 
-    assert boxes == [{
-        "bbox": [4.0, 8.0, 12.0, 16.0],
-        "type": "text",
-        "text": "검색",
-        "conf": 0.9,
-    }]
+    assert boxes == [
+        {
+            "bbox": [4.0, 8.0, 12.0, 16.0],
+            "type": "text",
+            "text": "Search",
+            "conf": 0.9,
+        }
+    ]
 
-
-def test_som_engine_falls_back_when_ocr_worker_fails(monkeypatch, tmp_path):
-    from agent.tools.som_engine import SomEngine
-
-    image_path = Path(tmp_path / "ocr.jpg")
-    Image.new("RGB", (10, 10), "white").save(image_path)
-
-    engine = object.__new__(SomEngine)
-    engine._ocr_worker = None
-    monkeypatch.setenv("SOM_OCR_WORKER_REUSE", "true")
-
-    def fail_worker(_path):
-        raise RuntimeError("worker failed")
-
-    monkeypatch.setattr(engine, "_run_paddle_ocr_worker", fail_worker)
-    monkeypatch.setattr(engine, "_run_paddle_ocr_once", lambda _path: [
-        {"text": "fallback", "confidence": 0.8, "bbox": [1.0, 2.0, 3.0, 4.0]},
-    ])
-
-    boxes = engine._run_paddle_ocr(image_path)
-
-    assert boxes[0]["text"] == "fallback"
 
 def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
     from agent.tools.som_engine import SomEngine
 
     engine = object.__new__(SomEngine)
     monkeypatch.delenv("SOM_OCR_RESIZE", raising=False)
-    monkeypatch.delenv("SOM_OCR_SCALE", raising=False)
-    monkeypatch.delenv("SOM_OCR_MAX_WIDTH", raising=False)
+    monkeypatch.delenv("SOM_OCR_MAX_DIM", raising=False)
 
-    assert engine._ocr_scale_for_image(1976, 1200) == 1.0
-    assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(4800 / 3846, 3)
+    assert engine._ocr_scale_for_image(1024, 900) == 1.0
+    assert round(engine._ocr_scale_for_image(1976, 1200), 3) == round(1280 / 1976, 3)
+    assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1280 / 3846, 3)
 
-    monkeypatch.setenv("SOM_OCR_SCALE", "1.1")
-    assert engine._ocr_scale_for_image(3846, 2094) == 1.1
+    monkeypatch.setenv("SOM_OCR_MAX_DIM", "1600")
+    assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1600 / 3846, 3)
 
     monkeypatch.setenv("SOM_OCR_RESIZE", "0")
     assert engine._ocr_scale_for_image(3846, 2094) == 1.0
 
 
-def test_som_engine_uses_separate_ocr_resize_from_yolo(monkeypatch, tmp_path):
+def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):
     from agent.tools.som_engine import SomEngine
 
     image_path = tmp_path / "screen.jpg"
@@ -153,25 +128,27 @@ def test_som_engine_uses_separate_ocr_resize_from_yolo(monkeypatch, tmp_path):
     engine = object.__new__(SomEngine)
     seen = {}
     monkeypatch.setenv("SOM_INFERENCE_MAX_DIM", "1024")
-    monkeypatch.setenv("SOM_OCR_SCALE", "1.5")
-    monkeypatch.setenv("SOM_OCR_MAX_WIDTH", "4800")
+    monkeypatch.setenv("SOM_OCR_MAX_DIM", "1280")
 
     def fake_ocr(path, scale=1.0):
         seen["ocr_path"] = Path(path)
         seen["ocr_scale"] = scale
+        with Image.open(path) as img:
+            seen["ocr_size"] = img.size
         return [{"bbox": [10, 10, 60, 30], "type": "text", "text": "Search", "conf": 0.9}]
 
     def fake_yolo(_img, scale):
         seen["yolo_scale"] = scale
         return []
 
-    monkeypatch.setattr(engine, "_run_paddle_ocr", fake_ocr)
+    monkeypatch.setattr(engine, "_run_easy_ocr", fake_ocr)
     monkeypatch.setattr(engine, "_run_yolo", fake_yolo)
 
     _marked, _coords, bboxes, elements = engine.process_image(image_path, output_filename="marked.jpg")
 
     assert seen["ocr_path"] != image_path
-    assert seen["ocr_scale"] == 1.5
+    assert seen["ocr_scale"] == 1280 / 3200
+    assert seen["ocr_size"] == (1280, 480)
     assert round(seen["yolo_scale"], 3) == round(1024 / 3200, 3)
     assert bboxes[0] == [10, 10, 60, 30]
     assert elements[0]["text"] == "Search"

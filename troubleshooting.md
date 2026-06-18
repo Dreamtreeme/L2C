@@ -121,7 +121,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 
 ---
 
-## 7. OmniParser SoM 로컬 파이프라인 실제 구현 및 통합 (YOLOv8 + PaddleOCR + PIL 인메모리 처리)
+## 7. OmniParser SoM 로컬 파이프라인 실제 구현 및 통합 (YOLOv8 + EasyOCR + PIL 인메모리 처리)
 
 ### [현상]
 * 비주얼 기반의 좌표 인식 및 에이전트 구동의 실효성을 높이기 위해, 기존 Mock 데이터를 걷어내고 실제 로컬 Set-of-Marks (SoM) 파이프라인인 **OmniParser 로컬 엔진**을 완전 통합하려 함.
@@ -129,7 +129,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 
 ### [해결 조치]
 1. **인메모리 디코딩 적용**: 디스크 입출력 없이 mss 캡처의 raw BGRA 데이터를 메모리 레벨에서 직접 `BGRX` 디코더를 활용하여 PIL 이미지로 초고속 고정밀 변환 (`wait_stable.py`, `som_engine.py`).
-2. **YOLOv8 & PaddleOCR 통합**:
+2. **YOLOv8 & EasyOCR 통합**:
    - `som_engine.py`에서 로컬 GPU(CUDA)를 바인딩하여 1.2s 수준으로 탐지 속도 가속화.
    - **IoU 기반 텍스트-아이콘 중복 필터링 (NMS)** 알고리즘을 적용하여 UI 마커 숫자가 겹치거나 지저분해지는 중복 마킹 현상을 말끔히 제거.
 3. **듀얼 모니터 좌표 매핑 교정**: 감지된 오프셋 좌표를 브라우저 윈도우 시작점에 매핑하여, 서브 모니터에서도 오차 없이 정밀하게 요소를 타격하는 스케일 보정 코드 적용 완료.
@@ -137,6 +137,12 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 ### [관련 참조 리소스]
 * **로컬 SoM 엔진**: [som_engine.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/som_engine.py)
 * **이미지 메모리 변환 모듈**: [wait_stable.py](file:///c:/Users/psg/Desktop/L2C/agent/utils/wait_stable.py)
+
+---
+
+## 7-1. PaddleOCR 제거 이유
+
+마지막 원티드 Android 개발자 검색 화면에서 PaddleOCR 경로는 CPU 환경 기준으로 긴 변 1280px 입력에서도 한 화면 처리에 약 65~70초가 걸렸다. 입력을 512px까지 줄이면 약 17초까지 줄었지만 텍스트 마커 수가 크게 감소했다. 같은 화면에서 EasyOCR은 CPU 기준 긴 변 1280px 입력이 약 4.5초였고, YOLOv8까지 포함한 전체 SoM 처리도 16.06초에 끝났으며 공고 카드 제목 마커를 유지했다. 그래서 비전 에이전트의 기본 OCR은 EasyOCR로 단순화했고, 서브프로세스 워커와 별도 런타임 의존성은 제거했다.
 
 ---
 
@@ -150,7 +156,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 * **해결 조치**:
   1. Gemini 3.5 Flash는 비전 능력이 탁월하므로 굳이 텍스트 사전 설명이 필요 없음을 간파.
   2. `SKIP_VLM_CAPTION=true` 환경변수 옵션을 추가하여 **VLM 캡셔닝 단계를 완전히 우회(Bypass)** 처리함.
-  3. 로컬 PaddleOCR이 감지한 텍스트 데이터와 YOLOv8의 탐지 타입을 직접 결합하여 최소한의 텍스트 설명 컨텍스트를 perception 레벨에서 자율 매핑함.
+  3. 로컬 EasyOCR이 감지한 텍스트 데이터와 YOLOv8의 탐지 타입을 직접 결합하여 최소한의 텍스트 설명 컨텍스트를 perception 레벨에서 자율 매핑함.
 * **결과**: Perception Node 소요 지연 시간이 **7.12초 ➡️ 평균 1.31초로 약 81.7% 급감**함.
 
 ### [관련 참조 리소스]
@@ -246,7 +252,7 @@ Phase 3 이후 성능 최적화를 위해 도구와 LLM 클라이언트를 모�
 
 ### [시도한 방향]
 1. **성능 최적화**
-   - `SKIP_VLM_CAPTION=true`, WaitStable 대기 단축, OCR 워커 재사용으로 perception 병목을 줄였다.
+   - `SKIP_VLM_CAPTION=true`, WaitStable 대기 단축, OCR 입력 리사이즈로 perception 병목을 줄였다.
    - 이후 병목은 주로 reasoning 호출 시간과 반복 판단 비용으로 이동했다.
 
 2. **저수준 Reflex Recipe**
