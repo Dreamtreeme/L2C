@@ -86,7 +86,12 @@ class SomEngine:
             json_str = output_str.split(marker)[-1].strip()
             ocr_results = json.loads(json_str) if json_str else []
         else:
-            logger.warning("OCR JSON marker not found in output", output=output_str)
+            logger.warning(
+                "OCR JSON marker not found in output",
+                returncode=res.returncode,
+                stdout=output_str,
+                stderr=res.stderr.strip(),
+            )
             ocr_results = []
 
         return ocr_results
@@ -101,7 +106,7 @@ class SomEngine:
             [sys.executable, str(runner_script), "--worker"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="ignore",
@@ -132,7 +137,14 @@ class SomEngine:
         while True:
             line = worker.stdout.readline()
             if line == "":
-                raise RuntimeError("PaddleOCR worker exited before returning a result")
+                stderr = ""
+                if worker.stderr:
+                    try:
+                        stderr = worker.stderr.read().strip()
+                    except Exception:
+                        stderr = ""
+                detail = f": {stderr}" if stderr else ""
+                raise RuntimeError(f"PaddleOCR worker exited before returning a result{detail}")
             line = line.strip()
             if not line or not line.startswith("__OCR_JSON_RESULT__"):
                 continue
