@@ -13,8 +13,21 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from agent.recipe.state_key import site_of
 from shared.schema.feedback_schema import CommanderReview, SubmissionIssue, WorkerSubmission
+
+
+class ReportJobSummaryItem(BaseModel):
+    company: str = ""
+    position: str = ""
+    url: str = ""
+    field_count: int = 0
+
+
+class ReportJobSummary(BaseModel):
+    jobs: list[ReportJobSummaryItem] = Field(default_factory=list)
 
 
 def _dump_model(model) -> dict[str, Any]:
@@ -31,43 +44,80 @@ def _job_items(extracted_jd: Any) -> list[dict[str, Any]]:
     for value in extracted_jd.values():
         if _looks_like_job_list(value):
             return [item for item in value if isinstance(item, dict) and item]
-    if any(key in extracted_jd for key in ("url", "URL", "company_name", "position")):
-        return [extracted_jd]
     return [extracted_jd] if extracted_jd else []
 
 
-def _pick(job: dict[str, Any], *keys: str) -> Any:
-    for key in keys:
-        value = job.get(key)
-        if value:
-            return value
-    return ""
+def _empty_report_summary(jobs: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "company": "",
+            "position": "",
+            "url": "",
+            "field_count": len(job.keys()),
+        }
+        for job in jobs[:limit]
+    ]
 
 
-def _first_text(job: dict[str, Any], exclude: set[str]) -> str:
-    for key, value in job.items():
-        if key in exclude:
+def _report_summary_mode() -> str:
+    mode = os.getenv("VISION_WORKER_SUMMARY_MODE", "llm").strip().lower()
+    return mode if mode in {"llm", "off"} else "llm"
+
+
+def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    compact_jobs = [
+        {
+            "index": idx,
+            "field_count": len(job.keys()),
+            "raw_job": job,
+        }
+        for idx, job in enumerate(jobs[:limit])
+    ]
+    model_name = os.getenv("VISION_WORKER_SUMMARY_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
+    llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(ReportJobSummary)
+    messages = [
+        SystemMessage(
+            content=(
+                "You normalize job postings that were already extracted by a vision worker. "
+                "Read field names in any language, including Korean. "
+                "Return one summary item per input job in the same order. "
+                "Do not invent missing facts; use an empty string when a value is unknown."
+            )
+        ),
+        HumanMessage(content=json.dumps({"jobs": compact_jobs}, ensure_ascii=False, indent=2)),
+    ]
+    response = llm.invoke(messages)
+    summary = _dump_model(response)
+    out: list[dict[str, Any]] = []
+    for idx, item in enumerate(summary.get("jobs") or []):
+        if not isinstance(item, dict):
             continue
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
-def _job_summary(jobs: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
-    out = []
-    for job in jobs[:limit]:
-        url = _pick(job, "url", "URL")
-        company = _pick(job, "company_name", "company", "companyName") or _first_text(job, {"url", "URL"})
-        position = _pick(job, "position", "title", "job_title", "jobTitle")
+        source_job = compact_jobs[idx] if idx < len(compact_jobs) else {}
         out.append(
             {
-                "company": company,
-                "position": position,
-                "url": url,
-                "field_count": len(job.keys()),
+                "company": str(item.get("company") or ""),
+                "position": str(item.get("position") or ""),
+                "url": str(item.get("url") or ""),
+                "field_count": int(item.get("field_count") or source_job.get("field_count") or 0),
             }
         )
-    return out
+    if len(out) < len(compact_jobs):
+        out.extend(_empty_report_summary([job["raw_job"] for job in compact_jobs[len(out):]], limit))
+    return out[:limit]
+
+
+def _report_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> tuple[list[dict[str, Any]], str, str]:
+    if not jobs:
+        return [], "none", ""
+    if _report_summary_mode() == "off":
+        return _empty_report_summary(jobs, limit), "disabled", ""
+    try:
+        return _llm_job_summary(jobs, limit=limit), "llm", ""
+    except Exception as exc:  # pragma: no cover - provider failures are best-effort
+        return _empty_report_summary(jobs, limit), "llm_failed", str(exc)[:200]
 
 
 def new_worker_run_id() -> str:
@@ -85,13 +135,38 @@ def build_worker_submission(
     feedback_saved: int = 0,
     review_attempt: int = 0,
     run_id: str | None = None,
+    target_count: int = 0,
 ) -> dict[str, Any]:
-    """Build the structured handoff from a worker graph run."""
+    """작업자 그래프 실행 결과를 구조화된 제출물(WorkerSubmission)로 만든다."""
     extracted_jd = final_state.get("extracted_jd", {}) or {}
     jobs = _job_items(extracted_jd)
     current_url = final_state.get("current_url", "") or ""
     resolved_site = site or site_of(current_url) or "unknown"
     run_id = run_id or new_worker_run_id()
+    report_jobs, report_source, report_error = _report_job_summary(jobs)
+    recorded_steps = list(final_state.get("recorded_steps", []) or [])
+    feedback_episodes = list(final_state.get("feedback_episodes", []) or [])
+    transition_observations = list(final_state.get("transition_observations", []) or [])
+    extracted_summary = {
+        "has_data": bool(jobs),
+        "job_count": len(jobs),
+        "jobs": report_jobs,
+        "summary_source": report_source,
+        "summary_error": report_error,
+        "current_url": current_url,
+        "action_count": len(final_state.get("action_history", []) or []),
+    }
+    from agent.recipe.skill_metadata import build_skill_metadata_evidence
+
+    skill_metadata_evidence = build_skill_metadata_evidence(
+        goal=final_state.get("goal", "") or "",
+        site=resolved_site,
+        keyword=keyword,
+        target_count=int(target_count or 0),
+        recorded_steps=recorded_steps,
+        feedback_episodes=feedback_episodes,
+        extracted_summary=extracted_summary,
+    )
     submission = WorkerSubmission(
         run_id=run_id,
         goal=final_state.get("goal", "") or "",
@@ -102,17 +177,14 @@ def build_worker_submission(
         is_finished=bool(final_state.get("is_finished", False)),
         hit_recursion_limit=bool(hit_recursion_limit),
         collected_count=len(jobs),
+        target_count=int(target_count or 0),
         persisted_count=int(persisted_count or 0),
         feedback_saved=int(feedback_saved or 0),
-        recorded_steps=list(final_state.get("recorded_steps", []) or []),
-        feedback_episodes=list(final_state.get("feedback_episodes", []) or []),
-        extracted_summary={
-            "has_data": bool(jobs),
-            "job_count": len(jobs),
-            "jobs": _job_summary(jobs),
-            "current_url": current_url,
-            "action_count": len(final_state.get("action_history", []) or []),
-        },
+        recorded_steps=recorded_steps,
+        feedback_episodes=feedback_episodes,
+        transition_observations=transition_observations,
+        skill_metadata_evidence=skill_metadata_evidence,
+        extracted_summary=extracted_summary,
         worker_notes="submitted after autonomous/reflex worker run",
     )
     return _dump_model(submission)

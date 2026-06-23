@@ -121,7 +121,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 
 ---
 
-## 7. OmniParser SoM 로컬 파이프라인 실제 구현 및 통합 (YOLOv8 + EasyOCR + PIL 인메모리 처리)
+## 7. OmniParser SoM 로컬 파이프라인 실제 구현 및 통합 (OmniParser + PaddleOCR + PIL 인메모리 처리)
 
 ### [현상]
 * 비주얼 기반의 좌표 인식 및 에이전트 구동의 실효성을 높이기 위해, 기존 Mock 데이터를 걷어내고 실제 로컬 Set-of-Marks (SoM) 파이프라인인 **OmniParser 로컬 엔진**을 완전 통합하려 함.
@@ -129,7 +129,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 
 ### [해결 조치]
 1. **인메모리 디코딩 적용**: 디스크 입출력 없이 mss 캡처의 raw BGRA 데이터를 메모리 레벨에서 직접 `BGRX` 디코더를 활용하여 PIL 이미지로 초고속 고정밀 변환 (`wait_stable.py`, `som_engine.py`).
-2. **YOLOv8 & EasyOCR 통합**:
+2. **OmniParser YOLO & PaddleOCR 통합**:
    - `som_engine.py`에서 로컬 GPU(CUDA)를 바인딩하여 1.2s 수준으로 탐지 속도 가속화.
    - **IoU 기반 텍스트-아이콘 중복 필터링 (NMS)** 알고리즘을 적용하여 UI 마커 숫자가 겹치거나 지저분해지는 중복 마킹 현상을 말끔히 제거.
 3. **듀얼 모니터 좌표 매핑 교정**: 감지된 오프셋 좌표를 브라우저 윈도우 시작점에 매핑하여, 서브 모니터에서도 오차 없이 정밀하게 요소를 타격하는 스케일 보정 코드 적용 완료.
@@ -140,9 +140,11 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 
 ---
 
-## 7-1. PaddleOCR 제거 이유
+## 7-1. PaddleOCR GPU 경로 충돌과 복귀
 
-마지막 원티드 Android 개발자 검색 화면에서 PaddleOCR 경로는 CPU 환경 기준으로 긴 변 1280px 입력에서도 한 화면 처리에 약 65~70초가 걸렸다. 입력을 512px까지 줄이면 약 17초까지 줄었지만 텍스트 마커 수가 크게 감소했다. 같은 화면에서 EasyOCR은 CPU 기준 긴 변 1280px 입력이 약 4.5초였고, YOLOv8까지 포함한 전체 SoM 처리도 16.06초에 끝났으며 공고 카드 제목 마커를 유지했다. 그래서 비전 에이전트의 기본 OCR은 EasyOCR로 단순화했고, 서브프로세스 워커와 별도 런타임 의존성은 제거했다.
+초기에는 PaddleOCR을 CPU 경로로 실행하면서 한 화면 처리 시간이 과도하게 길어져 EasyOCR로 단순화했다. 이후 GPU 환경을 다시 비교한 결과 PaddleOCR이 더 많은 텍스트 좌표를 더 빠르게 반환하는 것이 확인되어, 기본 OCR을 PaddleOCR로 되돌렸다.
+
+Windows에서는 `paddle`을 먼저 import하면 `torch`가 `shm.dll` 로딩 중 실패했고, PaddleOCR GPU inference 시 `cudnn64_8.dll`을 찾지 못하는 문제가 있었다. 해결은 `torch/ultralytics`를 먼저 로드하고, `.venv/Lib/site-packages/nvidia/*/bin` 및 CUDA bin 경로를 프로세스 DLL 검색 경로에 추가한 뒤 PaddleOCR을 초기화하는 방식으로 정리했다.
 
 ---
 
@@ -156,7 +158,7 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 * **해결 조치**:
   1. Gemini 3.5 Flash는 비전 능력이 탁월하므로 굳이 텍스트 사전 설명이 필요 없음을 간파.
   2. `SKIP_VLM_CAPTION=true` 환경변수 옵션을 추가하여 **VLM 캡셔닝 단계를 완전히 우회(Bypass)** 처리함.
-  3. 로컬 EasyOCR이 감지한 텍스트 데이터와 YOLOv8의 탐지 타입을 직접 결합하여 최소한의 텍스트 설명 컨텍스트를 perception 레벨에서 자율 매핑함.
+  3. PaddleOCR이 감지한 텍스트 좌표와 OmniParser YOLO의 탐지 좌표를 직접 결합하여 최소한의 텍스트 설명 컨텍스트를 perception 레벨에서 자율 매핑함.
 * **결과**: Perception Node 소요 지연 시간이 **7.12초 ➡️ 평균 1.31초로 약 81.7% 급감**함.
 
 ### [관련 참조 리소스]
@@ -226,10 +228,11 @@ Phase 3 이후 성능 최적화를 위해 도구와 LLM 클라이언트를 모�
    - 실제 로그에서 `Approve`, `Approve for session` 같은 Codex/브라우저 승인 요소가 화면에 섞였고, 이것도 클릭 대상으로 기록되었다.
    - 이런 요소는 사이트 고유 노하우가 아니므로 다음 실행에서 재사용하면 안 된다.
 
-4. **Reflex가 동작해도 정보 추출은 여전히 LLM이 필요했다.**
+4. **초기 구현은 Reflex가 동작해도 매번 reasoning으로 되돌아갔다.**
    - `상세 정보 더 보기`, `scroll`, `go_back` 같은 고정 UI 액션은 Reflex로 빠르게 실행 가능했다.
    - 하지만 펼쳐진 상세 본문에서 회사명/직무명/주요업무/자격요건을 구조화하는 작업은 캐시된 클릭만으로 해결되지 않았다.
-   - 그래서 `REFLEX_REASON_AFTER_HIT=1`을 기본값으로 두고, Reflex 액션 후 화면 검증이 맞으면 다시 reasoning으로 보내 추출과 다음 판단을 수행하게 했다.
+   - 당시에는 `REFLEX_REASON_AFTER_HIT=1`로 검증 직후 reasoning을 강제했지만, 이 구조는 Reflex의 지연 절감 효과를 줄였다.
+   - 현재는 행동별 전환 계약(`common_ready_cues`, 정상 `outcomes`, 선택적 `loading_cues`)을 Critic이 만들고, Reflex는 OCR로 계약만 검사한다. 계약 충족 시 다음 Reflex로 진행하고 미확인·시간 초과 때만 reasoning으로 폴백한다.
 
 5. **방문 카드 순회 정책이 약했다.**
    - 기대 동작은 `검색 → 공고 수 확인 → N개 수집 계획 → 상세 진입 → 수집 → 뒤로가기 → 이전 카드 제외 후 다음 카드 클릭`이었다.
@@ -241,9 +244,9 @@ Phase 3 이후 성능 최적화를 위해 도구와 LLM 클라이언트를 모�
   - Reasoning은 화면마다 대략 2.5~9초가 걸렸고, 초반에는 `Approve`, `Approve for session` 클릭이 섞여 레시피 오염 가능성이 확인되었다.
   - 이후 공고 카드 클릭에는 `target_label: '[병역특례 현역/보충역] iOS 개발자'`가 기록되어 카드 제목 메타데이터 보강이 유효함을 확인했다.
 
-- `logs/manual_e2e/actual_collect_20260614_target_label_reflex1.log`
+- `logs/manual_e2e/actual_collect_20260614_target_label_reflex1.log` (전환 계약 도입 전 기록)
   - Reflex hit 자체는 매우 빨랐다. 예: 상세 페이지의 `상세 정보 더 보기` 클릭은 `duration=0.002s`, `go_back`은 `duration=0.001s` 수준으로 기록되었다.
-  - 하지만 Reflex 후 `Routing to reasoning after reflex hit for extraction and next-step verification` 경로로 다시 reasoning에 들어가야 실제 `update_extracted_info`가 수행되었다.
+  - 당시에는 Reflex 후 `Routing to reasoning after reflex hit for extraction and next-step verification` 경로로 매번 reasoning에 들어갔다.
   - 결과적으로 1건 적재에는 성공했지만 recursion limit 25 전에 두 번째 공고 추출까지 완료하지 못했다.
 
 - `logs/manual_e2e/actual_collect_20260614_close_browser_smoke1.log`
@@ -306,7 +309,7 @@ Action
 → 기존 click_marker/type_in_marker/scroll/go_back 도구로 실제 실행
 
 Observer
-→ 실행 전후 OCR delta, URL 변화, page_role 변화, 화면 변화 여부, 수집 데이터 변화를 기록
+→ 화면 변경 action과 다음 OCR·스크린샷을 같은 action seq의 transition_observations로 기록
 
 Critic
 → success / partial / wrong_target / no_effect / loop_risk 로 피드백 라벨링
@@ -316,7 +319,7 @@ Recipe Memory
 
 Reflex
 → confidence가 충분히 높은 패턴만 LLM 없이 실행
-→ mismatch나 낮은 확신도에서는 즉시 Explore로 폴백
+→ 전환 계약이 pending이면 재관찰, ready이면 다음 행동, unknown/timeout이면 Explore로 폴백
 ```
 
 ### [핵심 아이디어]
@@ -337,7 +340,22 @@ Reflex
    - Reflex는 이미 승격된 절차에 `query`, `sample_count`, `site` 같은 슬롯만 주입해 빠르게 실행한다.
    - 예: 검색어가 바뀌면 `type_search_query`의 텍스트만 바뀐다.
    - 예: 상위 5개 요청이면 `collect_cards` 루프 횟수만 바뀐다.
-   - 공고 카드 선택 정책 자체는 `click_next_unvisited_card → collect_detail → go_back`처럼 유지된다.
+   - 공고 카드 순회 정책은 유지하지만, 현재 결과에서 어떤 제목을 누를지는 실행마다 바뀌므로 작업자가 미방문 카드를 판단한다.
+   - 검색 열기·검색어 입력·제출·검증 가능한 스크롤·상세 펼치기는 Reflex 후보이고, 현재 카드 선택과 남은 수집 개수에 따른 복귀/종료 판단은 reasoning 구간이다.
+
+### [후속 수정: 탐색 당시 공고 제목이 활성 레시피에 남은 문제]
+
+초기 Critic은 `job_card_title`을 `fixed=false`로 표시했지만 승격 코드는 이 값을 사용하지 않고 후보의 모든 행동을 활성 `recipes`에 저장했다. 그 결과 Android 탐색에서 선택한 `기술연구소 Android App 개발자`가 검색어가 바뀐 뒤에도 Reflex 클릭 대상으로 남았고, 상세 수집 후 목록으로 돌아오면 같은 공고를 다시 여는 루프가 발생했다.
+
+이를 다음처럼 수정했다.
+
+- Critic 단계 출력에 `replay_mode = fixed | parameterized | reasoning`을 추가했다.
+- `fixed`는 실행마다 같은 안정 UI, `parameterized`는 `query` 같은 명시적 슬롯만 바뀌는 UI, `reasoning`은 현재 카드 목록·방문 이력·남은 목표 수에 따라 달라지는 판단으로 정의했다.
+- 활성 레시피에는 `fixed`와 `parameterized` 단계만 저장하고 `reasoning` 단계는 제외한다.
+- 후보를 재승격할 때 해당 후보의 과거 상태 행을 교체하여 이전 특정 공고명 레시피가 남지 않게 했다.
+- reasoning 프롬프트에 목표 공고 수, 현재 수집 수, 이미 방문한 공고 제목을 전달하고 목표를 채우면 같은 카드를 다시 열지 않고 종료하도록 했다.
+
+검증은 Android 탐색 후보를 승격한 뒤 검색어를 `ios 개발자`, 목표를 2건으로 바꿔 수행했다. 현재 화면에서 `[Vrew/vFlat] iOS 개발자`와 `[병역특례 현역/보충역] iOS 개발자`를 각각 선택했고, 첫 상세 수집 후 목록 복귀와 두 번째 미방문 카드 선택을 거쳐 `is_finished=true`, 2건 저장으로 종료했다. 탐색 당시 Android 공고명은 재생되지 않았다.
 
 ### [수정된 구현 방향]
 - README의 Phase 8 목표를 “결정론적 Playwright 스크립트 자동 생성”에서 “피드백 루프 기반 Reflex Recipe 승격”으로 변경한다.

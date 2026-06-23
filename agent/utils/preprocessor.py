@@ -225,11 +225,26 @@ class Preprocessor:
         source_platform = cls.parse_source_platform(url)
 
         # 경력 파싱
-        exp_min, exp_max, exp_text = cls.parse_experience(position, requirements)
+        if raw_data.get("experience_min") is not None or raw_data.get("experience_max") is not None or raw_data.get("experience_text"):
+            try:
+                exp_min = int(raw_data.get("experience_min", 0) or 0)
+            except (TypeError, ValueError):
+                exp_min = 0
+            try:
+                exp_max = int(raw_data.get("experience_max", 99) or 99)
+            except (TypeError, ValueError):
+                exp_max = 99
+            exp_text = cls.clean_text(raw_data.get("experience_text") or raw_data.get("experience_level")) or "寃쎈젰 臾닿?"
+        else:
+            exp_min, exp_max, exp_text = cls.parse_experience(position, requirements)
 
         # 기술 스택 동의어 역파싱 추출
-        all_texts_for_tech = main_tasks + requirements + preferred
-        tech_stack = cls.extract_tech_stacks(all_texts_for_tech)
+        provided_tech_stack = cls.clean_list(raw_data.get("tech_stack"))
+        if provided_tech_stack:
+            tech_stack = list(dict.fromkeys(provided_tech_stack))
+        else:
+            all_texts_for_tech = main_tasks + requirements + preferred
+            tech_stack = cls.extract_tech_stacks(all_texts_for_tech)
 
         # 컨텐츠 해시 생성
         content_hash = cls.generate_content_hash(company_name, position, requirements)

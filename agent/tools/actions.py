@@ -1,7 +1,6 @@
 import os
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse
 import time
 from typing import Dict, Any, List
 import platform
@@ -176,28 +175,6 @@ class ActionTools:
     def _action_region(self):
         return getattr(self.perception, "last_region", None) or self.perception._get_browser_region()
 
-    @staticmethod
-    def _same_site_or_url(left: str, right: str) -> bool:
-        if not left or not right:
-            return False
-        left_parsed = urlparse(left)
-        right_parsed = urlparse(right)
-        if not left_parsed.netloc or not right_parsed.netloc:
-            return False
-        left_host = left_parsed.netloc.lower().removeprefix("www.")
-        right_host = right_parsed.netloc.lower().removeprefix("www.")
-        if left_host != right_host:
-            return False
-        left_path = left_parsed.path.rstrip("/") or "/"
-        right_path = right_parsed.path.rstrip("/") or "/"
-        if right_path == "/":
-            return left_path in {"/", "/search"}
-        if left_path != right_path:
-            return False
-        if right_parsed.query:
-            return left_parsed.query == right_parsed.query
-        return True
-
     def _execute(self, action_name: str, func, *args, **kwargs) -> Dict[str, Any]:
         """
         액션을 실행하고 결과를 반환합니다.
@@ -303,9 +280,6 @@ class ActionTools:
     def open_browser(self, url: str, current_url: str = "") -> Dict[str, Any]:
         """Open the first target in a dedicated browser window, then navigate only that bound window."""
         def _open():
-            if self._same_site_or_url(current_url, url):
-                return {"opened": False, "url": current_url, "reason": "state_url_already_matches"}
-
             if self._bound_browser_window_exists():
                 return self._navigate_bound_browser(url)
 

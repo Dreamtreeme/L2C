@@ -6,7 +6,7 @@ action_node에서 호출되며, 전부 예외 안전 -> 실패해도 실제 실�
 from __future__ import annotations
 
 from agent.recipe.matcher import marker_ordinal, marker_region
-from agent.recipe.state_key import compute_state_key, normalize_text, site_of, url_template
+from agent.recipe.state_key import compute_state_key, normalize_text, site_of, state_anchor_texts, url_template
 from agent.utils.logger import logger
 
 _TARGET_ACTIONS = {"click_marker", "type_in_marker"}
@@ -124,16 +124,24 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
         markers = state.get("current_markers", []) or []
         url = state.get("current_url", "") or ""
         goal = state.get("goal", "") or ""
+        slot_name = normalize_text(args.get("slot_name"))
         step = {
             "seq": seq,
             "state_key": compute_state_key(url, markers),
+            "state_anchors": state_anchor_texts(markers),
             "url_template": url_template(url),
             "action": action_name,
             "target": None,
             "value": None,
             "param": {},
             "is_param": False,
-            "expected_next_state": None,
+            "expected_after": normalize_text(args.get("expected_after")),
+            "transition_contract": None,
+            "intent": normalize_text(args.get("reason")),
+            "target_role": normalize_text(args.get("target_role") or args.get("target_role_candidate")),
+            "component": normalize_text(args.get("target_component") or args.get("component_candidate")),
+            "slot_refs": [slot_name] if slot_name else [],
+            "fixed": action_name in {"scroll", "press_key", "go_back"},
         }
         if action_name in _TARGET_ACTIONS:
             marker = _marker(markers, args.get("marker_id"))
@@ -155,7 +163,9 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
                 val = (args.get("text") or "").strip()
                 step["value"] = val
                 step["param"] = {"text": val}
-                step["is_param"] = bool(val) and _squash(val) in _squash(goal)
+                if slot_name:
+                    step["param"]["slot_name"] = slot_name
+                step["is_param"] = bool(slot_name) or (bool(val) and _squash(val) in _squash(goal))
         elif action_name == "scroll":
             step["value"] = args.get("direction", "down")
             step["param"] = {"direction": step["value"]}

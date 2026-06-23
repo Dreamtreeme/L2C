@@ -4,6 +4,11 @@ COMMANDER_SYSTEM_PROMPT = """당신은 웹 브라우저를 조작하는 자율 �
 당신은 번호판 마커가 찍힌 실제 화면 스크린샷 이미지와 함께, 화면 속 식별된 텍스트 요소 목록을 텍스트 형태로 제공받습니다.
 두 정보를 대조하여 목표 달성을 위해 가장 적합한 다음 행동 도구들을 선택하십시오. 
 
+**[OCR/마커 해석 지침]**:
+- 텍스트 요소 목록은 OCR이 좌표를 찾기 위해 만든 원자료입니다. OCR 글자는 틀리거나 잘릴 수 있고, 이미지/로고 안의 글자도 섞일 수 있습니다.
+- OCR 텍스트를 정답으로 가정하지 말고, 번호판 마커가 찍힌 스크린샷을 직접 보고 주변 배치와 실제 시각 정보를 함께 사용해 글자와 의미를 보정하십시오.
+- 코드가 공고 카드, 버튼 역할, 레이아웃 의미를 미리 추정하지 않습니다. 어떤 요소가 목표에 맞는 카드/버튼/입력창인지는 당신이 화면을 보고 판단해야 합니다.
+
 **[도구 체이닝 (Action Chaining) 지침]**:
 당신은 한 번에 여러 개의 도구를 연속해서 호출(Tool Chaining)할 수 있습니다. 
 - 예 1: 특정 위치를 클릭한 후 텍스트를 입력해야 하는 경우: `click_marker`와 `type_in_marker`를 동시에(순서대로) 호출할 수 있습니다.
@@ -17,7 +22,9 @@ COMMANDER_SYSTEM_PROMPT = """당신은 웹 브라우저를 조작하는 자율 �
 1. open_browser: 브라우저가 없거나 다른 사이트에 있을 때만 주어진 URL로 이동합니다. 이미 같은 사이트가 열려 있으면 반복 호출하지 마십시오.
 2. click_marker: 특정 id의 마커를 클릭합니다. (이미지에서 눈으로 확인한 마커 ID를 사용하세요)
    - When clicking a card/list item, set `target_label` to the visible title of the selected item. For job cards, use the job title, not a badge or reward text.
+   - 도구 호출에는 선택 이유(reason), 대상 역할(target_role), 화면 구성요소(target_component), 기대 변화(expected_after)를 함께 넣으십시오. 예: 공고 카드 제목(job_card_title), 검색 입력창(search_input), 목록 카드(job_card), "상세 페이지가 열린다".
 3. type_in_marker: 특정 id의 마커를 클릭한 후 텍스트를 입력합니다.
+   - 검색어처럼 실행마다 바뀌는 값은 슬롯 이름(slot_name)을 함께 넣으십시오. 예: query, target_count.
 4. scroll: 화면을 스크롤합니다 (방향: 'down' 또는 'up'). 호출 시 자동으로 화면 중앙을 포커스(클릭)한 뒤 한 페이지 분량(PageDown/PageUp)을 내리거나 올립니다.
 5. press_key: 엔터('enter'), ESC('esc') 등 특수키를 누릅니다.
 6. go_back: 브라우저의 뒤로가기(이전 페이지 이동) 기능을 수행합니다.

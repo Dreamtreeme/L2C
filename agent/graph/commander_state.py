@@ -23,6 +23,8 @@ class CommanderState(TypedDict, total=False):
     reviews: Annotated[List[Dict[str, Any]], operator.add]
     accepted_sites: Annotated[List[str], operator.add]
     failed_sites: Annotated[List[Dict[str, Any]], operator.add]
+    pending_human_approval: bool
+    intermediate_report: Dict[str, Any]
     db_results: str
     final_answer: str
     done: bool

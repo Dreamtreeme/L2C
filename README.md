@@ -112,7 +112,7 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     - [x] sentry-sdk: 시스템 크래시 및 좌표 이탈 등 치명적 에러 캡처
     - [x] structlog: 소요 시간 등 성능 벤치마크용 JSON 포맷 로깅
   - [x] 2. 백그라운드 엔진 스크립트 (LLM이 직접 호출하지 않는 내부 엔진 계층)
-    - [x] Perception: mss 모듈 활용 브라우저 영역 검출 및 YOLOv8 + EasyOCR 기반의 로컬 SoM(Set-of-Marks) 파이프라인 마커 합성 구현
+    - [x] Perception: mss 모듈 활용 브라우저 영역 검출 및 OmniParser + PaddleOCR 기반의 로컬 SoM(Set-of-Marks) 파이프라인 마커 합성 구현
     - [x] Wait Stable: 무한 대기 버그를 막기 위해 픽셀 오차율 1퍼센트 이하 조건 및 최대 대기 시간 5초를 적용한 시각적 화면 안정화 대기
     - [x] Security: .env 기반 자격증명 관리 시스템
   - [x] 3. 순수 파이썬 좌표 검증 테스트
@@ -130,7 +130,7 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 
 - [x] Phase 3: LangGraph 지휘자 워크플로우 구성 (비전 통합은 Phase 3.5에서 본격 구현)
   - [x] 1. 노드 설계 및 관찰 → 계획 → 행동 루프
-    - [x] Perception Node: 시스템이 화면을 캡처하고 로컬 SoM(YOLOv8 + EasyOCR)으로 UI 요소와 텍스트를 추출 후 상태 갱신
+    - [x] Perception Node: 시스템이 화면을 캡처하고 로컬 SoM(OmniParser + PaddleOCR)으로 UI 요소와 텍스트를 추출 후 상태 갱신
     - [x] Reasoning Node: 마킹 이미지와 압축된 UI 텍스트 컨텍스트를 Gemini 3.5 Flash에 전달해 다음 행동 도구 선택
     - [x] Action Node: 도구 실행 및 시스템 안정화 후 다시 Perception Node로 회귀
   - [x] 2. 모듈화 기반 서브 그래프 구축
@@ -141,9 +141,9 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     - [x] 바탕화면에서 브라우저 조작 및 검색 화면 이동 검증 ("원티드에서 데이터 분석가 신입 공고 검색해줘" 명령)
 
 - [x] Phase 3.5: OmniParser(Set-of-Marks) 로컬 파이프라인 실제 구현 및 순수 비전 본문 JSON 추출
-  - [x] 1. 종속성 패키지 설치 (`ultralytics`, `easyocr`) 및 로컬 OCR 연동 확인
+  - [x] 1. 종속성 패키지 설치 (`ultralytics`, `paddleocr`) 및 로컬 OCR 연동 확인
   - [x] 2. OmniParser 공식 YOLOv8 모델 가중치 자동 다운로드 유틸 개발
-  - [x] 3. `som_engine.py` 구현 (YOLOv8 + EasyOCR을 통한 요소 검출, 중복 제어 NMS, 마크 이미지 합성 및 좌표 매핑)
+  - [x] 3. `som_engine.py` 구현 (OmniParser + PaddleOCR을 통한 요소 검출, 중복 제어 NMS, 마크 이미지 합성 및 좌표 매핑)
   - [x] 4. `perception.py` 리팩토링 및 SoM 연동 (마킹 이미지 주입 및 마커 ID 좌표 매핑 디코딩)
   - [x] 5. VLM 프롬프트 최적화 (멀티모달 SoM 마크 이미지 주입 및 의사결정 프롬프트 팝업/모달 차단 조치 추가)
   - [x] 6. E2E 본문 추출 통합 테스트 검증 및 벤치마크
@@ -190,30 +190,35 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     - [x] 답변 생성 후 인용 ID 정합성 검사 및 위반 ID는 `[출처 확인 불가]` 마커로 치환 (`validate_citations`)
   - [x] 4. E2E SQLite 검색 동작 및 미적재 정보 거절 테스트 검증 (`test_sqlite_qa.py`)
 
-- [ ] **Phase 8 (예정): 피드백 루프 기반 Reflex Recipe 승격**
+- [ ] **Phase 8: 피드백 루프 기반 Reflex Recipe 승격**
 
   > 이 프로젝트의 차기 핵심 단계. 비전 에이전트가 처음부터 정답 스크립트를 만들도록 제약하지 않고, 탐색 중 생성한 행동 제안과 실제 실행 결과를 관찰해 성공 패턴만 Reflex Recipe로 승격한다. Reflex는 LLM 추론 없이 빠르게 실행하되, 검색어·수집 개수·사이트 범위처럼 바뀌는 값은 지휘자가 파라미터로 주입한다. 실패하거나 확신이 낮은 상황에서는 다시 비전 탐색으로 폴백한다.
 
-  - [ ] 1. 제안 로그 포맷 정규화
-    - [ ] LLM/VLM이 선택한 행동, 대상 마커, target_label, component 후보, parameter 후보, 선택 이유(`why`)를 기록
-    - [ ] 검색어(`query`), 수집 개수(`sample_count`), 사이트 범위(`sites`)처럼 실행마다 바뀔 수 있는 후보 값을 별도 필드로 보존
-  - [ ] 2. 전후 관찰(Observer) 파이프라인 구축
-    - [ ] action 전후 OCR delta, URL 변화, page_role 변화, 화면 변화 여부, 수집 데이터 변화 기록
+  - [x] 1. 제안 로그 포맷 정규화
+    - [x] LLM/VLM이 선택한 행동, 대상 마커, target_label, component 후보, parameter 후보, 선택 이유(`reason`)를 기록
+    - [x] 검색어(`query`)와 수집 개수(`target_count`)처럼 실행마다 바뀔 수 있는 후보 값을 별도 필드로 보존
+  - [x] 2. 전후 관찰(Observer) 파이프라인 구축
+    - [x] 화면 변경 action과 다음 OCR·스크린샷을 `transition_observations`로 연결
+    - [x] 로딩 중 관찰은 같은 action seq에 누적하고, 준비 완료 여부는 전환 계약으로 판정
     - [ ] 같은 카드 반복 클릭, 화면 변화 없음, 팝업/승인창 개입 등 오염 신호 탐지
-  - [ ] 3. Critic 피드백 루프 추가
-    - [ ] success / partial / wrong_target / no_effect / loop_risk 라벨 부여
+  - [x] 3. Critic 피드백 루프 추가
+    - [x] success / partial / wrong_target / no_effect / loop_risk 라벨 부여
     - [ ] 공고 카드 클릭 후 상세 페이지 진입, 상세 수집 후 DB 적재, go_back 후 목록 복귀 같은 목표 전이를 기준으로 판단
   - [ ] 4. Recipe Memory 승격 정책
     - [ ] 같은 사이트·페이지 역할·작업 유형에서 반복 성공한 패턴만 confidence 상승
     - [ ] 실패 패턴은 negative example로 저장하고 Reflex 후보에서 제외
     - [ ] Codex 승인창, 브라우저 툴바, 광고/팝업처럼 사이트 고유 동작이 아닌 요소는 승격 금지
-  - [ ] 5. 슬롯 기반 Reflex 실행기
-    - [ ] 검색어가 바뀌면 `query` 슬롯만 교체하고, 검색 결과 카드 순회 절차는 유지
-    - [ ] 상위 N개 요청은 `sample_count`만 교체하고, `click_next_unvisited_card → collect_detail → go_back` 루프는 유지
+    - [x] Critic이 각 단계를 `fixed / parameterized / reasoning`으로 분류하고 `reasoning` 단계는 활성 레시피에서 제외
+  - [x] 5. 슬롯 기반 Reflex 실행기
+    - [x] 검색어가 바뀌면 `query` 슬롯만 교체하고 고정 UI 절차는 유지
+    - [x] 행동 후 `common_ready_cues + outcomes`가 충족될 때까지 재관찰하고, 시간 초과 시 Explore로 폴백
+    - [x] 검색 결과의 현재 공고 제목은 동적 대상으로 취급하여 과거 제목을 재생하지 않고, 작업자가 미방문 카드를 선택
+    - [x] 상위 N개 요청은 `target_count`와 방문 이력을 유지하며 `현재 카드 선택 → 상세 수집 → 필요 시 go_back` 루프를 반복
     - [ ] Reflex는 높은 confidence 패턴만 실행하고, 불확실하면 추론하지 않고 Explore로 폴백
   - [ ] 6. 비용 절감 정량 검증
     - [ ] Explore 대비 Reflex의 LLM 호출 수, 단계별 평균 시간, 실패율, 폴백률 비교
     - [ ] 검색어/수집 개수 변경 시 파라미터만 바뀌고 고정 절차가 재사용되는지 검증
+    - [x] Android 탐색 레시피를 사용해 `ios 개발자` 2건을 서로 다른 현재 카드에서 수집하고 종료하는 E2E 검증
 
 ## 디렉토리 구조
 

@@ -98,6 +98,9 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     import shared.config as cfg
     monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     monkeypatch.delenv("VISION_AGENT_RECURSION_LIMIT", raising=False)
+    monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
+    monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "off")
+    monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "off")
     
     # 비전 에이전트 그래프를 모킹: stream 시 수집된 JD 데이터를 반환하는 가짜 앱 생성
     class FakeGraphApp:
@@ -155,6 +158,8 @@ def test_realtime_scraping_closes_browser_after_run(setup_test_db, monkeypatch):
     import agent.graph.nodes as nodes
 
     monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
+    monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "off")
+    monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "off")
 
     closed = []
 
@@ -178,6 +183,45 @@ def test_realtime_scraping_closes_browser_after_run(setup_test_db, monkeypatch):
     assert closed == ["close_browser"]
 
 
+def test_persistence_job_normalization_uses_llm(monkeypatch):
+    from shared.schema.jd_schema import JobPosting
+    from agent.tools.realtime_scraping import _normalize_job_for_persistence
+
+    class FakeStructuredLLM:
+        def invoke(self, messages):
+            return JobPosting(
+                company_name="Acme",
+                position="iOS Engineer",
+                url="",
+                tech_stack=["SwiftUI"],
+                requirements=["Swift experience"],
+                experience_min=3,
+                experience_max=99,
+                experience_text="3+ years",
+            )
+
+    class FakeLLM:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def with_structured_output(self, schema):
+            return FakeStructuredLLM()
+
+    monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "llm")
+    monkeypatch.setattr("langchain_google_genai.ChatGoogleGenerativeAI", FakeLLM)
+
+    normalized = _normalize_job_for_persistence(
+        {"URL": "https://example.com/job/1", "raw": "ignored"},
+        keyword="ios",
+    )
+
+    assert normalized["company_name"] == "Acme"
+    assert normalized["position"] == "iOS Engineer"
+    assert normalized["url"] == "https://example.com/job/1"
+    assert normalized["tech_stack"] == ["SwiftUI"]
+    assert normalized["_normalization_source"] == "llm"
+
+
 def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_db, monkeypatch):
     """recursion limit에 걸려도 마지막 partial state의 수집 데이터는 저장합니다."""
     import shared.config as cfg
@@ -185,6 +229,9 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
 
     monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     monkeypatch.delenv("VISION_AGENT_RECURSION_LIMIT", raising=False)
+    monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
+    monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "off")
+    monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "off")
 
     class FakeGraphApp:
         def stream(self, state, config=None, stream_mode=None):
@@ -202,7 +249,7 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
                         "action": "click_marker",
                         "target": {"text": "Data Engineer", "region": "middle-left", "ordinal": 0},
                         "param": {},
-                        "expected_next_state": "state-b",
+                        "expected_after": "job detail is visible",
                     },
                     {
                         "seq": 1,
@@ -211,7 +258,7 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
                         "action": "go_back",
                         "target": None,
                         "param": {},
-                        "expected_next_state": "state-c",
+                        "expected_after": "job result list is visible",
                     },
                     {
                         "seq": 2,
@@ -220,7 +267,7 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
                         "action": "scroll",
                         "target": None,
                         "param": {"direction": "down"},
-                        "expected_next_state": "state-d",
+                        "expected_after": "more job cards are visible",
                     },
                 ],
                 "extracted_jd": {
@@ -248,6 +295,10 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     payload = json.loads(result)
     assert payload["review"]["decision"] == "accept"
     assert payload["hit_recursion_limit"] is True
+    assert payload["needs_human_approval"] is True
+    assert payload["intermediate_report"]["current_recursion_limit"] == 60
+    assert payload["intermediate_report"]["suggested_recursion_limit"] == 120
+    assert "approval" in payload["message"]
     assert payload["persisted_count"] == 1
     conn = sqlite3.connect(TEST_DB_PATH)
     cursor = conn.execute("SELECT company_name, position FROM jobs WHERE url = 'https://www.wanted.co.kr/wd/88888'")
@@ -318,6 +369,55 @@ def test_url_stale_flag_for_actions(monkeypatch):
     }
     click_result = nodes.action_node(click_state)
     assert click_result["current_url_stale"] is True
+
+
+def test_update_extracted_info_skips_wanted_job_without_detail_url():
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    result = nodes.action_node({
+        "current_markers": [],
+        "current_url": "https://www.wanted.co.kr/search?query=android&tab=position",
+        "current_url_stale": False,
+        "reflex_state_key": "state-list",
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "update_extracted_info",
+                    "args": {
+                        "data_json": json.dumps(
+                            {
+                                "공고목록": [
+                                    {
+                                        "회사명": "비모소프트",
+                                        "직무명": "[인턴] Android 개발자",
+                                        "주요업무": ["Android App 개발"],
+                                    }
+                                ]
+                            },
+                            ensure_ascii=False,
+                        )
+                    },
+                    "id": "1",
+                }
+            ],
+        ),
+    })
+
+    action = result["action_history"][0]
+    assert action["status"] == "skipped"
+    assert action["reason"] == "job_update_requires_detail_url"
+    assert result["extracted_jd"] == {}
+    episode = result["feedback_episodes"][0]
+    assert episode["feedback"]["label"] == "no_effect"
+    assert episode["feedback"]["reason"] == "job_update_requires_detail_url"
 
 
 def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):

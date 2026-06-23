@@ -1,7 +1,8 @@
 """
-화면-상태 키 계산.
-state_key = URL 템플릿 + 앵커 마커 텍스트 집합의 해시.
-공고 ID 같은 가변 경로는 {id}로 템플릿화하므로, 같은 화면-상태는 같은 키가 된다.
+화면 상태 키(state_key)를 OCR 앵커 마커 텍스트만으로 계산한다.
+
+URL은 기록 메타데이터나 최종 공고 출처에는 쓸 수 있지만, Reflex 화면 상태 판단에는
+사용하지 않는다.
 """
 
 from __future__ import annotations
@@ -72,12 +73,7 @@ def url_template(url: str) -> str:
 
 def anchor_signature(markers, top: int = 8) -> str:
     """현재 화면 마커 텍스트 중 안정적인 상위 N개를 정렬·해시한 시그니처."""
-    texts = []
-    for m in markers or []:
-        if isinstance(m, dict):
-            t = canonical_anchor_text(m.get("text"))
-            if len(t) >= 2:
-                texts.append(t)
+    texts = state_anchor_texts(markers)
     uniq = sorted(set(texts), key=lambda s: (-len(s), s))[:top]
     uniq = sorted(uniq)
     if not uniq:
@@ -85,5 +81,35 @@ def anchor_signature(markers, top: int = 8) -> str:
     return hashlib.sha1("|".join(uniq).encode("utf-8")).hexdigest()[:10]
 
 
+def anchor_texts_from_values(values) -> list[str]:
+    """저장된 OCR 문자열을 화면 유사도 비교용 앵커 집합으로 정규화한다."""
+    anchors: set[str] = set()
+    for value in values or []:
+        text = canonical_anchor_text(value)
+        if len(text) < 2 or text.startswith("상호작용 가능한 요소"):
+            continue
+        anchors.add(text.casefold().replace(" ", ""))
+    return sorted(anchors)
+
+
+def state_anchor_texts(markers) -> list[str]:
+    """현재 OCR 마커에서 화면 유사도 비교용 앵커 텍스트를 만든다."""
+    values = [
+        marker.get("text")
+        for marker in markers or []
+        if isinstance(marker, dict)
+    ]
+    return anchor_texts_from_values(values)
+
+
+def anchor_similarity(saved_anchors, markers) -> float:
+    """기록 화면과 현재 화면의 OCR 앵커 자카드 유사도(Jaccard similarity)를 계산한다."""
+    saved = set(anchor_texts_from_values(saved_anchors))
+    current = set(state_anchor_texts(markers))
+    if not saved or not current:
+        return 0.0
+    return len(saved & current) / len(saved | current)
+
+
 def compute_state_key(url: str, markers) -> str:
-    return f"{url_template(url)}#{anchor_signature(markers)}"
+    return f"ocr#{anchor_signature(markers)}"

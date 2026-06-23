@@ -12,7 +12,7 @@
     "close_browser"
   ],
   "tool_rules": {
-    "open_browser": "Use once at the beginning for this site's base URL or a known search URL.",
+    "open_browser": "Use once at the beginning with https://www.wanted.co.kr only. Do not open /search?query URLs directly.",
     "click_marker": "Use only visible OCR/SoM marker IDs. For job cards, include target_label with the visible job title.",
     "type_in_marker": "Use for visible search inputs only.",
     "press_key": "Use enter for search submission after typing when safe.",

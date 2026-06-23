@@ -1,16 +1,42 @@
 import json
 import logging
 import os
-import re
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote_plus
 
 from langchain_core.tools import tool
 from langgraph.errors import GraphRecursionError
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECURSION_LIMIT = 60
+
+
+class SearchIntent(BaseModel):
+    """Structured extraction of the user's collection request."""
+
+    search_keyword: str = Field(default="", description="The literal job-search phrase to enter on the target site.")
+    target_count: int = Field(default=0, ge=0, le=100, description="Requested number of job postings, or 0 when unspecified.")
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _suggested_recursion_limit(current_limit: int) -> int:
+    increment = max(1, _env_int("VISION_AGENT_RECURSION_LIMIT_INCREMENT", current_limit))
+    return current_limit + increment
 
 
 def _default_site_slug() -> str:
@@ -34,21 +60,6 @@ def _join_manual_items(items) -> str:
     return "; ".join(str(item) for item in items if item)
 
 
-_KOREAN_SITE_PARTICLES = r"(?:\uc5d0\uc11c\uc758|\uc5d0\uc11c|\uc758|\ub85c|\uc73c\ub85c)?"
-_QUERY_FILLER_PATTERNS = [
-    r"\ucc44\uc6a9\s*\uacf5\uace0",
-    r"\uacf5\uace0",
-    r"\ucc3e\uc544\s*\uc918",
-    r"\ucc3e\uc544\uc8fc\uc138\uc694",
-    r"\uac80\uc0c9\s*(?:\ud574\s*\uc918|\ud574\uc918|\ud574\uc8fc\uc138\uc694|\ud574\uc11c|\ud558\uace0|\ud558\uc138\uc694)",
-    r"\uc54c\ub824\s*\uc918",
-    r"\uc54c\ub824\uc8fc\uc138\uc694",
-    r"\uc218\uc9d1\s*(?:\ud574\s*\uc918|\ud574\uc918|\ud574\uc8fc\uc138\uc694|\ud574\uc11c|\ud558\uace0|\ud558\uc138\uc694)",
-    r"\ud2b8\ub80c\ub4dc",
-    r"\ud2b8\ub79c\ub4dc",
-]
-
-
 def _profile_site_terms(profile: dict) -> list[str]:
     entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
     manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
@@ -66,41 +77,96 @@ def _profile_site_terms(profile: dict) -> list[str]:
     return sorted(cleaned, key=len, reverse=True)
 
 
-def _normalize_search_keyword(raw_query: str, profile: dict) -> str:
-    """Convert a user request into the actual search phrase passed to the worker."""
+def _dump_model(model) -> dict[str, Any]:
+    if isinstance(model, dict):
+        return model
+    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
+
+
+def _search_intent_mode() -> str:
+    mode = os.getenv("VISION_SEARCH_INTENT_MODE", "llm").strip().lower()
+    return mode if mode in {"llm", "off"} else "llm"
+
+
+def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
+    """Ask the intent model for the search phrase and requested item count."""
     original = str(raw_query or "").strip()
     if not original:
-        return ""
+        return _dump_model(SearchIntent())
 
-    keyword = re.sub(r"https?://\S+", " ", original, flags=re.IGNORECASE)
-    for term in _profile_site_terms(profile):
-        keyword = re.sub(
-            rf"{re.escape(term)}\s*{_KOREAN_SITE_PARTICLES}",
-            " ",
-            keyword,
-            flags=re.IGNORECASE,
-        )
-    for pattern in _QUERY_FILLER_PATTERNS:
-        keyword = re.sub(pattern, " ", keyword, flags=re.IGNORECASE)
-    keyword = re.sub(r"[\"'`]+", " ", keyword)
-    keyword = re.sub(r"[?!.,;:()\[\]{}<>]+", " ", keyword)
-    keyword = re.sub(r"\s+", " ", keyword).strip(" -_/")
-    return keyword or original
+    if _search_intent_mode() == "off":
+        intent = _dump_model(SearchIntent(search_keyword=original))
+        intent["source"] = "disabled"
+        intent["error"] = ""
+        return intent
+
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
+        manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
+        model_name = os.getenv("VISION_SEARCH_INTENT_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
+        llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(SearchIntent)
+        messages = [
+            SystemMessage(
+                content=(
+                    "Extract a job-search intent for an autonomous vision worker. "
+                    "Return only the actual phrase that should be searched on the target job site. "
+                    "Remove site names, URLs, filler commands, and analysis/reporting words. "
+                    "If the user asks for a number of postings, set target_count. "
+                    "Do not translate or broaden the keyword."
+                )
+            ),
+            HumanMessage(
+                content=json.dumps(
+                    {
+                        "user_request": original,
+                        "site": entry.get("slug") or manual.get("site"),
+                        "site_terms": _profile_site_terms(profile),
+                        "default_query_target": manual.get("default_query_target", ""),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            ),
+        ]
+        data = _dump_model(llm.invoke(messages))
+        keyword = str(data.get("search_keyword") or "").strip() or original
+        try:
+            target_count = max(0, int(data.get("target_count") or 0))
+        except (TypeError, ValueError):
+            target_count = 0
+        intent = _dump_model(SearchIntent(search_keyword=keyword, target_count=target_count))
+        intent["source"] = "llm"
+        intent["error"] = ""
+        return intent
+    except Exception as exc:  # pragma: no cover - provider failures are best-effort
+        logger.warning("[realtime_scraping] Search intent extraction failed; using raw query: %s", exc)
+        intent = _dump_model(SearchIntent(search_keyword=original))
+        intent["source"] = "llm_failed"
+        intent["error"] = str(exc)[:200]
+        return intent
+
+
+def _normalize_search_keyword(raw_query: str, profile: dict) -> str:
+    """Backward-compatible wrapper around LLM intent extraction."""
+    return str(_extract_search_intent(raw_query, profile).get("search_keyword") or "").strip()
 
 
 def _build_direct_search_url(search_keyword: str, profile: dict) -> str:
-    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
     manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-    slug = str(entry.get("slug") or manual.get("site") or "").strip().lower()
-    base_url = str(entry.get("base_url") or manual.get("base_url") or "").rstrip("/")
-    if not search_keyword or not base_url:
+    navigation = manual.get("navigation_policy", {}) if isinstance(manual, dict) else {}
+    if navigation.get("allow_direct_search_url") is False:
         return ""
-    if slug == "wanted":
-        return f"{base_url}/search?{urlencode({'query': search_keyword, 'tab': 'position'})}"
-    return ""
+    template = str(navigation.get("search_url_template") or "").strip()
+    if not search_keyword or not template:
+        return ""
+    encoded = quote_plus(search_keyword)
+    return template.format(query=encoded, keyword=encoded, raw_query=search_keyword)
 
 
-def _build_site_goal(search_keyword: str, profile: dict, direct_search_url: str = "") -> str:
+def _build_site_goal(search_keyword: str, profile: dict, direct_search_url: str = "", target_count: int = 0) -> str:
     entry = profile["entry"]
     manual = profile["manual"]
     tools = profile["tools"]
@@ -115,6 +181,10 @@ def _build_site_goal(search_keyword: str, profile: dict, direct_search_url: str 
     unsafe_reflex = _join_manual_items(manual.get("reflex_policy", {}).get("unsafe_actions", []))
     allowed_tools = _join_manual_items(tools.get("allowed_tools", []))
     site_prompt = profile.get("prompt", "").strip()
+    navigation = manual.get("navigation_policy", {}) if isinstance(manual, dict) else {}
+    start_url = str(navigation.get("start_url") or base_url or "").strip()
+    search_entry = str(navigation.get("search_entry") or "").strip()
+    navigation_section = ""
     direct_search_section = ""
     if direct_search_url:
         direct_search_section = (
@@ -123,13 +193,30 @@ def _build_site_goal(search_keyword: str, profile: dict, direct_search_url: str 
             "Use this exact URL with open_browser when direct search navigation is useful. "
             "Do not hand-encode Korean query text.\n\n"
         )
+    elif start_url:
+        navigation_section = (
+            "[Navigation start]\n"
+            f"Open only the site home page with open_browser: {start_url}\n"
+            "Do not construct or open a search/query URL yourself. "
+            "Find the visible search input, type the user query, and submit from the page."
+            f"{' ' + search_entry if search_entry else ''}\n\n"
+        )
+    target_section = ""
+    if int(target_count or 0) > 0:
+        target_section = (
+            "[Collection target]\n"
+            f"Collect up to {int(target_count)} distinct job postings for this request. "
+            "When that many valid detail pages have been collected and submitted, finish instead of opening more cards.\n\n"
+        )
 
     return (
         f"{site_name}({base_url})에서 '{search_keyword}' 채용공고를 검색하고 수집하세요. "
         "검색 결과 화면에 도달하면 공고 수와 카드/행 목록을 확인하고, "
         "방문할 공고별 순회 계획을 세운 뒤 상세 페이지를 하나씩 방문하세요. "
         "상세 페이지에서 필요한 정보를 수집한 뒤 목록으로 돌아와 이미 클릭한 공고는 제외하고 다음 공고를 선택하세요.\n\n"
+        f"{navigation_section}"
         f"{direct_search_section}"
+        f"{target_section}"
         f"[사이트 공통 흐름]\n{common_flow}\n\n"
         f"[안정적인 UI/Reflex 후보]\n{stable_controls}\n\n"
         f"[목표나 실행 시점에 따라 달라지는 UI]\n{variable_entities}\n\n"
@@ -223,6 +310,140 @@ def _worker_review_retries() -> int:
         return 1
 
 
+def needs_human_limit_approval(
+    *,
+    hit_recursion_limit: bool,
+    is_finished: bool,
+    persisted_count: int,
+    target_count: int = 0,
+) -> bool:
+    if not _env_bool("VISION_HITL_ON_RECURSION_LIMIT", True):
+        return False
+    persisted = int(persisted_count or 0)
+    target = int(target_count or 0)
+    if target > 0 and persisted >= target:
+        return False
+    return bool(hit_recursion_limit and not is_finished and persisted > 0)
+
+
+def _job_report_items(submission: dict) -> list[dict[str, str]]:
+    summary = submission.get("extracted_summary") if isinstance(submission, dict) else {}
+    jobs = summary.get("jobs") if isinstance(summary, dict) else []
+    out: list[dict[str, str]] = []
+    for job in jobs or []:
+        if not isinstance(job, dict):
+            continue
+        out.append(
+            {
+                "company": str(job.get("company") or ""),
+                "position": str(job.get("position") or ""),
+                "url": str(job.get("url") or ""),
+                "field_count": str(job.get("field_count") or ""),
+            }
+        )
+    return out
+
+
+def build_limit_intermediate_report(
+    worker_result: dict,
+    submission: dict,
+    *,
+    persisted_count: int,
+    current_limit: int,
+    target_count: int = 0,
+) -> dict[str, Any]:
+    final_state = worker_result.get("final_state") if isinstance(worker_result, dict) else {}
+    if not isinstance(final_state, dict):
+        final_state = {}
+    summary = submission.get("extracted_summary") if isinstance(submission, dict) else {}
+    if not isinstance(summary, dict):
+        summary = {}
+    plan = list(final_state.get("plan", []) or [])
+    current_step = int(final_state.get("current_plan_step", 0) or 0)
+    remaining_plan = plan[current_step: current_step + 4] if plan else []
+    suggested_limit = _suggested_recursion_limit(current_limit)
+    target = int(target_count or submission.get("target_count") or worker_result.get("target_count") or 0)
+    persisted = int(persisted_count or 0)
+    return {
+        "status": "needs_human_limit_approval",
+        "reason": "recursion_limit_reached_with_partial_data",
+        "current_recursion_limit": current_limit,
+        "suggested_recursion_limit": suggested_limit,
+        "collected_count": int(submission.get("collected_count") or summary.get("job_count") or 0),
+        "persisted_count": persisted,
+        "target_count": target,
+        "remaining_collection_count": max(0, target - persisted) if target > 0 else 0,
+        "collection_complete": bool(target > 0 and persisted >= target),
+        "current_url": str(summary.get("current_url") or final_state.get("current_url") or ""),
+        "current_plan_step": current_step,
+        "total_plan_steps": len(plan),
+        "remaining_plan_preview": [str(item) for item in remaining_plan],
+        "jobs": _job_report_items(submission),
+        "question": f"현재 recursion limit {current_limit}에 도달했습니다. limit을 {suggested_limit}로 늘려 계속 진행할까요?",
+    }
+
+
+def limit_report_requires_more_collection(report: dict) -> bool:
+    """Return True when explicit collection counters say more data is needed."""
+    if not isinstance(report, dict):
+        return False
+    target = int(report.get("target_count") or 0)
+    persisted = int(report.get("persisted_count") or 0)
+    if target > 0:
+        return persisted < target
+    return persisted > 0
+
+
+
+def _jd_normalization_mode() -> str:
+    mode = os.getenv("VISION_JD_NORMALIZATION_MODE", "llm").strip().lower()
+    return mode if mode in {"llm", "off"} else "llm"
+
+
+def _normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dict[str, Any]:
+    if _jd_normalization_mode() == "off":
+        return dict(job)
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        from shared.schema.jd_schema import JobPosting
+
+        model_name = os.getenv("VISION_JD_NORMALIZATION_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
+        llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(JobPosting)
+        messages = [
+            SystemMessage(
+                content=(
+                    "Normalize one raw job posting collected by a vision worker into the JobPosting schema. "
+                    "Read field names in any language, including Korean. Preserve the original job URL. "
+                    "Use empty strings or empty lists for unknown fields; do not invent missing facts. "
+                    "Do not compute content_hash."
+                )
+            ),
+            HumanMessage(
+                content=json.dumps(
+                    {
+                        "search_keyword": keyword,
+                        "raw_job": job,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            ),
+        ]
+        normalized = _dump_model(llm.invoke(messages))
+        raw_url = job.get("url") or job.get("URL") or job.get("공고url")
+        if raw_url and not normalized.get("url"):
+            normalized["url"] = raw_url
+        normalized["_normalization_source"] = "llm"
+        return normalized
+    except Exception as exc:  # pragma: no cover - provider failures are best-effort
+        logger.warning("[realtime_scraping] JD normalization failed; using raw job: %s", exc)
+        fallback = dict(job)
+        fallback["_normalization_source"] = "llm_failed"
+        fallback["_normalization_error"] = str(exc)[:200]
+        return fallback
+
+
 def _append_review_feedback(goal: str, review_feedback: str | None) -> str:
     if not review_feedback:
         return goal
@@ -257,12 +478,13 @@ def _initial_worker_state(goal: str) -> dict:
         "feedback_episodes": [],
         "reflex_state_key": "",
         "reflex_hit": False,
-        "reflex_expected_next_state": "",
-        "reflex_pending_validation": False,
-        "ocr_texts": [],
-        "ocr_delta_added": [],
-        "ocr_delta_removed": [],
-        "reflex_validation_status": "",
+        "reflex_transition_contracts": {},
+        "recipe_params": {},
+        "pending_transition": {},
+        "transition_status": "",
+        "transition_outcome": "",
+        "transition_source": "",
+        "transition_observations": [],
     }
 
 
@@ -284,10 +506,21 @@ def run_worker_once(
     site_name = site_entry.get("display_name") or site_slug
     run_id = run_id or new_worker_run_id()
     raw_search_keyword = search_keyword
-    search_keyword = _normalize_search_keyword(search_keyword, site_profile)
+    search_intent = _extract_search_intent(search_keyword, site_profile)
+    search_keyword = str(search_intent.get("search_keyword") or search_keyword or "").strip()
+    target_count = int(search_intent.get("target_count") or 0)
     direct_search_url = _build_direct_search_url(search_keyword, site_profile)
-    goal = _append_review_feedback(_build_site_goal(search_keyword, site_profile, direct_search_url), review_feedback)
+    goal = _append_review_feedback(
+        _build_site_goal(search_keyword, site_profile, direct_search_url, target_count=target_count),
+        review_feedback,
+    )
     initial_state = _initial_worker_state(goal)
+    initial_state["recipe_params"] = {
+        "query": search_keyword,
+        "keyword": search_keyword,
+        "target_count": target_count,
+        "site": site_slug,
+    }
 
     logger.info(
         "[realtime_scraping] Starting worker graph site=%s attempt=%s",
@@ -311,6 +544,7 @@ def run_worker_once(
         feedback_saved=feedback_saved,
         review_attempt=review_attempt,
         run_id=run_id,
+        target_count=target_count,
     )
 
     return {
@@ -321,10 +555,13 @@ def run_worker_once(
         "site_name": site_name,
         "keyword": search_keyword,
         "raw_keyword": raw_search_keyword,
+        "target_count": target_count,
+        "search_intent": search_intent,
         "run_status": run_status,
         "hit_recursion_limit": hit_recursion_limit,
         "is_finished": is_finished,
         "feedback_saved": feedback_saved,
+        "recursion_limit": recursion_limit,
     }
 
 
@@ -426,10 +663,13 @@ def _result_payload(
     keyword: str,
     item_count: int,
     persisted_count: int,
+    target_count: int = 0,
     submission_id: str,
     review: dict,
     hit_recursion_limit: bool,
     is_finished: bool,
+    needs_human_approval: bool = False,
+    intermediate_report: dict | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -437,12 +677,15 @@ def _result_payload(
             "site": site_slug,
             "site_name": site_name,
             "keyword": keyword,
+            "target_count": int(target_count or 0),
             "item_count": item_count,
             "persisted_count": persisted_count,
             "submission_id": submission_id,
             "review": review,
             "hit_recursion_limit": hit_recursion_limit,
             "is_finished": is_finished,
+            "needs_human_approval": needs_human_approval,
+            "intermediate_report": intermediate_report or {},
         },
         ensure_ascii=False,
         indent=2,
@@ -510,8 +753,34 @@ def realtime_scraping(
             effective_keyword = worker_result.get("keyword") or search_keyword
             hit_recursion_limit = bool(worker_result.get("hit_recursion_limit", False))
             is_finished = bool(worker_result.get("is_finished", False))
+            recursion_limit = int(worker_result.get("recursion_limit") or DEFAULT_RECURSION_LIMIT)
+            target_count = int(worker_result.get("target_count") or submission.get("target_count") or 0)
+            base_needs_approval = needs_human_limit_approval(
+                hit_recursion_limit=hit_recursion_limit,
+                is_finished=is_finished,
+                persisted_count=persisted_count,
+                target_count=target_count,
+            )
+            intermediate_report = (
+                build_limit_intermediate_report(
+                    worker_result,
+                    submission,
+                    persisted_count=persisted_count,
+                    current_limit=recursion_limit,
+                    target_count=target_count,
+                )
+                if base_needs_approval
+                else {}
+            )
+            needs_approval = base_needs_approval and limit_report_requires_more_collection(intermediate_report)
 
-            if review.get("decision") == "accept" and persisted_count > 0:
+            if needs_approval:
+                message = (
+                    "intermediate report: recursion limit reached with partial collection persisted; "
+                    f"keyword={effective_keyword!r}, site={site_name}, collected={item_count}, persisted={persisted_count}; "
+                    f"approval required to raise limit to {intermediate_report.get('suggested_recursion_limit')}"
+                )
+            elif review.get("decision") == "accept" and persisted_count > 0:
                 completion_type = "partial collection persisted" if hit_recursion_limit and not is_finished else "vision collection persisted"
                 message = f"{completion_type}: keyword={effective_keyword!r}, site={site_name}, collected={item_count}, persisted={persisted_count}"
             elif review.get("decision") == "revise":
@@ -527,12 +796,15 @@ def realtime_scraping(
                 site_name=site_name,
                 site_slug=site_slug,
                 keyword=effective_keyword,
+                target_count=target_count,
                 item_count=item_count,
                 persisted_count=persisted_count,
                 submission_id=submission_id,
                 review=review,
                 hit_recursion_limit=hit_recursion_limit,
                 is_finished=is_finished,
+                needs_human_approval=needs_approval,
+                intermediate_report=intermediate_report,
             )
 
     except Exception as e:
@@ -568,9 +840,11 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> int:
         if not isinstance(job, dict) or not job:
             continue
 
+        normalized_job = _normalize_job_for_persistence(job, keyword=keyword)
+
         # fallback으로 검색 결과 페이지 URL을 저장하면 이후 원본 공고 조회 시 엉뚱한 페이지로 연결됩니다.
         # URL을 수집하지 못한 경우 해당 공고는 적재를 건너뜁니다.
-        url = job.get("url") or job.get("URL")
+        url = normalized_job.get("url") or job.get("url") or job.get("URL") or job.get("공고url")
         if not url:
             company_name = job.get("회사명", job.get("company_name", ""))
             position = job.get("직무명", job.get("position", ""))
@@ -578,8 +852,8 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> int:
             continue
 
         try:
-            job.setdefault("url", url)
-            job_posting = Preprocessor.process_raw_jd(job)
+            normalized_job["url"] = str(url).strip()
+            job_posting = Preprocessor.process_raw_jd(normalized_job)
             db.upsert(url=url, data=job_posting.model_dump())
             persisted_count += 1
             logger.info(f"[_persist] Successfully upserted job #{idx}: {job_posting.company_name} - {job_posting.position}")

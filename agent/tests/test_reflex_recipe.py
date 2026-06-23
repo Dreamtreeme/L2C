@@ -16,20 +16,35 @@ def test_record_ui_step_stays_in_marker_text_space():
         ],
     }
 
-    record_ui_step(steps, state, "click_marker", {"marker_id": 1}, 0)
+    record_ui_step(
+        steps,
+        state,
+        "click_marker",
+        {
+            "marker_id": 1,
+            "reason": "open apply flow",
+            "target_role": "apply_button",
+            "target_component": "job_detail_header",
+            "expected_after": "application modal opens",
+        },
+        0,
+    )
 
-    assert steps[0]["state_key"].startswith("wanted.co.kr/wd/{id}#")
+    assert steps[0]["state_key"].startswith("ocr#")
     assert steps[0]["target"] == {
         "text": "지원하기",
         "region": "top-left",
         "ordinal": 0,
         "evidence_texts": ["공유하기"],
     }
+    assert steps[0]["intent"] == "open apply flow"
+    assert steps[0]["target_role"] == "apply_button"
+    assert steps[0]["component"] == "job_detail_header"
+    assert steps[0]["expected_after"] == "application modal opens"
     assert "bbox" not in steps[0]["target"]
 
 
-def test_state_key_and_ocr_delta_ignore_dynamic_numeric_changes():
-    from agent.recipe.ocr_delta import diff_marker_texts, marker_text_set
+def test_state_key_ignores_dynamic_numeric_changes():
     from agent.recipe.state_key import compute_state_key
 
     before = [
@@ -42,20 +57,111 @@ def test_state_key_and_ocr_delta_ignore_dynamic_numeric_changes():
         {"id": 2, "bbox": [0, 20, 10, 30], "text": "지원하기"},
         {"id": 3, "bbox": [0, 40, 10, 50], "text": "회사 소개"},
     ]
-    after_new_element = after_count_change + [
-        {"id": 4, "bbox": [0, 60, 10, 70], "text": "지원 완료"},
-    ]
-
     url = "https://www.wanted.co.kr/wd/12345"
     assert compute_state_key(url, before) == compute_state_key(url, after_count_change)
+    assert compute_state_key(url, before) == compute_state_key("https://example.com/other", before)
 
-    count_delta = diff_marker_texts(marker_text_set(before), after_count_change)
-    assert count_delta["added"] == []
-    assert count_delta["removed"] == []
 
-    new_delta = diff_marker_texts(marker_text_set(before), after_new_element)
-    assert new_delta["added"] == ["지원 완료"]
-    assert new_delta["removed"] == []
+def test_anchor_similarity_tolerates_partial_screen_changes():
+    from agent.recipe.state_key import anchor_similarity
+
+    saved = ["채용", "검색", "포지션 12", "회사 40", "Android 개발자"]
+    current = [
+        {"text": "채용"},
+        {"text": "검색"},
+        {"text": "포지션 13"},
+        {"text": "회사 41"},
+        {"text": "Android 개발자"},
+        {"text": "새 광고 문구"},
+    ]
+
+    assert anchor_similarity(saved, current) >= 0.4
+
+
+def test_transition_contract_waits_for_known_result_outcomes():
+    from agent.recipe.transition import evaluate_transition
+
+    contract = {
+        "common_ready_cues": [
+            {"kind": "slot_text", "slot": "query"},
+            {"kind": "text_any", "values": ["포지션", "회사"]},
+        ],
+        "outcomes": [
+            {"name": "results_found", "cues": [{"kind": "text_all", "values": ["Android 개발자", "마크노바"]}]},
+            {"name": "results_empty", "cues": [{"kind": "text_any", "values": ["검색 결과 없음", "0건"]}]},
+        ],
+        "loading_cues": [{"kind": "text_any", "values": ["포지션(0)"]}],
+        "timeout_sec": 5,
+    }
+    skeleton = [
+        {"text": "android 개발자"},
+        {"text": "포지션(0)"},
+        {"text": "회사(0)"},
+    ]
+    found = skeleton + [{"text": "Android 개발자"}, {"text": "마크노바"}]
+    empty = skeleton + [{"text": "검색 결과 없음"}]
+
+    assert evaluate_transition(contract, skeleton, {"query": "android 개발자"}, 1)["status"] == "pending"
+    assert evaluate_transition(contract, found, {"query": "android 개발자"}, 2)["outcome"] == "results_found"
+    assert evaluate_transition(contract, empty, {"query": "android 개발자"}, 2)["outcome"] == "results_empty"
+    assert evaluate_transition(contract, skeleton, {"query": "android 개발자"}, 6)["status"] == "unknown"
+    assert evaluate_transition({}, skeleton, {"query": "android 개발자"}, 0)["reason"] == "transition_contract_missing"
+    assert evaluate_transition({"timeout_sec": 12}, skeleton, {"query": "android 개발자"}, 0)["reason"] == "transition_contract_empty"
+
+
+def test_perception_node_records_and_resolves_pending_transition(monkeypatch, tmp_path):
+    import time
+    from PIL import Image
+    from agent.graph import nodes
+
+    screenshot = tmp_path / "screen.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+
+    class FakePerception:
+        def capture_screen(self):
+            return screenshot
+
+        def analyze_ui(self, _path):
+            return {
+                "markers": [
+                    {"id": 1, "bbox": [10, 150, 200, 180], "text": "android 개발자"},
+                    {"id": 2, "bbox": [10, 200, 200, 230], "text": "포지션"},
+                    {"id": 3, "bbox": [10, 250, 300, 280], "text": "Android App 개발자"},
+                ],
+                "marked_image": str(screenshot),
+            }
+
+    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    result = nodes.perception_node(
+        {
+            "current_url": "https://www.wanted.co.kr",
+            "current_url_stale": False,
+            "pending_transition": {
+                "action_seq": 3,
+                "action": "press_key",
+                "expected_after": "검색 결과가 나타남",
+                "source": "reflex",
+                "started_at": time.time(),
+                "attempts": 0,
+                "params": {"query": "android 개발자"},
+                "contract": {
+                    "common_ready_cues": [
+                        {"kind": "slot_text", "slot": "query"},
+                        {"kind": "text_any", "values": ["포지션"]},
+                    ],
+                    "outcomes": [
+                        {"name": "results_found", "cues": [{"kind": "text_any", "values": ["Android App 개발자"]}]}
+                    ],
+                },
+            },
+        }
+    )
+
+    assert result["transition_status"] == "ready"
+    assert result["transition_outcome"] == "results_found"
+    assert result["pending_transition"] == {}
+    assert result["transition_observations"][0]["action_seq"] == 3
+    assert "Android App 개발자" in result["transition_observations"][0]["marker_texts"]
 
 
 def test_match_marker_uses_region_and_ordinal_tiebreak():
@@ -92,7 +198,10 @@ def test_recipe_store_commits_and_reads_by_state_key(tmp_path):
                 "action": "click_marker",
                 "target": {"text": "검색", "region": "top-left", "ordinal": 0},
                 "param": {},
-                "expected_next_state": "state-b",
+                "transition_contract": {
+                    "common_ready_cues": [{"kind": "text_any", "values": ["검색 결과"]}],
+                    "outcomes": [],
+                },
             }
         ],
     )
@@ -101,12 +210,13 @@ def test_recipe_store_commits_and_reads_by_state_key(tmp_path):
     recipe = store.get_recipe("state-a")
     assert recipe is not None
     assert recipe.steps[0].action == "click_marker"
-    assert recipe.steps[0].expected_next_state == "state-b"
+    assert recipe.steps[0].transition_contract.common_ready_cues[0].values == ["검색 결과"]
 
     conn = sqlite3.connect(db_path)
     columns = [row[1] for row in conn.execute("PRAGMA table_info(recipes)").fetchall()]
     conn.close()
     assert "state_key" in columns
+    assert "metadata_json" in columns
     assert "recipe_key" not in columns
 
 
@@ -145,8 +255,8 @@ def test_recipe_store_groups_same_state_action_chain(tmp_path):
 
     assert recipe is not None
     assert [step.action for step in recipe.steps] == ["type_in_marker", "press_key"]
-    assert recipe.steps[0].expected_next_state == "results-state"
-    assert recipe.steps[1].expected_next_state == "results-state"
+    assert recipe.steps[0].transition_contract is None
+    assert recipe.steps[1].transition_contract is None
 
 
 def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
@@ -164,16 +274,20 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
                         seq=0,
                         state_key="state-a",
                         action="type_in_marker",
+                        replay_mode="parameterized",
                         target={"text": "검색", "region": "top-left", "ordinal": 0},
                         param={"text": "ai 엔지니어"},
-                        expected_next_state="state-b",
                     ),
                     RecipeStep(
                         seq=1,
                         state_key="state-a",
                         action="press_key",
+                        replay_mode="fixed",
                         param={"key": "enter"},
-                        expected_next_state="state-b",
+                        transition_contract={
+                            "common_ready_cues": [{"kind": "text_any", "values": ["포지션"]}],
+                            "outcomes": [{"name": "results_found", "cues": [{"kind": "text_any", "values": ["회사명"]}]}],
+                        },
                     ),
                 ],
             )
@@ -191,11 +305,149 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
 
     msg = result["last_action_result"]
     assert result["reflex_hit"] is True
-    assert result["reflex_expected_next_state"] == "state-b"
     assert msg.tool_calls[0]["name"] == "type_in_marker"
     assert msg.tool_calls[0]["args"] == {"marker_id": 7, "text": "ai 엔지니어"}
     assert msg.tool_calls[1]["name"] == "press_key"
     assert msg.tool_calls[1]["args"] == {"key": "enter"}
+    assert result["reflex_transition_contracts"][msg.tool_calls[1]["id"]]["outcomes"][0]["name"] == "results_found"
+
+
+def test_reflex_node_replaces_type_input_slot(monkeypatch):
+    from agent.graph import nodes
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+    from shared.schema.skill_schema import RecipeSkillMetadata, SkillInputSlot
+
+    class FakeStore:
+        def get_recipe(self, state_key):
+            return SiteRecipe(
+                site="wanted",
+                goal="old goal",
+                skill_metadata=RecipeSkillMetadata(
+                    inputs=[SkillInputSlot(name="query", required=True)]
+                ),
+                steps=[
+                    RecipeStep(
+                        seq=0,
+                        state_key="state-a",
+                        action="type_in_marker",
+                        replay_mode="parameterized",
+                        target={"text": "Search", "region": "top-left", "ordinal": 0},
+                        param={"text": "old query", "slot_name": "query"},
+                        slot_refs=["query"],
+                    )
+                ],
+            )
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "find android jobs",
+            "current_url": "https://www.wanted.co.kr",
+            "reflex_state_key": "state-a",
+            "current_markers": [{"id": 7, "bbox": [10, 10, 70, 40], "text": "Search"}],
+            "recipe_params": {"query": "android developer"},
+        }
+    )
+
+    assert result["reflex_hit"] is True
+    assert result["last_action_result"].tool_calls[0]["args"] == {
+        "marker_id": 7,
+        "text": "android developer",
+        "slot_name": "query",
+    }
+
+
+def test_reflex_node_uses_ocr_similarity_when_exact_state_misses(monkeypatch):
+    from agent.graph import nodes
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    class FakeStore:
+        def get_recipe(self, state_key):
+            assert state_key == "new-state"
+            return None
+
+        def get_similar_recipes(self, site, markers, min_similarity=0.0):
+            assert site == "wanted"
+            assert min_similarity == 0.25
+            return [
+                (
+                    "recorded-state",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="collect jobs",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                state_key="recorded-state",
+                                state_anchors=["검색", "채용"],
+                                action="click_marker",
+                                replay_mode="fixed",
+                                target={"text": "검색"},
+                            )
+                        ],
+                    ),
+                    0.62,
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "android 개발자 공고 찾아줘",
+            "reflex_state_key": "new-state",
+            "current_markers": [{"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"}],
+            "recipe_params": {"site": "wanted", "query": "android 개발자"},
+        }
+    )
+
+    assert result["reflex_hit"] is True
+    assert result["reflex_state_key"] == "new-state"
+    assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 7}
+
+
+def test_reflex_node_rejects_similar_recipe_when_target_does_not_match(monkeypatch):
+    from agent.graph import nodes
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    class FakeStore:
+        def get_recipe(self, state_key):
+            return None
+
+        def get_similar_recipes(self, site, markers, min_similarity=0.0):
+            return [
+                (
+                    "recorded-state",
+                    SiteRecipe(
+                        site="wanted",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                state_key="recorded-state",
+                                state_anchors=["검색", "채용"],
+                                action="click_marker",
+                                replay_mode="fixed",
+                                target={"text": "상세 정보 더 보기"},
+                            )
+                        ],
+                    ),
+                    0.7,
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "android 개발자 공고 찾아줘",
+            "reflex_state_key": "new-state",
+            "current_markers": [{"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"}],
+            "recipe_params": {"site": "wanted", "query": "android 개발자"},
+        }
+    )
+
+    assert result["reflex_hit"] is False
 
 
 def test_action_node_commits_accumulated_recorded_steps(monkeypatch):
@@ -223,7 +475,7 @@ def test_action_node_commits_accumulated_recorded_steps(monkeypatch):
             "action": "click_marker",
             "target": {"text": "검색", "region": "top-left", "ordinal": 0},
             "param": {},
-            "expected_next_state": None,
+            "transition_contract": None,
         }
     ]
 
@@ -258,14 +510,11 @@ def test_reflex_routing_respects_flag_and_validation(monkeypatch):
     assert route_after_perception({}) == "reasoning"
 
     monkeypatch.setenv("REFLEX_ENABLED", "1")
-    assert route_after_perception({"reflex_pending_validation": False}) == "reflex"
-    assert route_after_perception(
-        {
-            "reflex_pending_validation": True,
-            "reflex_expected_next_state": "expected",
-            "reflex_state_key": "current",
-        }
-    ) == "reasoning"
+    assert route_after_perception({}) == "reflex"
+    assert route_after_perception({"transition_status": "pending"}) == "perception"
+    assert route_after_perception({"transition_status": "unknown", "transition_source": "reflex"}) == "reasoning"
+    assert route_after_perception({"transition_status": "unknown", "transition_source": "autonomous"}) == "reflex"
+    assert route_after_perception({"transition_status": "ready"}) == "reflex"
 
     assert route_after_reflex({"reflex_hit": True}) == "action"
     assert route_after_reflex({"reflex_hit": False}) == "reasoning"
@@ -310,6 +559,62 @@ def test_match_marker_returns_none_when_evidence_is_ambiguous():
     }
 
     assert match_marker(step, markers) is None
+
+
+def test_match_marker_filters_generic_components_by_region_before_evidence():
+    from agent.recipe.matcher import match_marker
+
+    markers = [
+        {"id": 1, "bbox": [900, 100, 960, 160], "text": "상호작용 가능한 요소 (icon)"},
+        {"id": 2, "bbox": [100, 500, 300, 560], "text": "상호작용 가능한 요소 (icon)"},
+        {"id": 3, "bbox": [700, 180, 820, 220], "text": "기업"},
+        {"id": 4, "bbox": [760, 230, 900, 270], "text": "서비스"},
+        {"id": 5, "bbox": [120, 570, 260, 610], "text": "기업"},
+        {"id": 6, "bbox": [180, 620, 320, 660], "text": "서비스"},
+    ]
+    step = {
+        "target": {
+            "text": "상호작용 가능한 요소 (icon)",
+            "region": "top-right",
+            "evidence_texts": ["기업", "서비스"],
+        }
+    }
+
+    assert match_marker(step, markers) == 1
+
+
+def test_marker_ordinal_ignores_browser_chrome_and_uses_region():
+    from agent.recipe.matcher import marker_ordinal
+
+    markers = [
+        {"id": 1, "bbox": [900, 140, 960, 170], "text": "상호작용 가능한 요소 (icon)"},
+        {"id": 2, "bbox": [1200, 140, 1260, 170], "text": "상호작용 가능한 요소 (icon)"},
+        {"id": 3, "bbox": [1500, 190, 1560, 250], "text": "상호작용 가능한 요소 (icon)"},
+        {"id": 4, "bbox": [1600, 190, 1660, 250], "text": "상호작용 가능한 요소 (icon)"},
+        {"id": 5, "bbox": [100, 500, 160, 560], "text": "상호작용 가능한 요소 (icon)"},
+    ]
+
+    assert marker_ordinal(markers[2], markers) == 0
+    assert marker_ordinal(markers[3], markers) == 1
+
+
+def test_match_marker_combines_adjacent_split_ocr_text():
+    from agent.recipe.matcher import match_marker
+
+    markers = [
+        {"id": 1, "bbox": [100, 100, 160, 140], "text": "상세"},
+        {"id": 2, "bbox": [165, 100, 230, 140], "text": "정보"},
+        {"id": 3, "bbox": [100, 300, 220, 340], "text": "지원하기"},
+    ]
+    step = {
+        "target": {
+            "text": "상세정보",
+            "semantic_label": "상세 정보 더 보기",
+            "region": "top-left",
+        }
+    }
+
+    assert match_marker(step, markers) == 1
 
 
 def test_record_ui_step_preserves_llm_selected_card_title():
@@ -357,22 +662,6 @@ def test_match_marker_prefers_llm_selected_card_title():
     assert match_marker(step, markers) == 4
 
 
-def test_reflex_routes_to_reasoning_after_validated_hit_by_default(monkeypatch):
-    from agent.graph.workflow import route_after_perception
-
-    monkeypatch.setenv("REFLEX_ENABLED", "1")
-    monkeypatch.delenv("REFLEX_REASON_AFTER_HIT", raising=False)
-    state = {
-        "reflex_pending_validation": True,
-        "reflex_expected_next_state": "state-detail",
-        "reflex_state_key": "state-detail",
-    }
-
-    assert route_after_perception(state) == "reasoning"
-
-    monkeypatch.setenv("REFLEX_REASON_AFTER_HIT", "0")
-    assert route_after_perception(state) == "reflex"
-
 def test_feedback_episode_records_parameter_candidate_and_observation():
     from langchain_core.messages import AIMessage
     from agent.recipe.feedback import record_action_episode
@@ -382,7 +671,6 @@ def test_feedback_episode_records_parameter_candidate_and_observation():
         "goal": "AI 엔지니어 채용공고 찾아줘",
         "current_url": "https://www.wanted.co.kr",
         "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "검색"}],
-        "ocr_texts": ["검색"],
     }
     enriched = {
         "action": "type_in_marker",
@@ -396,7 +684,14 @@ def test_feedback_episode_records_parameter_candidate_and_observation():
         state,
         AIMessage(content="검색어를 입력한다"),
         "type_in_marker",
-        {"marker_id": 1, "text": "AI 엔지니어"},
+        {
+            "marker_id": 1,
+            "text": "AI 엔지니어",
+            "reason": "enter search keyword",
+            "target_role": "search_input",
+            "target_component": "site_search",
+            "expected_after": "search keyword is entered",
+        },
         enriched,
         {"state_key": "state-home", "url": "https://www.wanted.co.kr", "screenshot": "s.png", "marked_image": "m.png"},
         {"current_url": "https://www.wanted.co.kr", "current_url_stale": True, "screen_changed": True, "extracted_jd": {}, "is_finished": False},
@@ -407,10 +702,43 @@ def test_feedback_episode_records_parameter_candidate_and_observation():
     episode = episodes[0]
     assert episode["proposal"]["action"] == "type_in_marker"
     assert episode["proposal"]["llm_thought"] == "검색어를 입력한다"
+    assert episode["proposal"]["expected_after"] == "search keyword is entered"
     assert episode["proposal"]["parameter_candidates"][0]["slot_candidate"] == "query"
     assert episode["observation"]["before"]["state_key"] == "state-home"
     assert episode["observation"]["after"]["screen_changed"] is True
     assert episode["feedback"]["label"] == "partial"
+
+
+def test_feedback_episode_does_not_infer_site_slot_from_open_url():
+    from langchain_core.messages import AIMessage
+    from agent.recipe.feedback import record_action_episode
+
+    episodes = []
+    state = {
+        "goal": "collect jobs",
+        "current_url": "",
+        "current_markers": [],
+    }
+
+    record_action_episode(
+        episodes,
+        state,
+        AIMessage(content="open the site home page"),
+        "open_browser",
+        {
+            "url": "https://www.wanted.co.kr",
+            "reason": "start from home page",
+            "expected_after": "site home page is visible",
+        },
+        {"action": "open_browser", "status": "success", "result": {"opened": True}},
+        {"state_key": "state-empty", "url": "", "screenshot": "s.png", "marked_image": "m.png"},
+        {"current_url": "https://www.wanted.co.kr", "current_url_stale": True, "screen_changed": True, "extracted_jd": {}, "is_finished": False},
+        0,
+    )
+
+    assert episodes[0]["proposal"]["parameter_candidates"] == []
+    assert episodes[0]["proposal"]["expected_after"] == "site home page is visible"
+
 
 def _sample_feedback_episode(seq=0):
     return {
@@ -421,6 +749,7 @@ def _sample_feedback_episode(seq=0):
         "proposal": {
             "action": "type_in_marker",
             "args": {"marker_id": 1, "text": "AI 엔지니어"},
+            "expected_after": "search results are visible",
             "parameter_candidates": [{"slot_candidate": "query", "value": "AI 엔지니어", "confidence": 0.45}],
         },
         "observation": {
@@ -460,6 +789,7 @@ def test_database_initializes_feedback_episode_table(tmp_path):
     columns = [row[1] for row in conn.execute("PRAGMA table_info(feedback_episodes)").fetchall()]
     submission_columns = [row[1] for row in conn.execute("PRAGMA table_info(worker_submissions)").fetchall()]
     candidate_columns = [row[1] for row in conn.execute("PRAGMA table_info(recipe_candidates)").fetchall()]
+    recipe_columns = [row[1] for row in conn.execute("PRAGMA table_info(recipes)").fetchall()]
     conn.close()
 
     assert "feedback_episodes" in tables
@@ -472,6 +802,7 @@ def test_database_initializes_feedback_episode_table(tmp_path):
     assert "candidate_id" in candidate_columns
     assert "steps_json" in candidate_columns
     assert "validation_json" in candidate_columns
+    assert "metadata_json" in recipe_columns
 
 
 def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch):
@@ -523,6 +854,7 @@ def test_worker_submission_shape_review_requests_revision():
 def test_worker_submission_review_accepts_structured_data(monkeypatch):
     from agent.recipe.reviewer import build_worker_submission, review_worker_submission
 
+    monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
     monkeypatch.setenv("VISION_WORKER_REVIEW_MODE", "shape")
     submission = build_worker_submission(
         {
@@ -538,9 +870,21 @@ def test_worker_submission_review_accepts_structured_data(monkeypatch):
                 ]
             },
             "recorded_steps": [
-                {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
+                {
+                    "seq": 0,
+                    "state_key": "state-a",
+                    "action": "click_marker",
+                    "target": {"text": "AI Engineer"},
+                    "intent": "open the selected job card",
+                    "target_role": "job_card_title",
+                    "component": "search_result_card",
+                    "expected_after": "job detail page is visible",
+                }
             ],
             "feedback_episodes": [_sample_feedback_episode()],
+            "transition_observations": [
+                {"action_seq": 0, "status": "unknown", "marker_texts": ["AI Engineer", "주요업무"]}
+            ],
         },
         site="wanted",
         keyword="ai engineer",
@@ -551,6 +895,73 @@ def test_worker_submission_review_accepts_structured_data(monkeypatch):
 
     assert review["decision"] == "accept"
     assert review["recipe_candidate"] is True
+    assert submission["skill_metadata_evidence"]["site"] == "wanted"
+    assert submission["skill_metadata_evidence"]["actions"] == ["click_marker"]
+    assert submission["skill_metadata_evidence"]["step_intents"][0]["expected_after"] == "job detail page is visible"
+    assert submission["transition_observations"][0]["action_seq"] == 0
+
+
+def test_worker_submission_report_summary_uses_llm(monkeypatch):
+    import agent.recipe.reviewer as reviewer
+    from agent.recipe.reviewer import build_worker_submission
+
+    class FakeStructuredLLM:
+        def invoke(self, messages):
+            assert "raw_job" in messages[-1].content
+            return reviewer.ReportJobSummary(
+                jobs=[
+                    reviewer.ReportJobSummaryItem(
+                        company="비모소프트",
+                        position="[인턴] iOS 개발자",
+                        url="https://www.wanted.co.kr/wd/355442",
+                        field_count=4,
+                    )
+                ]
+            )
+
+    class FakeLLM:
+        def __init__(self, model="", temperature=0.0):
+            self.model = model
+            self.temperature = temperature
+
+        def with_structured_output(self, schema):
+            assert schema is reviewer.ReportJobSummary
+            return FakeStructuredLLM()
+
+    monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "llm")
+    monkeypatch.setenv("VISION_WORKER_SUMMARY_MODEL", "fake-summary-model")
+    monkeypatch.setattr("langchain_google_genai.ChatGoogleGenerativeAI", FakeLLM)
+
+    submission = build_worker_submission(
+        {
+            "goal": "collect iOS jobs",
+            "current_url": "https://www.wanted.co.kr/wd/355442",
+            "extracted_jd": {
+                "공고목록": [
+                    {
+                        "회사명": "비모소프트",
+                        "직무명": "[인턴] iOS 개발자",
+                        "URL": "https://www.wanted.co.kr/wd/355442",
+                        "주요업무": "Swift 기반 iOS App 개발",
+                    }
+                ]
+            },
+        },
+        site="wanted",
+        keyword="iOS 개발자",
+        run_status="finished",
+    )
+
+    summary = submission["extracted_summary"]
+    assert summary["summary_source"] == "llm"
+    assert summary["jobs"] == [
+        {
+            "company": "비모소프트",
+            "position": "[인턴] iOS 개발자",
+            "url": "https://www.wanted.co.kr/wd/355442",
+            "field_count": 4,
+        }
+    ]
 
 
 def test_submission_store_commits_and_reads_recent(tmp_path):
@@ -590,6 +1001,13 @@ def test_recipe_candidate_store_commits_reviewed_candidate(tmp_path):
         "recorded_steps": [
             {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
         ],
+        "transition_observations": [
+            {
+                "action_seq": 0,
+                "status": "unknown",
+                "marker_texts": ["AI Engineer", "주요업무"],
+            }
+        ],
     }
     review = {"decision": "accept", "recipe_candidate": True, "confidence": 0.7}
     store = RecipeCandidateStore(tmp_path / "candidates.db")
@@ -628,6 +1046,23 @@ def _sample_recipe_candidate_submission():
         "review_attempt": 0,
         "recorded_steps": [
             {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
+        ],
+        "transition_observations": [
+            {
+                "action_seq": 0,
+                "status": "unknown",
+                "marker_texts": ["AI Engineer", "주요업무"],
+            }
+        ],
+        "feedback_episodes": [
+            {
+                "seq": 0,
+                "observation": {
+                    "before": {
+                        "marker_texts": ["채용", "검색", "AI Engineer"],
+                    }
+                },
+            }
         ],
     }
 
@@ -676,6 +1111,31 @@ def test_candidate_reviewer_promotes_only_when_llm_accepts(tmp_path):
             "reasons": ["critic chose to promote"],
             "feedback_to_worker": "",
             "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "when_to_use": "Use on a job search result page.",
+                "goal_pattern": "collect jobs",
+                "site": "wanted",
+                "inputs": [{"name": "query", "required": True, "observed_value": "AI"}],
+                "step_intents": [
+                    {
+                        "seq": 0,
+                        "action": "click_marker",
+                        "intent": "Open the stable search control.",
+                        "expected_after": "Search overlay is visible.",
+                        "replay_mode": "fixed",
+                    }
+                ],
+                "verification": {"success_signals": ["job data collected"]},
+            },
+            "transition_contracts": [
+                {
+                    "seq": 0,
+                    "contract": {
+                        "common_ready_cues": [{"kind": "text_any", "values": ["채용 상세"]}],
+                        "outcomes": [{"name": "detail_opened", "cues": [{"kind": "text_any", "values": ["주요업무"]}]}],
+                    },
+                }
+            ],
             "confidence": 0.82,
         }
 
@@ -685,11 +1145,65 @@ def test_candidate_reviewer_promotes_only_when_llm_accepts(tmp_path):
 
     assert seen["payload"]["candidate_id"] == candidate_id
     assert seen["payload"]["steps"][0]["state_key"] == "state-a"
+    assert seen["payload"]["transition_observations"][0]["action_seq"] == 0
     assert review["decision"] == "accept"
     assert review["promoted_count"] == 1
     assert candidate["status"] == "accepted"
     assert candidate["validation"]["promoted_count"] == 1
     assert recipes[0]["steps"][0]["state_key"] == "state-a"
+    assert recipes[0]["steps"][0]["replay_mode"] == "fixed"
+    assert recipes[0]["steps"][0]["intent"] == "Open the stable search control."
+    assert recipes[0]["steps"][0]["expected_after"] == "Search overlay is visible."
+    assert recipes[0]["steps"][0]["state_anchors"] == ["aiengineer", "검색", "채용"]
+    assert recipes[0]["steps"][0]["transition_contract"]["outcomes"][0]["name"] == "detail_opened"
+    assert recipes[0]["skill_metadata"]["when_to_use"] == "Use on a job search result page."
+
+
+def test_candidate_reviewer_excludes_reasoning_steps_from_active_recipe(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    submission = _sample_recipe_candidate_submission()
+    submission["recorded_steps"].append(
+        {
+            "seq": 1,
+            "state_key": "state-results",
+            "action": "click_marker",
+            "target": {"text": "Specific Job Title"},
+            "component": "job_card_title",
+        }
+    )
+    store = RecipeCandidateStore(tmp_path / "critic.db")
+    candidate_id = store.commit_candidate(
+        submission,
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-critic:0",
+    )
+
+    review = review_and_apply_candidate(
+        candidate_id,
+        db_path=tmp_path / "critic.db",
+        critic=lambda payload: {
+            "decision": "accept",
+            "reasons": ["stable control only"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "site": "wanted",
+                "step_intents": [
+                    {"seq": 0, "action": "click_marker", "replay_mode": "fixed"},
+                    {"seq": 1, "action": "click_marker", "replay_mode": "reasoning"},
+                ],
+            },
+            "confidence": 0.9,
+        },
+    )
+
+    recipes = RecipeStore(tmp_path / "critic.db").get_by_site("wanted")
+    assert review["promoted_count"] == 1
+    assert [step["state_key"] for recipe in recipes for step in recipe["steps"]] == ["state-a"]
 
 
 def test_candidate_reviewer_revise_does_not_promote(tmp_path):
@@ -895,10 +1409,15 @@ def test_process_recipe_candidates_promote_mode_writes_active_recipe(tmp_path):
         critic=lambda payload: {
             "decision": "accept",
             "reasons": ["critic promoted replay evidence"],
-            "feedback_to_worker": "",
-            "promote_to_active_recipe": True,
-            "confidence": 0.88,
-        },
+                "feedback_to_worker": "",
+                "promote_to_active_recipe": True,
+                "skill_metadata": {
+                    "step_intents": [
+                        {"seq": 0, "action": "click_marker", "replay_mode": "fixed"}
+                    ]
+                },
+                "confidence": 0.88,
+            },
     )
 
     candidate = store.get_candidate(candidate_id)

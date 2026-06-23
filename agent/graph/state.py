@@ -71,16 +71,19 @@ class GraphState(TypedDict):
     # [Reflex Recipe] 직전 reflex_node가 reasoning을 우회했는지 여부
     reflex_hit: bool
 
-    # [Reflex Recipe] 반사 액션 직후 기대하는 다음 화면-상태 키
-    reflex_expected_next_state: str
+    # [Reflex Recipe] reflex tool_call id별 행동 후 전환 계약
+    reflex_transition_contracts: Dict[str, Any]
 
-    # [Reflex Recipe] 다음 perception에서 expected_next_state 검증이 필요한지 여부
-    reflex_pending_validation: bool
+    # [Reflex Recipe] 재생 시 치환할 입력값(recipe_params)
+    recipe_params: Dict[str, Any]
 
-    # [Reflex Recipe] 이전/현재 OCR canonical 텍스트 집합 및 변화량
-    ocr_texts: List[str]
-    ocr_delta_added: List[str]
-    ocr_delta_removed: List[str]
+    # [Transition Contract] 다음 perception이 검증할 직전 화면 변경 행동
+    pending_transition: Dict[str, Any]
 
-    # [Reflex Recipe] matched / changed_unexpected / unchanged
-    reflex_validation_status: str
+    # [Transition Contract] ready / pending / unknown
+    transition_status: str
+    transition_outcome: str
+    transition_source: str
+
+    # [Transition Contract] 행동 뒤 관찰된 OCR 화면 기록
+    transition_observations: Annotated[List[Dict[str, Any]], operator.add]

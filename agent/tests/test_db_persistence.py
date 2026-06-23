@@ -29,6 +29,24 @@ def test_preprocessor_accepts_korean_benefits_alias():
     assert job_posting.benefits == ["식대지원", "장비지원"]
 
 
+def test_preprocessor_preserves_canonical_llm_fields():
+    job_posting = Preprocessor.process_raw_jd({
+        "company_name": "Acme",
+        "position": "iOS Engineer",
+        "url": "https://www.wanted.co.kr/wd/123",
+        "tech_stack": ["SwiftUI", "UIKit"],
+        "requirements": ["Swift experience"],
+        "experience_min": 3,
+        "experience_max": 99,
+        "experience_text": "3+ years",
+    })
+
+    assert job_posting.tech_stack == ["SwiftUI", "UIKit"]
+    assert job_posting.experience_min == 3
+    assert job_posting.experience_max == 99
+    assert job_posting.experience_text == "3+ years"
+
+
 def test_persistence_pipeline():
     print("=== [테스트 시작] 전처리 및 DB 적재 파이프라인 검증 ===")
     

@@ -27,38 +27,21 @@ def _reflex_enabled() -> bool:
     return os.getenv("REFLEX_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _reason_after_reflex_hit_enabled() -> bool:
-    return os.getenv("REFLEX_REASON_AFTER_HIT", "1").strip().lower() not in {"0", "false", "no", "off"}
-
-
 def route_after_perception(state: GraphState) -> str:
-    """perception 이후 reflex 재생 또는 기존 reasoning 경로를 선택합니다."""
-    if not _reflex_enabled():
+    """전환 계약 판정 뒤 재관찰, reflex 재생 또는 reasoning 폴백을 선택한다."""
+    transition_status = state.get("transition_status", "")
+    if transition_status == "pending":
+        logger.info("Transition still pending; observing the screen again.")
+        return "perception"
+    if transition_status == "unknown" and state.get("transition_source") == "reflex":
+        logger.info(
+            "Transition contract could not verify the screen; falling back to reasoning.",
+            source=state.get("transition_source", ""),
+        )
         return "reasoning"
 
-    if state.get("reflex_pending_validation"):
-        expected = state.get("reflex_expected_next_state", "")
-        current = state.get("reflex_state_key", "")
-        if expected and current != expected:
-            status = state.get("reflex_validation_status", "")
-            logger.info(
-                "Reflex validation mismatch. Falling back to reasoning.",
-                expected=expected[:24],
-                current=current[:24],
-                status=status,
-                added=state.get("ocr_delta_added", [])[:8],
-                removed=state.get("ocr_delta_removed", [])[:8],
-            )
-            return "reasoning"
-        logger.info(
-            "Reflex validation matched.",
-            expected=expected[:24] if expected else "",
-            added=state.get("ocr_delta_added", [])[:8],
-            removed=state.get("ocr_delta_removed", [])[:8],
-        )
-        if _reason_after_reflex_hit_enabled():
-            logger.info("Routing to reasoning after reflex hit for extraction and next-step verification.")
-            return "reasoning"
+    if not _reflex_enabled():
+        return "reasoning"
 
     return "reflex"
 
@@ -91,6 +74,7 @@ def build_graph():
         "perception",
         route_after_perception,
         {
+            "perception": "perception",
             "reflex": "reflex",
             "reasoning": "reasoning",
         }

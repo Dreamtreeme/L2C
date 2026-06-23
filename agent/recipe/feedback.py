@@ -1,15 +1,13 @@
-"""Feedback episode recording for future Reflex Recipe promotion.
+"""향후 반사 레시피 승격을 위한 피드백 기록(feedback episode).
 
-This module intentionally records observations instead of enforcing a script.
-The Critic/Memory layers can later decide which repeated patterns deserve
-high-confidence Reflex replay.
+이 모듈은 스크립트를 강제하지 않고 관찰 결과만 남긴다.
+반복 패턴의 재사용 여부는 이후 비평가/메모리(Critic/Memory) 계층이 판단한다.
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any
-from urllib.parse import urlparse
 
 from agent.recipe.state_key import normalize_text, site_of
 from agent.utils.logger import logger
@@ -102,23 +100,14 @@ def _parameter_candidates(action_name: str, args: dict[str, Any], goal: str) -> 
     if action_name == "type_in_marker":
         value = str(args.get("text") or "").strip()
         if value:
+            slot_name = str(args.get("slot_name") or "").strip()
             candidates.append(
                 ParameterCandidate(
-                    slot_candidate="query" if _text_in_goal(value, goal) else "text_input",
+                    slot_candidate=slot_name or ("query" if _text_in_goal(value, goal) else "text_input"),
                     value=value,
-                    reason="typed text overlaps user goal" if _text_in_goal(value, goal) else "typed text may vary by run",
-                    confidence=0.45 if _text_in_goal(value, goal) else 0.25,
-                )
-            )
-    elif action_name == "open_browser":
-        url = str(args.get("url") or "")
-        if url:
-            candidates.append(
-                ParameterCandidate(
-                    slot_candidate="site",
-                    value=urlparse(url).netloc or url,
-                    reason="browser entry site may vary by commander-selected site",
-                    confidence=0.3,
+                    reason=str(args.get("reason") or "")
+                    or ("typed text overlaps user goal" if _text_in_goal(value, goal) else "typed text may vary by run"),
+                    confidence=0.65 if slot_name else (0.45 if _text_in_goal(value, goal) else 0.25),
                 )
             )
     return candidates
@@ -171,7 +160,7 @@ def record_action_episode(
     after_context: dict[str, Any],
     seq: int,
 ) -> None:
-    """Append one feedback episode. This is best-effort and never blocks execution."""
+    """피드백 기록(feedback episode)을 하나 추가한다. 실패해도 실행을 막지 않는다."""
     try:
         goal = state.get("goal", "") or ""
         target = enriched_result.get("target") or _target_snapshot(state, action_name, args)
@@ -179,10 +168,12 @@ def record_action_episode(
             action=action_name,
             args=_compact_args(action_name, args),
             llm_thought=_message_text(getattr(ai_msg, "content", "")),
+            reason=str(args.get("reason") or ""),
             target=target,
             target_label=(args.get("target_label") or args.get("semantic_label")),
             component_candidate=args.get("target_component") or args.get("component_candidate"),
             target_role_candidate=args.get("target_role") or args.get("target_role_candidate"),
+            expected_after=str(args.get("expected_after") or ""),
             parameter_candidates=_parameter_candidates(action_name, args, goal),
             fixed_candidate=action_name in {"scroll", "press_key", "go_back"},
         )
@@ -191,7 +182,11 @@ def record_action_episode(
             "url": before_snapshot.get("url", ""),
             "screenshot": before_snapshot.get("screenshot", ""),
             "marked_image": before_snapshot.get("marked_image", ""),
-            "ocr_texts": list(state.get("ocr_texts", []) or []),
+            "marker_texts": [
+                str(marker.get("text") or "")
+                for marker in state.get("current_markers", []) or []
+                if isinstance(marker, dict) and marker.get("text")
+            ],
         }
         after = {
             "url": after_context.get("current_url", ""),
@@ -199,8 +194,6 @@ def record_action_episode(
             "screen_changed": bool(after_context.get("screen_changed", False)),
             "is_finished": bool(after_context.get("is_finished", False)),
             "extracted_job_count": _extracted_job_count(after_context.get("extracted_jd", {})),
-            "ocr_delta_added": list(state.get("ocr_delta_added", []) or []),
-            "ocr_delta_removed": list(state.get("ocr_delta_removed", []) or []),
         }
         observation = ActionObservation(before=before, after=after, result=dict(enriched_result))
         feedback = _feedback_label(action_name, enriched_result, after)

@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS recipes (
     site          TEXT NOT NULL,
     goal          TEXT,
     steps_json    TEXT NOT NULL,
+    metadata_json TEXT,
     success_count INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
@@ -109,6 +110,17 @@ class Database:
                         logger.debug(f"컬럼 '{col}' 추가 건너뜀: {e}")
             
             # content_hash UNIQUE 인덱스 생성 보장
+            # 반사 레시피(recipes)에 스킬 메타데이터 컬럼(metadata_json)을 보강한다.
+            recipe_columns = [
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(recipes)").fetchall()
+            ]
+            if "metadata_json" not in recipe_columns:
+                try:
+                    conn.execute("ALTER TABLE recipes ADD COLUMN metadata_json TEXT")
+                except sqlite3.OperationalError as e:
+                    logger.debug(f"recipes.metadata_json 추가 건너뜀: {e}")
+
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash)")
             
         logger.debug("schema 확인/생성 및 마이그레이션 완료")

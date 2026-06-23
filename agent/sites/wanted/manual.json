@@ -3,6 +3,15 @@
   "display_name": "원티드",
   "base_url": "https://www.wanted.co.kr",
   "default_query_target": "position search",
+  "navigation_policy": {
+    "allow_direct_search_url": false,
+    "start_url": "https://www.wanted.co.kr",
+    "search_entry": "Open the home page first, then use the visible search UI. Do not open /search?query URLs directly."
+  },
+  "persistence_policy": {
+    "require_detail_url_for_job_update": true,
+    "detail_url_pattern": "/wd/\\d+"
+  },
   "screen_roles": ["home", "search_overlay", "search_results", "job_detail", "popup"],
   "common_flow": [
     "Open the site home page.",
@@ -25,7 +34,7 @@
   },
   "reflex_policy": {
     "safe_actions": ["open_search", "submit_search", "expand_detail", "scroll_down", "go_back"],
-    "unsafe_actions": ["choose_job_card_without_semantic_label", "click_reward_badge", "click_tag_chip"],
+    "unsafe_actions": ["replay_recorded_job_title", "choose_job_card_without_semantic_label", "click_reward_badge", "click_tag_chip"],
     "reason_after_hit": true
   },
   "known_pitfalls": [

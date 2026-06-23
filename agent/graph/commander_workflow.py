@@ -8,7 +8,10 @@ from langgraph.graph import END, START, StateGraph
 from agent.graph.commander_state import CommanderState
 from agent.tools.realtime_scraping import (
     _close_browser_after_run,
+    build_limit_intermediate_report,
     commit_worker_review,
+    limit_report_requires_more_collection,
+    needs_human_limit_approval,
     persist_accepted_worker_result,
     run_worker_once,
 )
@@ -140,14 +143,41 @@ def persist_accepted_node(state: CommanderState) -> dict:
     worker_result = dict(state.get("current_worker_result") or {})
     review = dict(state.get("current_review") or {})
     persisted_count, submission, persisted_review, submission_id = persist_accepted_worker_result(worker_result, review, source="commander_graph")
+    recursion_limit = int(worker_result.get("recursion_limit") or 60)
+    target_count = int(worker_result.get("target_count") or submission.get("target_count") or 0)
+    base_needs_approval = needs_human_limit_approval(
+        hit_recursion_limit=bool(worker_result.get("hit_recursion_limit", False)),
+        is_finished=bool(worker_result.get("is_finished", False)),
+        persisted_count=persisted_count,
+        target_count=target_count,
+    )
+    intermediate_report = (
+        build_limit_intermediate_report(
+            worker_result,
+            submission,
+            persisted_count=persisted_count,
+            current_limit=recursion_limit,
+            target_count=target_count,
+        )
+        if base_needs_approval
+        else {}
+    )
+    needs_approval = base_needs_approval and limit_report_requires_more_collection(intermediate_report)
+    index_delta = 0 if needs_approval else 1
     return {
         "current_worker_result": worker_result,
         "current_submission": submission,
         "current_review": persisted_review,
         "current_submission_id": submission_id or state.get("current_submission_id", ""),
         "accepted_sites": [state.get("current_site", "")],
-        "current_site_index": int(state.get("current_site_index", 0) or 0) + 1,
+        "current_site_index": int(state.get("current_site_index", 0) or 0) + index_delta,
+        "pending_human_approval": needs_approval,
+        "intermediate_report": intermediate_report,
     }
+
+
+def route_after_persist(state: CommanderState) -> str:
+    return "query_db" if state.get("pending_human_approval") else "select_site"
 
 
 def mark_failed_node(state: CommanderState) -> dict:
@@ -163,19 +193,83 @@ def mark_failed_node(state: CommanderState) -> dict:
     }
 
 
-def query_recent_jobs() -> str:
-    sql = (
-        "SELECT id, url, company_name, position, raw_ocr_text "
-        "FROM jobs ORDER BY updated_at DESC LIMIT 20"
-    )
+def _sql_literal(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _submission_job_urls(submission: dict[str, Any]) -> list[str]:
+    summary = submission.get("extracted_summary") if isinstance(submission, dict) else {}
+    jobs = summary.get("jobs") if isinstance(summary, dict) else []
+    urls: list[str] = []
+    for job in jobs or []:
+        if not isinstance(job, dict):
+            continue
+        url = str(job.get("url") or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def query_recent_jobs(submission: dict[str, Any] | None = None) -> str:
+    urls = _submission_job_urls(submission or {})
+    if urls:
+        limited = urls[:20]
+        url_list = ", ".join(_sql_literal(url) for url in limited)
+        order_cases = " ".join(f"WHEN {_sql_literal(url)} THEN {idx}" for idx, url in enumerate(limited))
+        sql = (
+            "SELECT id, url, company_name, position, raw_ocr_text "
+            f"FROM jobs WHERE url IN ({url_list}) "
+            f"ORDER BY CASE url {order_cases} ELSE {len(limited)} END"
+        )
+    else:
+        sql = (
+            "SELECT id, url, company_name, position, raw_ocr_text "
+            "FROM jobs ORDER BY updated_at DESC LIMIT 20"
+        )
     return sqlite_query.invoke({"sql_query": sql})
 
 
 def query_db_node(state: CommanderState) -> dict:
-    return {"db_results": query_recent_jobs()}
+    try:
+        db_results = query_recent_jobs(dict(state.get("current_submission") or {}))
+    except TypeError:
+        db_results = query_recent_jobs()
+    return {"db_results": db_results}
 
 
 def summarize_node(state: CommanderState) -> dict:
+    if state.get("pending_human_approval"):
+        report = dict(state.get("intermediate_report") or {})
+        jobs = report.get("jobs") or []
+        job_lines = []
+        for idx, job in enumerate(jobs[:8], start=1):
+            if not isinstance(job, dict):
+                continue
+            title = " - ".join(part for part in [job.get("company"), job.get("position")] if part)
+            url = job.get("url") or ""
+            job_lines.append(f"{idx}. {title or '(title missing)'} {url}".strip())
+        if not job_lines:
+            job_lines.append("none")
+
+        remaining = report.get("remaining_plan_preview") or []
+        remaining_lines = [f"- {item}" for item in remaining[:4]] or ["- none"]
+        answer = (
+            "중간보고: 작업자가 recursion limit에 도달해 일시 중단했습니다.\n"
+            f"사이트: {state.get('current_site', '')}\n"
+            f"수집/저장: {report.get('collected_count', 0)}건 / {report.get('persisted_count', 0)}건\n"
+            f"현재 limit: {report.get('current_recursion_limit', '')}\n"
+            f"제안 limit: {report.get('suggested_recursion_limit', '')}\n"
+            f"현재 URL: {report.get('current_url', '') or 'unknown'}\n"
+            f"계획 진행: {report.get('current_plan_step', 0)} / {report.get('total_plan_steps', 0)}\n\n"
+            "현재 저장된 공고:\n"
+            + "\n".join(job_lines)
+            + "\n\n남은 계획 미리보기:\n"
+            + "\n".join(remaining_lines)
+            + "\n\nlimit을 늘려 계속 진행할까요?\n\n"
+            f"DB evidence:\n{state.get('db_results', '')}"
+        )
+        return {"final_answer": answer, "done": True}
+
     accepted = [site for site in state.get("accepted_sites", []) if site]
     failed = [item for item in state.get("failed_sites", []) if item]
     answer = (
@@ -213,7 +307,11 @@ def build_commander_graph():
         {"retry": "prepare_retry", "persist": "persist_accepted", "fail": "mark_failed"},
     )
     workflow.add_edge("prepare_retry", "run_worker")
-    workflow.add_edge("persist_accepted", "select_site")
+    workflow.add_conditional_edges(
+        "persist_accepted",
+        route_after_persist,
+        {"select_site": "select_site", "query_db": "query_db"},
+    )
     workflow.add_edge("mark_failed", "select_site")
     workflow.add_edge("query_db", "summarize")
     workflow.add_edge("summarize", END)
@@ -229,5 +327,7 @@ def run_commander_graph(query: str, site_queue: list[str] | None = None) -> dict
         "reviews": [],
         "accepted_sites": [],
         "failed_sites": [],
+        "pending_human_approval": False,
+        "intermediate_report": {},
     }
     return build_commander_graph().invoke(initial)

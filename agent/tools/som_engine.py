@@ -1,5 +1,5 @@
 import os
-import tempfile
+import site
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -8,21 +8,27 @@ from PIL import Image, ImageDraw, ImageFont
 from agent.utils.logger import logger
 
 
+_DLL_DIRECTORY_HANDLES = []
+
+
 class SomEngine:
     def __init__(self):
         self.root_dir = Path(__file__).resolve().parent.parent.parent
-        yolo_config_dir = Path(os.getenv("YOLO_CONFIG_DIR", self.root_dir / ".cache" / "ultralytics"))
-        yolo_config_dir.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault("YOLO_CONFIG_DIR", str(yolo_config_dir))
+        self._configure_runtime_paths()
 
-        self.easyocr_dir = Path(os.getenv("EASYOCR_MODULE_PATH", self.root_dir / ".cache" / "easyocr"))
-        self.easyocr_dir.mkdir(parents=True, exist_ok=True)
-        os.environ.setdefault("EASYOCR_MODULE_PATH", str(self.easyocr_dir))
+        self.paddleocr_dir = self._resolve_paddleocr_base_dir()
+        self.paddleocr_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["PADDLE_OCR_BASE_DIR"] = str(self.paddleocr_dir)
 
         self.model_dir = self.root_dir / "models" / "omniparser"
         self.model_path = self.model_dir / "icon_detect" / "model.pt"
 
         self._ensure_model_downloaded()
+
+        try:
+            import torch
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("Torch/Ultralytics dependencies are not installed. Run `pip install -r requirements.txt`.") from exc
 
         from ultralytics import YOLO
 
@@ -30,21 +36,101 @@ class SomEngine:
         self.yolo_model = YOLO(str(self.model_path))
 
         try:
-            import easyocr
-            import torch
+            from paddleocr import PaddleOCR
         except ModuleNotFoundError as exc:
-            raise RuntimeError("EasyOCR dependencies are not installed. Run `pip install -r requirements.txt`.") from exc
+            raise RuntimeError("PaddleOCR dependencies are not installed. Run `pip install -r requirements.txt`.") from exc
 
-        use_gpu = torch.cuda.is_available()
-        logger.info("Loading EasyOCR reader", gpu=use_gpu, cache_dir=str(self.easyocr_dir))
-        self.ocr_reader = easyocr.Reader(
-            ["ko", "en"],
-            gpu=use_gpu,
-            model_storage_directory=str(self.easyocr_dir),
-            user_network_directory=str(self.easyocr_dir),
-            verbose=False,
+        use_gpu = self._should_use_paddle_gpu(torch.cuda.is_available())
+        model_dirs = self._paddleocr_model_dirs()
+        logger.info("Loading PaddleOCR reader", gpu=use_gpu, cache_dir=str(self.paddleocr_dir), model_dirs=bool(model_dirs))
+        self.ocr_reader = PaddleOCR(
+            use_angle_cls=False,
+            lang=os.getenv("PADDLEOCR_LANG", "korean"),
+            use_gpu=use_gpu,
+            show_log=False,
+            **model_dirs,
         )
         logger.info("SomEngine initialization complete")
+
+    def _configure_runtime_paths(self) -> None:
+        yolo_config_dir = Path(os.getenv("YOLO_CONFIG_DIR", self.root_dir / ".cache" / "ultralytics"))
+        yolo_config_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["YOLO_CONFIG_DIR"] = str(yolo_config_dir)
+
+        for path in self._candidate_cuda_dll_dirs():
+            if path.exists():
+                self._prepend_process_path(path)
+                if hasattr(os, "add_dll_directory"):
+                    _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(path)))
+                logger.debug("Added CUDA DLL search path", path=str(path))
+
+    def _candidate_cuda_dll_dirs(self) -> List[Path]:
+        paths: List[Path] = []
+        for key in ("PADDLE_CUDA_BIN_DIR", "PADDLE_CUDNN_BIN_DIR", "CUDA_PATH", "CUDA_PATH_V11_8"):
+            value = os.getenv(key)
+            if value:
+                base = Path(value)
+                paths.append(base / "bin" if base.name.lower() != "bin" else base)
+
+        for site_dir in site.getsitepackages():
+            nvidia_dir = Path(site_dir) / "nvidia"
+            paths.extend(
+                [
+                    nvidia_dir / "cudnn" / "bin",
+                    nvidia_dir / "cublas" / "bin",
+                    nvidia_dir / "cuda_nvrtc" / "bin",
+                ]
+            )
+
+        unique_paths: List[Path] = []
+        seen = set()
+        for path in paths:
+            key = str(path).lower()
+            if key not in seen:
+                seen.add(key)
+                unique_paths.append(path)
+        return unique_paths
+
+    @staticmethod
+    def _prepend_process_path(path: Path) -> None:
+        path_text = str(path)
+        current = os.environ.get("PATH", "")
+        parts = [part for part in current.split(os.pathsep) if part]
+        if path_text.lower() not in {part.lower() for part in parts}:
+            os.environ["PATH"] = path_text + os.pathsep + current
+
+    def _resolve_paddleocr_base_dir(self) -> Path:
+        configured = os.getenv("PADDLE_OCR_BASE_DIR")
+        if configured:
+            return Path(configured)
+
+        project_cache = self.root_dir / ".cache" / "paddleocr"
+        if (project_cache / "whl").exists():
+            return project_cache
+
+        home_cache = Path.home() / ".paddleocr"
+        if (home_cache / "whl").exists():
+            return home_cache
+
+        return project_cache
+
+    def _paddleocr_model_dirs(self) -> Dict[str, str]:
+        whl_dir = self.paddleocr_dir / "whl"
+        dirs = {
+            "det_model_dir": whl_dir / "det" / "ml" / "Multilingual_PP-OCRv3_det_infer",
+            "rec_model_dir": whl_dir / "rec" / "korean" / "korean_PP-OCRv4_rec_infer",
+            "cls_model_dir": whl_dir / "cls" / "ch_ppocr_mobile_v2.0_cls_infer",
+        }
+        if all(path.exists() for path in dirs.values()):
+            return {key: str(path) for key, path in dirs.items()}
+        return {}
+
+    @staticmethod
+    def _should_use_paddle_gpu(torch_cuda_available: bool) -> bool:
+        raw = os.getenv("PADDLEOCR_USE_GPU")
+        if raw is not None:
+            return raw.strip().lower() not in {"0", "false", "no", "off"}
+        return torch_cuda_available
 
     def _ensure_model_downloaded(self) -> None:
         if self.model_path.exists():
@@ -95,9 +181,12 @@ class SomEngine:
             return 1.0
         return max_dim / longest
 
-    def _normalize_easyocr_results(self, ocr_results: List, scale: float = 1.0) -> List[Dict]:
+    def _normalize_paddleocr_results(self, ocr_results: List, scale: float = 1.0) -> List[Dict]:
         raw_boxes = []
-        for bbox, text, confidence in ocr_results:
+        for line in self._iter_paddleocr_lines(ocr_results):
+            bbox = line[0]
+            text = line[1][0]
+            confidence = float(line[1][1])
             if confidence < 0.2:
                 continue
 
@@ -112,15 +201,55 @@ class SomEngine:
                 }
             )
 
-        logger.debug("EasyOCR element detection complete", count=len(raw_boxes))
+        logger.debug("PaddleOCR text detection complete", count=len(raw_boxes))
         return raw_boxes
 
-    def _run_easy_ocr(self, image_path: Path, scale: float = 1.0) -> List[Dict]:
+    @staticmethod
+    def _iter_paddleocr_lines(ocr_results: List) -> List:
+        if not ocr_results:
+            return []
+        first = ocr_results[0]
+        if SomEngine._looks_like_paddleocr_line(first):
+            return ocr_results
+        lines = []
+        for page in ocr_results:
+            if not page:
+                continue
+            if SomEngine._looks_like_paddleocr_line(page):
+                lines.append(page)
+            else:
+                lines.extend(line for line in page if SomEngine._looks_like_paddleocr_line(line))
+        return lines
+
+    @staticmethod
+    def _looks_like_paddleocr_line(value: Any) -> bool:
+        return (
+            isinstance(value, (list, tuple))
+            and len(value) >= 2
+            and isinstance(value[0], (list, tuple))
+            and isinstance(value[1], (list, tuple))
+            and len(value[1]) >= 2
+            and isinstance(value[1][0], str)
+        )
+
+    def _run_paddle_ocr(self, image: Image.Image | Path, scale: float = 1.0) -> List[Dict]:
         import numpy as np
 
-        with Image.open(image_path) as img:
-            image_array = np.array(img.convert("L"))
-        return self._normalize_easyocr_results(self.ocr_reader.readtext(image_array), scale=scale)
+        if isinstance(image, Image.Image):
+            image_input = np.array(image.convert("RGB"))
+        else:
+            image_input = str(image)
+        try:
+            results = self.ocr_reader.ocr(image_input, cls=False)
+        except RuntimeError as exc:
+            if "cudnn64_8.dll" in str(exc):
+                raise RuntimeError(
+                    "PaddleOCR GPU inference could not load cudnn64_8.dll. "
+                    "The engine already adds .venv/site-packages/nvidia/*/bin and CUDA_PATH/bin to the DLL search path; "
+                    "verify that the cuDNN 8 runtime matching paddlepaddle-gpu is installed."
+                ) from exc
+            raise
+        return self._normalize_paddleocr_results(results, scale=scale)
 
     def _run_yolo(self, inference_img: Image.Image, scale: float) -> List[Dict]:
         raw_boxes = []
@@ -248,33 +377,29 @@ class SomEngine:
             inference_img = img
 
         ocr_scale = self._ocr_scale_for_image(original_w, original_h)
-        ocr_image_path = image_path
+        ocr_image = img
         if ocr_scale != 1.0:
-            ocr_img = img.resize(
+            ocr_image = img.resize(
                 (int(original_w * ocr_scale), int(original_h * ocr_scale)),
                 Image.Resampling.BILINEAR,
             )
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                ocr_image_path = Path(tmp.name)
-            ocr_img.save(ocr_image_path, "JPEG", quality=85)
             logger.info(
                 "Resized image for OCR inference",
                 scale=round(ocr_scale, 3),
                 original=(original_w, original_h),
-                target=ocr_img.size,
+                target=ocr_image.size,
             )
 
-        try:
-            raw_boxes = self._run_easy_ocr(ocr_image_path, scale=ocr_scale)
-        finally:
-            if ocr_image_path != image_path:
-                try:
-                    ocr_image_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        raw_boxes += self._run_yolo(inference_img, yolo_scale)
-        final_elements = self._filter_overlaps(raw_boxes)
+        text_boxes = self._filter_overlaps(self._run_paddle_ocr(ocr_image, scale=ocr_scale))
+        icon_boxes = self._filter_overlaps(self._run_yolo(inference_img, yolo_scale))
+        final_elements = text_boxes + icon_boxes
+        final_elements.sort(key=lambda item: (item["bbox"][1] // 20, item["bbox"][0]))
+        logger.info(
+            "Raw OCR/icon detections merged",
+            text=len(text_boxes),
+            icon=len(icon_boxes),
+            total=len(final_elements),
+        )
         marked_img, marker_coords, marker_bboxes = self._draw_markers(img, final_elements)
 
         output_path = image_path.parent / output_filename

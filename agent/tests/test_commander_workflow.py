@@ -1,15 +1,26 @@
 import json
 
 
-def _worker_result(site="wanted", attempt=0, count=1, run_id="worker-run-1"):
+def _worker_result(
+    site="wanted",
+    attempt=0,
+    count=1,
+    run_id="worker-run-1",
+    hit_recursion_limit=False,
+    is_finished=True,
+    recursion_limit=60,
+    final_state=None,
+    target_count=0,
+):
     submission = {
         "run_id": run_id,
         "goal": "collect AI engineer jobs",
         "site": site,
         "keyword": "AI engineer trend",
-        "run_status": "finished",
+        "run_status": "recursion_limit" if hit_recursion_limit and not is_finished else "finished",
         "review_attempt": attempt,
         "collected_count": count,
+        "target_count": target_count,
         "persisted_count": 0,
         "recorded_steps": [
             {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
@@ -17,21 +28,47 @@ def _worker_result(site="wanted", attempt=0, count=1, run_id="worker-run-1"):
         "feedback_episodes": [
             {"seq": 0, "proposal": {"action": "click_marker"}, "feedback": {"label": "partial"}}
         ] if count else [],
-        "extracted_summary": {"has_data": bool(count), "job_count": count},
+        "extracted_summary": {
+            "has_data": bool(count),
+            "job_count": count,
+            "current_url": "https://www.wanted.co.kr/wd/1" if count else "",
+            "jobs": [
+                {
+                    "company": "Acme",
+                    "position": "AI Engineer",
+                    "url": "https://example.com/jobs/1",
+                    "field_count": 5,
+                }
+            ] if count else [],
+        },
     }
     extracted = {
         "jobs": [
             {"company_name": "Acme", "position": "AI Engineer", "url": "https://example.com/jobs/1"}
         ]
     } if count else {}
+    final_state = final_state or {
+        "current_url": "https://www.wanted.co.kr/wd/1" if count else "",
+        "plan": [
+            "search jobs",
+            "open first card",
+            "collect detail",
+            "go back",
+            "open next card",
+        ],
+        "current_plan_step": 3,
+    }
     return {
         "submission": submission,
         "extracted_jd": extracted,
+        "final_state": final_state,
         "site_slug": site,
         "site_name": site,
         "keyword": "AI engineer trend",
-        "hit_recursion_limit": False,
-        "is_finished": True,
+        "target_count": target_count,
+        "hit_recursion_limit": hit_recursion_limit,
+        "is_finished": is_finished,
+        "recursion_limit": recursion_limit,
     }
 
 
@@ -131,6 +168,112 @@ def test_commander_graph_marks_failed_when_retry_budget_exhausted(monkeypatch):
     assert len(result["failed_sites"]) == 1
     assert result["failed_sites"][0]["site"] == "wanted"
     assert "failed_sites=1" in result["final_answer"]
+
+
+def test_commander_graph_reports_before_raising_recursion_limit(monkeypatch):
+    import agent.graph.commander_workflow as cw
+
+    calls = []
+
+    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None):
+        calls.append(site)
+        return _worker_result(
+            site=site,
+            count=4,
+            hit_recursion_limit=True,
+            is_finished=False,
+            recursion_limit=60,
+        )
+
+    def fake_commit_worker_review(submission, source=""):
+        return {
+            "decision": "accept",
+            "reasons": ["partial data is valid"],
+            "feedback_to_worker": "",
+            "recipe_candidate": True,
+            "confidence": 0.8,
+        }, submission["run_id"]
+
+    def fake_persist(worker_result, review, source=""):
+        submission = dict(worker_result["submission"])
+        submission["persisted_count"] = 4
+        return 4, submission, review, submission["run_id"]
+
+    monkeypatch.setenv("VISION_HITL_ON_RECURSION_LIMIT", "1")
+    monkeypatch.delenv("VISION_AGENT_RECURSION_LIMIT_INCREMENT", raising=False)
+    monkeypatch.setattr(cw, "run_worker_once", fake_run_worker_once)
+    monkeypatch.setattr(cw, "commit_worker_review", fake_commit_worker_review)
+    monkeypatch.setattr(cw, "persist_accepted_worker_result", fake_persist)
+    monkeypatch.setattr(cw, "_close_browser_after_run", lambda: None)
+    monkeypatch.setattr(cw, "query_recent_jobs", lambda: "<document id=\"1\">Acme AI Engineer</document>")
+
+    result = cw.run_commander_graph("AI engineer trend", site_queue=["wanted", "saramin"])
+
+    assert calls == ["wanted"]
+    assert result["pending_human_approval"] is True
+    assert result["current_site_index"] == 0
+    assert result["intermediate_report"]["current_recursion_limit"] == 60
+    assert result["intermediate_report"]["suggested_recursion_limit"] == 120
+    assert "중간보고" in result["final_answer"]
+    assert "120" in result["final_answer"]
+    assert "계속" in result["final_answer"]
+
+
+def test_commander_graph_does_not_request_more_limit_after_collection_target(monkeypatch):
+    import agent.graph.commander_workflow as cw
+
+    calls = []
+
+    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None):
+        calls.append(site)
+        return _worker_result(
+            site=site,
+            count=8,
+            target_count=8,
+            hit_recursion_limit=True,
+            is_finished=False,
+            recursion_limit=120,
+            final_state={
+                "current_url": "https://www.wanted.co.kr/search?query=iOS",
+                "plan": [
+                    "open search results",
+                    "open first card and collect detail",
+                    "open eighth card and collect detail",
+                    "go_back",
+                    "submit collected data",
+                ],
+                "current_plan_step": 3,
+            },
+        )
+
+    def fake_commit_worker_review(submission, source=""):
+        return {
+            "decision": "accept",
+            "reasons": ["target data collected"],
+            "feedback_to_worker": "",
+            "recipe_candidate": True,
+            "confidence": 0.8,
+        }, submission["run_id"]
+
+    def fake_persist(worker_result, review, source=""):
+        submission = dict(worker_result["submission"])
+        submission["persisted_count"] = 8
+        return 8, submission, review, submission["run_id"]
+
+    monkeypatch.setenv("VISION_HITL_ON_RECURSION_LIMIT", "1")
+    monkeypatch.setattr(cw, "run_worker_once", fake_run_worker_once)
+    monkeypatch.setattr(cw, "commit_worker_review", fake_commit_worker_review)
+    monkeypatch.setattr(cw, "persist_accepted_worker_result", fake_persist)
+    monkeypatch.setattr(cw, "_close_browser_after_run", lambda: None)
+    monkeypatch.setattr(cw, "query_recent_jobs", lambda: "<document id=\"1\">8 iOS jobs</document>")
+
+    result = cw.run_commander_graph("iOS developer jobs", site_queue=["wanted"])
+
+    assert calls == ["wanted"]
+    assert result["pending_human_approval"] is False
+    assert result["current_site_index"] == 1
+    assert "중간보고" not in result["final_answer"]
+    assert "accepted_sites=1" in result["final_answer"]
 
 
 def test_qa_reasoning_node_can_route_to_commander_graph(monkeypatch):

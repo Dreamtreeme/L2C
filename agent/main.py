@@ -49,12 +49,13 @@ def main():
         feedback_episodes=[],
         reflex_state_key="",
         reflex_hit=False,
-        reflex_expected_next_state="",
-        reflex_pending_validation=False,
-        ocr_texts=[],
-        ocr_delta_added=[],
-        ocr_delta_removed=[],
-        reflex_validation_status="",
+        reflex_transition_contracts={},
+        recipe_params={},
+        pending_transition={},
+        transition_status="",
+        transition_outcome="",
+        transition_source="",
+        transition_observations=[],
     )
     
     try:

@@ -10,8 +10,10 @@ from agent.utils.logger import logger
 
 class WaitStable:
     """
-    클릭이나 스크롤 동작 후 UI 렌더링(애니메이션, 로딩 등)이 완료될 때까지
-    화면의 픽셀 변화를 감지하여 대기하는 안정화 모듈입니다.
+    OCR 캡처 직전의 큰 화면 흔들림이 잦아들 때까지 기다리는 보조 모듈입니다.
+
+    콘텐츠 로딩 완료 여부는 판단하지 않습니다. 정상 결과와 로딩 중 화면의 구분은
+    perception 단계의 전환 계약(transition contract)이 담당합니다.
     """
 
     def __init__(self, perception_engine: PerceptionEngine):
@@ -62,8 +64,8 @@ class WaitStable:
         region: Optional[dict] = None,
     ) -> bool:
         """
-        화면 렌더링이 완료될 때까지 대기합니다.
-        연속된 두 프레임의 픽셀 변화율 평균이 threshold_percent 이하가 되면 안정화된 것으로 판단합니다.
+        연속된 두 프레임의 픽셀 변화율 평균이 threshold_percent 이하가 될 때까지 기다립니다.
+        반환값은 캡처 안정화 여부일 뿐 페이지 준비 완료를 의미하지 않습니다.
         
         Args:
             max_wait_sec: 최대 대기 시간(초). 이 시간이 넘어가면 무한 대기를 멈추고 반환.

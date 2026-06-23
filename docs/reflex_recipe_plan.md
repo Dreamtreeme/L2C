@@ -17,9 +17,8 @@
 |---|---|
 | `perception_node` → `current_markers {id,bbox,text}` | 반사의 입력. 매 스텝 그대로 OCR/마커 생성 |
 | `reasoning_node` (`_get_ui_llm_with_tools`, gemini-3.5-flash) | **캐시 미스 때만** 호출 (개척·폴백) |
-| `action_node` (`tool_calls` 실행, 내부 `get_bbox`) | **변경 없음**. 반사 노드가 같은 `tool_calls` 형태를 만들어 그대로 실행 |
+| `action_node` (`tool_calls` 실행, 내부 `get_bbox`) | 기존 실행 경로를 재사용하고 화면 변경 행동을 `pending_transition`으로 기록 |
 | `should_continue` / `add_conditional_edges` | 반사 분기 라우터 패턴 그대로 차용 |
-| `_looks_like_job_detail_url` (`/wd/\d+`) | 상태키의 URL 템플릿 시드 |
 | `Preprocessor.clean_text` | 마커 텍스트 정규화(매칭용) |
 | `Database` / `DB_PATH` / UPSERT·마이그레이션 | 레시피 저장소(테이블만 추가) |
 | `GraphState` + `operator.add` 리듀서 | 기록 누적 필드 추가 |
@@ -28,10 +27,11 @@
 
 ## 4. 신규 요소 (작게)
 1. **`shared/schema/recipe_schema.py`** — Pydantic
-   - `RecipeStep`: `{ state_key, target:{text, region?, ordinal?}, action, param?, expected_next_state }`
+   - `RecipeStep`: `{ state_key, target:{text, region?, ordinal?}, action, param?, transition_contract? }`
+   - `TransitionContract`: `{ common_ready_cues, outcomes, loading_cues?, timeout_sec }`
    - `SiteRecipe`: `{ site, steps: list[RecipeStep], success_count, updated_at }`
 2. **`agent/recipe/state_key.py`** — `compute_state_key(url, markers) -> str`
-   - URL 템플릿(사이트별 정규식) + 정규화된 *앵커 마커 텍스트 집합*. 픽셀 해시 아님.
+   - 정규화된 *앵커 마커 텍스트 집합*으로 현재 화면의 레시피 조회 키를 계산한다. 픽셀 해시나 URL 판정은 사용하지 않는다.
 3. **`agent/recipe/matcher.py`** — `match_marker(step, markers, params) -> marker_id | None`
    - `target.text`를 `clean_text` 정규화 후 현재 마커와 매칭. 동률이면 region/ordinal로 타이브레이크. 실패 시 `None` → 폴백.
 4. **`agent/recipe/store.py`** — `Database` 위 thin wrapper
@@ -40,7 +40,7 @@
 5. **`reflex_node` + 라우터** — `workflow.py`
    - `perception → [reflex | reasoning]` 조건부 엣지로 교체.
    - `reflex_node`: 현재 `state_key`로 레시피 조회 → `match_marker` → 성공 시 `click_marker`/`type_in_marker` `tool_calls`를 담은 `AIMessage`를 `last_action_result`에 세팅(= reasoning 출력과 동일 형태). 미스/매칭실패 → reasoning.
-6. **`GraphState` 신규 필드**: `recorded_steps: Annotated[list, operator.add]`, `reflex_state_key: str`, `reflex_hit`, `reflex_expected_next_state`, `reflex_pending_validation`.
+6. **`GraphState` 신규 필드**: `recorded_steps`, `reflex_state_key`, `reflex_hit`, `pending_transition`, `transition_status`, `transition_observations`.
 
 ## 5. 페이즈
 
@@ -52,11 +52,13 @@
 ### Phase 1 — 반사 재생 (플래그 `REFLEX_ENABLED`)
 - `workflow.py`: `perception→reasoning` 무조건 엣지를 조건부로 교체 + `reflex_node` 삽입.
 - 캐시 히트 → reasoning(LLM) 스킵 → `action_node`가 동일하게 실행.
-- **검증→폴백**: 반사 후 다음 perception의 `state_key`가 `step.expected_next_state`와 불일치하거나 `match_marker`가 `None`이면 그 턴은 reasoning으로 강등(LLM 깨우기). reasoning은 절대 제거하지 않고 *우회*만 한다.
+- **검증→폴백**: 반사 행동 후 다음 perception이 OCR 전환 계약을 검사한다. `pending`이면 다시 관찰하고, `ready`이면 다음 Reflex를 시도하며, `unknown` 또는 시간 초과면 reasoning으로 강등한다.
+- `state_key`는 행동 전 레시피 조회에만 사용하고, 행동 후 성공 여부는 전체 해시 일치가 아니라 부분 OCR 단서와 정상 결과 분기로 판정한다.
 - 측정: `profile_run.py`/`profile_steps.py`로 반사 적중률·런당 LLM 호출수·스텝시간 비교(추론 항목 소거 확인).
 
 ### Phase 2 — LLM 태깅 의미 + 파라미터 템플릿
-- 개척(reasoning) 시 LLM이 텍스트로 함께 산출: ① 상태 라벨, ② 어느 입력이 파라미터였는지, ③ 기대 다음 상태. (`COMMANDER_SYSTEM_PROMPT`에 짧은 지시 + tool 인자/별도 필드.)
+- 개척(reasoning) 시 LLM이 텍스트로 함께 산출: ① 행동 의도, ② 어느 입력이 파라미터였는지, ③ 기대 화면 변화.
+- 실행 후 `transition_observations`를 Critic이 검토해 OCR로 검사 가능한 공통 완료 단서와 관찰된 정상 결과 분기를 구조화한다. 보지 않은 결과는 추측해서 추가하지 않는다.
 - 레시피를 *템플릿화*: "같은 사이트 다른 공고"가 히트하도록 파라미터 슬롯([회사명] 등) 일반화. (LLM이 goal을 아니까 가변/고정 스텝 귀납 가능.)
 
 ### Phase 3 — 자가 치유 + 텍스트 없는 타깃
@@ -98,7 +100,13 @@ This keeps the original principle: code guards structure and safety, while meani
 
 `recipe_candidates` stores accepted submissions that the commander marked as replay candidates. These rows are pending Critic review only; they do not activate Reflex behavior by themselves and do not write to the active `recipes` table.
 
-The candidate promotion gate is LLM-led. Code only packages the candidate row, worker submission, recorded steps, and previous commander review into the `RecipeCandidateReview` prompt shape. It does not score target quality, generalizability, expected next state, or whether a UI action is reusable. The Critic LLM returns `accept`, `revise`, or `reject`; only `accept` with `promote_to_active_recipe=true` writes to active `recipes`.
+The candidate promotion gate is LLM-led. Code only packages the candidate row, worker submission, recorded steps, and previous commander review into the `RecipeCandidateReview` prompt shape. The Critic assigns every step one replay mode:
+
+- `fixed`: the same stable UI operation is valid across runs.
+- `parameterized`: the operation is stable and only named runtime slots such as `query` change.
+- `reasoning`: the choice depends on the current screen, current result set, visited items, or remaining target count.
+
+Only `fixed` and `parameterized` steps are written to active `recipes`. A job title observed during exploration is evidence, not a reusable target, so current search-result card selection remains a reasoning step unless a current runtime title is explicitly supplied. Re-promoting a candidate replaces the state rows owned by that candidate so an older specific-card recipe cannot remain active.
 
 `VISION_RECIPE_LEARNING_MODE` controls how far this path runs:
 

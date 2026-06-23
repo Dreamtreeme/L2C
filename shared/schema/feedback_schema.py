@@ -1,8 +1,8 @@
-"""Feedback-loop schemas for Reflex Recipe promotion.
+"""피드백 루프(feedback loop) 스키마.
 
-These models describe what happened during exploration. They do not decide
-whether an action is permanently replayable; later Critic/Memory code can use
-these episodes to promote or reject candidate Reflex behavior.
+이 모델들은 자율탐색 중 실제로 무슨 일이 있었는지를 기록한다.
+행동이 영구적으로 재사용 가능한지는 코드가 결정하지 않고,
+이후 지휘자/비평가(Commander/Critic)가 판단한다.
 """
 
 from __future__ import annotations
@@ -10,6 +10,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+from shared.schema.recipe_schema import TransitionContract
+from shared.schema.skill_schema import RecipeSkillMetadata
 
 
 FeedbackLabel = Literal[
@@ -23,30 +26,31 @@ FeedbackLabel = Literal[
 
 
 class ParameterCandidate(BaseModel):
-    """A value that may become a slot in a future recipe template."""
+    """향후 레시피 템플릿(recipe template)의 입력 슬롯이 될 수 있는 값."""
 
-    slot_candidate: str = Field("", description="Suggested slot name, e.g. query/sample_count/site")
-    value: Any = Field(None, description="Observed value for this candidate slot")
-    reason: str = Field("", description="Why this value may be variable")
+    slot_candidate: str = Field("", description="입력 슬롯 후보(slot candidate)")
+    value: Any = Field(None, description="관찰된 값(observed value)")
+    reason: str = Field("", description="가변값으로 본 이유(reason)")
     confidence: float = Field(0.0, ge=0.0, le=1.0)
 
-
 class ActionProposal(BaseModel):
-    """The actor's proposed action before execution."""
+    """실행 전 행위자가 제안한 행동(action proposal)."""
 
     action: str
     args: Dict[str, Any] = Field(default_factory=dict)
     llm_thought: str = ""
+    reason: str = ""
     target: Optional[Dict[str, Any]] = None
     target_label: Optional[str] = None
     component_candidate: Optional[str] = None
     target_role_candidate: Optional[str] = None
+    expected_after: str = ""
     parameter_candidates: List[ParameterCandidate] = Field(default_factory=list)
     fixed_candidate: Optional[bool] = None
 
 
 class ActionObservation(BaseModel):
-    """Facts observed around the action execution."""
+    """행동 실행 전후에 관찰된 사실(action observation)."""
 
     before: Dict[str, Any] = Field(default_factory=dict)
     after: Dict[str, Any] = Field(default_factory=dict)
@@ -54,7 +58,7 @@ class ActionObservation(BaseModel):
 
 
 class ActionFeedback(BaseModel):
-    """First-pass feedback label for an executed proposal."""
+    """실행된 행동에 대한 1차 피드백(action feedback)."""
 
     label: FeedbackLabel
     reason: str = ""
@@ -62,7 +66,7 @@ class ActionFeedback(BaseModel):
 
 
 class FeedbackEpisode(BaseModel):
-    """One proposal -> action -> observation -> feedback record."""
+    """제안 -> 실행 -> 관찰 -> 피드백 단위 기록(feedback episode)."""
 
     seq: int
     goal: str = ""
@@ -72,12 +76,13 @@ class FeedbackEpisode(BaseModel):
     observation: ActionObservation
     feedback: ActionFeedback
 
+
 IssueSeverity = Literal["error", "warning"]
 ReviewDecision = Literal["accept", "revise", "reject"]
 
 
 class SubmissionIssue(BaseModel):
-    """Shape-level issue found before semantic review."""
+    """의미 판단 전 구조 검증에서 발견한 문제(submission issue)."""
 
     field: str
     reason: str
@@ -85,7 +90,7 @@ class SubmissionIssue(BaseModel):
 
 
 class WorkerSubmission(BaseModel):
-    """A child vision worker's structured handoff to the commander/critic layer."""
+    """하위 비전 작업자(child vision worker)가 지휘자에게 넘기는 제출물."""
 
     run_id: str = ""
     goal: str = ""
@@ -96,16 +101,19 @@ class WorkerSubmission(BaseModel):
     is_finished: bool = False
     hit_recursion_limit: bool = False
     collected_count: int = 0
+    target_count: int = 0
     persisted_count: int = 0
     feedback_saved: int = 0
     recorded_steps: List[Dict[str, Any]] = Field(default_factory=list)
     feedback_episodes: List[Dict[str, Any]] = Field(default_factory=list)
+    transition_observations: List[Dict[str, Any]] = Field(default_factory=list)
+    skill_metadata_evidence: Dict[str, Any] = Field(default_factory=dict)
     extracted_summary: Dict[str, Any] = Field(default_factory=dict)
     worker_notes: str = ""
 
 
 class CommanderReview(BaseModel):
-    """Commander/Critic verdict for one worker submission."""
+    """작업 제출물에 대한 지휘자/비평가 판정(commander review)."""
 
     decision: ReviewDecision
     reasons: List[str] = Field(default_factory=list)
@@ -113,11 +121,21 @@ class CommanderReview(BaseModel):
     recipe_candidate: bool = False
     confidence: float = Field(0.0, ge=0.0, le=1.0)
 
+
+class TransitionContractAssignment(BaseModel):
+    """비평가가 특정 기록 단계에 부여한 전환 계약."""
+
+    seq: int
+    contract: TransitionContract
+
+
 class RecipeCandidateReview(BaseModel):
-    """Critic verdict for a pending Reflex recipe candidate."""
+    """반사 레시피 후보에 대한 비평가 판정(recipe candidate review)."""
 
     decision: ReviewDecision
     reasons: List[str] = Field(default_factory=list)
     feedback_to_worker: str = ""
     promote_to_active_recipe: bool = False
+    skill_metadata: RecipeSkillMetadata = Field(default_factory=RecipeSkillMetadata)
+    transition_contracts: List[TransitionContractAssignment] = Field(default_factory=list)
     confidence: float = Field(0.0, ge=0.0, le=1.0)

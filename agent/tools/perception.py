@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 import mss
 import mss.tools
 import pygetwindow as gw
-from PIL import Image
+from PIL import Image, ImageFilter, ImageStat
 
 from agent.utils.logger import logger
 from shared.config import SCREENSHOT_DIR
@@ -47,6 +47,13 @@ class PerceptionEngine:
     def _env_float(name: str, default: float) -> float:
         try:
             return float(os.getenv(name, str(default)))
+        except ValueError:
+            return default
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return max(0, int(os.getenv(name, str(default))))
         except ValueError:
             return default
 
@@ -145,8 +152,8 @@ class PerceptionEngine:
         return self._browser_region_from_window(win)
     def capture_screen(self, filename: Optional[str] = None, initial_wait_sec: Optional[float] = None) -> Path:
         """
-        화면이 안정화될 때까지 기다린 후 브라우저 창 영역을 캡처합니다.
-        액션 직후 호출되므로, 짧은 초기 대기 후 WaitStable로 렌더링 완료를 감지합니다.
+        큰 화면 흔들림이 잦아든 뒤 브라우저 창 영역을 캡처합니다.
+        페이지의 실제 로딩 완료 여부는 이후 전환 계약 검사에서 판단합니다.
 
         Args:
             filename: 저장할 파일명. 입력하지 않으면 타임스탬프 기반 자동 생성.
@@ -154,9 +161,7 @@ class PerceptionEngine:
         Returns:
             저장된 스크린샷 이미지의 절대 경로 (Path 객체)
         """
-        # 액션 효과(클릭, 페이지 이동 등)가 화면에 나타나기 시작할 시간을 줍니다.
-        # 이 초기 대기 없이 바로 WaitStable을 시작하면 화면이 아직 변하지 않은 상태를
-        # "이미 안정됨"으로 오인할 수 있습니다.
+        # 액션 효과가 캡처에 반영되기 시작할 짧은 시간만 확보합니다.
         if initial_wait_sec is None:
             initial_wait_sec = self._env_float("VISION_CAPTURE_INITIAL_WAIT_SEC", 0.16)
         if initial_wait_sec > 0:
@@ -169,7 +174,7 @@ class PerceptionEngine:
 
         if not filename:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"screen_{timestamp}.jpg"
+            filename = f"screen_{timestamp}.png"
             
         output_path = self.screenshot_dir / filename
         
@@ -195,7 +200,7 @@ class PerceptionEngine:
                 }
                 logger.debug("Browser not found, captured full monitor", monitor=monitor)
                 
-            # Convert to PIL Image and save as compressed JPEG
+            # Convert to PIL Image and preserve text edges by default.
             from PIL import Image
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             if output_path.suffix.lower() in (".jpg", ".jpeg"):
@@ -213,6 +218,66 @@ class PerceptionEngine:
         except Exception as e:
             logger.exception("Failed to capture screen", error=str(e))
             raise
+
+    def screen_quality(self, image_path: Path) -> Dict[str, Any]:
+        """브라우저 본문이 단색 빈 화면에 가까운지 저비용 이미지 지표로 검사한다."""
+        content_top = self._env_int("VISION_PAGE_CONTENT_TOP_PX", 140)
+        bottom_ignore = self._env_int("VISION_PAGE_CONTENT_BOTTOM_IGNORE_PX", 80)
+        sample_width = self._env_int("VISION_PAGE_QUALITY_SAMPLE_WIDTH", 240)
+        try:
+            with Image.open(image_path) as source:
+                image = source.convert("L")
+                bottom = max(content_top + 1, image.height - bottom_ignore)
+                content = image.crop((0, min(content_top, image.height - 1), image.width, bottom))
+                if sample_width > 0 and content.width > sample_width:
+                    ratio = sample_width / content.width
+                    content = content.resize(
+                        (sample_width, max(1, int(content.height * ratio))),
+                        Image.Resampling.BILINEAR,
+                    )
+                stats = ImageStat.Stat(content)
+                edge_mean = ImageStat.Stat(content.filter(ImageFilter.FIND_EDGES)).mean[0]
+                histogram = content.histogram()
+                pixel_count = max(1, sum(histogram))
+                dominant_ratio = max(histogram) / pixel_count
+                stddev = stats.stddev[0]
+        except Exception as exc:
+            logger.debug("Screen quality check skipped", error=str(exc), image_path=str(image_path))
+            return {"low_information": False, "reason": "quality_check_error"}
+
+        max_stddev = self._env_float("VISION_PAGE_BLANK_MAX_STDDEV", 12.0)
+        max_edge_mean = self._env_float("VISION_PAGE_BLANK_MAX_EDGE_MEAN", 4.0)
+        min_dominant_ratio = self._env_float("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", 0.9)
+        low_information = (
+            stddev <= max_stddev
+            and edge_mean <= max_edge_mean
+            and dominant_ratio >= min_dominant_ratio
+        )
+        return {
+            "low_information": low_information,
+            "reason": "low_information_page" if low_information else "page_content_present",
+            "stddev": round(stddev, 3),
+            "edge_mean": round(edge_mean, 3),
+            "dominant_ratio": round(dominant_ratio, 4),
+        }
+
+    def capture_usable_screen(self) -> Path:
+        """단색 빈 본문이면 OCR 전에 짧게 재캡처하고 마지막 화면을 반환한다."""
+        max_attempts = max(1, self._env_int("VISION_PAGE_CAPTURE_MAX_ATTEMPTS", 4))
+        retry_interval = self._env_float("VISION_PAGE_CAPTURE_RETRY_SEC", 0.4)
+        last_path: Path | None = None
+        for attempt in range(1, max_attempts + 1):
+            filename = None
+            if attempt > 1:
+                filename = f"screen_retry_{int(time.time() * 1000)}_{attempt}.png"
+            last_path = self.capture_screen(filename=filename)
+            quality = self.screen_quality(last_path)
+            logger.info("Screen quality checked", attempt=attempt, max_attempts=max_attempts, **quality)
+            if not quality.get("low_information"):
+                return last_path
+            if attempt < max_attempts and retry_interval > 0:
+                time.sleep(retry_interval)
+        return last_path
 
     def get_current_url(self) -> str:
         """활성 브라우저의 주소창 URL을 클립보드 경유로 읽습니다."""
@@ -284,7 +349,7 @@ class PerceptionEngine:
 
     def _prepare_som_image(self, image_path: Path) -> tuple[Path, int]:
         try:
-            crop_top = int(os.getenv("VISION_SOM_CROP_TOP", "96"))
+            crop_top = int(os.getenv("VISION_SOM_CROP_TOP", "140"))
         except ValueError:
             crop_top = 96
         if crop_top <= 0:
@@ -307,7 +372,7 @@ class PerceptionEngine:
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """
         Set-of-Marks (SoM) 기반의 UI 분석 엔진입니다.
-        로컬 YOLOv8 및 EasyOCR로 마킹 이미지를 생성한 뒤 VLM(Gemini/Ollama)을 호출하여
+        OmniParser YOLO 및 PaddleOCR로 마킹 이미지를 생성한 뒤 VLM(Gemini/Ollama)을 호출하여
         각 마커 ID의 서비스 상 용도를 캡셔닝하고 물리 좌표와 맵핑하여 반환합니다.
         
         Args:
@@ -479,11 +544,16 @@ Example output format:
         markers = []
         for marker_id, bbox in marker_bboxes.items():
             text = id_to_text.get(marker_id, "상호작용 가능한 요소 (미식별)")
-            markers.append({
+            elem = final_elements[marker_id] if marker_id < len(final_elements) else {}
+            marker = {
                 "id": marker_id,
                 "text": text,
-                "bbox": bbox
-            })
+                "bbox": bbox,
+                "type": elem.get("type", "element"),
+            }
+            if elem.get("conf") is not None:
+                marker["conf"] = elem.get("conf")
+            markers.append(marker)
 
         logger.info("UI analysis pipeline complete", final_markers_count=len(markers))
         analysis = {

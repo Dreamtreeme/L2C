@@ -3,6 +3,7 @@ import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
@@ -24,28 +25,45 @@ _qa_llm_with_tools = None
 class click_marker(BaseModel):
     """화면의 특정 ID 마커를 클릭합니다."""
     marker_id: int = Field(..., description="클릭할 마커의 ID")
-    target_label: Optional[str] = Field(None, description="Visible title or label of the selected card/list item, when the marker is only part of a larger target")
+    target_label: Optional[str] = Field(None, description="선택한 항목의 보이는 제목(target_label)")
+    target_role: Optional[str] = Field(None, description="목표 기준 대상 역할(target_role)")
+    target_component: Optional[str] = Field(None, description="화면 구성요소(target_component)")
+    reason: Optional[str] = Field(None, description="이 대상을 선택한 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="클릭 후 정상이라면 보여야 할 화면 변화(expected_after)")
 
 class type_in_marker(BaseModel):
     """특정 id의 마커를 클릭한 후 텍스트를 입력합니다."""
     marker_id: int = Field(..., description="텍스트를 입력할 마커의 ID")
     text: str = Field(..., description="입력할 텍스트")
 
+    slot_name: Optional[str] = Field(None, description="실행마다 바뀌는 입력 슬롯 이름(slot_name)")
+    target_role: Optional[str] = Field(None, description="목표 기준 대상 역할(target_role)")
+    target_component: Optional[str] = Field(None, description="화면 구성요소(target_component)")
+    reason: Optional[str] = Field(None, description="이 입력을 수행한 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="입력 후 정상이라면 보여야 할 화면 변화(expected_after)")
+
 class scroll(BaseModel):
     """화면을 스크롤합니다."""
     direction: str = Field("down", description="스크롤 방향 ('down' 또는 'up')")
+    reason: Optional[str] = Field(None, description="스크롤을 수행한 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="스크롤 후 정상이라면 보여야 할 화면 변화(expected_after)")
 
 class press_key(BaseModel):
     """엔터, ESC 등 특수키를 누릅니다."""
     key: str = Field(..., description="누를 특수키 (예: 'enter', 'esc')")
+    reason: Optional[str] = Field(None, description="키 입력을 수행한 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="키 입력 후 정상이라면 보여야 할 화면 변화(expected_after)")
 
 class open_browser(BaseModel):
     """기본 브라우저를 열고 특정 URL에 접속합니다. 목표가 주어지면 가장 먼저 호출해야 할 수 있습니다."""
     url: str = Field(..., description="접속할 URL (예: https://www.wanted.co.kr)")
+    reason: Optional[str] = Field(None, description="이 URL을 여는 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="브라우저 이동 후 정상이라면 보여야 할 화면 변화(expected_after)")
 
 class close_browser(BaseModel):
     """열려 있는 브라우저 창을 닫습니다."""
-    pass
+    reason: Optional[str] = Field(None, description="브라우저를 닫는 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="브라우저 종료 후 기대 상태(expected_after)")
 
 class update_extracted_info(BaseModel):
     """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 병합합니다. 변경된 공고 또는 새 필드만 보내도 됩니다. (예: {'공고목록': [{'회사명': '로이드케이', '직무명': '...', '주요업무': ['A']}]} 형태의 JSON 문자열)"""
@@ -53,7 +71,8 @@ class update_extracted_info(BaseModel):
 
 class go_back(BaseModel):
     """브라우저의 뒤로가기(이전 페이지 이동) 기능을 실행합니다."""
-    pass
+    reason: Optional[str] = Field(None, description="뒤로가기를 수행한 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="뒤로가기 후 정상이라면 보여야 할 화면 변화(expected_after)")
 
 class update_plan_progress(BaseModel):
     """현재 실행 중인 계획 단계를 업데이트하거나 필요시 계획을 수정합니다."""
@@ -131,7 +150,8 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     perception = _get_perception()
     
     # 화면 캡처
-    image_path = perception.capture_screen()
+    capture = getattr(perception, "capture_usable_screen", perception.capture_screen)
+    image_path = capture()
 
     current_url = state.get("current_url", "")
     current_url_stale = state.get("current_url_stale", True)
@@ -165,29 +185,53 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     markers = filtered_markers
     
     ui_context = _build_ui_context(markers)
-    ocr_texts = []
-    ocr_delta_added = []
-    ocr_delta_removed = []
-    reflex_validation_status = ""
+    transition_observations = []
+    transition_status = ""
+    transition_outcome = ""
+    transition_source = ""
+    pending_transition = dict(state.get("pending_transition", {}) or {})
     try:
-        from agent.recipe.ocr_delta import diff_marker_texts
         from agent.recipe.state_key import compute_state_key
+        from agent.recipe.transition import evaluate_transition, marker_texts
 
         reflex_state_key = compute_state_key(current_url, markers)
-        marker_delta = diff_marker_texts(state.get("ocr_texts", []), markers)
-        ocr_texts = marker_delta["current"]
-        ocr_delta_added = marker_delta["added"]
-        ocr_delta_removed = marker_delta["removed"]
-        if state.get("reflex_pending_validation"):
-            expected_next = state.get("reflex_expected_next_state", "")
-            if expected_next and reflex_state_key == expected_next:
-                reflex_validation_status = "matched"
-            elif ocr_delta_added or ocr_delta_removed:
-                reflex_validation_status = "changed_unexpected"
+        if pending_transition:
+            started_at = float(pending_transition.get("started_at") or start_time)
+            elapsed_sec = max(0.0, time.time() - started_at)
+            evaluation = evaluate_transition(
+                pending_transition.get("contract"),
+                markers,
+                params=dict(pending_transition.get("params", {}) or {}),
+                elapsed_sec=elapsed_sec,
+            )
+            transition_status = evaluation["status"]
+            transition_outcome = evaluation.get("outcome", "")
+            transition_source = str(pending_transition.get("source") or "")
+            attempt = int(pending_transition.get("attempts") or 0) + 1
+            transition_observations.append(
+                {
+                    "action_seq": pending_transition.get("action_seq"),
+                    "action": pending_transition.get("action", ""),
+                    "expected_after": pending_transition.get("expected_after", ""),
+                    "source": transition_source,
+                    "attempt": attempt,
+                    "elapsed_sec": round(elapsed_sec, 3),
+                    "status": transition_status,
+                    "outcome": transition_outcome,
+                    "reason": evaluation.get("reason", ""),
+                    "state_key": reflex_state_key,
+                    "marker_count": len(markers),
+                    "marker_texts": marker_texts(markers),
+                    "screenshot": str(image_path),
+                    "marked_image": str(marked_image or ""),
+                }
+            )
+            if transition_status == "pending":
+                pending_transition["attempts"] = attempt
             else:
-                reflex_validation_status = "unchanged"
+                pending_transition = {}
     except Exception as e:
-        logger.debug("reflex state_key computation skipped", error=str(e))
+        logger.debug("transition observation skipped", error=str(e))
         reflex_state_key = state.get("reflex_state_key", "")
     
     elapsed = time.time() - start_time
@@ -200,10 +244,11 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "current_url": current_url,
         "current_url_stale": current_url_stale,
         "reflex_state_key": reflex_state_key,
-        "ocr_texts": ocr_texts,
-        "ocr_delta_added": ocr_delta_added,
-        "ocr_delta_removed": ocr_delta_removed,
-        "reflex_validation_status": reflex_validation_status,
+        "pending_transition": pending_transition,
+        "transition_status": transition_status,
+        "transition_outcome": transition_outcome,
+        "transition_source": transition_source,
+        "transition_observations": transition_observations,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
 
@@ -220,8 +265,55 @@ def _is_repeating(history: list, n: int) -> bool:
     return len(actions) == 1
 
 
+def _site_profile_for_url(url: str) -> dict:
+    try:
+        host = (urlparse(url or "").netloc or "").lower()
+    except Exception:
+        return {}
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return {}
+    try:
+        from agent.sites import list_supported_sites, load_site_profile
+
+        for entry in list_supported_sites(enabled_only=False):
+            domains = [str(domain or "").lower() for domain in entry.get("domains", [])]
+            if any(host == domain or host.endswith("." + domain) for domain in domains):
+                return load_site_profile(str(entry.get("slug") or ""))
+    except Exception:
+        return {}
+    return {}
+
+
+def _persistence_policy_for_url(url: str) -> dict:
+    profile = _site_profile_for_url(url)
+    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
+    policy = manual.get("persistence_policy", {}) if isinstance(manual, dict) else {}
+    return policy if isinstance(policy, dict) else {}
+
+
 def _looks_like_job_detail_url(url: str) -> bool:
-    return bool(url and re.search(r"/wd/\d+", url))
+    pattern = str(_persistence_policy_for_url(url).get("detail_url_pattern") or "").strip()
+    return bool(url and pattern and re.search(pattern, url))
+
+
+def _has_job_url(job: dict) -> bool:
+    return bool((job.get("url") or job.get("URL") or job.get("공고url") or "").strip())
+
+
+def _should_skip_job_update_without_detail_url(new_data: dict, current_url: str) -> bool:
+    policy = _persistence_policy_for_url(current_url)
+    if not policy.get("require_detail_url_for_job_update") or _looks_like_job_detail_url(current_url):
+        return False
+
+    incoming_jobs = new_data.get("공고목록")
+    if isinstance(incoming_jobs, dict):
+        incoming_jobs = [incoming_jobs]
+    if not isinstance(incoming_jobs, list):
+        return False
+
+    return any(isinstance(job, dict) and not _has_job_url(job) for job in incoming_jobs)
 
 
 def _is_browser_back_marker_bbox(bbox: list) -> bool:
@@ -584,6 +676,16 @@ def _build_ui_context(markers: list[dict]) -> str:
     return "\n".join(parts) if parts else "발견된 UI 마커 없음"
 
 
+def _collected_job_count(extracted_jd: Any) -> int:
+    """현재 누적 데이터에서 수집된 공고 개수를 계산한다."""
+    if not isinstance(extracted_jd, dict) or not extracted_jd:
+        return 0
+    for value in extracted_jd.values():
+        if isinstance(value, list) and any(isinstance(item, dict) and item for item in value):
+            return sum(1 for item in value if isinstance(item, dict) and item)
+    return 1
+
+
 def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     """
     reasoning_node용 LLM 메시지 리스트를 조립합니다.
@@ -604,6 +706,39 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     ui_context = state.get("ui_context", "")
     current_url = state.get("current_url", "")
     action_history = state.get("action_history", [])
+    recipe_params = dict(state.get("recipe_params", {}) or {})
+    target_count = int(recipe_params.get("target_count") or 0)
+    collected_count = _collected_job_count(extracted_jd)
+    visited_cards: list[str] = []
+    for action in action_history:
+        if not isinstance(action, dict) or action.get("status") != "success":
+            continue
+        args = action.get("args") or {}
+        target = action.get("target") or {}
+        component = args.get("target_component") or target.get("component") or ""
+        if component != "job_card_title":
+            continue
+        label = args.get("target_label") or target.get("target_label") or target.get("text") or ""
+        label = str(label).strip()
+        if label and label not in visited_cards:
+            visited_cards.append(label)
+    collection_context = (
+        "수집 순회 상태:\n"
+        f"- 목표 공고 수: {target_count if target_count > 0 else '(지정 안 됨)'}\n"
+        f"- 현재 수집 공고 수: {collected_count}\n"
+        f"- 이미 방문한 공고 카드: {json.dumps(visited_cards, ensure_ascii=False)}\n"
+        "- 검색 결과의 공고 제목은 실행마다 달라지는 동적 대상입니다. 기록된 과거 공고명을 재사용하지 말고, "
+        "현재 화면에서 보이는 미방문 공고 제목을 선택하십시오.\n"
+        "- 목표 수를 채웠으면 목록으로 돌아가거나 같은 카드를 다시 열지 말고 finish_task를 호출하십시오.\n\n"
+    )
+    transition_context = ""
+    if state.get("transition_status"):
+        transition_context = (
+            "직전 화면 전환 검증:\n"
+            f"- status: {state.get('transition_status')}\n"
+            f"- outcome: {state.get('transition_outcome') or '(없음)'}\n"
+            f"- source: {state.get('transition_source') or '(없음)'}\n\n"
+        )
     forbidden_action_context = _build_forbidden_action_context(action_history)
     if forbidden_action_context:
         forbidden_action_context += "\n\n"
@@ -612,6 +747,8 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
         f"{plan_context}"
         f"현재까지 누적 수집된 정보:\n{json.dumps(extracted_jd, ensure_ascii=False, indent=2)}\n\n"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
+        f"{collection_context}"
+        f"{transition_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
         f"이전 행동 내역:\n{json.dumps(action_history[-5:], ensure_ascii=False, indent=2)}\n\n"
@@ -687,8 +824,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
     result = {
         "last_action_result": response,
         "reflex_hit": False,
-        "reflex_expected_next_state": "",
-        "reflex_pending_validation": False,
+        "reflex_transition_contracts": {},
         "step_durations": [{"node": "reasoning", "duration": elapsed}]
     }
     if error_increment > 0:
@@ -697,37 +833,89 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
     return result
 
 
-def _reflex_action_args(step: dict, marker_id: int | None) -> dict | None:
+def _reflex_action_args(step: dict, marker_id: int | None, params: dict | None = None) -> dict | None:
     """저장된 RecipeStep dict를 action_node tool args 형태로 변환한다."""
     action = step.get("action")
     param = dict(step.get("param") or {})
     value = step.get("value")
+    params = dict(params or {})
+    trace_args = _reflex_trace_args(step)
 
     if action == "click_marker":
         if marker_id is None:
             return None
-        return {"marker_id": marker_id}
+        return {"marker_id": marker_id, **trace_args}
     if action == "type_in_marker":
         if marker_id is None:
             return None
-        text = param.get("text") or value
+        slot_name = param.get("slot_name") or param.get("slot") or ""
+        if not slot_name:
+            slot_refs = step.get("slot_refs") or []
+            slot_name = slot_refs[0] if slot_refs else ""
+        text = params.get(slot_name) if slot_name else None
+        text = text or param.get("text") or value
         if not text:
             return None
-        return {"marker_id": marker_id, "text": text}
+        args = {"marker_id": marker_id, "text": text, **trace_args}
+        if slot_name:
+            args["slot_name"] = slot_name
+        return args
     if action == "scroll":
-        return {"direction": param.get("direction") or value or "down"}
+        return {"direction": param.get("direction") or value or "down", **trace_args}
     if action == "press_key":
         key = param.get("key") or value
-        return {"key": key} if key else None
+        return {"key": key, **trace_args} if key else None
     if action == "go_back":
-        return {}
+        return dict(trace_args)
     return None
+
+
+def _reflex_trace_args(step: dict) -> dict:
+    """재생 액션 실행에는 영향 없는 추적 메타데이터만 도구 인자에 복원한다."""
+    out: dict[str, str] = {}
+    mapping = {
+        "intent": "reason",
+        "target_role": "target_role",
+        "component": "target_component",
+        "expected_after": "expected_after",
+    }
+    for source_key, arg_key in mapping.items():
+        value = step.get(source_key)
+        if value:
+            out[arg_key] = str(value)
+    target = step.get("target") if isinstance(step.get("target"), dict) else {}
+    semantic_label = target.get("semantic_label")
+    if semantic_label:
+        out["target_label"] = str(semantic_label)
+    return out
+
+
+def _missing_required_recipe_inputs(recipe, params: dict) -> list[str]:
+    """레시피 메타데이터(skill_metadata)의 필수 입력 누락 여부를 확인한다."""
+    metadata = getattr(recipe, "skill_metadata", None)
+    inputs = getattr(metadata, "inputs", []) if metadata is not None else []
+    missing: list[str] = []
+    for item in inputs or []:
+        name = getattr(item, "name", "")
+        required = bool(getattr(item, "required", False))
+        value = params.get(name)
+        if required and name and (value is None or value == ""):
+            missing.append(name)
+    return missing
 
 
 def reflex_node(state: GraphState) -> Dict[str, Any]:
     """캐시된 Reflex Recipe가 있으면 reasoning을 우회해 같은 tool_call 형태를 만든다."""
     start_time = time.time()
     logger.info("Executing Reflex Node")
+
+    def miss(state_key: str, elapsed: float) -> Dict[str, Any]:
+        return {
+            "reflex_state_key": state_key,
+            "reflex_hit": False,
+            "reflex_transition_contracts": {},
+            "step_durations": [{"node": "reflex", "duration": elapsed}],
+        }
 
     try:
         from agent.recipe.matcher import is_replayable_step, match_marker
@@ -736,60 +924,79 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
 
         markers = state.get("current_markers", []) or []
         state_key = state.get("reflex_state_key") or compute_state_key(state.get("current_url", ""), markers)
-        recipe = RecipeStore().get_recipe(state_key)
-        if not recipe or not recipe.steps:
-            elapsed = time.time() - start_time
-            logger.info("Reflex miss: no recipe", state_key=state_key[:24])
-            return {
-                "reflex_state_key": state_key,
-                "reflex_hit": False,
-                "reflex_expected_next_state": "",
-                "reflex_pending_validation": False,
-                "step_durations": [{"node": "reflex", "duration": elapsed}],
-            }
+        params = dict(state.get("recipe_params", {}) or {})
+        params.setdefault("goal", state.get("goal", ""))
+        store = RecipeStore()
+        recipe_candidates = []
+        exact_recipe = store.get_recipe(state_key)
+        if exact_recipe and exact_recipe.steps:
+            recipe_candidates.append((state_key, exact_recipe, 1.0, "exact"))
 
-        tool_calls = []
-        expected_next = ""
-        for idx, recipe_step in enumerate(recipe.steps):
-            step = recipe_step.model_dump() if hasattr(recipe_step, "model_dump") else recipe_step.dict()
-            action = step.get("action")
-            marker_id = None
-            params = {"goal": state.get("goal", "")}
-            if not is_replayable_step(step, params=params):
-                elapsed = time.time() - start_time
-                logger.info("Reflex miss: cached step is not replayable", state_key=state_key[:24], action=action)
-                return {
-                    "reflex_state_key": state_key,
-                    "reflex_hit": False,
-                    "reflex_expected_next_state": "",
-                    "reflex_pending_validation": False,
-                    "step_durations": [{"node": "reflex", "duration": elapsed}],
-                }
-            if action in {"click_marker", "type_in_marker"}:
-                marker_id = match_marker(step, markers, params=params)
-                if marker_id is None:
-                    elapsed = time.time() - start_time
-                    logger.info("Reflex miss: marker did not match", state_key=state_key[:24], action=action)
-                    return {
-                        "reflex_state_key": state_key,
-                        "reflex_hit": False,
-                        "reflex_expected_next_state": "",
-                        "reflex_pending_validation": False,
-                        "step_durations": [{"node": "reflex", "duration": elapsed}],
-                    }
-            args = _reflex_action_args(step, marker_id)
-            if args is None:
-                elapsed = time.time() - start_time
-                logger.info("Reflex miss: unsupported or incomplete action", state_key=state_key[:24], action=action)
-                return {
-                    "reflex_state_key": state_key,
-                    "reflex_hit": False,
-                    "reflex_expected_next_state": "",
-                    "reflex_pending_validation": False,
-                    "step_durations": [{"node": "reflex", "duration": elapsed}],
-                }
-            expected_next = step.get("expected_next_state") or expected_next
-            tool_calls.append({"name": action, "args": args, "id": f"reflex_{abs(hash(state_key))}_{idx}"})
+        site = str(params.get("site") or "").strip()
+        min_similarity = float(os.getenv("REFLEX_STATE_SIMILARITY_MIN", "0.25"))
+        if site:
+            for recipe_key, recipe, similarity in store.get_similar_recipes(
+                site,
+                markers,
+                min_similarity=min_similarity,
+            ):
+                if recipe_key != state_key:
+                    recipe_candidates.append((recipe_key, recipe, similarity, "ocr_similarity"))
+
+        if not recipe_candidates:
+            elapsed = time.time() - start_time
+            logger.info("Reflex miss: no recipe", state_key=state_key[:24], site=site)
+            return miss(state_key, elapsed)
+
+        selected = None
+        for recipe_key, recipe, similarity, lookup in recipe_candidates:
+            missing_inputs = _missing_required_recipe_inputs(recipe, params)
+            if missing_inputs:
+                logger.info(
+                    "Reflex candidate skipped: missing required inputs",
+                    recipe_key=recipe_key[:24],
+                    missing=missing_inputs,
+                )
+                continue
+
+            tool_calls = []
+            transition_contracts: dict[str, dict] = {}
+            candidate_valid = True
+            for idx, recipe_step in enumerate(recipe.steps):
+                step = recipe_step.model_dump() if hasattr(recipe_step, "model_dump") else recipe_step.dict()
+                action = step.get("action")
+                marker_id = None
+                if not is_replayable_step(step, params=params):
+                    candidate_valid = False
+                    break
+                if action in {"click_marker", "type_in_marker"}:
+                    marker_id = match_marker(step, markers, params=params)
+                    if marker_id is None:
+                        candidate_valid = False
+                        break
+                args = _reflex_action_args(step, marker_id, params=params)
+                if args is None:
+                    candidate_valid = False
+                    break
+                call_id = f"reflex_{abs(hash(recipe_key))}_{idx}"
+                tool_calls.append({"name": action, "args": args, "id": call_id})
+                contract = step.get("transition_contract")
+                if contract:
+                    transition_contracts[call_id] = dict(contract)
+            if candidate_valid and tool_calls:
+                selected = (recipe_key, recipe, similarity, lookup, tool_calls, transition_contracts)
+                break
+
+        if selected is None:
+            elapsed = time.time() - start_time
+            logger.info(
+                "Reflex miss: no candidate passed marker matching",
+                state_key=state_key[:24],
+                candidates=len(recipe_candidates),
+            )
+            return miss(state_key, elapsed)
+
+        recipe_key, recipe, similarity, lookup, tool_calls, transition_contracts = selected
 
         msg = AIMessage(
             content=f"[reflex] cached {len(tool_calls)} action(s)",
@@ -799,27 +1006,25 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
         logger.info(
             "Reflex hit",
             state_key=state_key[:24],
+            recipe_key=recipe_key[:24],
+            lookup=lookup,
+            similarity=f"{similarity:.3f}",
             actions=[call["name"] for call in tool_calls],
-            expected_next=expected_next[:24] if expected_next else "",
+            transition_contracts=len(transition_contracts),
+            when_to_use=getattr(getattr(recipe, "skill_metadata", None), "when_to_use", "")[:80],
             duration=f"{elapsed:.3f}s",
         )
         return {
             "last_action_result": msg,
             "reflex_state_key": state_key,
             "reflex_hit": True,
-            "reflex_expected_next_state": expected_next,
-            "reflex_pending_validation": bool(expected_next),
+            "reflex_transition_contracts": transition_contracts,
             "step_durations": [{"node": "reflex", "duration": elapsed}],
         }
     except Exception as e:
         elapsed = time.time() - start_time
         logger.debug("reflex node skipped", error=str(e))
-        return {
-            "reflex_hit": False,
-            "reflex_expected_next_state": "",
-            "reflex_pending_validation": False,
-            "step_durations": [{"node": "reflex", "duration": elapsed}],
-        }
+        return miss(state.get("reflex_state_key", ""), elapsed)
 
 
 def _dispatch_ui(action_name: str, args: dict, get_bbox, current_url: str = "") -> dict:
@@ -863,17 +1068,29 @@ def _dispatch_state(
     elif action_name == "update_extracted_info":
         try:
             new_data = json.loads(args["data_json"])
-            current_jd, summary = _merge_extracted_info(current_jd, new_data, current_url=current_url)
-            result_str = (
-                "Extracted data merged "
-                f"(incoming_jobs={summary['incoming_jobs']}, total_jobs={summary['total_jobs']}, "
-                f"fields={summary['fields']})"
-            )
-            status = "success"
+            if _should_skip_job_update_without_detail_url(new_data, current_url):
+                result_str = (
+                    "Skipped extracted data merge: this site requires a detail URL "
+                    "or an explicit job url in data_json"
+                )
+                status = "skipped"
+                reason = "job_update_requires_detail_url"
+            else:
+                current_jd, summary = _merge_extracted_info(current_jd, new_data, current_url=current_url)
+                result_str = (
+                    "Extracted data merged "
+                    f"(incoming_jobs={summary['incoming_jobs']}, total_jobs={summary['total_jobs']}, "
+                    f"fields={summary['fields']})"
+                )
+                status = "success"
+                reason = ""
         except Exception as e:
             result_str = f"Failed to parse data_json: {e}"
             status = "error"
+            reason = ""
         result = {"action": "update_extracted_info", "status": status, "result": result_str}
+        if reason:
+            result["reason"] = reason
     else:
         raise ValueError(f"Unknown state action: {action_name}")
     return result, current_jd, current_plan, current_plan_step
@@ -895,7 +1112,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     recorded_steps: list = []
     feedback_episodes: list = []
     prior_recorded_steps = list(state.get("recorded_steps", []) or [])
-    prior_feedback_episodes = list(state.get("feedback_episodes", []) or [])
 
     ai_msg: AIMessage = state.get("last_action_result")
 
@@ -910,6 +1126,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             "step_durations": [{"node": "action", "duration": elapsed}]
         }
 
+    prior_actions = list(state.get("action_history", []) or [])
     new_actions = []
     current_jd        = dict(state.get("extracted_jd", {}))
     is_finished       = state.get("is_finished", False)
@@ -923,6 +1140,35 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     screen_changed    = False
     chain_boundary    = False
     previous_ui_action: str | None = None
+    pending_transition: dict[str, Any] = {}
+    reflex_transition_contracts = dict(state.get("reflex_transition_contracts", {}) or {})
+
+    def transition_params() -> dict[str, Any]:
+        params = dict(state.get("recipe_params", {}) or {})
+        params.setdefault("goal", state.get("goal", ""))
+        return params
+
+    def set_pending_transition(
+        action_seq: int,
+        action_name: str,
+        args: dict,
+        contract: dict | None,
+        source: str,
+    ) -> None:
+        nonlocal pending_transition
+        pending_transition = {
+            "action_seq": action_seq,
+            "action": action_name,
+            "expected_after": str(args.get("expected_after") or ""),
+            "source": source,
+            "started_at": time.time(),
+            "attempts": 0,
+            "contract": dict(contract or {}),
+            "params": transition_params(),
+        }
+
+    def next_action_seq() -> int:
+        return len(prior_actions) + len(new_actions)
 
     # marker_id → bbox 변환 헬퍼
     def get_bbox(marker_id: int):
@@ -961,8 +1207,12 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         message: str,
         step_start: float,
         increments_error: bool = False,
+        observation_required: bool = False,
     ) -> None:
-        nonlocal error_count
+        nonlocal error_count, current_url_stale, screen_changed
+        if observation_required:
+            current_url_stale = True
+            screen_changed = True
         result = {
             "status": status,
             "action": action_name,
@@ -970,6 +1220,11 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             "error": message if status == "error" else None,
             "reason": reason,
         }
+        if observation_required:
+            result["observation_required"] = True
+        action_seq = next_action_seq()
+        if observation_required:
+            set_pending_transition(action_seq, action_name, args, None, "guard")
         enriched = enrich_result(result, action_name, args, before_snapshot, False)
         new_actions.append(enriched)
         if record_action_episode:
@@ -984,11 +1239,11 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 {
                     "current_url": current_url,
                     "current_url_stale": current_url_stale,
-                    "screen_changed": False,
+                    "screen_changed": observation_required,
                     "extracted_jd": current_jd,
                     "is_finished": is_finished,
                 },
-                len(prior_feedback_episodes) + len(feedback_episodes),
+                action_seq,
             )
         if increments_error:
             error_count += 1
@@ -1000,6 +1255,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
     SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
     URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "close_browser", "go_back"}
+    OBSERVATION_REQUIRED_ACTIONS = {"click_marker", "press_key", "open_browser", "go_back"}
     STATE_ACTIONS = {"update_plan_progress", "update_extracted_info"}
 
     for idx, tool_call in enumerate(ai_msg.tool_calls):
@@ -1014,6 +1270,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         step_start = time.time()
         before_snapshot = _state_snapshot_for_action(state, current_url)
         before_state_key = before_snapshot.get("state_key", "")
+        action_seq = next_action_seq()
 
         try:
             if chain_boundary and action_name in UI_ACTIONS:
@@ -1041,6 +1298,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     break
 
                 if _same_state_action_seen(state, action_name, args, before_state_key):
+                    observation_required = action_name in OBSERVATION_REQUIRED_ACTIONS
                     append_guard_result(
                         action_name,
                         args,
@@ -1049,6 +1307,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         "same_state_repeat_blocked",
                         "Blocked repeated UI action in the same screen state.",
                         step_start,
+                        observation_required=observation_required,
                     )
                     break
 
@@ -1068,10 +1327,19 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
                 screen_changed = screen_changed or action_changed_screen
                 previous_ui_action = action_name
+                if action_changed_screen:
+                    contract = reflex_transition_contracts.get(str(tool_call.get("id") or ""))
+                    set_pending_transition(
+                        action_seq,
+                        action_name,
+                        args,
+                        contract,
+                        "reflex" if state.get("reflex_hit") else "autonomous",
+                    )
                 if action_changed_screen and _chain_boundary_reached(action_name):
                     chain_boundary = True
                 if record_ui_step:
-                    record_ui_step(recorded_steps, state, action_name, args, len(prior_recorded_steps) + idx)
+                    record_ui_step(recorded_steps, state, action_name, args, action_seq)
 
             elif action_name in STATE_ACTIONS:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
@@ -1107,7 +1375,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         "extracted_jd": current_jd,
                         "is_finished": is_finished,
                     },
-                    len(prior_feedback_episodes) + len(feedback_episodes),
+                    action_seq,
                 )
 
             step_elapsed = time.time() - step_start
@@ -1140,7 +1408,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         "extracted_jd": current_jd,
                         "is_finished": is_finished,
                     },
-                    len(prior_feedback_episodes) + len(feedback_episodes),
+                    action_seq,
                 )
             error_count += 1
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
@@ -1164,6 +1432,10 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "current_url":       current_url,
         "current_url_stale": current_url_stale,
         "last_action_screen_changed": screen_changed,
+        "pending_transition": pending_transition,
+        "transition_status": "",
+        "transition_outcome": "",
+        "transition_source": "",
         "recorded_steps":    recorded_steps,
         "feedback_episodes": feedback_episodes,
     }
