@@ -222,6 +222,28 @@ def test_persistence_job_normalization_uses_llm(monkeypatch):
     assert normalized["_normalization_source"] == "llm"
 
 
+def test_persistence_job_normalization_defaults_to_deterministic(monkeypatch):
+    from agent.tools.realtime_scraping import _normalize_job_for_persistence
+
+    monkeypatch.delenv("VISION_JD_NORMALIZATION_MODE", raising=False)
+
+    normalized = _normalize_job_for_persistence(
+        {
+            "\ud68c\uc0ac\uba85": "\ud14c\uc2a4\ud2b8\ud68c\uc0ac",
+            "\uc9c1\ubb34\uba85": "iOS \uac1c\ubc1c\uc790",
+            "\uacf5\uace0url": "https://example.com/jobs/ios",
+            "\uc790\uaca9\uc694\uac74": ["Swift \uacbd\ud5d8"],
+        },
+        keyword="ios",
+    )
+
+    assert normalized["company_name"] == "\ud14c\uc2a4\ud2b8\ud68c\uc0ac"
+    assert normalized["position"] == "iOS \uac1c\ubc1c\uc790"
+    assert normalized["url"] == "https://example.com/jobs/ios"
+    assert normalized["requirements"] == ["Swift \uacbd\ud5d8"]
+    assert normalized["_normalization_source"] == "deterministic"
+
+
 def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_db, monkeypatch):
     """recursion limit에 걸려도 마지막 partial state의 수집 데이터는 저장합니다."""
     import shared.config as cfg
@@ -418,6 +440,57 @@ def test_update_extracted_info_skips_wanted_job_without_detail_url():
     episode = result["feedback_episodes"][0]
     assert episode["feedback"]["label"] == "no_effect"
     assert episode["feedback"]["reason"] == "job_update_requires_detail_url"
+
+
+def test_update_extracted_info_auto_finishes_when_target_count_reached(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    monkeypatch.delenv("VISION_AUTO_FINISH_ON_TARGET", raising=False)
+
+    result = nodes.action_node({
+        "current_markers": [],
+        "current_url": "https://www.wanted.co.kr/wd/12345",
+        "current_url_stale": False,
+        "reflex_state_key": "state-detail",
+        "recipe_params": {"target_count": 1},
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "update_extracted_info",
+                    "args": {
+                        "data_json": json.dumps(
+                            {
+                                "jobs": [
+                                    {
+                                        "company_name": "Acme",
+                                        "position": "iOS Engineer",
+                                        "url": "https://www.wanted.co.kr/wd/12345",
+                                    }
+                                ]
+                            },
+                            ensure_ascii=False,
+                        )
+                    },
+                    "id": "1",
+                }
+            ],
+        ),
+    })
+
+    action = result["action_history"][0]
+    assert result["is_finished"] is True
+    assert action["auto_finished"] is True
+    assert action["target_count"] == 1
+    assert action["collected_count"] == 1
+    assert len(result["extracted_jd"]["공고목록"]) == 1
 
 
 def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):

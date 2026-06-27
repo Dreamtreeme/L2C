@@ -105,6 +105,21 @@ def test_realtime_scraping_extracts_user_search_intent_with_llm(monkeypatch):
     assert intent["source"] == "llm"
 
 
+def test_realtime_scraping_extracts_simple_search_intent_without_llm(monkeypatch):
+    from agent.sites import load_site_profile
+    from agent.tools.realtime_scraping import _extract_search_intent
+
+    profile = load_site_profile("wanted")
+    query = "\uc6d0\ud2f0\ub4dc\uc5d0\uc11c ios \uac1c\ubc1c\uc790 \ucc44\uc6a9\uacf5\uace0 2\uac1c \ucc3e\uc544\uc918"
+    monkeypatch.delenv("VISION_SEARCH_INTENT_MODE", raising=False)
+
+    intent = _extract_search_intent(query, profile)
+
+    assert intent["search_keyword"] == "ios \uac1c\ubc1c\uc790"
+    assert intent["target_count"] == 2
+    assert intent["source"] == "heuristic"
+
+
 def test_realtime_scraping_direct_search_url_encodes_keyword():
     from urllib.parse import parse_qs, urlparse
 

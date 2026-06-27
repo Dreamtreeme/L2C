@@ -307,7 +307,7 @@ def _should_skip_job_update_without_detail_url(new_data: dict, current_url: str)
     if not policy.get("require_detail_url_for_job_update") or _looks_like_job_detail_url(current_url):
         return False
 
-    incoming_jobs = new_data.get("공고목록")
+    incoming_jobs = _job_list_value(new_data)
     if isinstance(incoming_jobs, dict):
         incoming_jobs = [incoming_jobs]
     if not isinstance(incoming_jobs, list):
@@ -354,16 +354,26 @@ def _merge_value(old: Any, new: Any) -> Any:
     return new
 
 
+JOB_LIST_KEYS = ("\uacf5\uace0\ubaa9\ub85d", "jobs", "job_list")
+
+
+def _job_list_value(data: dict) -> Any:
+    for key in JOB_LIST_KEYS:
+        if key in data:
+            return data.get(key)
+    return None
+
+
 def _merge_extracted_info(current_jd: dict, new_data: dict, current_url: str = "") -> tuple[dict, dict]:
     merged = dict(current_jd)
     summary = {"incoming_jobs": 0, "total_jobs": 0, "fields": []}
 
-    incoming_jobs = new_data.get("공고목록")
+    incoming_jobs = _job_list_value(new_data)
     if isinstance(incoming_jobs, dict):
         incoming_jobs = [incoming_jobs]
 
     if isinstance(incoming_jobs, list):
-        existing_jobs = merged.get("공고목록")
+        existing_jobs = _job_list_value(merged)
         if not isinstance(existing_jobs, list):
             existing_jobs = []
 
@@ -400,15 +410,38 @@ def _merge_extracted_info(current_jd: dict, new_data: dict, current_url: str = "
         summary["total_jobs"] = len(existing_jobs)
 
     for key, value in new_data.items():
-        if key == "공고목록":
+        if key in JOB_LIST_KEYS:
             continue
         summary["fields"].append(key)
         merged[key] = _merge_value(merged.get(key), value)
 
     summary["fields"] = sorted({str(field) for field in summary["fields"]})
-    if not summary["total_jobs"] and isinstance(merged.get("공고목록"), list):
-        summary["total_jobs"] = len(merged["공고목록"])
+    existing_jobs = _job_list_value(merged)
+    if not summary["total_jobs"] and isinstance(existing_jobs, list):
+        summary["total_jobs"] = len(existing_jobs)
     return merged, summary
+
+
+def _extracted_job_count(extracted_jd: dict) -> int:
+    jobs = _job_list_value(extracted_jd)
+    if isinstance(jobs, list):
+        return len([job for job in jobs if isinstance(job, dict) and job])
+    if isinstance(jobs, dict):
+        return 1
+    return 1 if extracted_jd else 0
+
+
+def _target_count_from_state(state: GraphState) -> int:
+    params = state.get("recipe_params", {}) or {}
+    try:
+        return max(0, int(params.get("target_count") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _auto_finish_on_target_enabled() -> bool:
+    raw = os.getenv("VISION_AUTO_FINISH_ON_TARGET", "1")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _compact_action_args(action_name: str, args: dict) -> dict:
@@ -418,7 +451,7 @@ def _compact_action_args(action_name: str, args: dict) -> dict:
         data = json.loads(args.get("data_json", "{}"))
     except Exception:
         return {"data_json": "<invalid json>"}
-    jobs = data.get("공고목록")
+    jobs = _job_list_value(data)
     if isinstance(jobs, dict):
         jobs = [jobs]
     fields = []
@@ -426,7 +459,7 @@ def _compact_action_args(action_name: str, args: dict) -> dict:
         for job in jobs:
             if isinstance(job, dict):
                 fields.extend(job.keys())
-    fields.extend(k for k in data.keys() if k != "공고목록")
+    fields.extend(k for k in data.keys() if k not in JOB_LIST_KEYS)
     return {
         "incoming_jobs": len(jobs) if isinstance(jobs, list) else 0,
         "fields": sorted({str(field) for field in fields}),
@@ -1346,6 +1379,21 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     action_name, args, current_jd, current_plan, current_plan_step, current_url=current_url
                 )
                 action_changed_screen = False
+                if (
+                    action_name == "update_extracted_info"
+                    and result.get("status") == "success"
+                    and _auto_finish_on_target_enabled()
+                ):
+                    target_count = _target_count_from_state(state)
+                    collected_count = _extracted_job_count(current_jd)
+                    if target_count > 0 and collected_count >= target_count:
+                        is_finished = True
+                        collected_data.append(
+                            f"Auto-finished after collecting target_count={target_count} jobs."
+                        )
+                        result["auto_finished"] = True
+                        result["target_count"] = target_count
+                        result["collected_count"] = collected_count
 
             elif action_name == "finish_task":
                 action_tools = _get_action_tools()

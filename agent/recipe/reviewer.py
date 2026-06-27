@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from agent.recipe.state_key import site_of
+from agent.utils.job_fields import deterministic_report_item
 from shared.schema.feedback_schema import CommanderReview, SubmissionIssue, WorkerSubmission
 
 
@@ -48,20 +49,12 @@ def _job_items(extracted_jd: Any) -> list[dict[str, Any]]:
 
 
 def _empty_report_summary(jobs: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    return [
-        {
-            "company": "",
-            "position": "",
-            "url": "",
-            "field_count": len(job.keys()),
-        }
-        for job in jobs[:limit]
-    ]
+    return [deterministic_report_item(job) for job in jobs[:limit]]
 
 
 def _report_summary_mode() -> str:
-    mode = os.getenv("VISION_WORKER_SUMMARY_MODE", "llm").strip().lower()
-    return mode if mode in {"llm", "off"} else "llm"
+    mode = os.getenv("VISION_WORKER_SUMMARY_MODE", "deterministic").strip().lower()
+    return mode if mode in {"deterministic", "llm", "off"} else "deterministic"
 
 
 def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
@@ -112,7 +105,8 @@ def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[s
 def _report_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> tuple[list[dict[str, Any]], str, str]:
     if not jobs:
         return [], "none", ""
-    if _report_summary_mode() == "off":
+    mode = _report_summary_mode()
+    if mode in {"deterministic", "off"}:
         return _empty_report_summary(jobs, limit), "disabled", ""
     try:
         return _llm_job_summary(jobs, limit=limit), "llm", ""

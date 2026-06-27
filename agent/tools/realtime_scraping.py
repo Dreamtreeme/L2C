@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -84,8 +85,46 @@ def _dump_model(model) -> dict[str, Any]:
 
 
 def _search_intent_mode() -> str:
-    mode = os.getenv("VISION_SEARCH_INTENT_MODE", "llm").strip().lower()
-    return mode if mode in {"llm", "off"} else "llm"
+    mode = os.getenv("VISION_SEARCH_INTENT_MODE", "heuristic").strip().lower()
+    return mode if mode in {"heuristic", "llm", "off"} else "heuristic"
+
+
+def _strip_site_terms(text: str, profile: dict) -> str:
+    cleaned = text
+    for term in _profile_site_terms(profile):
+        if not term:
+            continue
+        cleaned = re.sub(re.escape(term), " ", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def _heuristic_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
+    """간단한 한국어 명령문에서 검색어와 목표 개수를 코드로 추출합니다."""
+    original = str(raw_query or "").strip()
+    target_count = 0
+    count_match = re.search(r"(\d+)\s*(?:개|건|명|개의|건의)", original)
+    if count_match:
+        try:
+            target_count = max(0, int(count_match.group(1)))
+        except ValueError:
+            target_count = 0
+
+    keyword = _strip_site_terms(original, profile)
+    keyword = re.sub(r"\d+\s*(?:개|건|명|개의|건의)\s*(?:까지|만|정도)?", " ", keyword)
+    keyword = re.sub(
+        r"(?:채용\s*공고|채용공고|공고|포지션|직무|목록|트렌드|트랜드|분석|수집|검색|찾아줘|찾아|알려줘|보여줘|에서|에서만|부터)",
+        " ",
+        keyword,
+        flags=re.IGNORECASE,
+    )
+    keyword = re.sub(r"\s+", " ", keyword).strip(" .,:;!?")
+    if not keyword:
+        keyword = original
+
+    intent = _dump_model(SearchIntent(search_keyword=keyword, target_count=target_count))
+    intent["source"] = "heuristic"
+    intent["error"] = ""
+    return intent
 
 
 def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
@@ -94,7 +133,11 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
     if not original:
         return _dump_model(SearchIntent())
 
-    if _search_intent_mode() == "off":
+    mode = _search_intent_mode()
+    if mode == "heuristic":
+        return _heuristic_search_intent(original, profile)
+
+    if mode == "off":
         intent = _dump_model(SearchIntent(search_keyword=original))
         intent["source"] = "disabled"
         intent["error"] = ""
@@ -396,13 +439,18 @@ def limit_report_requires_more_collection(report: dict) -> bool:
 
 
 def _jd_normalization_mode() -> str:
-    mode = os.getenv("VISION_JD_NORMALIZATION_MODE", "llm").strip().lower()
-    return mode if mode in {"llm", "off"} else "llm"
+    mode = os.getenv("VISION_JD_NORMALIZATION_MODE", "deterministic").strip().lower()
+    return mode if mode in {"deterministic", "llm", "off"} else "deterministic"
 
 
 def _normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dict[str, Any]:
-    if _jd_normalization_mode() == "off":
+    mode = _jd_normalization_mode()
+    if mode == "off":
         return dict(job)
+    if mode == "deterministic":
+        from agent.utils.job_fields import deterministic_job_for_persistence
+
+        return deterministic_job_for_persistence(job)
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -442,6 +490,16 @@ def _normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> di
         fallback["_normalization_source"] = "llm_failed"
         fallback["_normalization_error"] = str(exc)[:200]
         return fallback
+
+
+JOB_LIST_KEYS = ("\uacf5\uace0\ubaa9\ub85d", "jobs", "job_list")
+
+
+def _job_list_value(data: dict) -> Any:
+    for key in JOB_LIST_KEYS:
+        if key in data:
+            return data.get(key)
+    return None
 
 
 def _append_review_feedback(goal: str, review_feedback: str | None) -> str:
@@ -828,8 +886,8 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> int:
     db = Database(DB_PATH)
 
     # 공고 목록 추출 (리스트 or 단건)
-    if "공고목록" in extracted_jd:
-        job_list = extracted_jd["공고목록"]
+    job_list = _job_list_value(extracted_jd)
+    if job_list is not None:
         if not isinstance(job_list, list):
             job_list = [job_list]
     else:
