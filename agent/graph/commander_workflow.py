@@ -16,6 +16,7 @@ from agent.tools.realtime_scraping import (
     run_worker_once,
 )
 from agent.tools.sqlite_query import sqlite_query
+from agent.tools.task_triage import research_public_web, triage_user_task
 from agent.utils.logger import logger
 
 
@@ -63,6 +64,93 @@ def commander_plan_node(state: CommanderState) -> dict:
     }
 
 
+def task_triage_node(state: CommanderState) -> dict:
+    triage = triage_user_task(state.get("user_query", ""))
+    payload = triage.model_dump() if hasattr(triage, "model_dump") else dict(triage)
+    logger.info("[commander_graph] task triage: %s", payload)
+    return {
+        "task_triage": payload,
+        "task_context": {
+            "triage": payload,
+            "allowed_actions": ["read", "navigate", "search"],
+            "blocked_actions": _blocked_actions_for_triage(payload),
+        },
+        "pending_human_approval": False,
+        "human_approval_reason": "",
+        "human_approval_request": {},
+    }
+
+
+def research_node(state: CommanderState) -> dict:
+    triage = dict(state.get("task_triage") or {})
+    report = research_public_web(state.get("user_query", ""), triage)
+    report_payload = report.model_dump() if hasattr(report, "model_dump") else dict(report)
+    context = dict(state.get("task_context") or {})
+    context["research_report"] = report_payload
+    logger.info("[commander_graph] public research status=%s", report_payload.get("status"))
+    return {
+        "research_report": report_payload,
+        "task_context": context,
+    }
+
+
+def _blocked_actions_for_triage(triage: dict[str, Any]) -> list[str]:
+    blocked = ["submit", "agree", "pay", "transfer", "apply", "enter_password", "enter_personal_data"]
+    if triage.get("risk_level") == "sensitive" or triage.get("sensitive_steps"):
+        blocked.extend(str(step) for step in triage.get("sensitive_steps") or [])
+    return list(dict.fromkeys(blocked))
+
+
+def _task_needs_human_gate(state: CommanderState) -> bool:
+    triage = dict(state.get("task_triage") or {})
+    report = dict(state.get("research_report") or {})
+    if triage.get("goal_type") == "job_collection" and not triage.get("requires_research"):
+        return False
+    if triage.get("risk_level") == "sensitive":
+        return True
+    if report.get("needs_user_confirmation") or report.get("needs_user_choice"):
+        return True
+    if triage.get("requires_research") and report.get("status") != "completed":
+        return True
+    return triage.get("known_or_unknown") == "unknown" and triage.get("goal_type") != "job_collection"
+
+
+def route_after_research(state: CommanderState) -> str:
+    return "human_gate" if _task_needs_human_gate(state) else "plan_sites"
+
+
+def human_gate_node(state: CommanderState) -> dict:
+    triage = dict(state.get("task_triage") or {})
+    report = dict(state.get("research_report") or {})
+    options = report.get("official_paths") or report.get("possible_sites") or []
+    request = {
+        "status": "needs_task_approval",
+        "reason": _human_gate_reason(triage, report),
+        "triage": triage,
+        "research_report": report,
+        "options": options[:8] if isinstance(options, list) else [],
+        "blocked_actions": _blocked_actions_for_triage(triage),
+        "question": "Choose an official route and confirm before login, personal data, agreement, application, payment, or other sensitive steps.",
+    }
+    return {
+        "pending_human_approval": True,
+        "human_approval_reason": request["reason"],
+        "human_approval_request": request,
+        "intermediate_report": request,
+        "done": True,
+    }
+
+
+def _human_gate_reason(triage: dict[str, Any], report: dict[str, Any]) -> str:
+    if triage.get("risk_level") == "sensitive":
+        return "sensitive_task_requires_human_confirmation"
+    if report.get("needs_user_choice"):
+        return "multiple_public_routes_require_user_choice"
+    if report.get("status") == "failed":
+        return "public_research_failed_before_execution"
+    return "unknown_task_requires_user_confirmation"
+
+
 def select_site_node(state: CommanderState) -> dict:
     site_queue = list(state.get("site_queue", []) or [])
     index = int(state.get("current_site_index", 0) or 0)
@@ -93,6 +181,7 @@ def run_worker_node(state: CommanderState) -> dict:
             review_feedback=state.get("review_feedback") or None,
             review_attempt=int(state.get("review_attempt", 0) or 0),
             run_id=state.get("current_run_id") or None,
+            task_context=dict(state.get("task_context") or {}),
         )
     finally:
         _close_browser_after_run()
@@ -240,6 +329,33 @@ def query_db_node(state: CommanderState) -> dict:
 def summarize_node(state: CommanderState) -> dict:
     if state.get("pending_human_approval"):
         report = dict(state.get("intermediate_report") or {})
+        if report.get("status") == "needs_task_approval":
+            options = report.get("options") or []
+            option_lines = []
+            for idx, option in enumerate(options[:8], start=1):
+                if not isinstance(option, dict):
+                    continue
+                title = option.get("title") or option.get("domain") or "(untitled)"
+                url = option.get("url") or ""
+                option_lines.append(f"{idx}. {title} {url}".strip())
+            if not option_lines:
+                option_lines.append("none")
+            triage = report.get("triage") if isinstance(report.get("triage"), dict) else {}
+            sensitive = triage.get("sensitive_steps") or report.get("blocked_actions") or []
+            answer = (
+                "Human confirmation required before autonomous execution.\n"
+                f"Reason: {report.get('reason', '')}\n"
+                f"Goal type: {triage.get('goal_type', '')}\n"
+                f"Risk level: {triage.get('risk_level', '')}\n"
+                f"Research status: {(report.get('research_report') or {}).get('status', '')}\n\n"
+                "Candidate public routes:\n"
+                + "\n".join(option_lines)
+                + "\n\nSensitive or blocked steps:\n"
+                + "\n".join(f"- {item}" for item in sensitive[:12])
+                + "\n\nPlease choose the route/site and explicitly confirm before any login, personal data, agreement, application, payment, account, finance, or legal-effect step."
+            )
+            return {"final_answer": answer, "done": True}
+
         jobs = report.get("jobs") or []
         job_lines = []
         for idx, job in enumerate(jobs[:8], start=1):
@@ -283,6 +399,9 @@ def summarize_node(state: CommanderState) -> dict:
 
 def build_commander_graph():
     workflow = StateGraph(CommanderState)
+    workflow.add_node("task_triage", task_triage_node)
+    workflow.add_node("research", research_node)
+    workflow.add_node("human_gate", human_gate_node)
     workflow.add_node("plan_sites", commander_plan_node)
     workflow.add_node("select_site", select_site_node)
     workflow.add_node("run_worker", run_worker_node)
@@ -293,7 +412,14 @@ def build_commander_graph():
     workflow.add_node("query_db", query_db_node)
     workflow.add_node("summarize", summarize_node)
 
-    workflow.add_edge(START, "plan_sites")
+    workflow.add_edge(START, "task_triage")
+    workflow.add_edge("task_triage", "research")
+    workflow.add_conditional_edges(
+        "research",
+        route_after_research,
+        {"human_gate": "human_gate", "plan_sites": "plan_sites"},
+    )
+    workflow.add_edge("human_gate", "summarize")
     workflow.add_edge("plan_sites", "select_site")
     workflow.add_conditional_edges(
         "select_site",
@@ -328,6 +454,11 @@ def run_commander_graph(query: str, site_queue: list[str] | None = None) -> dict
         "accepted_sites": [],
         "failed_sites": [],
         "pending_human_approval": False,
+        "human_approval_reason": "",
+        "human_approval_request": {},
         "intermediate_report": {},
+        "task_triage": {},
+        "research_report": {},
+        "task_context": {},
     }
     return build_commander_graph().invoke(initial)

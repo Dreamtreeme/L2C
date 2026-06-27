@@ -167,7 +167,55 @@ def _build_direct_search_url(search_keyword: str, profile: dict) -> str:
     return template.format(query=encoded, keyword=encoded, raw_query=search_keyword)
 
 
-def _build_site_goal(search_keyword: str, profile: dict, direct_search_url: str = "", target_count: int = 0) -> str:
+def _compact_research_for_goal(research: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(research, dict):
+        return {}
+    out: dict[str, Any] = {
+        "status": research.get("status", ""),
+        "query": research.get("query", ""),
+        "meaning": research.get("meaning", ""),
+        "requirements": research.get("requirements", []),
+        "sensitive_steps": research.get("sensitive_steps", []),
+    }
+    paths = research.get("official_paths") or research.get("possible_sites") or []
+    if isinstance(paths, list):
+        out["routes"] = [
+            {
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "domain": item.get("domain", ""),
+            }
+            for item in paths[:5]
+            if isinstance(item, dict)
+        ]
+    return out
+
+
+def _task_context_section(task_context: dict[str, Any] | None) -> str:
+    if not isinstance(task_context, dict) or not task_context:
+        return ""
+    triage = task_context.get("triage") if isinstance(task_context.get("triage"), dict) else {}
+    research = task_context.get("research_report") if isinstance(task_context.get("research_report"), dict) else {}
+    allowed = task_context.get("allowed_actions") or []
+    blocked = task_context.get("blocked_actions") or []
+    return (
+        "[Task triage and safety context]\n"
+        f"triage={json.dumps(triage, ensure_ascii=False)}\n"
+        f"research_summary={json.dumps(_compact_research_for_goal(research), ensure_ascii=False)}\n"
+        f"allowed_actions={json.dumps(allowed, ensure_ascii=False)}\n"
+        f"blocked_actions={json.dumps(blocked, ensure_ascii=False)}\n"
+        "Proceed automatically only for read, navigation, search, and public information collection. "
+        "Before login, personal data, authentication, agreement, application, payment, account, finance, or legal-effect steps, stop and request human confirmation.\n\n"
+    )
+
+
+def _build_site_goal(
+    search_keyword: str,
+    profile: dict,
+    direct_search_url: str = "",
+    target_count: int = 0,
+    task_context: dict[str, Any] | None = None,
+) -> str:
     entry = profile["entry"]
     manual = profile["manual"]
     tools = profile["tools"]
@@ -209,6 +257,7 @@ def _build_site_goal(search_keyword: str, profile: dict, direct_search_url: str 
             f"Collect up to {int(target_count)} distinct job postings for this request. "
             "When that many valid detail pages have been collected and submitted, finish instead of opening more cards.\n\n"
         )
+    task_context_section = _task_context_section(task_context)
 
     return (
         f"{site_name}({base_url})에서 '{search_keyword}' 채용공고를 검색하고 수집하세요. "
@@ -218,6 +267,7 @@ def _build_site_goal(search_keyword: str, profile: dict, direct_search_url: str 
         f"{navigation_section}"
         f"{direct_search_section}"
         f"{target_section}"
+        f"{task_context_section}"
         f"[사이트 공통 흐름]\n{common_flow}\n\n"
         f"[안정적인 UI/Reflex 후보]\n{stable_controls}\n\n"
         f"[목표나 실행 시점에 따라 달라지는 UI]\n{variable_entities}\n\n"
@@ -502,6 +552,9 @@ def _initial_worker_state(goal: str) -> dict:
         "transition_source": "",
         "transition_observations": [],
         "detail_auto_scroll_count": 0,
+        "detail_page_observations": [],
+        "pending_human_approval": False,
+        "human_approval_request": {},
     }
 
 
@@ -511,6 +564,7 @@ def run_worker_once(
     review_feedback: str | None = None,
     review_attempt: int = 0,
     run_id: str | None = None,
+    task_context: dict[str, Any] | None = None,
 ) -> dict:
     """Run one child vision worker attempt and return an unreviewed submission payload."""
     from agent.graph.workflow import build_graph
@@ -528,7 +582,13 @@ def run_worker_once(
     target_count = int(search_intent.get("target_count") or 0)
     direct_search_url = _build_direct_search_url(search_keyword, site_profile)
     goal = _append_review_feedback(
-        _build_site_goal(search_keyword, site_profile, direct_search_url, target_count=target_count),
+        _build_site_goal(
+            search_keyword,
+            site_profile,
+            direct_search_url,
+            target_count=target_count,
+            task_context=task_context,
+        ),
         review_feedback,
     )
     initial_state = _initial_worker_state(goal)
@@ -574,6 +634,7 @@ def run_worker_once(
         "raw_keyword": raw_search_keyword,
         "target_count": target_count,
         "search_intent": search_intent,
+        "task_context": task_context or {},
         "run_status": run_status,
         "hit_recursion_limit": hit_recursion_limit,
         "is_finished": is_finished,

@@ -507,6 +507,20 @@ def test_update_extracted_info_auto_scrolls_when_detail_incomplete(monkeypatch):
 
     monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
     monkeypatch.delenv("VISION_DETAIL_PAGE_POLICY_ENABLED", raising=False)
+    monkeypatch.setenv("VISION_DETAIL_BATCH_SCROLLS", "1")
+    monkeypatch.setattr(
+        nodes,
+        "perception_node",
+        lambda _state: {
+            "current_markers": [{"id": 10, "text": "More detail text", "bbox": [0, 0, 100, 20]}],
+            "ui_context": "[id: 10] More detail text",
+            "marked_image": "marked.png",
+            "recent_images": ["screen.png"],
+            "current_url": "https://www.wanted.co.kr/wd/12345",
+            "current_url_stale": False,
+            "step_durations": [{"node": "perception", "duration": 0.01}],
+        },
+    )
 
     result = nodes.action_node({
         "current_markers": [],
@@ -550,11 +564,14 @@ def test_update_extracted_info_auto_scrolls_when_detail_incomplete(monkeypatch):
     })
 
     assert [action["action"] for action in result["action_history"]] == ["update_extracted_info", "scroll"]
-    assert result["action_history"][0]["detail_policy"] == "auto_scroll"
+    assert result["action_history"][0]["detail_policy"] == "batch_observe"
     assert result["action_history"][1]["policy_action"] is True
-    assert result["last_action_screen_changed"] is True
-    assert result["pending_transition"]["source"] == "page_policy"
+    assert result["action_history"][1]["detail_batch"] is True
+    assert result["last_action_screen_changed"] is False
+    assert result["pending_transition"] == {}
     assert result["detail_auto_scroll_count"] == 1
+    assert result["detail_page_observations"][0]["new_texts"] == ["More detail text"]
+    assert result["current_markers"][0]["text"] == "More detail text"
     assert calls[0][0] == "scroll"
 
 
@@ -621,6 +638,52 @@ def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targ
     assert result["current_url_stale"] is True
     assert result["detail_auto_scroll_count"] == 0
     assert calls[0][0] == "go_back"
+
+
+def test_action_node_blocks_sensitive_ui_action_before_dispatch(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fail_dispatch(*args, **kwargs):
+        raise AssertionError("sensitive action must not be dispatched")
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fail_dispatch)
+
+    result = nodes.action_node({
+        "current_markers": [{"id": 7, "text": "가입 신청", "bbox": [0, 0, 100, 20]}],
+        "current_url": "https://bank.example/product",
+        "current_url_stale": False,
+        "reflex_state_key": "state-sensitive",
+        "recipe_params": {},
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "detail_auto_scroll_count": 0,
+        "detail_page_observations": [],
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "click_marker",
+                    "args": {
+                        "marker_id": 7,
+                        "target_label": "가입 신청",
+                        "risk_level": "sensitive",
+                        "needs_user_confirmation": True,
+                    },
+                    "id": "1",
+                }
+            ],
+        ),
+    })
+
+    assert result["pending_human_approval"] is True
+    assert result["human_approval_request"]["action"] == "click_marker"
+    assert result["action_history"][0]["status"] == "skipped"
+    assert result["action_history"][0]["reason"] == "tool_args_requested_user_confirmation"
 
 
 def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):

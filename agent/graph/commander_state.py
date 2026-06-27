@@ -19,11 +19,16 @@ class CommanderState(TypedDict, total=False):
     current_submission: Dict[str, Any]
     current_review: Dict[str, Any]
     current_submission_id: str
+    task_triage: Dict[str, Any]
+    research_report: Dict[str, Any]
+    task_context: Dict[str, Any]
     worker_submissions: Annotated[List[Dict[str, Any]], operator.add]
     reviews: Annotated[List[Dict[str, Any]], operator.add]
     accepted_sites: Annotated[List[str], operator.add]
     failed_sites: Annotated[List[Dict[str, Any]], operator.add]
     pending_human_approval: bool
+    human_approval_reason: str
+    human_approval_request: Dict[str, Any]
     intermediate_report: Dict[str, Any]
     db_results: str
     final_answer: str

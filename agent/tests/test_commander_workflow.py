@@ -89,8 +89,8 @@ def test_commander_graph_retries_revised_worker(monkeypatch):
 
     calls = []
 
-    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None):
-        calls.append({"query": query, "site": site, "feedback": review_feedback, "attempt": review_attempt, "run_id": run_id})
+    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None, task_context=None):
+        calls.append({"query": query, "site": site, "feedback": review_feedback, "attempt": review_attempt, "run_id": run_id, "task_context": task_context})
         return _worker_result(site=site, attempt=review_attempt, count=0 if review_attempt == 0 else 1)
 
     def fake_commit_worker_review(submission, source=""):
@@ -124,16 +124,54 @@ def test_commander_graph_retries_revised_worker(monkeypatch):
     result = cw.run_commander_graph("AI engineer trend", site_queue=["wanted"])
 
     assert [call["attempt"] for call in calls] == [0, 1]
+    assert calls[0]["task_context"]["triage"]["goal_type"] == "job_collection"
     assert calls[1]["feedback"] and "collect at least one" in calls[1]["feedback"]
     assert result["accepted_sites"] == ["wanted"]
     assert result.get("failed_sites", []) == []
     assert "accepted_sites=1" in result["final_answer"]
 
 
+def test_commander_graph_stops_unknown_sensitive_task_for_human_gate(monkeypatch):
+    import agent.graph.commander_workflow as cw
+
+    calls = []
+
+    def fake_run_worker_once(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("worker must not run before human confirmation")
+
+    monkeypatch.setattr(cw, "run_worker_once", fake_run_worker_once)
+    monkeypatch.setattr(
+        cw,
+        "research_public_web",
+        lambda query, triage: {
+            "status": "completed",
+            "query": query,
+            "possible_sites": [
+                {"title": "A Bank official", "url": "https://bank.example/future", "domain": "bank.example"}
+            ],
+            "official_paths": [
+                {"title": "A Bank official", "url": "https://bank.example/future", "domain": "bank.example"}
+            ],
+            "requirements": ["login required"],
+            "sensitive_steps": ["login", "agreement", "application"],
+            "needs_user_choice": False,
+            "needs_user_confirmation": True,
+        },
+    )
+
+    result = cw.run_commander_graph("미래적금 신청하기")
+
+    assert calls == []
+    assert result["pending_human_approval"] is True
+    assert result["human_approval_reason"] == "sensitive_task_requires_human_confirmation"
+    assert "Human confirmation required" in result["final_answer"]
+
+
 def test_commander_graph_marks_failed_when_retry_budget_exhausted(monkeypatch):
     import agent.graph.commander_workflow as cw
 
-    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None):
+    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None, task_context=None):
         return _worker_result(site=site, attempt=review_attempt, count=0)
 
     def fake_commit_worker_review(submission, source=""):
@@ -175,7 +213,7 @@ def test_commander_graph_reports_before_raising_recursion_limit(monkeypatch):
 
     calls = []
 
-    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None):
+    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None, task_context=None):
         calls.append(site)
         return _worker_result(
             site=site,
@@ -224,7 +262,7 @@ def test_commander_graph_does_not_request_more_limit_after_collection_target(mon
 
     calls = []
 
-    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None):
+    def fake_run_worker_once(query, site=None, review_feedback=None, review_attempt=0, run_id=None, task_context=None):
         calls.append(site)
         return _worker_result(
             site=site,

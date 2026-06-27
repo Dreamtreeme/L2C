@@ -52,6 +52,26 @@ def test_realtime_scraping_goal_uses_requested_site_profile():
     assert "AI 엔지니어" in goal
     assert "원티드(" not in goal
 
+def test_realtime_scraping_goal_includes_task_context():
+    from agent.sites import load_site_profile
+    from agent.tools.realtime_scraping import _build_site_goal
+
+    goal = _build_site_goal(
+        "AI engineer",
+        load_site_profile("wanted"),
+        task_context={
+            "triage": {"goal_type": "job_collection", "risk_level": "safe_navigation"},
+            "research_report": {"status": "skipped"},
+            "allowed_actions": ["read", "navigate", "search"],
+            "blocked_actions": ["submit", "agree"],
+        },
+    )
+
+    assert "[Task triage and safety context]" in goal
+    assert '"goal_type": "job_collection"' in goal
+    assert "blocked_actions" in goal
+
+
 def test_commander_site_tools_expose_classic_sites():
     import json
     from agent.tools.site_registry import list_collection_sites

@@ -11,6 +11,9 @@ def should_continue(state: GraphState) -> str:
     if state.get("is_finished", False):
         logger.info("Task marked as finished. Ending workflow.")
         return "end"
+    if state.get("pending_human_approval", False):
+        logger.info("Human approval required. Ending worker loop.")
+        return "end"
         
     if state.get("error_count", 0) >= 3:
         logger.error("Too many errors. Forcing workflow to end.")

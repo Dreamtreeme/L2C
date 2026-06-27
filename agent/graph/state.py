@@ -90,3 +90,10 @@ class GraphState(TypedDict):
 
     # [Page Policy] 상세페이지 자동 스크롤 반복 횟수
     detail_auto_scroll_count: int
+
+    # [Page Policy] OCR observations accumulated inside a detail page before the next reasoning call
+    detail_page_observations: List[Dict[str, Any]]
+
+    # [HITL] Stop autonomous execution before sensitive or irreversible steps
+    pending_human_approval: bool
+    human_approval_request: Dict[str, Any]
