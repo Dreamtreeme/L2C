@@ -513,6 +513,7 @@ def test_reflex_routing_respects_flag_and_validation(monkeypatch):
     assert route_after_perception({}) == "reflex"
     assert route_after_perception({"transition_status": "pending"}) == "perception"
     assert route_after_perception({"transition_status": "unknown", "transition_source": "reflex"}) == "reasoning"
+    assert route_after_perception({"transition_status": "unknown", "transition_source": "page_policy"}) == "reasoning"
     assert route_after_perception({"transition_status": "unknown", "transition_source": "autonomous"}) == "reflex"
     assert route_after_perception({"transition_status": "ready"}) == "reflex"
 

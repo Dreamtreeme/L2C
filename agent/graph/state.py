@@ -87,3 +87,6 @@ class GraphState(TypedDict):
 
     # [Transition Contract] 행동 뒤 관찰된 OCR 화면 기록
     transition_observations: Annotated[List[Dict[str, Any]], operator.add]
+
+    # [Page Policy] 상세페이지 자동 스크롤 반복 횟수
+    detail_auto_scroll_count: int

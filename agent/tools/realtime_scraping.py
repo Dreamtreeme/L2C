@@ -501,6 +501,7 @@ def _initial_worker_state(goal: str) -> dict:
         "transition_outcome": "",
         "transition_source": "",
         "transition_observations": [],
+        "detail_auto_scroll_count": 0,
     }
 
 

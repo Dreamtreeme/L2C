@@ -68,6 +68,8 @@ class close_browser(BaseModel):
 class update_extracted_info(BaseModel):
     """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 병합합니다. 변경된 공고 또는 새 필드만 보내도 됩니다. (예: {'공고목록': [{'회사명': '로이드케이', '직무명': '...', '주요업무': ['A']}]} 형태의 JSON 문자열)"""
     data_json: str = Field(..., description="업데이트할 정보 키-값 딕셔너리의 JSON 문자열")
+    page_role: Optional[str] = Field(None, description="현재 정보를 읽은 페이지 역할(page_role). 상세 공고면 job_detail.")
+    detail_complete: Optional[bool] = Field(None, description="상세 공고 본문 정보가 충분히 수집되었는지 여부(detail_complete).")
 
 class go_back(BaseModel):
     """브라우저의 뒤로가기(이전 페이지 이동) 기능을 실행합니다."""
@@ -442,6 +444,23 @@ def _target_count_from_state(state: GraphState) -> int:
 def _auto_finish_on_target_enabled() -> bool:
     raw = os.getenv("VISION_AUTO_FINISH_ON_TARGET", "1")
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _detail_page_policy_enabled() -> bool:
+    raw = os.getenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _detail_auto_scroll_max() -> int:
+    try:
+        return max(0, int(os.getenv("VISION_DETAIL_AUTO_SCROLL_MAX", "4")))
+    except ValueError:
+        return 4
+
+
+def _is_detail_update(args: dict[str, Any]) -> bool:
+    role = str(args.get("page_role") or "").strip().lower()
+    return role in {"job_detail", "detail", "posting_detail"}
 
 
 def _compact_action_args(action_name: str, args: dict) -> dict:
@@ -1170,6 +1189,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     current_plan      = list(state.get("plan", []))
     current_url       = state.get("current_url", "")
     current_url_stale = state.get("current_url_stale", True)
+    detail_auto_scroll_count = int(state.get("detail_auto_scroll_count", 0) or 0)
     screen_changed    = False
     chain_boundary    = False
     previous_ui_action: str | None = None
@@ -1284,6 +1304,44 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
         logger.warning(message, action=action_name, reason=reason)
 
+    def append_policy_ui_action(action_name: str, args: dict, reason: str) -> dict:
+        nonlocal current_url_stale, screen_changed, pending_transition
+        step_start = time.time()
+        before_snapshot = _state_snapshot_for_action(state, current_url)
+        action_seq = next_action_seq()
+        result = _dispatch_ui(action_name, args, get_bbox)
+        action_changed_screen = action_name in SCREEN_CHANGING_ACTIONS
+        current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
+        screen_changed = screen_changed or action_changed_screen
+        if action_changed_screen:
+            set_pending_transition(action_seq, action_name, args, None, "page_policy")
+        enriched = enrich_result(result, action_name, args, before_snapshot, action_changed_screen)
+        enriched["policy_action"] = True
+        enriched["policy_reason"] = reason
+        new_actions.append(enriched)
+        if record_action_episode:
+            record_action_episode(
+                feedback_episodes,
+                state,
+                ai_msg,
+                action_name,
+                args,
+                enriched,
+                before_snapshot,
+                {
+                    "current_url": current_url,
+                    "current_url_stale": current_url_stale,
+                    "screen_changed": action_changed_screen,
+                    "extracted_jd": current_jd,
+                    "is_finished": is_finished,
+                },
+                action_seq,
+            )
+        step_elapsed = time.time() - step_start
+        step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
+        logger.info("Page policy action executed", action=action_name, reason=reason, duration=f"{step_elapsed:.2f}s")
+        return enriched
+
     # 도구 카테고리 라우팅 테이블
     UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
     SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
@@ -1304,6 +1362,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         before_snapshot = _state_snapshot_for_action(state, current_url)
         before_state_key = before_snapshot.get("state_key", "")
         action_seq = next_action_seq()
+        policy_ui_action: tuple[str, dict, str] | None = None
 
         try:
             if chain_boundary and action_name in UI_ACTIONS:
@@ -1382,7 +1441,46 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 if (
                     action_name == "update_extracted_info"
                     and result.get("status") == "success"
+                    and _detail_page_policy_enabled()
+                    and _is_detail_update(args)
+                ):
+                    target_count = _target_count_from_state(state)
+                    collected_count = _extracted_job_count(current_jd)
+                    detail_complete = args.get("detail_complete")
+                    if detail_complete is False:
+                        if detail_auto_scroll_count < _detail_auto_scroll_max():
+                            detail_auto_scroll_count += 1
+                            result["detail_policy"] = "auto_scroll"
+                            result["detail_auto_scroll_count"] = detail_auto_scroll_count
+                            policy_ui_action = (
+                                "scroll",
+                                {
+                                    "direction": "down",
+                                    "reason": "detail page policy continues reading until detail_complete=true",
+                                    "expected_after": "next detail content section is visible",
+                                },
+                                "detail_incomplete",
+                            )
+                        else:
+                            result["detail_policy"] = "max_scroll_reached"
+                            result["detail_auto_scroll_count"] = detail_auto_scroll_count
+                    elif detail_complete is True:
+                        detail_auto_scroll_count = 0
+                        result["detail_policy"] = "detail_complete"
+                        if target_count > 0 and collected_count < target_count:
+                            policy_ui_action = (
+                                "go_back",
+                                {
+                                    "reason": "detail page complete and more result cards remain",
+                                    "expected_after": "job result list is visible",
+                                },
+                                "detail_complete_more_items",
+                            )
+                if (
+                    action_name == "update_extracted_info"
+                    and result.get("status") == "success"
                     and _auto_finish_on_target_enabled()
+                    and args.get("detail_complete") is not False
                 ):
                     target_count = _target_count_from_state(state)
                     collected_count = _extracted_job_count(current_jd)
@@ -1429,6 +1527,11 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             step_elapsed = time.time() - step_start
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
             logger.info(f"Action Node [{action_name}] completed in {step_elapsed:.2f} seconds")
+
+            if policy_ui_action and not is_finished:
+                policy_action, policy_args, policy_reason = policy_ui_action
+                append_policy_ui_action(policy_action, policy_args, policy_reason)
+                break
 
             if is_finished:
                 break
@@ -1486,6 +1589,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "transition_source": "",
         "recorded_steps":    recorded_steps,
         "feedback_episodes": feedback_episodes,
+        "detail_auto_scroll_count": detail_auto_scroll_count,
     }
 
 

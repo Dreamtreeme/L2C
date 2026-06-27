@@ -493,6 +493,136 @@ def test_update_extracted_info_auto_finishes_when_target_count_reached(monkeypat
     assert len(result["extracted_jd"]["공고목록"]) == 1
 
 
+def test_update_extracted_info_auto_scrolls_when_detail_incomplete(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    calls = []
+
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        calls.append((action_name, args))
+        assert action_name == "scroll"
+        assert args["direction"] == "down"
+        return {"status": "success", "action": "scroll", "result": "ok"}
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+    monkeypatch.delenv("VISION_DETAIL_PAGE_POLICY_ENABLED", raising=False)
+
+    result = nodes.action_node({
+        "current_markers": [],
+        "current_url": "https://www.wanted.co.kr/wd/12345",
+        "current_url_stale": False,
+        "reflex_state_key": "state-detail",
+        "recipe_params": {"target_count": 2},
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "detail_auto_scroll_count": 0,
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "update_extracted_info",
+                    "args": {
+                        "page_role": "job_detail",
+                        "detail_complete": False,
+                        "data_json": json.dumps(
+                            {
+                                "공고목록": [
+                                    {
+                                        "company_name": "Acme",
+                                        "position": "iOS Engineer",
+                                        "url": "https://www.wanted.co.kr/wd/12345",
+                                        "main_tasks": ["Build app"],
+                                    }
+                                ]
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                    "id": "1",
+                }
+            ],
+        ),
+    })
+
+    assert [action["action"] for action in result["action_history"]] == ["update_extracted_info", "scroll"]
+    assert result["action_history"][0]["detail_policy"] == "auto_scroll"
+    assert result["action_history"][1]["policy_action"] is True
+    assert result["last_action_screen_changed"] is True
+    assert result["pending_transition"]["source"] == "page_policy"
+    assert result["detail_auto_scroll_count"] == 1
+    assert calls[0][0] == "scroll"
+
+
+def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targets(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    calls = []
+
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        calls.append((action_name, args))
+        assert action_name == "go_back"
+        return {"status": "success", "action": "go_back", "result": "ok"}
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+    monkeypatch.delenv("VISION_DETAIL_PAGE_POLICY_ENABLED", raising=False)
+
+    result = nodes.action_node({
+        "current_markers": [],
+        "current_url": "https://www.wanted.co.kr/wd/12345",
+        "current_url_stale": False,
+        "reflex_state_key": "state-detail",
+        "recipe_params": {"target_count": 2},
+        "extracted_jd": {},
+        "is_finished": False,
+        "collected_data": [],
+        "error_count": 0,
+        "current_plan_step": 0,
+        "plan": [],
+        "detail_auto_scroll_count": 2,
+        "last_action_result": AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "update_extracted_info",
+                    "args": {
+                        "page_role": "job_detail",
+                        "detail_complete": True,
+                        "data_json": json.dumps(
+                            {
+                                "공고목록": [
+                                    {
+                                        "company_name": "Acme",
+                                        "position": "iOS Engineer",
+                                        "url": "https://www.wanted.co.kr/wd/12345",
+                                        "main_tasks": ["Build app"],
+                                        "requirements": ["Swift"],
+                                    }
+                                ]
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                    "id": "1",
+                }
+            ],
+        ),
+    })
+
+    assert [action["action"] for action in result["action_history"]] == ["update_extracted_info", "go_back"]
+    assert result["action_history"][0]["detail_policy"] == "detail_complete"
+    assert result["action_history"][1]["policy_action"] is True
+    assert result["last_action_screen_changed"] is True
+    assert result["current_url_stale"] is True
+    assert result["detail_auto_scroll_count"] == 0
+    assert calls[0][0] == "go_back"
+
+
 def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
     from PIL import Image
     from agent.graph import nodes

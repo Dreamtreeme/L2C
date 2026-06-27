@@ -33,7 +33,7 @@ def route_after_perception(state: GraphState) -> str:
     if transition_status == "pending":
         logger.info("Transition still pending; observing the screen again.")
         return "perception"
-    if transition_status == "unknown" and state.get("transition_source") == "reflex":
+    if transition_status == "unknown" and state.get("transition_source") in {"reflex", "page_policy"}:
         logger.info(
             "Transition contract could not verify the screen; falling back to reasoning.",
             source=state.get("transition_source", ""),
