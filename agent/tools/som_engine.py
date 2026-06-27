@@ -1,5 +1,9 @@
 import os
+import json
 import site
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -19,38 +23,23 @@ class SomEngine:
         self.paddleocr_dir = self._resolve_paddleocr_base_dir()
         self.paddleocr_dir.mkdir(parents=True, exist_ok=True)
         os.environ["PADDLE_OCR_BASE_DIR"] = str(self.paddleocr_dir)
+        self._ocr_worker = None
 
         self.model_dir = self.root_dir / "models" / "omniparser"
         self.model_path = self.model_dir / "icon_detect" / "model.pt"
 
         self._ensure_model_downloaded()
 
-        try:
-            import torch
-        except ModuleNotFoundError as exc:
-            raise RuntimeError("Torch/Ultralytics dependencies are not installed. Run `pip install -r requirements.txt`.") from exc
-
         from ultralytics import YOLO
 
         logger.info("Loading local YOLOv8 OmniParser model", model_path=str(self.model_path))
         self.yolo_model = YOLO(str(self.model_path))
 
-        try:
-            from paddleocr import PaddleOCR
-        except ModuleNotFoundError as exc:
-            raise RuntimeError("PaddleOCR dependencies are not installed. Run `pip install -r requirements.txt`.") from exc
-
-        use_gpu = self._should_use_paddle_gpu(torch.cuda.is_available())
-        model_dirs = self._paddleocr_model_dirs()
-        logger.info("Loading PaddleOCR reader", gpu=use_gpu, cache_dir=str(self.paddleocr_dir), model_dirs=bool(model_dirs))
-        self.ocr_reader = PaddleOCR(
-            use_angle_cls=False,
-            lang=os.getenv("PADDLEOCR_LANG", "korean"),
-            use_gpu=use_gpu,
-            show_log=False,
-            **model_dirs,
-        )
+        logger.info("SomEngine will invoke PaddleOCR in an isolated worker", cache_dir=str(self.paddleocr_dir))
         logger.info("SomEngine initialization complete")
+
+    def __del__(self):
+        self._stop_ocr_worker()
 
     def _configure_runtime_paths(self) -> None:
         yolo_config_dir = Path(os.getenv("YOLO_CONFIG_DIR", self.root_dir / ".cache" / "ultralytics"))
@@ -78,6 +67,18 @@ class SomEngine:
                 [
                     nvidia_dir / "cudnn" / "bin",
                     nvidia_dir / "cublas" / "bin",
+                    nvidia_dir / "cuda_runtime" / "bin",
+                    nvidia_dir / "cuda_nvrtc" / "bin",
+                ]
+            )
+        user_site = site.getusersitepackages()
+        if user_site:
+            nvidia_dir = Path(user_site) / "nvidia"
+            paths.extend(
+                [
+                    nvidia_dir / "cudnn" / "bin",
+                    nvidia_dir / "cublas" / "bin",
+                    nvidia_dir / "cuda_runtime" / "bin",
                     nvidia_dir / "cuda_nvrtc" / "bin",
                 ]
             )
@@ -132,6 +133,98 @@ class SomEngine:
             return raw.strip().lower() not in {"0", "false", "no", "off"}
         return torch_cuda_available
 
+    def _ocr_worker_env(self) -> Dict[str, str]:
+        env = dict(os.environ)
+        env["PADDLE_OCR_BASE_DIR"] = str(self.paddleocr_dir)
+        return env
+
+    def _start_ocr_worker(self):
+        if self._ocr_worker and self._ocr_worker.poll() is None:
+            return self._ocr_worker
+
+        runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
+        logger.info("Starting isolated PaddleOCR worker", script=str(runner_script))
+        self._ocr_worker = subprocess.Popen(
+            [sys.executable, str(runner_script), "--worker"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            bufsize=1,
+            env=self._ocr_worker_env(),
+        )
+
+        assert self._ocr_worker.stdout is not None
+        while True:
+            line = self._ocr_worker.stdout.readline()
+            if line == "":
+                stderr = ""
+                if self._ocr_worker.stderr is not None:
+                    stderr = self._ocr_worker.stderr.read()
+                self._ocr_worker = None
+                raise RuntimeError(f"PaddleOCR worker exited during startup: {stderr.strip()}")
+            stripped = line.strip()
+            if stripped == "__OCR_WORKER_READY__":
+                return self._ocr_worker
+            if stripped.startswith("__OCR_WORKER_FAILED__"):
+                stderr = ""
+                if self._ocr_worker.stderr is not None:
+                    stderr = self._ocr_worker.stderr.read()
+                self._ocr_worker = None
+                raise RuntimeError(f"PaddleOCR worker failed during startup: {stderr.strip()}")
+
+    def _stop_ocr_worker(self) -> None:
+        worker = getattr(self, "_ocr_worker", None)
+        self._ocr_worker = None
+        if not worker:
+            return
+        try:
+            if worker.poll() is None:
+                worker.terminate()
+        except Exception:
+            pass
+
+    def _run_paddle_ocr_worker(self, image_path: Path) -> List[Dict[str, Any]]:
+        worker = self._start_ocr_worker()
+        if not worker.stdin or not worker.stdout:
+            raise RuntimeError("PaddleOCR worker pipes are unavailable")
+
+        request = json.dumps({"image_path": str(image_path)}, ensure_ascii=False)
+        worker.stdin.write(request + "\n")
+        worker.stdin.flush()
+
+        while True:
+            line = worker.stdout.readline()
+            if line == "":
+                self._stop_ocr_worker()
+                raise RuntimeError("PaddleOCR worker exited before returning a result")
+            stripped = line.strip()
+            if not stripped.startswith("__OCR_JSON_RESULT__"):
+                continue
+            payload = stripped.removeprefix("__OCR_JSON_RESULT__").strip()
+            return json.loads(payload) if payload else []
+
+    def _run_paddle_ocr_once(self, image_path: Path) -> List[Dict[str, Any]]:
+        runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
+        result = subprocess.run(
+            [sys.executable, str(runner_script), str(image_path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            env=self._ocr_worker_env(),
+            check=False,
+        )
+        marker = "__OCR_JSON_START__"
+        if marker not in result.stdout:
+            if result.stderr:
+                logger.warning("PaddleOCR one-shot runner produced stderr", stderr=result.stderr.strip())
+            return []
+        payload = result.stdout.split(marker, 1)[-1].strip()
+        return json.loads(payload) if payload else []
+
     def _ensure_model_downloaded(self) -> None:
         if self.model_path.exists():
             return
@@ -183,6 +276,23 @@ class SomEngine:
 
     def _normalize_paddleocr_results(self, ocr_results: List, scale: float = 1.0) -> List[Dict]:
         raw_boxes = []
+        if ocr_results and isinstance(ocr_results[0], dict):
+            for item in ocr_results:
+                confidence = float(item.get("confidence", item.get("conf", 0.0)))
+                if confidence < 0.2:
+                    continue
+                bbox = item["bbox"]
+                raw_boxes.append(
+                    {
+                        "bbox": [float(coord) / scale for coord in bbox],
+                        "type": "text",
+                        "text": str(item.get("text", "")),
+                        "conf": confidence,
+                    }
+                )
+            logger.debug("PaddleOCR text detection complete", count=len(raw_boxes))
+            return raw_boxes
+
         for line in self._iter_paddleocr_lines(ocr_results):
             bbox = line[0]
             text = line[1][0]
@@ -233,23 +343,34 @@ class SomEngine:
         )
 
     def _run_paddle_ocr(self, image: Image.Image | Path, scale: float = 1.0) -> List[Dict]:
-        import numpy as np
-
+        temp_path: Path | None = None
         if isinstance(image, Image.Image):
-            image_input = np.array(image.convert("RGB"))
+            fd, raw_temp = tempfile.mkstemp(suffix=".jpg")
+            os.close(fd)
+            temp_path = Path(raw_temp)
+            image.convert("RGB").save(temp_path, "JPEG", quality=90)
+            image_path = temp_path
         else:
-            image_input = str(image)
+            image_path = image
+
         try:
-            results = self.ocr_reader.ocr(image_input, cls=False)
-        except RuntimeError as exc:
-            if "cudnn64_8.dll" in str(exc):
-                raise RuntimeError(
-                    "PaddleOCR GPU inference could not load cudnn64_8.dll. "
-                    "The engine already adds .venv/site-packages/nvidia/*/bin and CUDA_PATH/bin to the DLL search path; "
-                    "verify that the cuDNN 8 runtime matching paddlepaddle-gpu is installed."
-                ) from exc
-            raise
-        return self._normalize_paddleocr_results(results, scale=scale)
+            use_worker = os.getenv("SOM_OCR_WORKER_REUSE", "true").strip().lower() not in {"0", "false", "no", "off"}
+            if use_worker:
+                try:
+                    results = self._run_paddle_ocr_worker(image_path)
+                except Exception as exc:
+                    logger.warning("PaddleOCR worker failed; falling back to one-shot runner", error=str(exc))
+                    self._stop_ocr_worker()
+                    results = self._run_paddle_ocr_once(image_path)
+            else:
+                results = self._run_paddle_ocr_once(image_path)
+            return self._normalize_paddleocr_results(results, scale=scale)
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def _run_yolo(self, inference_img: Image.Image, scale: float) -> List[Dict]:
         raw_boxes = []
