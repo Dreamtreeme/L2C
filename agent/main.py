@@ -36,6 +36,7 @@ def main():
         action_history=[],
         recent_images=[],
         marked_image="",
+        screen_signature={},
         error_count=0,
         is_finished=False,
         collected_data=[],
@@ -56,6 +57,8 @@ def main():
         transition_outcome="",
         transition_source="",
         transition_observations=[],
+        pending_human_approval=False,
+        human_approval_request={},
     )
     
     try:

@@ -686,6 +686,8 @@ def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
     assert fake_perception.url_reads == 0
     assert fresh_result["current_url"] == "https://www.wanted.co.kr/wd/cached"
     assert fresh_result["current_url_stale"] is False
+    assert fresh_result["screen_signature"]["size"] == [200, 200]
+    assert len(fresh_result["screen_signature"]["phash"]) == 16
 
     stale_result = nodes.perception_node({
         "current_url": "https://www.wanted.co.kr/wd/cached",

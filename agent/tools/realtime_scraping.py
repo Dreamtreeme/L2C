@@ -531,6 +531,7 @@ def _initial_worker_state(goal: str) -> dict:
         "action_history": [],
         "recent_images": [],
         "marked_image": "",
+        "screen_signature": {},
         "error_count": 0,
         "is_finished": False,
         "collected_data": [],

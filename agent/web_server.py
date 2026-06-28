@@ -92,6 +92,7 @@ async def chat_endpoint(req: ChatRequest):
             action_history=[],
             recent_images=[],
             marked_image="",
+            screen_signature={},
             error_count=0,
             is_finished=False,
             collected_data=[],
@@ -112,6 +113,8 @@ async def chat_endpoint(req: ChatRequest):
             transition_outcome="",
             transition_source="",
             transition_observations=[],
+            pending_human_approval=False,
+            human_approval_request={},
         )
         try:
             result = await asyncio.to_thread(qa_reasoning_node, state)

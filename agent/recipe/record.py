@@ -8,6 +8,7 @@ from __future__ import annotations
 from agent.recipe.matcher import marker_ordinal, marker_region
 from agent.recipe.state_key import compute_state_key, normalize_text, site_of, state_anchor_texts, url_template
 from agent.utils.logger import logger
+from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox
 
 _TARGET_ACTIONS = {"click_marker", "type_in_marker"}
 _RECORDED_ACTIONS = _TARGET_ACTIONS | {"scroll", "press_key", "go_back"}
@@ -129,6 +130,7 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             "seq": seq,
             "state_key": compute_state_key(url, markers),
             "state_anchors": state_anchor_texts(markers),
+            "screen_signature": dict(state.get("screen_signature", {}) or {}),
             "url_template": url_template(url),
             "action": action_name,
             "target": None,
@@ -152,6 +154,10 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
                 "region": marker_region(marker, markers),
                 "ordinal": marker_ordinal(marker, markers),
             }
+            screen_size = (step.get("screen_signature") or {}).get("size") or []
+            if isinstance(screen_size, list) and len(screen_size) == 2:
+                target["bbox_ratio"] = bbox_to_ratio(_bbox(marker), screen_size)
+                target["center_ratio"] = center_ratio_from_bbox(_bbox(marker), screen_size)
             target_label = normalize_text(args.get("target_label") or args.get("semantic_label"))
             if target_label:
                 target["semantic_label"] = target_label

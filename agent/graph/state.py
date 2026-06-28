@@ -30,6 +30,9 @@ class GraphState(TypedDict):
     
     # 최근 마킹된 이미지 경로 (SoM VLM 추론용)
     marked_image: str
+
+    # 현재 화면 pHash/OCR 앵커 서명. Reflex replay에서 같은 화면인지 검증한다.
+    screen_signature: Dict[str, Any]
     
     # 에러가 발생한 횟수
     error_count: int

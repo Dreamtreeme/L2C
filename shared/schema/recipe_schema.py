@@ -49,6 +49,8 @@ class RecipeTarget(BaseModel):
     region: Optional[str] = Field(None, description="화면 내 대략적 위치(region)")
     ordinal: Optional[int] = Field(None, description="동일 텍스트 중 화면 순서(ordinal)")
     evidence_texts: List[str] = Field(default_factory=list, description="주변 OCR 근거 텍스트(evidence texts)")
+    bbox_ratio: List[float] = Field(default_factory=list, description="화면 크기 대비 대상 bbox 비율(bbox ratio)")
+    center_ratio: List[float] = Field(default_factory=list, description="화면 크기 대비 대상 중심 비율(center ratio)")
 
 
 class RecipeStep(BaseModel):
@@ -60,6 +62,7 @@ class RecipeStep(BaseModel):
         default_factory=list,
         description="행동 전 화면의 정규화된 OCR 앵커(state anchors)",
     )
+    screen_signature: Dict[str, Any] = Field(default_factory=dict, description="행동 전 화면 pHash/OCR 서명(screen signature)")
     url_template: str = Field("", description="URL 템플릿(url template)")
     action: str = Field(..., description="도구 이름(tool action)")
     target: Optional[RecipeTarget] = Field(None, description="클릭/입력 대상(target)")

@@ -103,6 +103,16 @@ def _target_snapshot(state: dict, action_name: str, args: dict[str, Any]) -> dic
         "text": marker.get("text", ""),
         "bbox": marker.get("bbox", []),
     }
+    signature = dict(state.get("screen_signature", {}) or {})
+    size = signature.get("size") or []
+    if isinstance(size, list) and len(size) == 2:
+        try:
+            from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox
+
+            target["bbox_ratio"] = bbox_to_ratio(marker.get("bbox", []), size)
+            target["center_ratio"] = center_ratio_from_bbox(marker.get("bbox", []), size)
+        except Exception:
+            pass
     target_label = args.get("target_label") or args.get("semantic_label")
     if target_label:
         target["target_label"] = target_label
@@ -202,6 +212,7 @@ def record_action_episode(
             "url": before_snapshot.get("url", ""),
             "screenshot": before_snapshot.get("screenshot", ""),
             "marked_image": before_snapshot.get("marked_image", ""),
+            "screen_signature": dict(before_snapshot.get("screen_signature", {}) or {}),
             "marker_texts": [
                 str(marker.get("text") or "")
                 for marker in state.get("current_markers", []) or []

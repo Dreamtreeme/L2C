@@ -10,6 +10,11 @@ def test_record_ui_step_stays_in_marker_text_space():
     state = {
         "goal": "지원하기",
         "current_url": "https://www.wanted.co.kr/wd/12345",
+        "screen_signature": {
+            "phash": "0" * 16,
+            "size": [200, 200],
+            "anchors": ["지원하기", "공유하기"],
+        },
         "current_markers": [
             {"id": 1, "bbox": [20, 20, 120, 60], "text": "지원하기"},
             {"id": 2, "bbox": [20, 80, 120, 120], "text": "공유하기"},
@@ -31,17 +36,75 @@ def test_record_ui_step_stays_in_marker_text_space():
     )
 
     assert steps[0]["state_key"].startswith("ocr#")
+    assert steps[0]["screen_signature"]["phash"] == "0" * 16
     assert steps[0]["target"] == {
         "text": "지원하기",
         "region": "top-left",
         "ordinal": 0,
         "evidence_texts": ["공유하기"],
+        "bbox_ratio": [0.1, 0.1, 0.6, 0.3],
+        "center_ratio": [0.35, 0.2],
     }
     assert steps[0]["intent"] == "open apply flow"
     assert steps[0]["target_role"] == "apply_button"
     assert steps[0]["component"] == "job_detail_header"
     assert steps[0]["expected_after"] == "application modal opens"
     assert "bbox" not in steps[0]["target"]
+
+
+def test_phash_replay_matches_current_marker_by_ratio():
+    from agent.recipe.phash_replay import match_step_by_screen_signature
+
+    current_signature = {
+        "phash": "f0f0f0f0f0f0f0f0",
+        "size": [1000, 1000],
+        "anchors": ["검색", "채용"],
+    }
+    step = {
+        "screen_signature": {
+            "phash": "f0f0f0f0f0f0f0f0",
+            "size": [1000, 1000],
+            "anchors": ["검색", "채용"],
+        },
+        "target": {
+            "text": "검색",
+            "bbox_ratio": [0.79, 0.08, 0.83, 0.12],
+            "center_ratio": [0.81, 0.10],
+        },
+    }
+    markers = [
+        {"id": 99, "bbox": [790, 80, 830, 120], "text": "검색"},
+        {"id": 3, "bbox": [100, 100, 140, 140], "text": "검색"},
+    ]
+
+    marker_id, result = match_step_by_screen_signature(step, current_signature, markers)
+
+    assert result["matched"] is True
+    assert marker_id == 99
+
+
+def test_phash_replay_rejects_different_screen_before_text_match():
+    from agent.recipe.phash_replay import match_step_by_screen_signature
+
+    current_signature = {
+        "phash": "0000000000000000",
+        "size": [1000, 1000],
+        "anchors": ["검색", "채용"],
+    }
+    step = {
+        "screen_signature": {
+            "phash": "ffffffffffffffff",
+            "size": [1000, 1000],
+            "anchors": ["검색", "채용"],
+        },
+        "target": {"text": "검색", "center_ratio": [0.81, 0.10]},
+    }
+    markers = [{"id": 99, "bbox": [790, 80, 830, 120], "text": "검색"}]
+
+    marker_id, result = match_step_by_screen_signature(step, current_signature, markers)
+
+    assert marker_id is None
+    assert result["reason"] == "phash_distance"
 
 
 def test_state_key_ignores_dynamic_numeric_changes():
@@ -310,6 +373,99 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
     assert msg.tool_calls[1]["name"] == "press_key"
     assert msg.tool_calls[1]["args"] == {"key": "enter"}
     assert result["reflex_transition_contracts"][msg.tool_calls[1]["id"]]["outcomes"][0]["name"] == "results_found"
+
+
+def test_reflex_node_uses_phash_ratio_when_step_has_screen_signature(monkeypatch):
+    from agent.graph import nodes
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    class FakeStore:
+        def get_recipe(self, state_key):
+            return SiteRecipe(
+                site="wanted.co.kr",
+                goal="goal",
+                steps=[
+                    RecipeStep(
+                        seq=0,
+                        state_key="state-a",
+                        action="click_marker",
+                        replay_mode="fixed",
+                        screen_signature={
+                            "phash": "f0f0f0f0f0f0f0f0",
+                            "size": [1000, 1000],
+                            "anchors": ["검색"],
+                        },
+                        target={
+                            "text": "검색",
+                            "bbox_ratio": [0.79, 0.08, 0.83, 0.12],
+                            "center_ratio": [0.81, 0.10],
+                        },
+                    )
+                ],
+            )
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "ai 엔지니어 공고 찾아줘",
+            "current_url": "https://www.wanted.co.kr",
+            "reflex_state_key": "state-a",
+            "screen_signature": {
+                "phash": "f0f0f0f0f0f0f0f0",
+                "size": [1000, 1000],
+                "anchors": ["검색"],
+            },
+            "current_markers": [{"id": 77, "bbox": [790, 80, 830, 120], "text": "검색"}],
+        }
+    )
+
+    assert result["reflex_hit"] is True
+    assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 77}
+
+
+def test_reflex_node_rejects_signed_step_when_phash_misses(monkeypatch):
+    from agent.graph import nodes
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    class FakeStore:
+        def get_recipe(self, state_key):
+            return SiteRecipe(
+                site="wanted.co.kr",
+                goal="goal",
+                steps=[
+                    RecipeStep(
+                        seq=0,
+                        state_key="state-a",
+                        action="click_marker",
+                        replay_mode="fixed",
+                        screen_signature={
+                            "phash": "ffffffffffffffff",
+                            "size": [1000, 1000],
+                            "anchors": ["검색"],
+                        },
+                        target={"text": "검색", "center_ratio": [0.81, 0.10]},
+                    )
+                ],
+            )
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "ai 엔지니어 공고 찾아줘",
+            "current_url": "https://www.wanted.co.kr",
+            "reflex_state_key": "state-a",
+            "screen_signature": {
+                "phash": "0000000000000000",
+                "size": [1000, 1000],
+                "anchors": ["검색"],
+            },
+            "current_markers": [{"id": 77, "bbox": [790, 80, 830, 120], "text": "검색"}],
+        }
+    )
+
+    assert result["reflex_hit"] is False
 
 
 def test_reflex_node_replaces_type_input_slot(monkeypatch):

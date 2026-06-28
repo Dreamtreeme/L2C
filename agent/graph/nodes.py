@@ -218,6 +218,13 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     markers = filtered_markers
     
     ui_context = _build_ui_context(markers)
+    screen_signature = {}
+    try:
+        from agent.vision.screen_signature import compute_screen_signature
+
+        screen_signature = compute_screen_signature(image_path, markers)
+    except Exception as e:
+        logger.debug("screen signature skipped", error=str(e))
     transition_observations = []
     transition_status = ""
     transition_outcome = ""
@@ -274,6 +281,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "marked_image": marked_image,
         "current_markers": markers,
         "ui_context": ui_context,
+        "screen_signature": screen_signature,
         "current_url": current_url,
         "current_url_stale": current_url_stale,
         "reflex_state_key": reflex_state_key,
@@ -584,6 +592,16 @@ def _action_target_metadata(state: GraphState, action_name: str, args: dict) -> 
         "bbox": bbox,
         "center": center,
     }
+    signature = dict(state.get("screen_signature", {}) or {})
+    size = signature.get("size") or []
+    if isinstance(size, list) and len(size) == 2 and isinstance(bbox, list) and len(bbox) == 4:
+        try:
+            from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox
+
+            metadata["bbox_ratio"] = bbox_to_ratio(bbox, size)
+            metadata["center_ratio"] = center_ratio_from_bbox(bbox, size)
+        except Exception:
+            pass
     target_label = args.get("target_label") or args.get("semantic_label")
     if target_label:
         metadata["target_label"] = target_label
@@ -597,6 +615,7 @@ def _state_snapshot_for_action(state: GraphState, current_url: str) -> dict:
         "url": current_url or state.get("current_url", "") or "",
         "screenshot": screenshot,
         "marked_image": state.get("marked_image", "") or "",
+        "screen_signature": dict(state.get("screen_signature", {}) or {}),
     }
 
 
@@ -1235,6 +1254,7 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
 
     try:
         from agent.recipe.matcher import is_replayable_step, match_marker
+        from agent.recipe.phash_replay import match_step_by_screen_signature
         from agent.recipe.state_key import compute_state_key
         from agent.recipe.store import RecipeStore
 
@@ -1286,7 +1306,24 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                     candidate_valid = False
                     break
                 if action in {"click_marker", "type_in_marker"}:
-                    marker_id = match_marker(step, markers, params=params)
+                    if step.get("screen_signature"):
+                        marker_id, phash_result = match_step_by_screen_signature(
+                            step,
+                            dict(state.get("screen_signature", {}) or {}),
+                            markers,
+                        )
+                        if marker_id is None:
+                            logger.info(
+                                "Reflex candidate skipped: pHash replay check failed",
+                                recipe_key=recipe_key[:24],
+                                reason=phash_result.get("reason"),
+                                distance=phash_result.get("distance"),
+                                anchor_overlap=phash_result.get("anchor_overlap"),
+                            )
+                            candidate_valid = False
+                            break
+                    else:
+                        marker_id = match_marker(step, markers, params=params)
                     if marker_id is None:
                         candidate_valid = False
                         break
@@ -1865,6 +1902,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "current_markers":   latest_markers,
         "ui_context":        latest_ui_context,
         "marked_image":      latest_marked_image,
+        "screen_signature":  dict(state.get("screen_signature", {}) or {}),
         "recent_images":     latest_recent_images,
         "last_action_screen_changed": screen_changed,
         "pending_transition": pending_transition,
