@@ -488,6 +488,85 @@ def test_reasoning_prompt_lists_visited_cards_and_collection_target():
     assert "미방문 공고 제목" in human_text
 
 
+def test_reasoning_prompt_compacts_large_state_inputs(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_REASONING_ACTION_HISTORY_LIMIT", "2")
+    large_unused_text = "UNRELATED_FULL_TEXT_" + ("x" * 800)
+    messages = nodes._build_reasoning_messages(
+        {
+            "goal": "collect jobs",
+            "plan": [
+                "초기 검색 완료",
+                "현재 공고 상세 정보 수집",
+                "목록으로 돌아가 다음 공고 클릭",
+                "최종 보고서 작성",
+            ],
+            "current_plan_step": 1,
+            "extracted_jd": {
+                "jobs": [
+                    {
+                        "company_name": "Old Co",
+                        "position": "Old Job",
+                        "main_tasks": [large_unused_text],
+                    },
+                    {
+                        "company_name": "Current Co",
+                        "position": "Current Job",
+                        "url": "https://www.wanted.co.kr/wd/current",
+                        "main_tasks": ["Build product"],
+                        "extra_notes": large_unused_text,
+                    },
+                ]
+            },
+            "ui_context": "[id: 1] Current Job",
+            "current_url": "https://www.wanted.co.kr/wd/current",
+            "marked_image": "",
+            "action_history": [
+                {
+                    "status": "success",
+                    "action": "scroll",
+                    "args": {"direction": "down"},
+                    "reason": "OLD_ACTION_REASON_SHOULD_NOT_BE_INCLUDED",
+                },
+                {
+                    "status": "success",
+                    "action": "click_marker",
+                    "args": {"marker_id": 1, "target_label": "Old hidden action"},
+                },
+                {
+                    "status": "success",
+                    "action": "click_marker",
+                    "args": {"marker_id": 2, "target_label": "Recent card"},
+                },
+                {
+                    "status": "success",
+                    "action": "update_extracted_info",
+                    "args": {
+                        "data_json": "{\"jobs\":[{\"company_name\":\"Current Co\"}]}",
+                    },
+                },
+            ],
+        },
+        "",
+    )
+
+    human_text = messages[-1].content
+    assert "계획 요약" in human_text
+    assert "현재 공고 상세 정보 수집" in human_text
+    assert "목록으로 돌아가 다음 공고 클릭" in human_text
+    assert "최종 보고서 작성" not in human_text
+    assert "수집 데이터 요약" in human_text
+    assert "Current Co" in human_text
+    assert "Current Job" in human_text
+    assert "누락필드" in human_text
+    assert "UNRELATED_FULL_TEXT" not in human_text
+    assert "최근 행동 요약" in human_text
+    assert "Old hidden action" not in human_text
+    assert "Recent card" in human_text
+    assert "이전 행동 내역" not in human_text
+
+
 def test_action_node_blocks_same_state_repeat_across_intervening_states(monkeypatch):
     from langchain_core.messages import AIMessage
     from agent.graph import nodes

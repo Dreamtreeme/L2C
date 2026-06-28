@@ -824,6 +824,190 @@ def _collected_job_count(extracted_jd: Any) -> int:
     return 1
 
 
+def _clip_prompt_text(value: Any, max_chars: int = 160) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
+def _first_nonempty_field(data: dict, aliases: tuple[str, ...]) -> Any:
+    for key in aliases:
+        value = data.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _compact_prompt_value(value: Any, max_chars: int = 140) -> Any:
+    if isinstance(value, list):
+        compacted = []
+        for item in value:
+            if item in (None, "", [], {}):
+                continue
+            compacted.append(_compact_prompt_value(item, max_chars=100))
+            if len(compacted) >= 3:
+                break
+        return compacted
+    if isinstance(value, dict):
+        compacted = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= 4:
+                break
+            if item in (None, "", [], {}):
+                continue
+            compacted[str(key)] = _compact_prompt_value(item, max_chars=80)
+        return compacted
+    return _clip_prompt_text(value, max_chars=max_chars)
+
+
+_JOB_FIELD_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("회사명", ("회사명", "company_name", "company")),
+    ("직무명", ("직무명", "position", "title", "job_title")),
+    ("url", ("url", "공고URL", "link")),
+    ("주요업무", ("주요업무", "main_tasks", "responsibilities")),
+    ("자격요건", ("자격요건", "requirements", "qualifications")),
+    ("우대사항", ("우대사항", "preferred", "preferred_qualifications")),
+    ("혜택", ("혜택", "혜택 및 복지", "복리후생", "benefits")),
+)
+
+
+def _job_display_label(job: dict) -> str:
+    company = _first_nonempty_field(job, ("회사명", "company_name", "company"))
+    position = _first_nonempty_field(job, ("직무명", "position", "title", "job_title"))
+    if company and position:
+        return _clip_prompt_text(f"{company} - {position}", 120)
+    return _clip_prompt_text(position or company or job.get("url") or "", 120)
+
+
+def _job_summary_for_prompt(job: dict) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    present_fields: list[str] = []
+    missing_fields: list[str] = []
+    for label, aliases in _JOB_FIELD_ALIASES:
+        value = _first_nonempty_field(job, aliases)
+        if value in (None, "", [], {}):
+            missing_fields.append(label)
+            continue
+        present_fields.append(label)
+        if label in {"회사명", "직무명", "url"}:
+            summary[label] = _compact_prompt_value(value, max_chars=140)
+        elif label in {"주요업무", "자격요건", "우대사항", "혜택"}:
+            summary[label] = _compact_prompt_value(value, max_chars=120)
+    if present_fields:
+        summary["채워진필드"] = present_fields
+    if missing_fields:
+        summary["누락필드"] = missing_fields
+    return summary
+
+
+def _job_items_for_prompt(extracted_jd: Any) -> list[dict]:
+    if not isinstance(extracted_jd, dict) or not extracted_jd:
+        return []
+    jobs = _job_list_value(extracted_jd)
+    if isinstance(jobs, dict):
+        jobs = [jobs]
+    if isinstance(jobs, list):
+        return [job for job in jobs if isinstance(job, dict) and job]
+    return [extracted_jd] if extracted_jd else []
+
+
+def _current_job_for_prompt(jobs: list[dict], current_url: str) -> dict | None:
+    current_url = str(current_url or "").strip()
+    if current_url:
+        for job in reversed(jobs):
+            if str(job.get("url") or "").strip() == current_url:
+                return job
+    return jobs[-1] if jobs else None
+
+
+def _compact_extracted_context(extracted_jd: Any, current_url: str) -> str:
+    jobs = _job_items_for_prompt(extracted_jd)
+    if not jobs:
+        return "수집 데이터 요약:\n- 수집된 공고 없음\n\n"
+
+    current_job = _current_job_for_prompt(jobs, current_url)
+    recent_labels = [_job_display_label(job) for job in jobs[-3:]]
+    recent_labels = [label for label in recent_labels if label]
+    lines = [
+        "수집 데이터 요약:",
+        f"- 수집 공고 수: {len(jobs)}",
+    ]
+    if recent_labels:
+        lines.append(f"- 최근 공고: {json.dumps(recent_labels, ensure_ascii=False, separators=(',', ':'))}")
+    if current_job:
+        summary = _job_summary_for_prompt(current_job)
+        lines.append(
+            "- 현재/최근 공고 핵심 필드: "
+            + json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
+        )
+    return "\n".join(lines) + "\n\n"
+
+
+def _compact_plan_context(plan: list, current_plan_step: int) -> str:
+    if not plan:
+        return ""
+    safe_plan = [str(step) for step in plan]
+    current_idx = min(max(int(current_plan_step or 0), 0), len(safe_plan) - 1)
+    lines = [
+        "계획 요약:",
+        f"- 전체 단계 수: {len(safe_plan)}",
+        f"- 현재 단계({current_idx + 1}): {_clip_prompt_text(safe_plan[current_idx], 180)}",
+    ]
+    if current_idx + 1 < len(safe_plan):
+        lines.append(f"- 다음 단계({current_idx + 2}): {_clip_prompt_text(safe_plan[current_idx + 1], 180)}")
+    return "\n".join(lines) + "\n\n"
+
+
+def _compact_recent_action(action: dict) -> dict[str, Any]:
+    action_name = str(action.get("action") or "")
+    args = action.get("args") or {}
+    compact_args = _compact_action_args(action_name, args) if isinstance(args, dict) else {}
+    keep_keys = (
+        "marker_id",
+        "target_label",
+        "target_component",
+        "target_role",
+        "text",
+        "key",
+        "direction",
+        "url",
+        "page_role",
+    )
+    if action_name == "update_extracted_info":
+        shown_args = compact_args
+    else:
+        shown_args = {key: compact_args.get(key) for key in keep_keys if compact_args.get(key) not in (None, "", [], {})}
+    item: dict[str, Any] = {
+        "action": action_name,
+        "status": action.get("status", ""),
+        "args": shown_args,
+    }
+    reason = action.get("reason")
+    if reason and action.get("status") != "success":
+        item["reason"] = _clip_prompt_text(reason, 120)
+    return item
+
+
+def _compact_recent_actions_context(action_history: list[dict]) -> str:
+    try:
+        limit = max(1, int(os.getenv("VISION_REASONING_ACTION_HISTORY_LIMIT", "2")))
+    except ValueError:
+        limit = 2
+    recent = [
+        _compact_recent_action(action)
+        for action in (action_history or [])[-limit:]
+        if isinstance(action, dict)
+    ]
+    if not recent:
+        return "최근 행동 요약: []\n\n"
+    return (
+        "최근 행동 요약:\n"
+        + json.dumps(recent, ensure_ascii=False, separators=(",", ":"))
+        + "\n\n"
+    )
+
+
 def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     """
     reasoning_node용 LLM 메시지 리스트를 조립합니다.
@@ -831,13 +1015,7 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     """
     plan = state.get("plan", [])
     current_plan_step = state.get("current_plan_step", 0)
-    plan_context = ""
-    if plan:
-        plan_context = "현재 수립된 세부 계획 단계:\n"
-        for i, step in enumerate(plan):
-            marker = "➡️" if i == current_plan_step else " "
-            plan_context += f"  {marker} {i+1}. {step}\n"
-        plan_context += f"(현재 단계: {current_plan_step + 1}번째 소목표 실행 중)\n\n"
+    plan_context = _compact_plan_context(plan, current_plan_step)
 
     system_prompt_text = COMMANDER_SYSTEM_PROMPT.format(goal=state.get("goal", "")) + _safety_page_role_contract()
     extracted_jd = state.get("extracted_jd", {})
@@ -883,13 +1061,13 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
 
     human_prompt_text = (
         f"{plan_context}"
-        f"현재까지 누적 수집된 정보:\n{json.dumps(extracted_jd, ensure_ascii=False, indent=2)}\n\n"
+        f"{_compact_extracted_context(extracted_jd, current_url)}"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"{collection_context}"
         f"{transition_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
-        f"이전 행동 내역:\n{json.dumps(action_history[-5:], ensure_ascii=False, indent=2)}\n\n"
+        f"{_compact_recent_actions_context(action_history)}"
         f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
         f"계획 단계 전환이 일어났다면 update_plan_progress를 함께 체이닝 호출하여 계획 진행률을 반영하십시오."
     )
