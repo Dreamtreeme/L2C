@@ -20,6 +20,7 @@ _perception = None
 _action_tools = None
 _ui_llm_with_tools = None
 _qa_llm_with_tools = None
+_detail_policy_llm = None
 
 # --- LLM 도구 정의용 Pydantic 모델 ---
 class click_marker(BaseModel):
@@ -117,6 +118,15 @@ class finish_task(BaseModel):
     result: str = Field(..., description="최종 완료 요약 또는 결과 데이터")
 
 
+class DetailPagePolicyDecision(BaseModel):
+    """상세 페이지에서 다음 저수준 행동을 하나만 결정합니다."""
+
+    action: str = Field(..., description="click_marker, scroll, defer 중 하나")
+    marker_id: Optional[int] = Field(None, description="click_marker일 때만 사용할 현재 OCR 마커 ID")
+    reason: str = Field("", description="판단 이유")
+    expected_after: str = Field("", description="행동 뒤 기대되는 화면 변화")
+
+
 def _get_perception():
     """비전 엔진은 실제 브라우저 제어 경로에서만 초기화합니다."""
     global _perception
@@ -174,6 +184,18 @@ def _get_qa_llm_with_tools():
             review_recipe_candidates,
         ])
     return _qa_llm_with_tools
+
+
+def _get_detail_policy_llm():
+    global _detail_policy_llm
+    if _detail_policy_llm is None:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        model_name = os.getenv("VISION_DETAIL_POLICY_MODEL", "gemini-3.5-flash")
+        _detail_policy_llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(
+            DetailPagePolicyDecision
+        )
+    return _detail_policy_llm
 
 
 def perception_node(state: GraphState) -> Dict[str, Any]:
@@ -866,6 +888,90 @@ def _detail_observations_context(state: GraphState) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def _marked_image_base64(path: str, max_dim_env: str, quality_env: str, default_max_dim: int, default_quality: int) -> str:
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        from pathlib import Path
+        from agent.utils.image_utils import image_to_base64_jpeg
+
+        try:
+            max_dim = int(os.getenv(max_dim_env, str(default_max_dim)))
+            quality = int(os.getenv(quality_env, str(default_quality)))
+        except ValueError:
+            max_dim = default_max_dim
+            quality = default_quality
+        return image_to_base64_jpeg(Path(path), max_dim=max_dim, quality=quality, fast=True)
+    except Exception as img_err:
+        logger.warning("Failed to prepare marked image for LLM", error=str(img_err), path=path)
+        return ""
+
+
+def _decide_detail_page_policy(
+    state: GraphState,
+    current_url: str,
+    markers: list[dict],
+    ui_context: str,
+    marked_image: str,
+    current_jd: dict,
+    detail_page_observations: list[dict],
+) -> tuple[dict[str, Any], float]:
+    start_time = time.time()
+    observations = "\n".join(
+        json.dumps(obs, ensure_ascii=False) for obs in (detail_page_observations or [])[-3:] if isinstance(obs, dict)
+    )
+    marker_ids = [marker.get("id") for marker in markers or [] if isinstance(marker, dict)]
+    prompt = (
+        "You are deciding the next low-level action for a job detail page.\n"
+        "Use the screenshot and OCR markers together. Do not use DOM, URL selectors, or site-specific hardcoded rules.\n"
+        "Choose exactly one action:\n"
+        "- click_marker: only if a visible marker clearly opens hidden job-detail/body content on this detail page. Do not choose header menus, share/bookmark/apply buttons, navigation, filters, or unrelated 'more' menus.\n"
+        "- scroll: if no safe hidden-content control is visible and lower job-detail text likely remains below the current viewport.\n"
+        "- defer: if the page already looks complete, the next action is ambiguous, or a full reasoning/extraction pass should decide.\n"
+        "When choosing click_marker, marker_id must be one of the current marker IDs.\n\n"
+        f"User goal: {state.get('goal', '')}\n"
+        f"Current URL: {current_url or '(unknown)'}\n"
+        f"Current extracted data:\n{json.dumps(current_jd, ensure_ascii=False)[:4000]}\n\n"
+        f"Recent detail observations:\n{observations or '(none)'}\n\n"
+        f"Current marker IDs: {marker_ids}\n"
+        f"Current OCR markers:\n{ui_context}\n"
+    )
+    base64_image = _marked_image_base64(
+        marked_image,
+        "VISION_DETAIL_POLICY_IMAGE_MAX_DIM",
+        "VISION_DETAIL_POLICY_IMAGE_QUALITY",
+        512,
+        45,
+    )
+    try:
+        messages = [
+            SystemMessage(content="Return only the structured detail page policy decision."),
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": prompt},
+                    *(
+                        [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]
+                        if base64_image
+                        else []
+                    ),
+                ]
+                if base64_image
+                else prompt
+            ),
+        ]
+        decision = _get_detail_policy_llm().invoke(messages)
+        data = decision.model_dump() if hasattr(decision, "model_dump") else dict(decision)
+    except Exception as err:
+        logger.warning("Detail page policy LLM failed; deferring to reasoning", error=str(err))
+        data = {"action": "defer", "reason": "detail_policy_llm_failed", "expected_after": ""}
+    elapsed = time.time() - start_time
+    action = str(data.get("action") or "defer").strip().lower()
+    if action not in {"click_marker", "scroll", "defer"}:
+        action = "defer"
+    data["action"] = action
+    return data, elapsed
+
+
 def _safety_page_role_contract() -> str:
     return (
         "\n\n[Safety and page-role contract]\n"
@@ -873,7 +979,7 @@ def _safety_page_role_contract() -> str:
         "- Include risk_level: safe_read, safe_navigation, or sensitive.\n"
         "- Set needs_user_confirmation=true before login, password/authentication, personal data, agreement/terms, application/submission, payment, transfer, account, finance, or legal-effect steps. The executor will stop and ask the user.\n"
         "- Unknown or newly released tasks should be researched and narrowed before execution. Do not try random branches first.\n"
-        "- On detail pages, your main judgment is whether enough information has been collected. If not enough, call update_extracted_info(page_role=\"job_detail\", detail_complete=false). Do not call scroll yourself; the executor batches scroll/capture/OCR observations and then returns them to you for one later judgment.\n"
+        "- On detail pages, your main judgment is whether enough information has been collected. If not enough, call update_extracted_info(page_role=\"job_detail\", detail_complete=false). Do not call scroll yourself; the executor asks a separate low-resolution screenshot+OCR page-policy check whether to reveal hidden detail content, scroll, or defer.\n"
         "- When accumulated detail-page OCR observations are provided, use them to update fields and decide detail_complete instead of asking for another scroll unless required information is still missing.\n"
     )
 
@@ -1747,14 +1853,61 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     collected_count = _extracted_job_count(current_jd)
                     detail_complete = args.get("detail_complete")
                     if detail_complete is False:
-                        if detail_auto_scroll_count < _detail_auto_scroll_max():
-                            result["detail_policy"] = "batch_pending"
-                            result["detail_auto_scroll_count"] = detail_auto_scroll_count
-                            result["detail_observation_count"] = len(detail_page_observations)
-                            policy_batch_reason = "detail_incomplete"
-                        else:
+                        if detail_auto_scroll_count >= _detail_auto_scroll_max():
                             result["detail_policy"] = "max_scroll_reached"
                             result["detail_auto_scroll_count"] = detail_auto_scroll_count
+                        else:
+                            policy_decision, policy_elapsed = _decide_detail_page_policy(
+                                state,
+                                current_url,
+                                latest_markers,
+                                latest_ui_context,
+                                latest_marked_image,
+                                current_jd,
+                                detail_page_observations,
+                            )
+                            step_durations.append({"node": "detail_policy_reasoning", "duration": policy_elapsed})
+                            result["detail_policy_decision"] = policy_decision
+                            result["detail_auto_scroll_count"] = detail_auto_scroll_count
+                            result["detail_observation_count"] = len(detail_page_observations)
+                            policy_action = str(policy_decision.get("action") or "defer").strip().lower()
+                            if policy_action == "click_marker":
+                                marker_id = policy_decision.get("marker_id")
+                                marker = _marker_by_id(latest_markers, marker_id)
+                                if marker:
+                                    click_args = {
+                                        "marker_id": marker_id,
+                                        "target_label": str(marker.get("text") or ""),
+                                        "target_role": "expand_or_reveal_detail_content",
+                                        "target_component": "detail_page_policy_target",
+                                        "reason": str(policy_decision.get("reason") or "detail policy selected visible marker"),
+                                        "expected_after": str(policy_decision.get("expected_after") or "more detail content may be visible"),
+                                        "page_role": "job_detail",
+                                        "risk_level": "safe_navigation",
+                                        "needs_user_confirmation": False,
+                                    }
+                                    sensitive_reason = _sensitive_action_reason(
+                                        {**state, "current_markers": latest_markers},
+                                        "click_marker",
+                                        click_args,
+                                    )
+                                    if sensitive_reason:
+                                        result["detail_policy"] = "llm_defer_sensitive"
+                                        result["detail_policy_reason"] = sensitive_reason
+                                    else:
+                                        result["detail_policy"] = "llm_click_marker"
+                                        policy_ui_action = (
+                                            "click_marker",
+                                            click_args,
+                                            "detail_policy_llm",
+                                        )
+                                else:
+                                    result["detail_policy"] = "llm_defer_invalid_marker"
+                            elif policy_action == "scroll":
+                                result["detail_policy"] = "batch_pending"
+                                policy_batch_reason = "detail_policy_llm_scroll"
+                            else:
+                                result["detail_policy"] = "llm_defer"
                     elif detail_complete is True:
                         detail_auto_scroll_count = 0
                         detail_page_observations = []

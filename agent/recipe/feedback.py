@@ -41,6 +41,25 @@ def _message_text(content: Any) -> str:
     return "" if content is None else str(content).strip()
 
 
+def _preview_value(value: Any, depth: int = 0) -> Any:
+    if depth > 2:
+        return "..."
+    if isinstance(value, str):
+        return value if len(value) <= 160 else value[:157] + "..."
+    if isinstance(value, list):
+        preview = [_preview_value(item, depth + 1) for item in value[:3]]
+        if len(value) > 3:
+            preview.append(f"...(+{len(value) - 3})")
+        return preview
+    if isinstance(value, dict):
+        items = list(value.items())[:12]
+        preview = {str(key): _preview_value(item, depth + 1) for key, item in items}
+        if len(value) > 12:
+            preview["..."] = f"+{len(value) - 12}"
+        return preview
+    return value
+
+
 def _compact_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
     if action_name == "update_extracted_info":
         raw = args.get("data_json", "")
@@ -61,6 +80,7 @@ def _compact_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
             "incoming_jobs": len(jobs) if isinstance(jobs, list) else 0,
             "fields": sorted({str(field) for field in fields}),
             "payload_chars": len(raw),
+            "payload_preview": _preview_value(data),
         }
     return dict(args or {})
 
