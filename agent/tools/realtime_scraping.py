@@ -551,11 +551,62 @@ def _initial_worker_state(goal: str) -> dict:
         "transition_outcome": "",
         "transition_source": "",
         "transition_observations": [],
-        "detail_auto_scroll_count": 0,
-        "detail_page_observations": [],
         "pending_human_approval": False,
         "human_approval_request": {},
     }
+
+
+def _worker_preopen_enabled() -> bool:
+    return _env_bool("VISION_WORKER_PREOPEN_BROWSER", True)
+
+
+def _worker_start_url(profile: dict) -> str:
+    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
+    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
+    navigation = manual.get("navigation_policy", {}) if isinstance(manual, dict) else {}
+    return str(navigation.get("start_url") or entry.get("base_url") or manual.get("base_url") or "").strip()
+
+
+def _prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dict:
+    """사이트 홈을 코드로 먼저 열고 첫 OCR 상태를 채워 worker의 첫 open_browser 추론을 줄인다."""
+    start_url = _worker_start_url(site_profile)
+    if not start_url or not _worker_preopen_enabled():
+        return initial_state
+
+    try:
+        from agent.graph.nodes import _get_action_tools, perception_node
+
+        action_tools = _get_action_tools()
+        result = action_tools.open_browser(start_url, current_url=initial_state.get("current_url", ""))
+        action_history = [
+            {
+                "action": "open_browser",
+                "status": result.get("status", "unknown"),
+                "result": result.get("result"),
+                "args": {"url": start_url},
+                "screen_change_expected": True,
+            }
+        ]
+        observation = perception_node(
+            {
+                **initial_state,
+                "current_url": start_url,
+                "current_url_stale": True,
+                "action_history": action_history,
+                "pending_transition": {},
+            }
+        )
+        prepared = dict(initial_state)
+        prepared.update(observation)
+        prepared["current_url"] = observation.get("current_url") or start_url
+        prepared["current_url_stale"] = bool(observation.get("current_url_stale", False))
+        prepared["action_history"] = action_history
+        prepared["last_action_screen_changed"] = False
+        logger.info("[realtime_scraping] Worker start screen prepared via code-open: %s", start_url)
+        return prepared
+    except Exception as exc:
+        logger.warning("[realtime_scraping] Worker start screen preparation failed; falling back to LLM open_browser: %s", exc)
+        return initial_state
 
 
 def run_worker_once(
@@ -598,6 +649,7 @@ def run_worker_once(
         "target_count": target_count,
         "site": site_slug,
     }
+    initial_state = _prepare_worker_start_screen(initial_state, site_profile)
 
     logger.info(
         "[realtime_scraping] Starting worker graph site=%s attempt=%s",

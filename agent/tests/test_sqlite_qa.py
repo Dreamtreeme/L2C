@@ -493,156 +493,14 @@ def test_update_extracted_info_auto_finishes_when_target_count_reached(monkeypat
     assert len(result["extracted_jd"]["공고목록"]) == 1
 
 
-def test_update_extracted_info_runs_detail_policy_click_decision(monkeypatch):
+def test_update_extracted_info_does_not_auto_scroll_when_detail_incomplete(monkeypatch):
     from langchain_core.messages import AIMessage
     from agent.graph import nodes
 
-    calls = []
+    def fail_dispatch(*_args, **_kwargs):
+        raise AssertionError("detail_complete=false must not trigger executor-side UI action")
 
-    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
-        calls.append((action_name, args))
-        if action_name == "click_marker":
-            assert args["marker_id"] == 7
-            return {"status": "success", "action": "click_marker", "result": "ok"}
-        if action_name == "scroll":
-            assert args["direction"] == "down"
-            return {"status": "success", "action": "scroll", "result": "ok"}
-        raise AssertionError(action_name)
-
-    observations = iter(
-        [
-            {
-                "current_markers": [{"id": 11, "text": "Expanded detail intro", "bbox": [0, 0, 100, 20]}],
-                "ui_context": "[id: 11] Expanded detail intro",
-                "marked_image": "marked-expand.png",
-                "recent_images": ["screen-expand.png"],
-                "current_url": "https://www.wanted.co.kr/wd/12345",
-                "current_url_stale": False,
-                "step_durations": [{"node": "perception", "duration": 0.01}],
-            },
-            {
-                "current_markers": [
-                    {"id": 11, "text": "Expanded detail intro", "bbox": [0, 0, 100, 20]},
-                    {"id": 12, "text": "More detail text", "bbox": [0, 40, 100, 60]},
-                ],
-                "ui_context": "[id: 11] Expanded detail intro\n[id: 12] More detail text",
-                "marked_image": "marked-scroll.png",
-                "recent_images": ["screen-scroll.png"],
-                "current_url": "https://www.wanted.co.kr/wd/12345",
-                "current_url_stale": False,
-                "step_durations": [{"node": "perception", "duration": 0.01}],
-            },
-        ]
-    )
-
-    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
-    monkeypatch.delenv("VISION_DETAIL_PAGE_POLICY_ENABLED", raising=False)
-    monkeypatch.setattr(
-        nodes,
-        "_decide_detail_page_policy",
-        lambda *_args, **_kwargs: (
-            {
-                "action": "click_marker",
-                "marker_id": 7,
-                "reason": "visible control reveals hidden detail body",
-                "expected_after": "more detail text is visible",
-            },
-            0.01,
-        ),
-    )
-    monkeypatch.setenv("VISION_DETAIL_BATCH_SCROLLS", "1")
-    monkeypatch.setattr(nodes, "perception_node", lambda _state: next(observations))
-
-    result = nodes.action_node({
-        "current_markers": [{"id": 7, "text": "상세 정보 더 보기", "bbox": [10, 500, 210, 540]}],
-        "current_url": "https://www.wanted.co.kr/wd/12345",
-        "current_url_stale": False,
-        "reflex_state_key": "state-detail",
-        "recipe_params": {"target_count": 2},
-        "extracted_jd": {},
-        "is_finished": False,
-        "collected_data": [],
-        "error_count": 0,
-        "current_plan_step": 0,
-        "plan": [],
-        "detail_auto_scroll_count": 0,
-        "last_action_result": AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "update_extracted_info",
-                    "args": {
-                        "page_role": "job_detail",
-                        "detail_complete": False,
-                        "data_json": json.dumps(
-                            {
-                                "jobs": [
-                                    {
-                                        "company_name": "Acme",
-                                        "position": "iOS Engineer",
-                                        "url": "https://www.wanted.co.kr/wd/12345",
-                                        "main_tasks": ["Build app"],
-                                    }
-                                ]
-                            },
-                            ensure_ascii=False,
-                        ),
-                    },
-                    "id": "1",
-                }
-            ],
-        ),
-    })
-
-    assert [action["action"] for action in result["action_history"]] == ["update_extracted_info", "click_marker"]
-    assert result["action_history"][0]["detail_policy"] == "llm_click_marker"
-    assert result["action_history"][0]["detail_policy_decision"]["action"] == "click_marker"
-    assert result["action_history"][1]["policy_action"] is True
-    assert result["last_action_screen_changed"] is True
-    assert result["detail_auto_scroll_count"] == 0
-    assert [call[0] for call in calls] == ["click_marker"]
-
-
-def test_update_extracted_info_auto_scrolls_when_detail_incomplete(monkeypatch):
-    from langchain_core.messages import AIMessage
-    from agent.graph import nodes
-
-    calls = []
-
-    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
-        calls.append((action_name, args))
-        assert action_name == "scroll"
-        assert args["direction"] == "down"
-        return {"status": "success", "action": "scroll", "result": "ok"}
-
-    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
-    monkeypatch.delenv("VISION_DETAIL_PAGE_POLICY_ENABLED", raising=False)
-    monkeypatch.setattr(
-        nodes,
-        "_decide_detail_page_policy",
-        lambda *_args, **_kwargs: (
-            {
-                "action": "scroll",
-                "reason": "no safe hidden-content control is visible and more body text likely remains",
-                "expected_after": "more detail text may be visible",
-            },
-            0.01,
-        ),
-    )
-    monkeypatch.setenv("VISION_DETAIL_BATCH_SCROLLS", "1")
-    monkeypatch.setattr(
-        nodes,
-        "perception_node",
-        lambda _state: {
-            "current_markers": [{"id": 10, "text": "More detail text", "bbox": [0, 0, 100, 20]}],
-            "ui_context": "[id: 10] More detail text",
-            "marked_image": "marked.png",
-            "recent_images": ["screen.png"],
-            "current_url": "https://www.wanted.co.kr/wd/12345",
-            "current_url_stale": False,
-            "step_durations": [{"node": "perception", "duration": 0.01}],
-        },
-    )
+    monkeypatch.setattr(nodes, "_dispatch_ui", fail_dispatch)
 
     result = nodes.action_node({
         "current_markers": [],
@@ -656,7 +514,6 @@ def test_update_extracted_info_auto_scrolls_when_detail_incomplete(monkeypatch):
         "error_count": 0,
         "current_plan_step": 0,
         "plan": [],
-        "detail_auto_scroll_count": 0,
         "last_action_result": AIMessage(
             content="",
             tool_calls=[
@@ -685,16 +542,11 @@ def test_update_extracted_info_auto_scrolls_when_detail_incomplete(monkeypatch):
         ),
     })
 
-    assert [action["action"] for action in result["action_history"]] == ["update_extracted_info", "scroll"]
-    assert result["action_history"][0]["detail_policy"] == "batch_observe"
-    assert result["action_history"][1]["policy_action"] is True
-    assert result["action_history"][1]["detail_batch"] is True
+    assert [action["action"] for action in result["action_history"]] == ["update_extracted_info"]
+    assert "detail_policy" not in result["action_history"][0]
     assert result["last_action_screen_changed"] is False
     assert result["pending_transition"] == {}
-    assert result["detail_auto_scroll_count"] == 1
-    assert result["detail_page_observations"][0]["new_texts"] == ["More detail text"]
-    assert result["current_markers"][0]["text"] == "More detail text"
-    assert calls[0][0] == "scroll"
+    assert result["current_markers"] == []
 
 
 def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targets(monkeypatch):
@@ -709,7 +561,6 @@ def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targ
         return {"status": "success", "action": "go_back", "result": "ok"}
 
     monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
-    monkeypatch.delenv("VISION_DETAIL_PAGE_POLICY_ENABLED", raising=False)
 
     result = nodes.action_node({
         "current_markers": [],
@@ -723,7 +574,6 @@ def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targ
         "error_count": 0,
         "current_plan_step": 0,
         "plan": [],
-        "detail_auto_scroll_count": 2,
         "last_action_result": AIMessage(
             content="",
             tool_calls=[
@@ -758,7 +608,6 @@ def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targ
     assert result["action_history"][1]["policy_action"] is True
     assert result["last_action_screen_changed"] is True
     assert result["current_url_stale"] is True
-    assert result["detail_auto_scroll_count"] == 0
     assert calls[0][0] == "go_back"
 
 
@@ -783,8 +632,6 @@ def test_action_node_blocks_sensitive_ui_action_before_dispatch(monkeypatch):
         "error_count": 0,
         "current_plan_step": 0,
         "plan": [],
-        "detail_auto_scroll_count": 0,
-        "detail_page_observations": [],
         "last_action_result": AIMessage(
             content="",
             tool_calls=[

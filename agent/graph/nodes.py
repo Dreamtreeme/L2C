@@ -20,7 +20,6 @@ _perception = None
 _action_tools = None
 _ui_llm_with_tools = None
 _qa_llm_with_tools = None
-_detail_policy_llm = None
 
 # --- LLM 도구 정의용 Pydantic 모델 ---
 class click_marker(BaseModel):
@@ -118,15 +117,6 @@ class finish_task(BaseModel):
     result: str = Field(..., description="최종 완료 요약 또는 결과 데이터")
 
 
-class DetailPagePolicyDecision(BaseModel):
-    """상세 페이지에서 다음 저수준 행동을 하나만 결정합니다."""
-
-    action: str = Field(..., description="click_marker, scroll, defer 중 하나")
-    marker_id: Optional[int] = Field(None, description="click_marker일 때만 사용할 현재 OCR 마커 ID")
-    reason: str = Field("", description="판단 이유")
-    expected_after: str = Field("", description="행동 뒤 기대되는 화면 변화")
-
-
 def _get_perception():
     """비전 엔진은 실제 브라우저 제어 경로에서만 초기화합니다."""
     global _perception
@@ -184,18 +174,6 @@ def _get_qa_llm_with_tools():
             review_recipe_candidates,
         ])
     return _qa_llm_with_tools
-
-
-def _get_detail_policy_llm():
-    global _detail_policy_llm
-    if _detail_policy_llm is None:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        model_name = os.getenv("VISION_DETAIL_POLICY_MODEL", "gemini-3.5-flash")
-        _detail_policy_llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(
-            DetailPagePolicyDecision
-        )
-    return _detail_policy_llm
 
 
 def perception_node(state: GraphState) -> Dict[str, Any]:
@@ -499,25 +477,6 @@ def _auto_finish_on_target_enabled() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _detail_page_policy_enabled() -> bool:
-    raw = os.getenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _detail_auto_scroll_max() -> int:
-    try:
-        return max(0, int(os.getenv("VISION_DETAIL_AUTO_SCROLL_MAX", "4")))
-    except ValueError:
-        return 4
-
-
-def _detail_batch_scrolls() -> int:
-    try:
-        return max(1, int(os.getenv("VISION_DETAIL_BATCH_SCROLLS", "3")))
-    except ValueError:
-        return 3
-
-
 def _is_detail_update(args: dict[str, Any]) -> bool:
     role = str(args.get("page_role") or "").strip().lower()
     return role in {"job_detail", "detail", "posting_detail"}
@@ -577,27 +536,6 @@ def _sensitive_action_reason(state: GraphState, action_name: str, args: dict[str
         if term.lower() in text:
             return f"sensitive_term:{term}"
     return ""
-
-
-def _marker_text_set(markers: list[dict]) -> set[str]:
-    texts: set[str] = set()
-    for marker in markers or []:
-        text = str(marker.get("text") or "").strip()
-        if text:
-            texts.add(text)
-    return texts
-
-
-def _detail_observation(markers: list[dict], ui_context: str, image_path: str = "", marked_image: str = "", new_texts: list[str] | None = None) -> dict[str, Any]:
-    texts = sorted(_marker_text_set(markers))
-    return {
-        "marker_count": len(markers or []),
-        "marker_texts": texts[:120],
-        "new_texts": list(new_texts or [])[:80],
-        "ui_context": ui_context,
-        "screenshot": str(image_path or ""),
-        "marked_image": str(marked_image or ""),
-    }
 
 
 def _compact_action_args(action_name: str, args: dict) -> dict:
@@ -865,113 +803,6 @@ def _build_ui_context(markers: list[dict]) -> str:
     return "\n".join(parts) if parts else "발견된 UI 마커 없음"
 
 
-def _detail_observations_context(state: GraphState) -> str:
-    observations = list(state.get("detail_page_observations", []) or [])
-    if not observations:
-        return ""
-    lines = [
-        "[Accumulated detail-page OCR observations]",
-        "The executor already scrolled/captured inside this detail page without another reasoning call. Use these observations to update extracted_info and decide detail_complete.",
-    ]
-    start_idx = max(1, len(observations) - 4)
-    for idx, observation in enumerate(observations[-5:], start=start_idx):
-        if not isinstance(observation, dict):
-            continue
-        new_texts = observation.get("new_texts") or []
-        marker_texts = observation.get("marker_texts") or []
-        lines.append(f"- observation {idx}: marker_count={observation.get('marker_count', 0)}")
-        if new_texts:
-            lines.append("  new_texts=" + json.dumps(new_texts[:40], ensure_ascii=False))
-        elif marker_texts:
-            lines.append("  marker_texts=" + json.dumps(marker_texts[:40], ensure_ascii=False))
-    lines.append("If the accumulated information is still insufficient, set detail_complete=false again; the executor may continue the batch until its limit.")
-    return "\n".join(lines) + "\n\n"
-
-
-def _marked_image_base64(path: str, max_dim_env: str, quality_env: str, default_max_dim: int, default_quality: int) -> str:
-    if not path or not os.path.exists(path):
-        return ""
-    try:
-        from pathlib import Path
-        from agent.utils.image_utils import image_to_base64_jpeg
-
-        try:
-            max_dim = int(os.getenv(max_dim_env, str(default_max_dim)))
-            quality = int(os.getenv(quality_env, str(default_quality)))
-        except ValueError:
-            max_dim = default_max_dim
-            quality = default_quality
-        return image_to_base64_jpeg(Path(path), max_dim=max_dim, quality=quality, fast=True)
-    except Exception as img_err:
-        logger.warning("Failed to prepare marked image for LLM", error=str(img_err), path=path)
-        return ""
-
-
-def _decide_detail_page_policy(
-    state: GraphState,
-    current_url: str,
-    markers: list[dict],
-    ui_context: str,
-    marked_image: str,
-    current_jd: dict,
-    detail_page_observations: list[dict],
-) -> tuple[dict[str, Any], float]:
-    start_time = time.time()
-    observations = "\n".join(
-        json.dumps(obs, ensure_ascii=False) for obs in (detail_page_observations or [])[-3:] if isinstance(obs, dict)
-    )
-    marker_ids = [marker.get("id") for marker in markers or [] if isinstance(marker, dict)]
-    prompt = (
-        "You are deciding the next low-level action for a job detail page.\n"
-        "Use the screenshot and OCR markers together. Do not use DOM, URL selectors, or site-specific hardcoded rules.\n"
-        "Choose exactly one action:\n"
-        "- click_marker: only if a visible marker clearly opens hidden job-detail/body content on this detail page. Do not choose header menus, share/bookmark/apply buttons, navigation, filters, or unrelated 'more' menus.\n"
-        "- scroll: if no safe hidden-content control is visible and lower job-detail text likely remains below the current viewport.\n"
-        "- defer: if the page already looks complete, the next action is ambiguous, or a full reasoning/extraction pass should decide.\n"
-        "When choosing click_marker, marker_id must be one of the current marker IDs.\n\n"
-        f"User goal: {state.get('goal', '')}\n"
-        f"Current URL: {current_url or '(unknown)'}\n"
-        f"Current extracted data:\n{json.dumps(current_jd, ensure_ascii=False)[:4000]}\n\n"
-        f"Recent detail observations:\n{observations or '(none)'}\n\n"
-        f"Current marker IDs: {marker_ids}\n"
-        f"Current OCR markers:\n{ui_context}\n"
-    )
-    base64_image = _marked_image_base64(
-        marked_image,
-        "VISION_DETAIL_POLICY_IMAGE_MAX_DIM",
-        "VISION_DETAIL_POLICY_IMAGE_QUALITY",
-        512,
-        45,
-    )
-    try:
-        messages = [
-            SystemMessage(content="Return only the structured detail page policy decision."),
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": prompt},
-                    *(
-                        [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]
-                        if base64_image
-                        else []
-                    ),
-                ]
-                if base64_image
-                else prompt
-            ),
-        ]
-        decision = _get_detail_policy_llm().invoke(messages)
-        data = decision.model_dump() if hasattr(decision, "model_dump") else dict(decision)
-    except Exception as err:
-        logger.warning("Detail page policy LLM failed; deferring to reasoning", error=str(err))
-        data = {"action": "defer", "reason": "detail_policy_llm_failed", "expected_after": ""}
-    elapsed = time.time() - start_time
-    action = str(data.get("action") or "defer").strip().lower()
-    if action not in {"click_marker", "scroll", "defer"}:
-        action = "defer"
-    data["action"] = action
-    return data, elapsed
-
-
 def _safety_page_role_contract() -> str:
     return (
         "\n\n[Safety and page-role contract]\n"
@@ -979,8 +810,7 @@ def _safety_page_role_contract() -> str:
         "- Include risk_level: safe_read, safe_navigation, or sensitive.\n"
         "- Set needs_user_confirmation=true before login, password/authentication, personal data, agreement/terms, application/submission, payment, transfer, account, finance, or legal-effect steps. The executor will stop and ask the user.\n"
         "- Unknown or newly released tasks should be researched and narrowed before execution. Do not try random branches first.\n"
-        "- On detail pages, your main judgment is whether enough information has been collected. If not enough, call update_extracted_info(page_role=\"job_detail\", detail_complete=false). Do not call scroll yourself; the executor asks a separate low-resolution screenshot+OCR page-policy check whether to reveal hidden detail content, scroll, or defer.\n"
-        "- When accumulated detail-page OCR observations are provided, use them to update fields and decide detail_complete instead of asking for another scroll unless required information is still missing.\n"
+        "- On detail pages, your main judgment is whether enough information has been collected. If not enough, call update_extracted_info(page_role=\"job_detail\", detail_complete=false), then choose the next visible UI action yourself, such as scrolling down or clicking a clearly relevant reveal/details control.\n"
     )
 
 
@@ -1039,7 +869,6 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
         "현재 화면에서 보이는 미방문 공고 제목을 선택하십시오.\n"
         "- 목표 수를 채웠으면 목록으로 돌아가거나 같은 카드를 다시 열지 말고 finish_task를 호출하십시오.\n\n"
     )
-    detail_context = _detail_observations_context(state)
     transition_context = ""
     if state.get("transition_status"):
         transition_context = (
@@ -1057,7 +886,6 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
         f"현재까지 누적 수집된 정보:\n{json.dumps(extracted_jd, ensure_ascii=False, indent=2)}\n\n"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"{collection_context}"
-        f"{detail_context}"
         f"{transition_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
@@ -1447,8 +1275,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     current_plan      = list(state.get("plan", []))
     current_url       = state.get("current_url", "")
     current_url_stale = state.get("current_url_stale", True)
-    detail_auto_scroll_count = int(state.get("detail_auto_scroll_count", 0) or 0)
-    detail_page_observations = list(state.get("detail_page_observations", []) or [])
     pending_human_approval = bool(state.get("pending_human_approval", False))
     human_approval_request = dict(state.get("human_approval_request", {}) or {})
     latest_markers = list(state.get("current_markers", []) or [])
@@ -1629,115 +1455,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             step_start,
         )
 
-    def run_detail_observation_batch(reason: str) -> bool:
-        nonlocal current_url, current_url_stale, detail_auto_scroll_count
-        nonlocal latest_markers, latest_ui_context, latest_marked_image, latest_recent_images
-        nonlocal detail_page_observations, screen_changed, pending_transition
-
-        remaining = max(0, _detail_auto_scroll_max() - detail_auto_scroll_count)
-        batch_count = min(_detail_batch_scrolls(), remaining)
-        if batch_count <= 0:
-            return False
-
-        seen_texts = _marker_text_set(latest_markers)
-        captured_any = False
-        for _ in range(batch_count):
-            step_start = time.time()
-            before_snapshot = _state_snapshot_for_action(
-                {
-                    **state,
-                    "current_markers": latest_markers,
-                    "ui_context": latest_ui_context,
-                    "marked_image": latest_marked_image,
-                    "recent_images": list(state.get("recent_images", []) or []) + latest_recent_images,
-                },
-                current_url,
-            )
-            action_seq = next_action_seq()
-            scroll_args = {
-                "direction": "down",
-                "reason": "detail page batch reader accumulates OCR before next reasoning",
-                "expected_after": "more detail content may be visible",
-                "page_role": "job_detail",
-                "risk_level": "safe_navigation",
-            }
-            result = _dispatch_ui("scroll", scroll_args, get_bbox)
-            detail_auto_scroll_count += 1
-            enriched = enrich_result(result, "scroll", scroll_args, before_snapshot, True)
-            enriched["policy_action"] = True
-            enriched["policy_reason"] = reason
-            enriched["detail_batch"] = True
-            enriched["detail_auto_scroll_count"] = detail_auto_scroll_count
-            new_actions.append(enriched)
-            if record_action_episode:
-                record_action_episode(
-                    feedback_episodes,
-                    state,
-                    ai_msg,
-                    "scroll",
-                    scroll_args,
-                    enriched,
-                    before_snapshot,
-                    {
-                        "current_url": current_url,
-                        "current_url_stale": current_url_stale,
-                        "screen_changed": True,
-                        "extracted_jd": current_jd,
-                        "is_finished": is_finished,
-                    },
-                    action_seq,
-                )
-            step_durations.append({"node": "action (scroll)", "duration": time.time() - step_start})
-
-            observe_state = {
-                **state,
-                "current_url": current_url,
-                "current_url_stale": current_url_stale,
-                "current_markers": latest_markers,
-                "ui_context": latest_ui_context,
-                "marked_image": latest_marked_image,
-                "pending_transition": {},
-            }
-            observation_result = perception_node(observe_state)
-            for duration in observation_result.get("step_durations", []) or []:
-                item = dict(duration)
-                item["node"] = "detail_policy_" + str(item.get("node", "perception"))
-                step_durations.append(item)
-
-            markers = list(observation_result.get("current_markers", []) or [])
-            ui_context = observation_result.get("ui_context", "")
-            marked_image = observation_result.get("marked_image", "")
-            recent_images = list(observation_result.get("recent_images", []) or [])
-            current_url = observation_result.get("current_url", current_url)
-            current_url_stale = bool(observation_result.get("current_url_stale", False))
-            latest_markers = markers
-            latest_ui_context = ui_context
-            latest_marked_image = marked_image
-            latest_recent_images.extend(recent_images)
-
-            current_texts = _marker_text_set(markers)
-            new_texts = sorted(current_texts - seen_texts)
-            seen_texts.update(current_texts)
-            image_path = str(recent_images[-1]) if recent_images else ""
-            detail_page_observations.append(
-                _detail_observation(
-                    markers,
-                    ui_context,
-                    image_path=image_path,
-                    marked_image=marked_image,
-                    new_texts=new_texts,
-                )
-            )
-            captured_any = True
-            if not new_texts:
-                logger.info("Detail batch stopped: no new OCR text after scroll")
-                break
-
-        if captured_any:
-            screen_changed = False
-            pending_transition = {}
-        return captured_any
-
     UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
     SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
     URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "close_browser", "go_back"}
@@ -1758,7 +1475,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         before_state_key = before_snapshot.get("state_key", "")
         action_seq = next_action_seq()
         policy_ui_action: tuple[str, dict, str] | None = None
-        policy_batch_reason: str | None = None
 
         try:
             if chain_boundary and action_name in UI_ACTIONS:
@@ -1846,71 +1562,12 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 if (
                     action_name == "update_extracted_info"
                     and result.get("status") == "success"
-                    and _detail_page_policy_enabled()
                     and _is_detail_update(args)
                 ):
                     target_count = _target_count_from_state(state)
                     collected_count = _extracted_job_count(current_jd)
                     detail_complete = args.get("detail_complete")
-                    if detail_complete is False:
-                        if detail_auto_scroll_count >= _detail_auto_scroll_max():
-                            result["detail_policy"] = "max_scroll_reached"
-                            result["detail_auto_scroll_count"] = detail_auto_scroll_count
-                        else:
-                            policy_decision, policy_elapsed = _decide_detail_page_policy(
-                                state,
-                                current_url,
-                                latest_markers,
-                                latest_ui_context,
-                                latest_marked_image,
-                                current_jd,
-                                detail_page_observations,
-                            )
-                            step_durations.append({"node": "detail_policy_reasoning", "duration": policy_elapsed})
-                            result["detail_policy_decision"] = policy_decision
-                            result["detail_auto_scroll_count"] = detail_auto_scroll_count
-                            result["detail_observation_count"] = len(detail_page_observations)
-                            policy_action = str(policy_decision.get("action") or "defer").strip().lower()
-                            if policy_action == "click_marker":
-                                marker_id = policy_decision.get("marker_id")
-                                marker = _marker_by_id(latest_markers, marker_id)
-                                if marker:
-                                    click_args = {
-                                        "marker_id": marker_id,
-                                        "target_label": str(marker.get("text") or ""),
-                                        "target_role": "expand_or_reveal_detail_content",
-                                        "target_component": "detail_page_policy_target",
-                                        "reason": str(policy_decision.get("reason") or "detail policy selected visible marker"),
-                                        "expected_after": str(policy_decision.get("expected_after") or "more detail content may be visible"),
-                                        "page_role": "job_detail",
-                                        "risk_level": "safe_navigation",
-                                        "needs_user_confirmation": False,
-                                    }
-                                    sensitive_reason = _sensitive_action_reason(
-                                        {**state, "current_markers": latest_markers},
-                                        "click_marker",
-                                        click_args,
-                                    )
-                                    if sensitive_reason:
-                                        result["detail_policy"] = "llm_defer_sensitive"
-                                        result["detail_policy_reason"] = sensitive_reason
-                                    else:
-                                        result["detail_policy"] = "llm_click_marker"
-                                        policy_ui_action = (
-                                            "click_marker",
-                                            click_args,
-                                            "detail_policy_llm",
-                                        )
-                                else:
-                                    result["detail_policy"] = "llm_defer_invalid_marker"
-                            elif policy_action == "scroll":
-                                result["detail_policy"] = "batch_pending"
-                                policy_batch_reason = "detail_policy_llm_scroll"
-                            else:
-                                result["detail_policy"] = "llm_defer"
-                    elif detail_complete is True:
-                        detail_auto_scroll_count = 0
-                        detail_page_observations = []
+                    if detail_complete is True:
                         result["detail_policy"] = "detail_complete"
                         if target_count > 0 and collected_count < target_count:
                             policy_ui_action = (
@@ -1972,13 +1629,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             step_elapsed = time.time() - step_start
             step_durations.append({"node": f"action ({action_name})", "duration": step_elapsed})
             logger.info(f"Action Node [{action_name}] completed in {step_elapsed:.2f} seconds")
-
-            if policy_batch_reason and not is_finished:
-                batch_captured = run_detail_observation_batch(policy_batch_reason)
-                enriched["detail_policy"] = "batch_observe" if batch_captured else "auto_scroll_unavailable"
-                enriched["detail_auto_scroll_count"] = detail_auto_scroll_count
-                enriched["detail_observation_count"] = len(detail_page_observations)
-                break
 
             if policy_ui_action and not is_finished:
                 policy_action, policy_args, policy_reason = policy_ui_action
@@ -2045,8 +1695,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "transition_source": "",
         "recorded_steps":    recorded_steps,
         "feedback_episodes": feedback_episodes,
-        "detail_auto_scroll_count": detail_auto_scroll_count,
-        "detail_page_observations": detail_page_observations,
         "pending_human_approval": pending_human_approval,
         "human_approval_request": human_approval_request,
     }
