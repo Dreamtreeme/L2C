@@ -1159,6 +1159,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
     result = {
         "last_action_result": response,
         "reflex_hit": False,
+        "reflex_trace": {"hit": False, "source": "reasoning"},
         "reflex_transition_contracts": {},
         "step_durations": [{"node": "reasoning", "duration": elapsed}]
     }
@@ -1244,12 +1245,21 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
     start_time = time.time()
     logger.info("Executing Reflex Node")
 
-    def miss(state_key: str, elapsed: float) -> Dict[str, Any]:
+    def miss(state_key: str, elapsed: float, reason: str = "", trace: dict | None = None) -> Dict[str, Any]:
+        reflex_trace = dict(trace or {})
+        reflex_trace.update(
+            {
+                "hit": False,
+                "state_key": state_key,
+                "reason": reason or reflex_trace.get("reason", ""),
+            }
+        )
         return {
             "reflex_state_key": state_key,
             "reflex_hit": False,
+            "reflex_trace": reflex_trace,
             "reflex_transition_contracts": {},
-            "step_durations": [{"node": "reflex", "duration": elapsed}],
+            "step_durations": [{"node": "reflex", "duration": elapsed, "hit": False, "reason": reason}],
         }
 
     try:
@@ -1282,12 +1292,28 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
         if not recipe_candidates:
             elapsed = time.time() - start_time
             logger.info("Reflex miss: no recipe", state_key=state_key[:24], site=site)
-            return miss(state_key, elapsed)
+            return miss(
+                state_key,
+                elapsed,
+                "no_recipe",
+                {"candidate_count": 0, "site": site, "current_phash": (state.get("screen_signature") or {}).get("phash", "")},
+            )
 
         selected = None
+        candidate_traces: list[dict[str, Any]] = []
         for recipe_key, recipe, similarity, lookup in recipe_candidates:
+            candidate_trace: dict[str, Any] = {
+                "recipe_key": recipe_key,
+                "lookup": lookup,
+                "similarity": similarity,
+                "steps": [],
+            }
             missing_inputs = _missing_required_recipe_inputs(recipe, params)
             if missing_inputs:
+                candidate_trace["accepted"] = False
+                candidate_trace["reason"] = "missing_required_inputs"
+                candidate_trace["missing_inputs"] = missing_inputs
+                candidate_traces.append(candidate_trace)
                 logger.info(
                     "Reflex candidate skipped: missing required inputs",
                     recipe_key=recipe_key[:24],
@@ -1297,21 +1323,34 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
 
             tool_calls = []
             transition_contracts: dict[str, dict] = {}
+            tool_call_traces: dict[str, dict[str, Any]] = {}
             candidate_valid = True
             for idx, recipe_step in enumerate(recipe.steps):
                 step = recipe_step.model_dump() if hasattr(recipe_step, "model_dump") else recipe_step.dict()
                 action = step.get("action")
                 marker_id = None
+                step_trace: dict[str, Any] = {
+                    "seq": step.get("seq"),
+                    "action": action,
+                    "replay_mode": step.get("replay_mode"),
+                    "match_mode": "none",
+                    "target_text": ((step.get("target") or {}).get("text") if isinstance(step.get("target"), dict) else ""),
+                }
                 if not is_replayable_step(step, params=params):
+                    step_trace["accepted"] = False
+                    step_trace["reason"] = "not_replayable"
+                    candidate_trace["steps"].append(step_trace)
                     candidate_valid = False
                     break
                 if action in {"click_marker", "type_in_marker"}:
                     if step.get("screen_signature"):
+                        step_trace["match_mode"] = "phash"
                         marker_id, phash_result = match_step_by_screen_signature(
                             step,
                             dict(state.get("screen_signature", {}) or {}),
                             markers,
                         )
+                        step_trace["phash"] = phash_result
                         if marker_id is None:
                             logger.info(
                                 "Reflex candidate skipped: pHash replay check failed",
@@ -1320,25 +1359,46 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                                 distance=phash_result.get("distance"),
                                 anchor_overlap=phash_result.get("anchor_overlap"),
                             )
+                            step_trace["accepted"] = False
+                            step_trace["reason"] = phash_result.get("reason", "phash_check_failed")
+                            candidate_trace["steps"].append(step_trace)
                             candidate_valid = False
                             break
                     else:
+                        step_trace["match_mode"] = "ocr_text"
                         marker_id = match_marker(step, markers, params=params)
                     if marker_id is None:
+                        step_trace["accepted"] = False
+                        step_trace["reason"] = "marker_match_failed"
+                        candidate_trace["steps"].append(step_trace)
                         candidate_valid = False
                         break
+                    step_trace["marker_id"] = marker_id
                 args = _reflex_action_args(step, marker_id, params=params)
                 if args is None:
+                    step_trace["accepted"] = False
+                    step_trace["reason"] = "args_build_failed"
+                    candidate_trace["steps"].append(step_trace)
                     candidate_valid = False
                     break
                 call_id = f"reflex_{abs(hash(recipe_key))}_{idx}"
                 tool_calls.append({"name": action, "args": args, "id": call_id})
+                step_trace["accepted"] = True
+                step_trace["tool_call_id"] = call_id
+                tool_call_traces[call_id] = dict(step_trace)
+                candidate_trace["steps"].append(step_trace)
                 contract = step.get("transition_contract")
                 if contract:
                     transition_contracts[call_id] = dict(contract)
             if candidate_valid and tool_calls:
-                selected = (recipe_key, recipe, similarity, lookup, tool_calls, transition_contracts)
+                candidate_trace["accepted"] = True
+                candidate_trace["reason"] = "matched"
+                candidate_traces.append(candidate_trace)
+                selected = (recipe_key, recipe, similarity, lookup, tool_calls, transition_contracts, tool_call_traces)
                 break
+            candidate_trace.setdefault("accepted", False)
+            candidate_trace.setdefault("reason", "candidate_invalid")
+            candidate_traces.append(candidate_trace)
 
         if selected is None:
             elapsed = time.time() - start_time
@@ -1347,9 +1407,14 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                 state_key=state_key[:24],
                 candidates=len(recipe_candidates),
             )
-            return miss(state_key, elapsed)
+            return miss(
+                state_key,
+                elapsed,
+                "no_candidate_passed",
+                {"candidate_count": len(recipe_candidates), "candidates": candidate_traces},
+            )
 
-        recipe_key, recipe, similarity, lookup, tool_calls, transition_contracts = selected
+        recipe_key, recipe, similarity, lookup, tool_calls, transition_contracts, tool_call_traces = selected
 
         msg = AIMessage(
             content=f"[reflex] cached {len(tool_calls)} action(s)",
@@ -1371,13 +1436,33 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
             "last_action_result": msg,
             "reflex_state_key": state_key,
             "reflex_hit": True,
+            "reflex_trace": {
+                "hit": True,
+                "state_key": state_key,
+                "recipe_key": recipe_key,
+                "lookup": lookup,
+                "similarity": similarity,
+                "candidate_count": len(recipe_candidates),
+                "actions": [call["name"] for call in tool_calls],
+                "tool_calls": tool_call_traces,
+                "candidates": candidate_traces,
+            },
             "reflex_transition_contracts": transition_contracts,
-            "step_durations": [{"node": "reflex", "duration": elapsed}],
+            "step_durations": [
+                {
+                    "node": "reflex",
+                    "duration": elapsed,
+                    "hit": True,
+                    "lookup": lookup,
+                    "candidate_count": len(recipe_candidates),
+                    "actions": [call["name"] for call in tool_calls],
+                }
+            ],
         }
     except Exception as e:
         elapsed = time.time() - start_time
         logger.debug("reflex node skipped", error=str(e))
-        return miss(state.get("reflex_state_key", ""), elapsed)
+        return miss(state.get("reflex_state_key", ""), elapsed, "exception", {"error": str(e)})
 
 
 def _dispatch_ui(action_name: str, args: dict, get_bbox, current_url: str = "") -> dict:
@@ -1542,6 +1627,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         action_args: dict,
         before_snapshot: dict,
         screen_change_expected: bool = False,
+        tool_call_id: str = "",
     ) -> dict:
         result["args"] = _compact_action_args(requested_action, action_args)
         result["state_key"] = before_snapshot.get("state_key", "")
@@ -1553,6 +1639,16 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         target = _action_target_metadata(state, requested_action, action_args)
         if target:
             result["target"] = target
+        if state.get("reflex_hit"):
+            trace = dict(state.get("reflex_trace", {}) or {})
+            if trace:
+                result["reflex_hit"] = True
+                result["reflex_recipe_key"] = trace.get("recipe_key", "")
+                result["reflex_lookup"] = trace.get("lookup", "")
+                result["reflex_similarity"] = trace.get("similarity")
+                call_trace = (trace.get("tool_calls") or {}).get(tool_call_id) if tool_call_id else None
+                if call_trace:
+                    result["reflex_match"] = dict(call_trace)
         if result.get("action") != requested_action:
             result["requested_action"] = requested_action
         return result
@@ -1820,7 +1916,14 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             else:
                 raise ValueError(f"Unknown tool: {action_name}")
 
-            enriched = enrich_result(result, action_name, args, before_snapshot, action_changed_screen)
+            enriched = enrich_result(
+                result,
+                action_name,
+                args,
+                before_snapshot,
+                action_changed_screen,
+                str(tool_call.get("id") or ""),
+            )
             new_actions.append(enriched)
             if record_action_episode:
                 record_action_episode(
@@ -1858,7 +1961,14 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             step_elapsed = time.time() - step_start
             before_snapshot = _state_snapshot_for_action(state, current_url)
             result = {"action": action_name, "status": "error", "error": str(e)}
-            enriched = enrich_result(result, action_name, args, before_snapshot, False)
+            enriched = enrich_result(
+                result,
+                action_name,
+                args,
+                before_snapshot,
+                False,
+                str(tool_call.get("id") or ""),
+            )
             new_actions.append(enriched)
             if record_action_episode:
                 record_action_episode(

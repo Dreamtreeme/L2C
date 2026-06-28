@@ -422,6 +422,11 @@ def test_reflex_node_uses_phash_ratio_when_step_has_screen_signature(monkeypatch
 
     assert result["reflex_hit"] is True
     assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 77}
+    assert result["reflex_trace"]["hit"] is True
+    assert result["reflex_trace"]["lookup"] == "exact"
+    call_id = result["last_action_result"].tool_calls[0]["id"]
+    assert result["reflex_trace"]["tool_calls"][call_id]["match_mode"] == "phash"
+    assert result["reflex_trace"]["tool_calls"][call_id]["phash"]["distance"] == 0
 
 
 def test_reflex_node_rejects_signed_step_when_phash_misses(monkeypatch):
@@ -466,6 +471,8 @@ def test_reflex_node_rejects_signed_step_when_phash_misses(monkeypatch):
     )
 
     assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["reason"] == "no_candidate_passed"
+    assert result["reflex_trace"]["candidates"][0]["steps"][0]["reason"] == "phash_distance"
 
 
 def test_reflex_node_replaces_type_input_slot(monkeypatch):

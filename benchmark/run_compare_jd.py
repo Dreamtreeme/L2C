@@ -113,6 +113,7 @@ def main():
         "recorded_steps": [],
         "reflex_state_key": "",
         "reflex_hit": False,
+        "reflex_trace": {},
         "reflex_expected_next_state": "",
         "reflex_pending_validation": False,
         "ocr_texts": [],

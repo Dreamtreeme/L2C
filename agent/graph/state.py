@@ -74,6 +74,9 @@ class GraphState(TypedDict):
     # [Reflex Recipe] 직전 reflex_node가 reasoning을 우회했는지 여부
     reflex_hit: bool
 
+    # [Reflex Recipe] 직전 reflex 후보 선택/매칭/실패 원인 추적 정보
+    reflex_trace: Dict[str, Any]
+
     # [Reflex Recipe] reflex tool_call id별 행동 후 전환 계약
     reflex_transition_contracts: Dict[str, Any]
 

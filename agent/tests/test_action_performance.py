@@ -268,6 +268,20 @@ def test_action_node_carries_reflex_transition_contract_to_next_perception(monke
             "plan": [],
             "recipe_params": {"query": "android 개발자"},
             "reflex_hit": True,
+            "reflex_trace": {
+                "hit": True,
+                "recipe_key": "recipe-home",
+                "lookup": "exact",
+                "similarity": 1.0,
+                "tool_calls": {
+                    "reflex-call": {
+                        "seq": 0,
+                        "action": "click_marker",
+                        "match_mode": "phash",
+                        "marker_id": 1,
+                    }
+                },
+            },
             "reflex_transition_contracts": {"reflex-call": contract},
             "last_action_result": AIMessage(
                 content="",
@@ -281,6 +295,8 @@ def test_action_node_carries_reflex_transition_contract_to_next_perception(monke
     assert pending["source"] == "reflex"
     assert pending["contract"] == contract
     assert pending["params"]["query"] == "android 개발자"
+    assert result["action_history"][0]["reflex_recipe_key"] == "recipe-home"
+    assert result["action_history"][0]["reflex_match"]["match_mode"] == "phash"
 
 
 def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):

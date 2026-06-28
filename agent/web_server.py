@@ -106,6 +106,7 @@ async def chat_endpoint(req: ChatRequest):
             feedback_episodes=[],
             reflex_state_key="",
             reflex_hit=False,
+            reflex_trace={},
             reflex_transition_contracts={},
             recipe_params={},
             pending_transition={},
