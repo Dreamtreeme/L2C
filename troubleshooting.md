@@ -472,6 +472,26 @@ pHash 기반 replay는 `ios 개발자 공고 2개` 반복탐색에서 추론 횟
 
 이번 테스트에서 고정 경로에 해당하는 검색 아이콘 클릭, 검색 결과 진입, 일부 스크롤/클릭은 Reflex가 처리했다. 반대로 공고 상세 페이지처럼 공고마다 본문 길이와 OCR 텍스트가 크게 달라지는 구간은 `no recipe` 또는 pHash/OCR 검증 실패로 reasoning에 폴백했다. 이는 실패라기보다 의도한 동작에 가깝다. 고정 가능한 부모 경로는 줄이고, 가변적인 마지막 자식 노드 판단은 계속 LLM에게 맡기는 하이브리드 구조가 현재 가장 현실적이다.
 
+### [3차 시도: pHash ROI fast path]
+
+pHash hit 후보에서는 전체 SoM/OCR 전에 저장된 target bbox 비율 주변 ROI만 PaddleOCR로 읽는 fast path를 추가했다. ROI에서 target text 또는 저장된 주변 evidence anchor가 확인되면 synthetic marker를 만들어 기존 `reflex_node -> action_node` 경로를 그대로 사용한다. 실패하면 기존 전체 SoM/OCR과 reasoning 폴백 경로를 유지한다.
+
+검증 로그는 `logs/e2e_phash_roi_wanted_ios2_20260629_000722.log`이다.
+
+| 항목 | pHash/Reflex 반복탐색 | pHash ROI fast path |
+|---|---:|---:|
+| 저장 품질 | 2건 저장 | 2건 저장 |
+| reasoning 횟수 | 9회 | 9회 |
+| Reflex hit | 5회 | 5회 |
+| pHash ROI fast hit | 0회 | 3회 |
+| ROI OCR 호출 | 0회 | 6회 |
+| fast perception 시간 | - | 3회 / 총 2.30초 / 평균 0.77초 |
+| perception 총시간 | 97.43초 | 99.10초 |
+
+저장 URL은 동일하게 `https://www.wanted.co.kr/wd/82178`, `https://www.wanted.co.kr/wd/130049` 두 건이었다. 다만 두 번째 실행에서는 첫 공고 직무명이 `[Vrew/vFlat] iOS 개발자`가 아니라 `iOS 개발자`로 저장되어 상세 추출 LLM 변동이 남아 있다.
+
+결론은 제한적이다. fast path 자체는 검색 아이콘, 포지션 탭, 상세 정보 더 보기 같은 고정 target에서 전체 OCR을 0.5~0.9초대 ROI OCR로 대체했다. 하지만 상세 페이지 OCR이 28~46초까지 튀었고, 이미 사라진 `상세 정보 더 보기` 후보에 대해 ROI miss가 반복되어 perception 총시간 감소로는 이어지지 않았다. 다음 개선은 ROI miss negative cache 또는 화면 역할별 후보 제한, 그리고 상세 페이지 extraction/OCR 호출 압축이다.
+
 따라서 이번 단계의 결론은 다음과 같다.
 
 - pHash 기반 Reflex는 반복탐색에서 reasoning 횟수와 시간을 유의미하게 줄였다.

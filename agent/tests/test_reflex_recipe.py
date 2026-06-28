@@ -107,6 +107,22 @@ def test_phash_replay_rejects_different_screen_before_text_match():
     assert result["reason"] == "phash_distance"
 
 
+def test_roi_target_match_accepts_nearby_anchor_for_generic_icon():
+    from agent.recipe.phash_replay import roi_target_match
+
+    result = roi_target_match(
+        {
+            "text": "상호작용 가능한 요소 (icon)",
+            "semantic_label": "검색 아이콘",
+            "evidence_texts": ["기업", "채용"],
+        },
+        [{"id": 1, "bbox": [10, 10, 80, 30], "text": "기업"}],
+    )
+
+    assert result["matched"] is True
+    assert result["reason"] == "evidence_anchor"
+
+
 def test_state_key_ignores_dynamic_numeric_changes():
     from agent.recipe.state_key import compute_state_key
 
@@ -225,6 +241,182 @@ def test_perception_node_records_and_resolves_pending_transition(monkeypatch, tm
     assert result["pending_transition"] == {}
     assert result["transition_observations"][0]["action_seq"] == 3
     assert "Android App 개발자" in result["transition_observations"][0]["marker_texts"]
+
+
+def test_perception_node_uses_phash_roi_fast_path(monkeypatch, tmp_path):
+    import time
+    from PIL import Image
+    from agent.graph import nodes
+    from agent.vision.screen_signature import perceptual_hash
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    screenshot = tmp_path / "screen.png"
+    Image.new("RGB", (1000, 1000), "white").save(screenshot)
+    phash = perceptual_hash(screenshot)
+    step = RecipeStep(
+        seq=0,
+        state_key="state-fast",
+        action="click_marker",
+        replay_mode="fixed",
+        screen_signature={"phash": phash, "size": [1000, 1000], "anchors": ["검색"]},
+        target={"text": "검색", "bbox_ratio": [0.4, 0.4, 0.5, 0.5], "center_ratio": [0.45, 0.45]},
+    )
+    step_payload = step.model_dump() if hasattr(step, "model_dump") else step.dict()
+
+    class FakeSom:
+        def __init__(self):
+            self.roi_calls = []
+
+        def run_ocr_roi(self, image_path, bbox):
+            self.roi_calls.append((image_path, bbox))
+            return [{"bbox": [420, 420, 470, 450], "text": "검색", "conf": 0.93}]
+
+    class FakePerception:
+        def __init__(self):
+            self.som_engine = FakeSom()
+            self.analyze_calls = 0
+
+        def capture_screen(self):
+            return screenshot
+
+        def analyze_ui(self, _image_path):
+            self.analyze_calls += 1
+            raise AssertionError("fast path hit should not run full SoM/OCR")
+
+    class FakeStore:
+        def get_by_site(self, site):
+            assert site == "wanted"
+            return [
+                {
+                    "state_key": "state-fast",
+                    "site": "wanted",
+                    "steps": [step_payload],
+                    "skill_metadata": {},
+                    "success_count": 3,
+                }
+            ]
+
+        def get_recipe(self, state_key):
+            assert state_key == "state-fast"
+            return SiteRecipe(site="wanted", goal="goal", steps=[step])
+
+        def get_similar_recipes(self, site, markers, min_similarity=0.0):
+            return []
+
+    fake_perception = FakePerception()
+    monkeypatch.setenv("REFLEX_ENABLED", "1")
+    monkeypatch.setenv("REFLEX_PHASH_FAST_PATH", "1")
+    monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.perception_node(
+        {
+            "goal": "검색",
+            "current_url": "https://www.wanted.co.kr",
+            "current_url_stale": False,
+            "recipe_params": {"site": "wanted"},
+            "pending_transition": {
+                "action_seq": 1,
+                "action": "click_marker",
+                "expected_after": "검색 화면이 보인다",
+                "source": "reflex",
+                "started_at": time.time(),
+                "attempts": 0,
+            },
+        }
+    )
+
+    assert fake_perception.analyze_calls == 0
+    assert fake_perception.som_engine.roi_calls
+    assert result["reflex_state_key"] == "state-fast"
+    assert result["screen_signature"]["fast_path"] == "phash_roi"
+    assert result["screen_signature"]["roi_verified"] is True
+    assert result["current_markers"][0]["type"] == "reflex_target"
+    assert result["transition_status"] == "ready"
+    assert result["transition_outcome"] == "phash_roi_fast_path"
+    assert result["pending_transition"] == {}
+    assert result["transition_observations"][0]["reason"] == "phash_roi_verified"
+
+    reflex_result = nodes.reflex_node(
+        {
+            **result,
+            "goal": "검색",
+            "current_url": "https://www.wanted.co.kr",
+            "recipe_params": {"site": "wanted"},
+        }
+    )
+
+    assert reflex_result["reflex_hit"] is True
+    assert reflex_result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 0}
+
+
+def test_perception_node_falls_back_when_phash_roi_validation_fails(monkeypatch, tmp_path):
+    from PIL import Image
+    from agent.graph import nodes
+    from agent.vision.screen_signature import perceptual_hash
+
+    screenshot = tmp_path / "screen.png"
+    Image.new("RGB", (1000, 1000), "white").save(screenshot)
+    phash = perceptual_hash(screenshot)
+    step_payload = {
+        "seq": 0,
+        "state_key": "state-fast",
+        "action": "click_marker",
+        "replay_mode": "fixed",
+        "screen_signature": {"phash": phash, "size": [1000, 1000], "anchors": ["검색"]},
+        "target": {"text": "검색", "bbox_ratio": [0.4, 0.4, 0.5, 0.5], "center_ratio": [0.45, 0.45]},
+    }
+
+    class FakeSom:
+        def run_ocr_roi(self, image_path, bbox):
+            return [{"bbox": [420, 420, 470, 450], "text": "다른 텍스트", "conf": 0.91}]
+
+    class FakePerception:
+        def __init__(self):
+            self.som_engine = FakeSom()
+            self.analyze_calls = 0
+
+        def capture_screen(self):
+            return screenshot
+
+        def analyze_ui(self, _image_path):
+            self.analyze_calls += 1
+            return {
+                "markers": [{"id": 7, "bbox": [10, 10, 100, 40], "text": "전체 OCR"}],
+                "marked_image": str(screenshot),
+            }
+
+    class FakeStore:
+        def get_by_site(self, site):
+            return [
+                {
+                    "state_key": "state-fast",
+                    "site": "wanted",
+                    "steps": [step_payload],
+                    "skill_metadata": {},
+                    "success_count": 1,
+                }
+            ]
+
+    fake_perception = FakePerception()
+    monkeypatch.setenv("REFLEX_ENABLED", "1")
+    monkeypatch.setenv("REFLEX_PHASH_FAST_PATH", "1")
+    monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.perception_node(
+        {
+            "goal": "검색",
+            "current_url": "https://www.wanted.co.kr",
+            "current_url_stale": False,
+            "recipe_params": {"site": "wanted"},
+            "pending_transition": {},
+        }
+    )
+
+    assert fake_perception.analyze_calls == 1
+    assert result["current_markers"] == [{"id": 7, "bbox": [10, 10, 100, 40], "text": "전체 OCR"}]
+    assert "fast_path" not in result["screen_signature"]
 
 
 def test_match_marker_uses_region_and_ordinal_tiebreak():

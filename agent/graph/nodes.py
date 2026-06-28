@@ -176,6 +176,229 @@ def _get_qa_llm_with_tools():
     return _qa_llm_with_tools
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _reflex_phash_fast_path_enabled() -> bool:
+    """Reflex가 켜진 경우에만 OCR 전 pHash fast path를 시도한다."""
+    return _env_bool("REFLEX_ENABLED", False) and _env_bool("REFLEX_PHASH_FAST_PATH", True)
+
+
+def _site_slug_for_reflex(current_url: str, params: dict[str, Any]) -> str:
+    site = str(params.get("site") or "").strip()
+    if site:
+        return site
+    profile = _site_profile_for_url(current_url)
+    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
+    slug = str(entry.get("slug") or "").strip()
+    if slug:
+        return slug
+    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
+    return str(manual.get("site") or "").strip()
+
+
+def _model_or_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if hasattr(value, "dict"):
+        return value.dict()
+    return dict(value or {}) if isinstance(value, dict) else {}
+
+
+def _recipe_missing_required_inputs(metadata: Any, params: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+    meta = _model_or_dict(metadata)
+    for item in meta.get("inputs", []) or []:
+        slot = _model_or_dict(item)
+        name = str(slot.get("name") or "")
+        if slot.get("required") and name and params.get(name) in (None, ""):
+            missing.append(name)
+    return missing
+
+
+def _ocr_boxes_to_markers(boxes: list[dict[str, Any]], start_id: int = 1) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    for index, item in enumerate(boxes or [], start=start_id):
+        bbox = item.get("bbox") or []
+        if len(bbox) != 4:
+            continue
+        markers.append(
+            {
+                "id": index,
+                "text": str(item.get("text") or ""),
+                "bbox": [int(float(coord)) for coord in bbox],
+                "type": "text",
+                "conf": item.get("conf"),
+            }
+        )
+    return markers
+
+
+def _try_reflex_phash_fast_path(
+    state: GraphState,
+    image_path,
+    current_url: str,
+    current_signature: dict[str, Any],
+    perception,
+) -> dict[str, Any] | None:
+    """전체 SoM/OCR 전에 pHash + target ROI OCR만으로 replay 가능한 화면인지 확인한다."""
+    if not _reflex_phash_fast_path_enabled():
+        return None
+    pending_transition = dict(state.get("pending_transition", {}) or {})
+    if pending_transition and str(pending_transition.get("source") or "") not in {"autonomous", "reflex", "page_policy"}:
+        return None
+
+    try:
+        from agent.recipe.matcher import is_replayable_step
+        from agent.recipe.phash_replay import (
+            bbox_from_ratio,
+            roi_target_match,
+            screen_signature_match,
+            synthetic_marker_from_target,
+            target_bbox_ratio,
+        )
+        from agent.recipe.store import RecipeStore
+        from agent.vision.screen_signature import marker_count_bucket
+
+        params = dict(state.get("recipe_params", {}) or {})
+        params.setdefault("goal", state.get("goal", ""))
+        site = _site_slug_for_reflex(current_url, params)
+        if not site or not current_signature.get("phash"):
+            return None
+
+        store = RecipeStore()
+        candidates: list[tuple[float, int, str, list[dict[str, Any]], dict[str, Any], dict[str, Any]]] = []
+        for item in store.get_by_site(site):
+            recipe_key = str(item.get("state_key") or "")
+            steps = [dict(step) for step in item.get("steps", []) or [] if isinstance(step, dict)]
+            if not recipe_key or not steps:
+                continue
+            missing_inputs = _recipe_missing_required_inputs(item.get("skill_metadata"), params)
+            if missing_inputs:
+                continue
+            if any(not is_replayable_step(step, params=params) for step in steps):
+                continue
+            target_steps = [
+                step
+                for step in steps
+                if step.get("action") in {"click_marker", "type_in_marker"}
+            ]
+            if len(target_steps) != 1:
+                continue
+            target_step = target_steps[0]
+            target = _model_or_dict(target_step.get("target"))
+            if not target_bbox_ratio(target):
+                continue
+            saved_signature = dict(target_step.get("screen_signature") or steps[0].get("screen_signature") or {})
+            phash_result = screen_signature_match(saved_signature, current_signature)
+            if not phash_result.get("matched"):
+                continue
+
+            args_valid = True
+            for step in steps:
+                marker_id = 0 if step.get("action") in {"click_marker", "type_in_marker"} else None
+                if _reflex_action_args(step, marker_id, params=params) is None:
+                    args_valid = False
+                    break
+            if not args_valid:
+                continue
+
+            distance = phash_result.get("distance")
+            score_distance = float(distance if distance is not None else 999)
+            success_count = int(item.get("success_count") or 0)
+            candidates.append((score_distance, -success_count, recipe_key, steps, target_step, phash_result))
+
+        if not candidates:
+            logger.info("Reflex pHash fast path miss", reason="no_phash_candidate", site=site)
+            return None
+
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        distance, _success_rank, recipe_key, steps, target_step, phash_result = candidates[0]
+        target = _model_or_dict(target_step.get("target"))
+        screen_size = list(current_signature.get("size") or [])
+        if len(screen_size) != 2:
+            return None
+
+        try:
+            padding_ratio = float(os.getenv("REFLEX_FAST_ROI_PADDING_RATIO", "0.04"))
+        except ValueError:
+            padding_ratio = 0.04
+        try:
+            min_padding_px = int(os.getenv("REFLEX_FAST_ROI_MIN_PADDING_PX", "80"))
+        except ValueError:
+            min_padding_px = 80
+        roi_bbox = bbox_from_ratio(
+            target_bbox_ratio(target),
+            screen_size,
+            padding_ratio=padding_ratio,
+            min_padding_px=min_padding_px,
+        )
+        if len(roi_bbox) != 4:
+            return None
+
+        roi_boxes = perception.som_engine.run_ocr_roi(image_path, roi_bbox)
+        roi_markers = _ocr_boxes_to_markers(roi_boxes, start_id=1)
+        roi_validation = roi_target_match(target, roi_markers)
+        if not roi_validation.get("matched"):
+            logger.info(
+                "Reflex pHash fast path miss",
+                reason=roi_validation.get("reason"),
+                site=site,
+                recipe_key=recipe_key[:24],
+                distance=distance,
+            )
+            return None
+
+        synthetic_marker = synthetic_marker_from_target(target, screen_size, marker_id=0)
+        if not synthetic_marker:
+            return None
+        synthetic_marker["roi_validation"] = roi_validation
+        markers = [synthetic_marker] + roi_markers
+        signature = dict(current_signature)
+        signature.update(
+            {
+                "marker_count": len(markers),
+                "marker_count_bucket": marker_count_bucket(len(markers)),
+                "anchors": [],
+                "roi_anchors": roi_validation.get("roi_texts", []),
+                "roi_verified": True,
+                "roi_validation": roi_validation,
+                "fast_path": "phash_roi",
+            }
+        )
+        logger.info(
+            "Reflex pHash fast path hit",
+            site=site,
+            recipe_key=recipe_key[:24],
+            distance=distance,
+            roi_reason=roi_validation.get("reason"),
+            roi_text_count=len(roi_validation.get("roi_texts", [])),
+        )
+        return {
+            "markers": markers,
+            "ui_context": _build_ui_context(markers),
+            "screen_signature": signature,
+            "reflex_state_key": recipe_key,
+            "marked_image": "",
+            "trace": {
+                "site": site,
+                "recipe_key": recipe_key,
+                "phash": phash_result,
+                "roi_validation": roi_validation,
+                "actions": [step.get("action") for step in steps],
+            },
+        }
+    except Exception as e:
+        logger.debug("Reflex pHash fast path skipped", error=str(e))
+        return None
+
+
 def perception_node(state: GraphState) -> Dict[str, Any]:
     """화면을 캡처하고 마커를 파싱하여 상태를 업데이트합니다."""
     start_time = time.time()
@@ -193,6 +416,75 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         if fetched_url:
             current_url = fetched_url
         current_url_stale = False
+
+    pending_transition = dict(state.get("pending_transition", {}) or {})
+    screen_signature = {}
+    try:
+        from agent.vision.screen_signature import compute_phash_signature
+
+        screen_signature = compute_phash_signature(image_path)
+    except Exception as e:
+        logger.debug("pHash signature skipped", error=str(e))
+
+    fast_replay = _try_reflex_phash_fast_path(
+        state,
+        image_path,
+        current_url,
+        screen_signature,
+        perception,
+    )
+    if fast_replay:
+        transition_observations = []
+        transition_status = ""
+        transition_outcome = ""
+        transition_source = ""
+        if pending_transition:
+            started_at = float(pending_transition.get("started_at") or start_time)
+            transition_source = str(pending_transition.get("source") or "")
+            transition_status = "ready"
+            transition_outcome = "phash_roi_fast_path"
+            transition_observations.append(
+                {
+                    "action_seq": pending_transition.get("action_seq"),
+                    "action": pending_transition.get("action", ""),
+                    "expected_after": pending_transition.get("expected_after", ""),
+                    "source": transition_source,
+                    "attempt": int(pending_transition.get("attempts") or 0) + 1,
+                    "elapsed_sec": round(max(0.0, time.time() - started_at), 3),
+                    "status": transition_status,
+                    "outcome": transition_outcome,
+                    "reason": "phash_roi_verified",
+                    "state_key": fast_replay["reflex_state_key"],
+                    "marker_count": len(fast_replay["markers"]),
+                    "marker_texts": fast_replay["screen_signature"].get("roi_anchors", []),
+                    "screenshot": str(image_path),
+                    "marked_image": "",
+                }
+            )
+            pending_transition = {}
+        elapsed = time.time() - start_time
+        logger.info(f"Perception Node completed in {elapsed:.2f} seconds via pHash ROI fast path")
+        return {
+            "recent_images": [image_path],
+            "marked_image": fast_replay.get("marked_image", ""),
+            "current_markers": fast_replay["markers"],
+            "ui_context": fast_replay["ui_context"],
+            "screen_signature": fast_replay["screen_signature"],
+            "current_url": current_url,
+            "current_url_stale": current_url_stale,
+            "reflex_state_key": fast_replay["reflex_state_key"],
+            "pending_transition": pending_transition,
+            "transition_status": transition_status,
+            "transition_outcome": transition_outcome,
+            "transition_source": transition_source,
+            "transition_observations": transition_observations,
+            "reflex_trace": {
+                "hit": False,
+                "source": "perception_fast_path",
+                **dict(fast_replay.get("trace") or {}),
+            },
+            "step_durations": [{"node": "perception", "duration": elapsed, "mode": "phash_roi"}],
+        }
 
     analysis = perception.analyze_ui(image_path)
     markers = analysis.get("markers", [])
@@ -229,7 +521,6 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     transition_status = ""
     transition_outcome = ""
     transition_source = ""
-    pending_transition = dict(state.get("pending_transition", {}) or {})
     try:
         from agent.recipe.state_key import compute_state_key
         from agent.recipe.transition import evaluate_transition, marker_texts

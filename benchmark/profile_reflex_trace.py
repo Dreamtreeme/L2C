@@ -17,6 +17,10 @@ NODE_PATTERNS = {
 ACTION_PATTERN = re.compile(r"Action Node \[([^\]]+)\] completed in ([0-9.]+) seconds")
 PHASH_MISS_PATTERN = re.compile(r"pHash replay check failed.*reason=([^\s]+)")
 REFLEX_MISS_PATTERN = re.compile(r"Reflex miss: ([^\[]+)")
+FAST_PERCEPTION_PATTERN = re.compile(r"Perception Node completed in ([0-9.]+) seconds via pHash ROI fast path")
+FAST_HIT_PATTERN = re.compile(r"Reflex pHash fast path hit")
+FAST_MISS_PATTERN = re.compile(r"Reflex pHash fast path miss.*reason=([^\s]+)")
+ROI_OCR_PATTERN = re.compile(r"ROI OCR complete")
 
 
 def _stats(values: list[float]) -> dict[str, float | int]:
@@ -40,7 +44,10 @@ def profile_log(path: Path) -> dict:
     action_durations: dict[str, list[float]] = defaultdict(list)
     phash_miss_reasons: Counter[str] = Counter()
     reflex_miss_reasons: Counter[str] = Counter()
+    fast_miss_reasons: Counter[str] = Counter()
     reflex_hits = 0
+    fast_hits = 0
+    roi_ocr_calls = 0
 
     for line in _read_log_text(path).splitlines():
         for name, pattern in NODE_PATTERNS.items():
@@ -49,6 +56,16 @@ def profile_log(path: Path) -> dict:
                 durations[name].append(float(match.group(1)))
                 if name == "reflex":
                     reflex_hits += 1
+        fast_perception_match = FAST_PERCEPTION_PATTERN.search(line)
+        if fast_perception_match:
+            durations["perception_phash_roi"].append(float(fast_perception_match.group(1)))
+        if FAST_HIT_PATTERN.search(line):
+            fast_hits += 1
+        fast_miss_match = FAST_MISS_PATTERN.search(line)
+        if fast_miss_match:
+            fast_miss_reasons[fast_miss_match.group(1)] += 1
+        if ROI_OCR_PATTERN.search(line):
+            roi_ocr_calls += 1
         action_match = ACTION_PATTERN.search(line)
         if action_match:
             action_durations[action_match.group(1)].append(float(action_match.group(2)))
@@ -72,6 +89,9 @@ def profile_log(path: Path) -> dict:
         "reflex_hits": reflex_hits,
         "reflex_misses": dict(reflex_miss_reasons),
         "phash_miss_reasons": dict(phash_miss_reasons),
+        "phash_roi_fast_hits": fast_hits,
+        "phash_roi_fast_misses": dict(fast_miss_reasons),
+        "roi_ocr_calls": roi_ocr_calls,
         "estimated_reasoning_seconds_avoided": round(avoided_reasoning_estimate, 3),
         "reflex_seconds_spent": round(reflex_total, 3),
     }
@@ -86,6 +106,8 @@ def _print_report(report: dict) -> None:
     for name, stats in report["actions"].items():
         print(f"  {name}: count={stats['count']} total={stats['total']}s avg={stats['avg']}s")
     print(f"reflex_hits: {report['reflex_hits']}")
+    print(f"phash_roi_fast_hits: {report['phash_roi_fast_hits']}")
+    print(f"roi_ocr_calls: {report['roi_ocr_calls']}")
     print(f"estimated_reasoning_seconds_avoided: {report['estimated_reasoning_seconds_avoided']}s")
     print(f"reflex_seconds_spent: {report['reflex_seconds_spent']}s")
     if report["reflex_misses"]:
@@ -95,6 +117,10 @@ def _print_report(report: dict) -> None:
     if report["phash_miss_reasons"]:
         print("phash_miss_reasons:")
         for reason, count in report["phash_miss_reasons"].items():
+            print(f"  {reason}: {count}")
+    if report["phash_roi_fast_misses"]:
+        print("phash_roi_fast_misses:")
+        for reason, count in report["phash_roi_fast_misses"].items():
             print(f"  {reason}: {count}")
 
 

@@ -151,9 +151,8 @@ def marker_center_ratio(marker: dict[str, Any], size: list[int] | tuple[int, int
     return center_ratio_from_bbox(_bbox(marker), size)
 
 
-def compute_screen_signature(image_path: str | Path, markers: list[dict[str, Any]]) -> dict[str, Any]:
-    """스크린샷 pHash와 OCR 앵커를 결합한 화면 서명을 만든다."""
-
+def compute_phash_signature(image_path: str | Path) -> dict[str, Any]:
+    """OCR 없이 스크린샷 pHash와 화면 크기만 계산한다."""
     size: tuple[int, int] | None = None
     phash = ""
     try:
@@ -161,13 +160,22 @@ def compute_screen_signature(image_path: str | Path, markers: list[dict[str, Any
         phash = perceptual_hash(image_path)
     except Exception:
         size = None
-    marker_count = len(markers or [])
-    signature = {
+    return {
         "algorithm": "phash-dct64-v1",
         "phash": phash,
         "size": list(size or [0, 0]),
-        "marker_count": marker_count,
-        "marker_count_bucket": marker_count_bucket(marker_count),
-        "anchors": anchor_texts(markers),
+        "marker_count": 0,
+        "marker_count_bucket": marker_count_bucket(0),
+        "anchors": [],
     }
+
+
+def compute_screen_signature(image_path: str | Path, markers: list[dict[str, Any]]) -> dict[str, Any]:
+    """스크린샷 pHash와 OCR 앵커를 결합한 화면 서명을 만든다."""
+
+    marker_count = len(markers or [])
+    signature = compute_phash_signature(image_path)
+    signature["marker_count"] = marker_count
+    signature["marker_count_bucket"] = marker_count_bucket(marker_count)
+    signature["anchors"] = anchor_texts(markers)
     return signature
