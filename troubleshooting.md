@@ -347,12 +347,12 @@ Reflex
 
 초기 Critic은 `job_card_title`을 `fixed=false`로 표시했지만 승격 코드는 이 값을 사용하지 않고 후보의 모든 행동을 활성 `recipes`에 저장했다. 그 결과 Android 탐색에서 선택한 `기술연구소 Android App 개발자`가 검색어가 바뀐 뒤에도 Reflex 클릭 대상으로 남았고, 상세 수집 후 목록으로 돌아오면 같은 공고를 다시 여는 루프가 발생했다.
 
-이를 다음처럼 수정했다.
+이 문제 때문에 현재 구현은 자동 승격 경로를 다시 제거했다. 후보 기록과 Critic 검토는 남기지만, 검토 결과가 accept/promote를 반환해도 활성 `recipes` 테이블에는 쓰지 않는다. 아래 기준은 향후 승격을 다시 켤 때 지켜야 할 조건이다.
 
 - Critic 단계 출력에 `replay_mode = fixed | parameterized | reasoning`을 추가했다.
 - `fixed`는 실행마다 같은 안정 UI, `parameterized`는 `query` 같은 명시적 슬롯만 바뀌는 UI, `reasoning`은 현재 카드 목록·방문 이력·남은 목표 수에 따라 달라지는 판단으로 정의했다.
-- 활성 레시피에는 `fixed`와 `parameterized` 단계만 저장하고 `reasoning` 단계는 제외한다.
-- 후보를 재승격할 때 해당 후보의 과거 상태 행을 교체하여 이전 특정 공고명 레시피가 남지 않게 했다.
+- 활성 레시피를 다시 쓰게 될 경우에는 `fixed`와 `parameterized` 단계만 저장하고 `reasoning` 단계는 제외해야 한다.
+- 후보를 재승격할 때는 해당 후보의 과거 상태 행을 교체하여 이전 특정 공고명 레시피가 남지 않게 해야 한다.
 - reasoning 프롬프트에 목표 공고 수, 현재 수집 수, 이미 방문한 공고 제목을 전달하고 목표를 채우면 같은 카드를 다시 열지 않고 종료하도록 했다.
 
 검증은 Android 탐색 후보를 승격한 뒤 검색어를 `ios 개발자`, 목표를 2건으로 바꿔 수행했다. 현재 화면에서 `[Vrew/vFlat] iOS 개발자`와 `[병역특례 현역/보충역] iOS 개발자`를 각각 선택했고, 첫 상세 수집 후 목록 복귀와 두 번째 미방문 카드 선택을 거쳐 `is_finished=true`, 2건 저장으로 종료했다. 탐색 당시 Android 공고명은 재생되지 않았다.
@@ -471,26 +471,6 @@ pHash 기반 replay는 `ios 개발자 공고 2개` 반복탐색에서 추론 횟
 중요한 점은 pHash replay가 모든 화면을 스크립트처럼 고정하려는 방식이 아니라는 점이다. 무한히 늘어나는 트리 구조에 비유하면, 매번 루트에서 모든 판단을 다시 시작하지 않고 **이미 검증된 부모 노드 경로는 고정해 바로 통과**하고, 마지막에 계속 달라지는 자식 노드만 새로 찾는 방식에 가깝다.
 
 이번 테스트에서 고정 경로에 해당하는 검색 아이콘 클릭, 검색 결과 진입, 일부 스크롤/클릭은 Reflex가 처리했다. 반대로 공고 상세 페이지처럼 공고마다 본문 길이와 OCR 텍스트가 크게 달라지는 구간은 `no recipe` 또는 pHash/OCR 검증 실패로 reasoning에 폴백했다. 이는 실패라기보다 의도한 동작에 가깝다. 고정 가능한 부모 경로는 줄이고, 가변적인 마지막 자식 노드 판단은 계속 LLM에게 맡기는 하이브리드 구조가 현재 가장 현실적이다.
-
-### [3차 시도: pHash ROI fast path]
-
-pHash hit 후보에서는 전체 SoM/OCR 전에 저장된 target bbox 비율 주변 ROI만 PaddleOCR로 읽는 fast path를 추가했다. ROI에서 target text 또는 저장된 주변 evidence anchor가 확인되면 synthetic marker를 만들어 기존 `reflex_node -> action_node` 경로를 그대로 사용한다. 실패하면 기존 전체 SoM/OCR과 reasoning 폴백 경로를 유지한다.
-
-검증 로그는 `logs/e2e_phash_roi_wanted_ios2_20260629_000722.log`이다.
-
-| 항목 | pHash/Reflex 반복탐색 | pHash ROI fast path |
-|---|---:|---:|
-| 저장 품질 | 2건 저장 | 2건 저장 |
-| reasoning 횟수 | 9회 | 9회 |
-| Reflex hit | 5회 | 5회 |
-| pHash ROI fast hit | 0회 | 3회 |
-| ROI OCR 호출 | 0회 | 6회 |
-| fast perception 시간 | - | 3회 / 총 2.30초 / 평균 0.77초 |
-| perception 총시간 | 97.43초 | 99.10초 |
-
-저장 URL은 동일하게 `https://www.wanted.co.kr/wd/82178`, `https://www.wanted.co.kr/wd/130049` 두 건이었다. 다만 두 번째 실행에서는 첫 공고 직무명이 `[Vrew/vFlat] iOS 개발자`가 아니라 `iOS 개발자`로 저장되어 상세 추출 LLM 변동이 남아 있다.
-
-결론은 제한적이다. fast path 자체는 검색 아이콘, 포지션 탭, 상세 정보 더 보기 같은 고정 target에서 전체 OCR을 0.5~0.9초대 ROI OCR로 대체했다. 하지만 상세 페이지 OCR이 28~46초까지 튀었고, 이미 사라진 `상세 정보 더 보기` 후보에 대해 ROI miss가 반복되어 perception 총시간 감소로는 이어지지 않았다. 다음 개선은 ROI miss negative cache 또는 화면 역할별 후보 제한, 그리고 상세 페이지 extraction/OCR 호출 압축이다.
 
 따라서 이번 단계의 결론은 다음과 같다.
 

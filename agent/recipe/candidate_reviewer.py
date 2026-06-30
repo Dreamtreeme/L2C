@@ -54,7 +54,8 @@ def build_candidate_review_payload(candidate: dict[str, Any]) -> dict[str, Any]:
         "worker_submission": worker_submission,
         "commander_review": dict(candidate.get("review", {}) or {}),
         "review_task": (
-            "Decide whether this candidate should be promoted to the active Reflex recipe table. "
+            "Decide whether this candidate is reusable Reflex recipe evidence. "
+            "Active recipe promotion is disabled in code, so promote_to_active_recipe is only a review signal. "
             "Use the worker evidence, skill metadata evidence, and commander review. If accepted, fill "
             "skill_metadata with when_to_use, inputs, step_intents, verification, and fallback conditions. "
             "For every recorded step, set step_intents.replay_mode to fixed, parameterized, or reasoning. "
@@ -82,8 +83,8 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
         SystemMessage(
             content=(
                 "You are the Reflex Recipe Critic. The script layer only packaged evidence and did not judge "
-                "semantic quality. Review the candidate and return only RecipeCandidateReview. Set "
-                "promote_to_active_recipe=true only when this candidate should become an active reusable recipe. "
+                "semantic quality. Review the candidate and return only RecipeCandidateReview. Active recipe "
+                "promotion is disabled in code, so use promote_to_active_recipe only as a recommendation signal. "
                 "When accepting, write concise skill_metadata that explains when to use the recipe, which inputs "
                 "are variable, which steps are fixed, parameterized, or require reasoning, and how replay success "
                 "or fallback should be verified. Every step_intent must include replay_mode. Current search-result "
@@ -116,86 +117,12 @@ def _status_for_review(review: dict[str, Any]) -> str:
     return "revise"
 
 
-def _steps_with_transition_contracts(
-    steps: list[dict[str, Any]],
-    assignments: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """비평가 출력의 seq별 계약을 기록 단계에 기계적으로 병합한다."""
-    by_seq = {
-        int(item["seq"]): dict(item.get("contract") or {})
-        for item in assignments or []
-        if isinstance(item, dict) and isinstance(item.get("seq"), int) and item.get("contract")
-    }
-    compiled = []
-    for raw_step in steps or []:
-        step = dict(raw_step)
-        seq = step.get("seq")
-        if isinstance(seq, int) and seq in by_seq:
-            step["transition_contract"] = by_seq[seq]
-        compiled.append(step)
-    return compiled
-
-
-def _steps_with_state_anchors(
-    steps: list[dict[str, Any]],
-    worker_submission: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """행동 전 피드백 관찰에서 화면 OCR 앵커를 복원해 단계에 병합한다."""
-    from agent.recipe.state_key import anchor_texts_from_values
-
-    anchors_by_seq: dict[int, list[str]] = {}
-    for episode in worker_submission.get("feedback_episodes", []) or []:
-        if not isinstance(episode, dict) or not isinstance(episode.get("seq"), int):
-            continue
-        before = ((episode.get("observation") or {}).get("before") or {})
-        anchors = anchor_texts_from_values(before.get("marker_texts") or [])
-        if anchors:
-            anchors_by_seq.setdefault(int(episode["seq"]), anchors)
-
-    compiled = []
-    for raw_step in steps or []:
-        step = dict(raw_step)
-        seq = step.get("seq")
-        if not step.get("state_anchors") and isinstance(seq, int):
-            step["state_anchors"] = list(anchors_by_seq.get(seq, []))
-        compiled.append(step)
-    return compiled
-
-
-def _steps_with_replay_modes(
-    steps: list[dict[str, Any]],
-    skill_metadata: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Critic이 명시한 재생 모드를 단계에 병합하고 추론 단계를 활성 레시피에서 제외한다."""
-    intent_by_seq = {
-        int(item["seq"]): dict(item)
-        for item in skill_metadata.get("step_intents", []) or []
-        if isinstance(item, dict) and isinstance(item.get("seq"), int)
-    }
-    replayable = []
-    for raw_step in steps or []:
-        step = dict(raw_step)
-        seq = step.get("seq")
-        intent = intent_by_seq.get(seq, {}) if isinstance(seq, int) else {}
-        mode = str(intent.get("replay_mode") or "reasoning")
-        step["replay_mode"] = mode
-        for key in ("intent", "target_role", "component", "expected_after", "slot_refs", "fixed"):
-            value = intent.get(key)
-            if value not in (None, "", []):
-                step[key] = value
-        if mode != "reasoning":
-            replayable.append(step)
-    return replayable
-
-
 def review_and_apply_candidate(
     candidate_id: str,
     db_path=None,
     critic: CriticFn | None = None,
-    allow_promote: bool = True,
 ) -> dict[str, Any]:
     from agent.recipe.candidate_store import RecipeCandidateStore
-    from agent.recipe.store import RecipeStore
 
     candidate_store = RecipeCandidateStore(db_path)
     candidate = candidate_store.get_candidate(candidate_id)
@@ -203,41 +130,18 @@ def review_and_apply_candidate(
         return _fallback_review(f"candidate_not_found: {candidate_id}")
 
     review = review_candidate(candidate, critic=critic)
-    promoted_count = 0
-    if allow_promote and review.get("decision") == "accept" and review.get("promote_to_active_recipe"):
-        source_steps = list(candidate.get("steps", []) or [])
-        compiled_steps = _steps_with_replay_modes(
-            _steps_with_state_anchors(
-                _steps_with_transition_contracts(
-                    source_steps,
-                    list(review.get("transition_contracts", []) or []),
-                ),
-                dict(candidate.get("payload", {}) or {}),
-            ),
-            dict(review.get("skill_metadata", {}) or {}),
-        )
-        promoted_count = RecipeStore(db_path).replace_recipe_steps(
-            candidate.get("site", "") or "unknown",
-            candidate.get("goal", "") or "",
-            source_steps,
-            compiled_steps,
-            metadata=dict(review.get("skill_metadata", {}) or {}),
-        )
 
     validation = {
         "review": review,
-        "promoted_count": promoted_count,
-        "allow_promote": allow_promote,
     }
     candidate_store.update_status(candidate_id, _status_for_review(review), validation=validation)
     out = dict(review)
     out["candidate_id"] = candidate_id
-    out["promoted_count"] = promoted_count
     return out
 
 
 def _process_mode(mode: str | None) -> str:
-    return "promote" if str(mode or "").strip().lower() == "promote" else "review"
+    return "review"
 
 
 def process_recipe_candidates(
@@ -261,7 +165,6 @@ def process_recipe_candidates(
             candidate["candidate_id"],
             db_path=db_path,
             critic=critic,
-            allow_promote=(normalized_mode == "promote"),
         )
         for candidate in candidates
     ]
@@ -271,6 +174,5 @@ def process_recipe_candidates(
         "requested_limit": safe_limit,
         "candidate_count": len(candidates),
         "processed_count": len(results),
-        "promoted_count": sum(int(result.get("promoted_count") or 0) for result in results),
         "results": results,
     }

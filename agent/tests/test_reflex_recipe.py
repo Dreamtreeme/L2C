@@ -107,22 +107,6 @@ def test_phash_replay_rejects_different_screen_before_text_match():
     assert result["reason"] == "phash_distance"
 
 
-def test_roi_target_match_accepts_nearby_anchor_for_generic_icon():
-    from agent.recipe.phash_replay import roi_target_match
-
-    result = roi_target_match(
-        {
-            "text": "상호작용 가능한 요소 (icon)",
-            "semantic_label": "검색 아이콘",
-            "evidence_texts": ["기업", "채용"],
-        },
-        [{"id": 1, "bbox": [10, 10, 80, 30], "text": "기업"}],
-    )
-
-    assert result["matched"] is True
-    assert result["reason"] == "evidence_anchor"
-
-
 def test_state_key_ignores_dynamic_numeric_changes():
     from agent.recipe.state_key import compute_state_key
 
@@ -243,180 +227,153 @@ def test_perception_node_records_and_resolves_pending_transition(monkeypatch, tm
     assert "Android App 개발자" in result["transition_observations"][0]["marker_texts"]
 
 
-def test_perception_node_uses_phash_roi_fast_path(monkeypatch, tmp_path):
-    import time
-    from PIL import Image
+def test_set_result_card_queue_stores_visible_card_ratios():
     from agent.graph import nodes
-    from agent.vision.screen_signature import perceptual_hash
-    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
-    screenshot = tmp_path / "screen.png"
-    Image.new("RGB", (1000, 1000), "white").save(screenshot)
-    phash = perceptual_hash(screenshot)
-    step = RecipeStep(
-        seq=0,
-        state_key="state-fast",
-        action="click_marker",
-        replay_mode="fixed",
-        screen_signature={"phash": phash, "size": [1000, 1000], "anchors": ["검색"]},
-        target={"text": "검색", "bbox_ratio": [0.4, 0.4, 0.5, 0.5], "center_ratio": [0.45, 0.45]},
-    )
-    step_payload = step.model_dump() if hasattr(step, "model_dump") else step.dict()
-
-    class FakeSom:
-        def __init__(self):
-            self.roi_calls = []
-
-        def run_ocr_roi(self, image_path, bbox):
-            self.roi_calls.append((image_path, bbox))
-            return [{"bbox": [420, 420, 470, 450], "text": "검색", "conf": 0.93}]
-
-    class FakePerception:
-        def __init__(self):
-            self.som_engine = FakeSom()
-            self.analyze_calls = 0
-
-        def capture_screen(self):
-            return screenshot
-
-        def analyze_ui(self, _image_path):
-            self.analyze_calls += 1
-            raise AssertionError("fast path hit should not run full SoM/OCR")
-
-    class FakeStore:
-        def get_by_site(self, site):
-            assert site == "wanted"
-            return [
-                {
-                    "state_key": "state-fast",
-                    "site": "wanted",
-                    "steps": [step_payload],
-                    "skill_metadata": {},
-                    "success_count": 3,
-                }
-            ]
-
-        def get_recipe(self, state_key):
-            assert state_key == "state-fast"
-            return SiteRecipe(site="wanted", goal="goal", steps=[step])
-
-        def get_similar_recipes(self, site, markers, min_similarity=0.0):
-            return []
-
-    fake_perception = FakePerception()
-    monkeypatch.setenv("REFLEX_ENABLED", "1")
-    monkeypatch.setenv("REFLEX_PHASH_FAST_PATH", "1")
-    monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
-    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
-
-    result = nodes.perception_node(
-        {
-            "goal": "검색",
-            "current_url": "https://www.wanted.co.kr",
-            "current_url_stale": False,
-            "recipe_params": {"site": "wanted"},
-            "pending_transition": {
-                "action_seq": 1,
-                "action": "click_marker",
-                "expected_after": "검색 화면이 보인다",
-                "source": "reflex",
-                "started_at": time.time(),
-                "attempts": 0,
-            },
-        }
-    )
-
-    assert fake_perception.analyze_calls == 0
-    assert fake_perception.som_engine.roi_calls
-    assert result["reflex_state_key"] == "state-fast"
-    assert result["screen_signature"]["fast_path"] == "phash_roi"
-    assert result["screen_signature"]["roi_verified"] is True
-    assert result["current_markers"][0]["type"] == "reflex_target"
-    assert result["transition_status"] == "ready"
-    assert result["transition_outcome"] == "phash_roi_fast_path"
-    assert result["pending_transition"] == {}
-    assert result["transition_observations"][0]["reason"] == "phash_roi_verified"
-
-    reflex_result = nodes.reflex_node(
-        {
-            **result,
-            "goal": "검색",
-            "current_url": "https://www.wanted.co.kr",
-            "recipe_params": {"site": "wanted"},
-        }
-    )
-
-    assert reflex_result["reflex_hit"] is True
-    assert reflex_result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 0}
-
-
-def test_perception_node_falls_back_when_phash_roi_validation_fails(monkeypatch, tmp_path):
-    from PIL import Image
-    from agent.graph import nodes
-    from agent.vision.screen_signature import perceptual_hash
-
-    screenshot = tmp_path / "screen.png"
-    Image.new("RGB", (1000, 1000), "white").save(screenshot)
-    phash = perceptual_hash(screenshot)
-    step_payload = {
-        "seq": 0,
-        "state_key": "state-fast",
-        "action": "click_marker",
-        "replay_mode": "fixed",
-        "screen_signature": {"phash": phash, "size": [1000, 1000], "anchors": ["검색"]},
-        "target": {"text": "검색", "bbox_ratio": [0.4, 0.4, 0.5, 0.5], "center_ratio": [0.45, 0.45]},
+    state = {
+        "current_markers": [
+            {"id": 10, "bbox": [100, 200, 300, 240], "text": "iOS 개발자"},
+            {"id": 11, "bbox": [100, 245, 260, 270], "text": "보이저엑스"},
+        ],
+        "screen_signature": {
+            "phash": "0" * 16,
+            "size": [1000, 1000],
+            "anchors": ["iOS 개발자", "보이저엑스"],
+        },
+        "reflex_state_key": "ocr#list",
+        "recent_images": ["screen.png"],
+        "marked_image": "marked.png",
+        "recipe_params": {"target_count": 2},
+        "extracted_jd": {},
     }
 
-    class FakeSom:
-        def run_ocr_roi(self, image_path, bbox):
-            return [{"bbox": [420, 420, 470, 450], "text": "다른 텍스트", "conf": 0.91}]
-
-    class FakePerception:
-        def __init__(self):
-            self.som_engine = FakeSom()
-            self.analyze_calls = 0
-
-        def capture_screen(self):
-            return screenshot
-
-        def analyze_ui(self, _image_path):
-            self.analyze_calls += 1
-            return {
-                "markers": [{"id": 7, "bbox": [10, 10, 100, 40], "text": "전체 OCR"}],
-                "marked_image": str(screenshot),
-            }
-
-    class FakeStore:
-        def get_by_site(self, site):
-            return [
-                {
-                    "state_key": "state-fast",
-                    "site": "wanted",
-                    "steps": [step_payload],
-                    "skill_metadata": {},
-                    "success_count": 1,
-                }
-            ]
-
-    fake_perception = FakePerception()
-    monkeypatch.setenv("REFLEX_ENABLED", "1")
-    monkeypatch.setenv("REFLEX_PHASH_FAST_PATH", "1")
-    monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
-    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
-
-    result = nodes.perception_node(
-        {
-            "goal": "검색",
-            "current_url": "https://www.wanted.co.kr",
-            "current_url_stale": False,
-            "recipe_params": {"site": "wanted"},
-            "pending_transition": {},
-        }
+    result, _jd, _plan, _step = nodes._dispatch_state(
+        "set_result_card_queue",
+        {"cards": [{"marker_id": 10, "title": "iOS 개발자", "company": "보이저엑스"}]},
+        {},
+        [],
+        0,
+        current_url="https://www.wanted.co.kr/search?query=ios",
+        state=state,
     )
 
-    assert fake_perception.analyze_calls == 1
-    assert result["current_markers"] == [{"id": 7, "bbox": [10, 10, 100, 40], "text": "전체 OCR"}]
-    assert "fast_path" not in result["screen_signature"]
+    assert result["status"] == "success"
+    queue = result["_result_card_queue"]
+    assert queue[0]["title"] == "iOS 개발자"
+    assert queue[0]["company"] == "보이저엑스"
+    assert queue[0]["bbox_ratio"] == [0.1, 0.2, 0.3, 0.24]
+    assert result["_result_page_memory"]["state_key"] == "ocr#list"
+
+
+def test_card_queue_replay_after_go_back_uses_cached_bbox():
+    from agent.graph import nodes
+
+    state = {
+        "result_card_queue": [
+            {
+                "queue_id": "card-2",
+                "status": "pending",
+                "title": "두번째 iOS 개발자",
+                "company": "넛지",
+                "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+                "center_ratio": [0.4, 0.425],
+                "target": {
+                    "text": "두번째 iOS 개발자",
+                    "semantic_label": "두번째 iOS 개발자",
+                    "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+                    "center_ratio": [0.4, 0.425],
+                },
+            }
+        ],
+        "result_page_memory": {
+            "state_key": "ocr#list",
+            "screen_signature": {
+                "phash": "0" * 16,
+                "anchors": ["두번째 iOS 개발자"],
+                "size": [1000, 1000],
+            },
+        },
+    }
+
+    msg, markers, trace = nodes._queue_replay_after_return(
+        state,
+        {"action": "go_back"},
+        "https://www.wanted.co.kr/search?query=ios",
+        "ocr#list",
+        [],
+        {"phash": "0" * 16, "anchors": ["두번째 iOS 개발자"], "size": [1000, 1000]},
+    )
+
+    assert msg is not None
+    assert trace["hit"] is True
+    call = msg.tool_calls[0]
+    assert call["name"] == "click_marker"
+    assert call["args"]["queue_id"] == "card-2"
+    assert markers[0]["bbox"] == [300, 400, 500, 450]
+
+
+def test_card_queue_replay_waits_until_active_card_is_done():
+    from agent.graph import nodes
+
+    state = {
+        "active_result_card": {"queue_id": "card-1", "status": "active", "title": "첫번째 iOS 개발자"},
+        "result_card_queue": [
+            {"queue_id": "card-1", "status": "active", "title": "첫번째 iOS 개발자"},
+            {
+                "queue_id": "card-2",
+                "status": "pending",
+                "title": "두번째 iOS 개발자",
+                "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+            },
+        ],
+        "result_page_memory": {
+            "state_key": "ocr#list",
+            "screen_signature": {"phash": "0" * 16, "anchors": ["두번째 iOS 개발자"], "size": [1000, 1000]},
+        },
+    }
+
+    msg, _markers, trace = nodes._queue_replay_after_return(
+        state,
+        {"action": "go_back"},
+        "https://www.wanted.co.kr/search?query=ios",
+        "ocr#list",
+        [],
+        {"phash": "0" * 16, "anchors": ["두번째 iOS 개발자"], "size": [1000, 1000]},
+    )
+
+    assert msg is None
+    assert trace["reason"] == "active_card_not_completed"
+
+
+def test_card_queue_marks_active_and_done():
+    from agent.graph import nodes
+
+    queue = [{"queue_id": "card-1", "status": "pending", "title": "A"}]
+
+    queue, active = nodes._mark_result_card_active(queue, {"queue_id": "card-1"})
+    assert queue[0]["status"] == "active"
+    assert active["queue_id"] == "card-1"
+
+    queue, active = nodes._complete_active_result_card(queue, active)
+    assert queue[0]["status"] == "done"
+    assert active == {}
+
+
+def test_card_queue_marks_active_when_card_click_uses_title_label():
+    from agent.graph import nodes
+
+    queue = [{"queue_id": "card-1", "status": "pending", "title": "iOS 핵심 시스템 CTO 및 PM급 엔지니어"}]
+    args = {
+        "marker_id": 170,
+        "target_component": "job_card",
+        "target_role": "link",
+        "target_label": "iOS 핵심 시스템 CTO 및 PM급 엔지니어",
+    }
+
+    assert nodes._result_card_click_matches_queue(queue, args) is True
+    queue, active = nodes._mark_result_card_active(queue, args)
+    assert queue[0]["status"] == "active"
+    assert active["queue_id"] == "card-1"
 
 
 def test_match_marker_uses_region_and_ordinal_tiebreak():
@@ -871,9 +828,86 @@ def test_reflex_routing_respects_flag_and_validation(monkeypatch):
     assert route_after_perception({"transition_status": "unknown", "transition_source": "page_policy"}) == "reasoning"
     assert route_after_perception({"transition_status": "unknown", "transition_source": "autonomous"}) == "reflex"
     assert route_after_perception({"transition_status": "ready"}) == "reflex"
+    assert route_after_perception({"queue_replay_hit": True}) == "action"
 
     assert route_after_reflex({"reflex_hit": True}) == "action"
     assert route_after_reflex({"reflex_hit": False}) == "reasoning"
+
+
+def test_detail_ui_context_compacts_ocr_markers_into_ordered_lines(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "1")
+    markers = [
+        {"id": 1, "bbox": [80, 80, 130, 110], "text": "채용"},
+        {"id": 2, "bbox": [100, 200, 210, 235], "text": "모바일"},
+        {"id": 3, "bbox": [220, 200, 360, 235], "text": "엔지니어"},
+        {"id": 10, "bbox": [100, 400, 210, 435], "text": "주요업무"},
+        {"id": 11, "bbox": [100, 450, 135, 480], "text": "iOS"},
+        {"id": 12, "bbox": [150, 450, 180, 480], "text": "앱"},
+        {"id": 13, "bbox": [195, 450, 250, 480], "text": "개발"},
+        {"id": 20, "bbox": [100, 540, 220, 575], "text": "자격요건"},
+        {"id": 21, "bbox": [100, 590, 170, 620], "text": "Swift"},
+        {"id": 22, "bbox": [190, 590, 250, 620], "text": "경험"},
+        {"id": 30, "bbox": [100, 700, 290, 735], "text": "상세 정보 더 보기"},
+        {"id": 31, "bbox": [820, 210, 870, 260], "text": "상호작용 가능한 요소 (button)"},
+    ]
+
+    context = nodes._build_ui_context(markers, current_url="https://www.wanted.co.kr/wd/1")
+
+    assert "상세 페이지 OCR 본문" in context
+    assert "식별된 텍스트 요소" not in context
+    assert "[공고 소개]" not in context
+    assert "모바일 엔지니어" in context
+    assert "[주요업무]" not in context
+    assert "주요업무" in context
+    assert "iOS 앱 개발" in context
+    assert "[자격요건]" not in context
+    assert "자격요건" in context
+    assert "Swift 경험" in context
+    assert "수집 진행용 클릭 후보" in context
+    assert "[id: 30] 상세 정보 더 보기" in context
+    assert "채용" not in context
+
+
+def test_detail_ui_context_keeps_heading_lines_for_llm_judgment(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "1")
+    markers = [
+        {"id": 1, "bbox": [100, 200, 210, 235], "text": "기술스택"},
+        {"id": 2, "bbox": [100, 250, 170, 280], "text": "Flutter"},
+        {"id": 3, "bbox": [190, 250, 260, 280], "text": "WebRTC"},
+        {"id": 4, "bbox": [100, 340, 160, 375], "text": "태그"},
+        {"id": 5, "bbox": [100, 390, 190, 420], "text": "식대지원"},
+        {"id": 6, "bbox": [210, 390, 320, 420], "text": "장비지원"},
+    ]
+
+    context = nodes._build_ui_context(markers, current_url="https://www.wanted.co.kr/wd/1")
+
+    assert "[기술스택]" not in context
+    assert "[태그/혜택]" not in context
+    assert "기술스택" in context
+    assert "태그" in context
+    assert "Flutter WebRTC" in context
+    assert "식대지원 장비지원" in context
+
+
+def test_non_detail_ui_context_keeps_raw_marker_list(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "1")
+    markers = [
+        {"id": 1, "bbox": [100, 200, 180, 230], "text": "검색"},
+        {"id": 2, "bbox": [100, 260, 220, 290], "text": "iOS 개발자"},
+    ]
+
+    context = nodes._build_ui_context(markers, current_url="https://www.wanted.co.kr/search?query=ios")
+
+    assert "상세 페이지 OCR 섹션 요약" not in context
+    assert "식별된 텍스트 요소" in context
+    assert "[id: 2] iOS 개발자" in context
+
 
 def test_match_marker_uses_evidence_texts_to_disambiguate_repeated_targets():
     from agent.recipe.matcher import match_marker
@@ -1445,7 +1479,7 @@ def test_recipe_candidate_status_update_records_llm_validation(tmp_path):
     assert row["validation"]["review"]["decision"] == "revise"
 
 
-def test_candidate_reviewer_promotes_only_when_llm_accepts(tmp_path):
+def test_candidate_reviewer_records_review_without_active_promotion(tmp_path):
     from agent.recipe.candidate_reviewer import review_and_apply_candidate
     from agent.recipe.candidate_store import RecipeCandidateStore
     from agent.recipe.store import RecipeStore
@@ -1503,19 +1537,11 @@ def test_candidate_reviewer_promotes_only_when_llm_accepts(tmp_path):
     assert seen["payload"]["steps"][0]["state_key"] == "state-a"
     assert seen["payload"]["transition_observations"][0]["action_seq"] == 0
     assert review["decision"] == "accept"
-    assert review["promoted_count"] == 1
     assert candidate["status"] == "accepted"
-    assert candidate["validation"]["promoted_count"] == 1
-    assert recipes[0]["steps"][0]["state_key"] == "state-a"
-    assert recipes[0]["steps"][0]["replay_mode"] == "fixed"
-    assert recipes[0]["steps"][0]["intent"] == "Open the stable search control."
-    assert recipes[0]["steps"][0]["expected_after"] == "Search overlay is visible."
-    assert recipes[0]["steps"][0]["state_anchors"] == ["aiengineer", "검색", "채용"]
-    assert recipes[0]["steps"][0]["transition_contract"]["outcomes"][0]["name"] == "detail_opened"
-    assert recipes[0]["skill_metadata"]["when_to_use"] == "Use on a job search result page."
+    assert recipes == []
 
 
-def test_candidate_reviewer_excludes_reasoning_steps_from_active_recipe(tmp_path):
+def test_candidate_reviewer_does_not_write_active_recipe_when_critic_accepts(tmp_path):
     from agent.recipe.candidate_reviewer import review_and_apply_candidate
     from agent.recipe.candidate_store import RecipeCandidateStore
     from agent.recipe.store import RecipeStore
@@ -1558,8 +1584,8 @@ def test_candidate_reviewer_excludes_reasoning_steps_from_active_recipe(tmp_path
     )
 
     recipes = RecipeStore(tmp_path / "critic.db").get_by_site("wanted")
-    assert review["promoted_count"] == 1
-    assert [step["state_key"] for recipe in recipes for step in recipe["steps"]] == ["state-a"]
+    assert review["decision"] == "accept"
+    assert recipes == []
 
 
 def test_candidate_reviewer_revise_does_not_promote(tmp_path):
@@ -1589,7 +1615,6 @@ def test_candidate_reviewer_revise_does_not_promote(tmp_path):
     candidate = store.get_candidate(candidate_id)
 
     assert review["decision"] == "revise"
-    assert review["promoted_count"] == 0
     assert candidate["status"] == "revise"
     assert RecipeStore(tmp_path / "critic.db").get_by_site("wanted") == []
 
@@ -1636,7 +1661,7 @@ def test_realtime_recipe_learning_mode_off_skips_candidate(monkeypatch):
     monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "off")
     monkeypatch.setattr(rs, "_persist_collected_data", lambda extracted, keyword: 1)
     called = []
-    monkeypatch.setattr(rs, "_commit_recipe_candidate", lambda *args, **kwargs: called.append(args) or ("candidate-1", {}))
+    monkeypatch.setattr(rs, "_commit_recipe_candidate", lambda *args, **kwargs: called.append(args) or "candidate-1")
     monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
 
     persisted_count, submission, _review, _submission_id = rs.persist_accepted_worker_result(
@@ -1657,7 +1682,7 @@ def test_realtime_recipe_learning_mode_record_saves_candidate_without_critic(mon
     seen = {}
     def fake_commit_recipe_candidate(submission, review, source, submission_id, mode):
         seen["mode"] = mode
-        return "candidate-1", {}
+        return "candidate-1"
 
     monkeypatch.setattr(rs, "_commit_recipe_candidate", fake_commit_recipe_candidate)
     monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
@@ -1673,7 +1698,7 @@ def test_realtime_recipe_learning_mode_record_saves_candidate_without_critic(mon
     assert "recipe_candidate_review" not in submission
 
 
-def test_realtime_recipe_learning_mode_promote_attaches_critic_review(monkeypatch):
+def test_realtime_recipe_learning_mode_promote_is_treated_as_record(monkeypatch):
     from agent.tools import realtime_scraping as rs
 
     monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "promote")
@@ -1681,10 +1706,7 @@ def test_realtime_recipe_learning_mode_promote_attaches_critic_review(monkeypatc
     monkeypatch.setattr(
         rs,
         "_commit_recipe_candidate",
-        lambda submission, review, source, submission_id, mode: (
-            "candidate-1",
-            {"decision": "accept", "promote_to_active_recipe": True, "promoted_count": 1},
-        ),
+        lambda submission, review, source, submission_id, mode: "candidate-1",
     )
     monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
 
@@ -1693,8 +1715,8 @@ def test_realtime_recipe_learning_mode_promote_attaches_critic_review(monkeypatc
         {"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
     )
 
-    assert submission["recipe_learning_mode"] == "promote"
-    assert submission["recipe_candidate_review"]["promoted_count"] == 1
+    assert submission["recipe_learning_mode"] == "record"
+    assert "recipe_candidate_review" not in submission
 
 
 def test_process_recipe_candidates_review_mode_does_not_promote(tmp_path):
@@ -1734,17 +1756,14 @@ def test_process_recipe_candidates_review_mode_does_not_promote(tmp_path):
 
     assert result["mode"] == "review"
     assert result["processed_count"] == 2
-    assert result["promoted_count"] == 0
     assert set(seen) == set(candidate_ids)
     assert RecipeStore(db_path).get_by_site("wanted") == []
     for candidate_id in candidate_ids:
         candidate = store.get_candidate(candidate_id)
         assert candidate["status"] == "accepted"
-        assert candidate["validation"]["allow_promote"] is False
-        assert candidate["validation"]["promoted_count"] == 0
 
 
-def test_process_recipe_candidates_promote_mode_writes_active_recipe(tmp_path):
+def test_process_recipe_candidates_promote_mode_is_review_only(tmp_path):
     from agent.recipe.candidate_reviewer import process_recipe_candidates
     from agent.recipe.candidate_store import RecipeCandidateStore
     from agent.recipe.store import RecipeStore
@@ -1765,26 +1784,24 @@ def test_process_recipe_candidates_promote_mode_writes_active_recipe(tmp_path):
         critic=lambda payload: {
             "decision": "accept",
             "reasons": ["critic promoted replay evidence"],
-                "feedback_to_worker": "",
-                "promote_to_active_recipe": True,
-                "skill_metadata": {
-                    "step_intents": [
-                        {"seq": 0, "action": "click_marker", "replay_mode": "fixed"}
-                    ]
-                },
-                "confidence": 0.88,
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "step_intents": [
+                    {"seq": 0, "action": "click_marker", "replay_mode": "fixed"}
+                ]
             },
+            "confidence": 0.88,
+        },
     )
 
     candidate = store.get_candidate(candidate_id)
     recipes = RecipeStore(db_path).get_by_site("wanted")
 
-    assert result["mode"] == "promote"
+    assert result["mode"] == "review"
     assert result["processed_count"] == 1
-    assert result["promoted_count"] == 1
     assert candidate["status"] == "accepted"
-    assert candidate["validation"]["allow_promote"] is True
-    assert recipes[0]["steps"][0]["state_key"] == "state-a"
+    assert recipes == []
 
 
 def test_review_recipe_candidates_tool_returns_batch_json(monkeypatch):
@@ -1805,6 +1822,6 @@ def test_review_recipe_candidates_tool_returns_batch_json(monkeypatch):
         review_recipe_candidates.invoke({"mode": "promote", "limit": 2, "status": "accepted"})
     )
 
-    assert seen == {"limit": 2, "mode": "promote", "status": "accepted"}
-    assert payload["mode"] == "promote"
+    assert seen == {"limit": 2, "mode": "review", "status": "accepted"}
+    assert payload["mode"] == "review"
     assert payload["requested_limit"] == 2

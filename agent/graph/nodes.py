@@ -112,6 +112,17 @@ class update_plan_progress(BaseModel):
     current_step: int = Field(..., description="수행 중인 계획 단계 인덱스 (0-indexed)")
     plan: Optional[List[str]] = Field(None, description="수정된 계획 단계 목록 (필요한 경우)")
 
+class set_result_card_queue(BaseModel):
+    """검색 결과 목록에서 현재 화면에 보이는 수집 대상 공고 카드들을 런타임 작업 큐에 저장합니다."""
+    cards: List[Dict[str, Any]] = Field(
+        ...,
+        description=(
+            "수집할 공고 카드 목록. 각 항목에는 marker_id와 title/target_label, company를 가능한 만큼 넣으십시오. "
+            "현재 화면에 보이는 카드만 넣어야 합니다."
+        ),
+    )
+    reason: Optional[str] = Field(None, description="이 카드들을 큐에 넣은 이유")
+
 class finish_task(BaseModel):
     """작업을 완료하고 최종 데이터를 반환합니다."""
     result: str = Field(..., description="최종 완료 요약 또는 결과 데이터")
@@ -154,6 +165,7 @@ def _get_ui_llm_with_tools():
             update_extracted_info,
             go_back,
             update_plan_progress,
+            set_result_card_queue,
             finish_task,
         ])
     return _ui_llm_with_tools
@@ -176,229 +188,6 @@ def _get_qa_llm_with_tools():
     return _qa_llm_with_tools
 
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _reflex_phash_fast_path_enabled() -> bool:
-    """Reflex가 켜진 경우에만 OCR 전 pHash fast path를 시도한다."""
-    return _env_bool("REFLEX_ENABLED", False) and _env_bool("REFLEX_PHASH_FAST_PATH", True)
-
-
-def _site_slug_for_reflex(current_url: str, params: dict[str, Any]) -> str:
-    site = str(params.get("site") or "").strip()
-    if site:
-        return site
-    profile = _site_profile_for_url(current_url)
-    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
-    slug = str(entry.get("slug") or "").strip()
-    if slug:
-        return slug
-    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-    return str(manual.get("site") or "").strip()
-
-
-def _model_or_dict(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if hasattr(value, "model_dump"):
-        return value.model_dump()
-    if hasattr(value, "dict"):
-        return value.dict()
-    return dict(value or {}) if isinstance(value, dict) else {}
-
-
-def _recipe_missing_required_inputs(metadata: Any, params: dict[str, Any]) -> list[str]:
-    missing: list[str] = []
-    meta = _model_or_dict(metadata)
-    for item in meta.get("inputs", []) or []:
-        slot = _model_or_dict(item)
-        name = str(slot.get("name") or "")
-        if slot.get("required") and name and params.get(name) in (None, ""):
-            missing.append(name)
-    return missing
-
-
-def _ocr_boxes_to_markers(boxes: list[dict[str, Any]], start_id: int = 1) -> list[dict[str, Any]]:
-    markers: list[dict[str, Any]] = []
-    for index, item in enumerate(boxes or [], start=start_id):
-        bbox = item.get("bbox") or []
-        if len(bbox) != 4:
-            continue
-        markers.append(
-            {
-                "id": index,
-                "text": str(item.get("text") or ""),
-                "bbox": [int(float(coord)) for coord in bbox],
-                "type": "text",
-                "conf": item.get("conf"),
-            }
-        )
-    return markers
-
-
-def _try_reflex_phash_fast_path(
-    state: GraphState,
-    image_path,
-    current_url: str,
-    current_signature: dict[str, Any],
-    perception,
-) -> dict[str, Any] | None:
-    """전체 SoM/OCR 전에 pHash + target ROI OCR만으로 replay 가능한 화면인지 확인한다."""
-    if not _reflex_phash_fast_path_enabled():
-        return None
-    pending_transition = dict(state.get("pending_transition", {}) or {})
-    if pending_transition and str(pending_transition.get("source") or "") not in {"autonomous", "reflex", "page_policy"}:
-        return None
-
-    try:
-        from agent.recipe.matcher import is_replayable_step
-        from agent.recipe.phash_replay import (
-            bbox_from_ratio,
-            roi_target_match,
-            screen_signature_match,
-            synthetic_marker_from_target,
-            target_bbox_ratio,
-        )
-        from agent.recipe.store import RecipeStore
-        from agent.vision.screen_signature import marker_count_bucket
-
-        params = dict(state.get("recipe_params", {}) or {})
-        params.setdefault("goal", state.get("goal", ""))
-        site = _site_slug_for_reflex(current_url, params)
-        if not site or not current_signature.get("phash"):
-            return None
-
-        store = RecipeStore()
-        candidates: list[tuple[float, int, str, list[dict[str, Any]], dict[str, Any], dict[str, Any]]] = []
-        for item in store.get_by_site(site):
-            recipe_key = str(item.get("state_key") or "")
-            steps = [dict(step) for step in item.get("steps", []) or [] if isinstance(step, dict)]
-            if not recipe_key or not steps:
-                continue
-            missing_inputs = _recipe_missing_required_inputs(item.get("skill_metadata"), params)
-            if missing_inputs:
-                continue
-            if any(not is_replayable_step(step, params=params) for step in steps):
-                continue
-            target_steps = [
-                step
-                for step in steps
-                if step.get("action") in {"click_marker", "type_in_marker"}
-            ]
-            if len(target_steps) != 1:
-                continue
-            target_step = target_steps[0]
-            target = _model_or_dict(target_step.get("target"))
-            if not target_bbox_ratio(target):
-                continue
-            saved_signature = dict(target_step.get("screen_signature") or steps[0].get("screen_signature") or {})
-            phash_result = screen_signature_match(saved_signature, current_signature)
-            if not phash_result.get("matched"):
-                continue
-
-            args_valid = True
-            for step in steps:
-                marker_id = 0 if step.get("action") in {"click_marker", "type_in_marker"} else None
-                if _reflex_action_args(step, marker_id, params=params) is None:
-                    args_valid = False
-                    break
-            if not args_valid:
-                continue
-
-            distance = phash_result.get("distance")
-            score_distance = float(distance if distance is not None else 999)
-            success_count = int(item.get("success_count") or 0)
-            candidates.append((score_distance, -success_count, recipe_key, steps, target_step, phash_result))
-
-        if not candidates:
-            logger.info("Reflex pHash fast path miss", reason="no_phash_candidate", site=site)
-            return None
-
-        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
-        distance, _success_rank, recipe_key, steps, target_step, phash_result = candidates[0]
-        target = _model_or_dict(target_step.get("target"))
-        screen_size = list(current_signature.get("size") or [])
-        if len(screen_size) != 2:
-            return None
-
-        try:
-            padding_ratio = float(os.getenv("REFLEX_FAST_ROI_PADDING_RATIO", "0.04"))
-        except ValueError:
-            padding_ratio = 0.04
-        try:
-            min_padding_px = int(os.getenv("REFLEX_FAST_ROI_MIN_PADDING_PX", "80"))
-        except ValueError:
-            min_padding_px = 80
-        roi_bbox = bbox_from_ratio(
-            target_bbox_ratio(target),
-            screen_size,
-            padding_ratio=padding_ratio,
-            min_padding_px=min_padding_px,
-        )
-        if len(roi_bbox) != 4:
-            return None
-
-        roi_boxes = perception.som_engine.run_ocr_roi(image_path, roi_bbox)
-        roi_markers = _ocr_boxes_to_markers(roi_boxes, start_id=1)
-        roi_validation = roi_target_match(target, roi_markers)
-        if not roi_validation.get("matched"):
-            logger.info(
-                "Reflex pHash fast path miss",
-                reason=roi_validation.get("reason"),
-                site=site,
-                recipe_key=recipe_key[:24],
-                distance=distance,
-            )
-            return None
-
-        synthetic_marker = synthetic_marker_from_target(target, screen_size, marker_id=0)
-        if not synthetic_marker:
-            return None
-        synthetic_marker["roi_validation"] = roi_validation
-        markers = [synthetic_marker] + roi_markers
-        signature = dict(current_signature)
-        signature.update(
-            {
-                "marker_count": len(markers),
-                "marker_count_bucket": marker_count_bucket(len(markers)),
-                "anchors": [],
-                "roi_anchors": roi_validation.get("roi_texts", []),
-                "roi_verified": True,
-                "roi_validation": roi_validation,
-                "fast_path": "phash_roi",
-            }
-        )
-        logger.info(
-            "Reflex pHash fast path hit",
-            site=site,
-            recipe_key=recipe_key[:24],
-            distance=distance,
-            roi_reason=roi_validation.get("reason"),
-            roi_text_count=len(roi_validation.get("roi_texts", [])),
-        )
-        return {
-            "markers": markers,
-            "ui_context": _build_ui_context(markers),
-            "screen_signature": signature,
-            "reflex_state_key": recipe_key,
-            "marked_image": "",
-            "trace": {
-                "site": site,
-                "recipe_key": recipe_key,
-                "phash": phash_result,
-                "roi_validation": roi_validation,
-                "actions": [step.get("action") for step in steps],
-            },
-        }
-    except Exception as e:
-        logger.debug("Reflex pHash fast path skipped", error=str(e))
-        return None
-
-
 def perception_node(state: GraphState) -> Dict[str, Any]:
     """화면을 캡처하고 마커를 파싱하여 상태를 업데이트합니다."""
     start_time = time.time()
@@ -416,75 +205,6 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         if fetched_url:
             current_url = fetched_url
         current_url_stale = False
-
-    pending_transition = dict(state.get("pending_transition", {}) or {})
-    screen_signature = {}
-    try:
-        from agent.vision.screen_signature import compute_phash_signature
-
-        screen_signature = compute_phash_signature(image_path)
-    except Exception as e:
-        logger.debug("pHash signature skipped", error=str(e))
-
-    fast_replay = _try_reflex_phash_fast_path(
-        state,
-        image_path,
-        current_url,
-        screen_signature,
-        perception,
-    )
-    if fast_replay:
-        transition_observations = []
-        transition_status = ""
-        transition_outcome = ""
-        transition_source = ""
-        if pending_transition:
-            started_at = float(pending_transition.get("started_at") or start_time)
-            transition_source = str(pending_transition.get("source") or "")
-            transition_status = "ready"
-            transition_outcome = "phash_roi_fast_path"
-            transition_observations.append(
-                {
-                    "action_seq": pending_transition.get("action_seq"),
-                    "action": pending_transition.get("action", ""),
-                    "expected_after": pending_transition.get("expected_after", ""),
-                    "source": transition_source,
-                    "attempt": int(pending_transition.get("attempts") or 0) + 1,
-                    "elapsed_sec": round(max(0.0, time.time() - started_at), 3),
-                    "status": transition_status,
-                    "outcome": transition_outcome,
-                    "reason": "phash_roi_verified",
-                    "state_key": fast_replay["reflex_state_key"],
-                    "marker_count": len(fast_replay["markers"]),
-                    "marker_texts": fast_replay["screen_signature"].get("roi_anchors", []),
-                    "screenshot": str(image_path),
-                    "marked_image": "",
-                }
-            )
-            pending_transition = {}
-        elapsed = time.time() - start_time
-        logger.info(f"Perception Node completed in {elapsed:.2f} seconds via pHash ROI fast path")
-        return {
-            "recent_images": [image_path],
-            "marked_image": fast_replay.get("marked_image", ""),
-            "current_markers": fast_replay["markers"],
-            "ui_context": fast_replay["ui_context"],
-            "screen_signature": fast_replay["screen_signature"],
-            "current_url": current_url,
-            "current_url_stale": current_url_stale,
-            "reflex_state_key": fast_replay["reflex_state_key"],
-            "pending_transition": pending_transition,
-            "transition_status": transition_status,
-            "transition_outcome": transition_outcome,
-            "transition_source": transition_source,
-            "transition_observations": transition_observations,
-            "reflex_trace": {
-                "hit": False,
-                "source": "perception_fast_path",
-                **dict(fast_replay.get("trace") or {}),
-            },
-            "step_durations": [{"node": "perception", "duration": elapsed, "mode": "phash_roi"}],
-        }
 
     analysis = perception.analyze_ui(image_path)
     markers = analysis.get("markers", [])
@@ -509,7 +229,6 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         filtered_markers.append(m)
     markers = filtered_markers
     
-    ui_context = _build_ui_context(markers)
     screen_signature = {}
     try:
         from agent.vision.screen_signature import compute_screen_signature
@@ -521,6 +240,8 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     transition_status = ""
     transition_outcome = ""
     transition_source = ""
+    pending_transition = dict(state.get("pending_transition", {}) or {})
+    observed_transition = dict(pending_transition)
     try:
         from agent.recipe.state_key import compute_state_key
         from agent.recipe.transition import evaluate_transition, marker_texts
@@ -564,10 +285,31 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
     except Exception as e:
         logger.debug("transition observation skipped", error=str(e))
         reflex_state_key = state.get("reflex_state_key", "")
+
+    queue_msg = None
+    queue_trace: dict[str, Any] = {}
+    if observed_transition:
+        queue_msg, markers, queue_trace = _queue_replay_after_return(
+            state,
+            observed_transition,
+            current_url,
+            reflex_state_key,
+            markers,
+            screen_signature,
+        )
+        if queue_msg:
+            logger.info(
+                "Result card queue replay prepared",
+                queue_id=queue_trace.get("queue_id", ""),
+                title=queue_trace.get("title", ""),
+                reason=((queue_trace.get("return_match") or {}).get("reason") or ""),
+            )
+
+    ui_context = _build_ui_context(markers, current_url=current_url)
     
     elapsed = time.time() - start_time
     logger.info(f"Perception Node completed in {elapsed:.2f} seconds")
-    return {
+    result = {
         "recent_images": [image_path],
         "marked_image": marked_image,
         "current_markers": markers,
@@ -581,8 +323,13 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "transition_outcome": transition_outcome,
         "transition_source": transition_source,
         "transition_observations": transition_observations,
+        "queue_replay_hit": bool(queue_msg),
+        "queue_replay_trace": queue_trace if queue_msg else {},
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
+    if queue_msg:
+        result["last_action_result"] = queue_msg
+    return result
 
 
 def _is_repeating(history: list, n: int) -> bool:
@@ -838,6 +585,16 @@ def _sensitive_action_reason(state: GraphState, action_name: str, args: dict[str
 
 
 def _compact_action_args(action_name: str, args: dict) -> dict:
+    if action_name == "set_result_card_queue":
+        cards = args.get("cards") if isinstance(args, dict) else []
+        titles = []
+        if isinstance(cards, list):
+            for card in cards:
+                if isinstance(card, dict):
+                    label = _queue_card_label(card)
+                    if label:
+                        titles.append(label)
+        return {"cards": len(cards) if isinstance(cards, list) else 0, "titles": titles[:5]}
     if action_name != "update_extracted_info":
         return args
     try:
@@ -865,6 +622,317 @@ def _marker_by_id(markers: list[dict], marker_id: int | None) -> dict | None:
         if isinstance(marker, dict) and marker.get("id") == marker_id:
             return marker
     return None
+
+
+def _card_queue_enabled() -> bool:
+    raw = os.getenv("VISION_RESULT_CARD_QUEUE_ENABLED", "1")
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _screen_size_from_signature(signature: dict) -> list[int]:
+    size = signature.get("size") if isinstance(signature, dict) else []
+    if isinstance(size, list) and len(size) == 2:
+        try:
+            return [int(size[0]), int(size[1])]
+        except (TypeError, ValueError):
+            return []
+    return []
+
+
+def _bbox_from_ratio(bbox_ratio: list, size: list[int]) -> list[int]:
+    if not isinstance(bbox_ratio, list) or len(bbox_ratio) != 4 or len(size) != 2:
+        return [0, 0, 0, 0]
+    width, height = int(size[0]), int(size[1])
+    return [
+        int(float(bbox_ratio[0]) * width),
+        int(float(bbox_ratio[1]) * height),
+        int(float(bbox_ratio[2]) * width),
+        int(float(bbox_ratio[3]) * height),
+    ]
+
+
+def _queue_card_label(card: dict) -> str:
+    for key in ("title", "target_label", "position", "text", "label"):
+        value = card.get(key)
+        if value not in (None, "", [], {}):
+            return str(value).strip()
+    return ""
+
+
+def _normalize_result_card_queue(args: dict, state: GraphState, current_url: str) -> tuple[list[dict], dict]:
+    """LLM이 고른 현재 화면의 공고 카드를 런타임 큐 항목으로 정규화한다."""
+    cards = args.get("cards") or []
+    if not isinstance(cards, list):
+        cards = []
+    markers = list(state.get("current_markers", []) or [])
+    signature = dict(state.get("screen_signature", {}) or {})
+    size = _screen_size_from_signature(signature)
+    queue: list[dict] = []
+    target_count = _target_count_from_state(state)
+    remaining = target_count - _collected_job_count(state.get("extracted_jd", {}) or {}) if target_count > 0 else len(cards)
+    limit = max(0, remaining) if target_count > 0 else len(cards)
+
+    for index, raw in enumerate(cards[:limit]):
+        if not isinstance(raw, dict):
+            continue
+        marker_id = raw.get("marker_id", raw.get("id"))
+        try:
+            marker_id = int(marker_id) if marker_id is not None else None
+        except (TypeError, ValueError):
+            marker_id = None
+        marker = _marker_by_id(markers, marker_id)
+        label = _queue_card_label(raw) or (str(marker.get("text") or "").strip() if marker else "")
+        if not label:
+            continue
+
+        bbox = marker.get("bbox") if marker else raw.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            bbox = []
+        bbox_ratio = raw.get("bbox_ratio")
+        center_ratio = raw.get("center_ratio")
+        if marker and size and not bbox_ratio:
+            try:
+                from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox
+
+                bbox_ratio = bbox_to_ratio(bbox, size)
+                center_ratio = center_ratio_from_bbox(bbox, size)
+            except Exception:
+                bbox_ratio = []
+                center_ratio = []
+        if (not bbox_ratio or len(bbox_ratio) != 4) and raw.get("bbox_ratio"):
+            bbox_ratio = raw.get("bbox_ratio")
+        if (not center_ratio or len(center_ratio) != 2) and raw.get("center_ratio"):
+            center_ratio = raw.get("center_ratio")
+        if not bbox_ratio and not marker:
+            continue
+
+        queue_id = str(raw.get("queue_id") or raw.get("id") or f"card-{len(queue) + 1}")
+        evidence_texts = raw.get("evidence_texts") if isinstance(raw.get("evidence_texts"), list) else []
+        company = str(raw.get("company") or raw.get("company_name") or "").strip()
+        if company and company not in evidence_texts:
+            evidence_texts = [company, *evidence_texts]
+        item = {
+            "queue_id": queue_id,
+            "status": "pending",
+            "title": label,
+            "company": company,
+            "source_marker_id": marker_id,
+            "bbox_ratio": bbox_ratio or [],
+            "center_ratio": center_ratio or [],
+            "evidence_texts": evidence_texts[:6],
+            "target": {
+                "text": str(marker.get("text") or label) if marker else label,
+                "semantic_label": label,
+                "bbox_ratio": bbox_ratio or [],
+                "center_ratio": center_ratio or [],
+                "evidence_texts": evidence_texts[:6],
+            },
+        }
+        queue.append(item)
+
+    memory = {
+        "state_key": state.get("reflex_state_key", "") or "",
+        "url": current_url or state.get("current_url", "") or "",
+        "screen_signature": signature,
+        "screenshot": str((state.get("recent_images") or [""])[-1] or "") if state.get("recent_images") else "",
+        "marked_image": state.get("marked_image", "") or "",
+    }
+    return queue, memory
+
+
+def _pending_result_cards(queue: list[dict]) -> list[dict]:
+    return [
+        dict(item)
+        for item in queue or []
+        if isinstance(item, dict) and str(item.get("status") or "pending") == "pending"
+    ]
+
+
+def _same_queue_card(item: dict, args: dict) -> bool:
+    if args.get("queue_id") and str(args.get("queue_id")) == str(item.get("queue_id")):
+        return True
+    label = str(args.get("target_label") or "").strip()
+    if label and label == str(item.get("title") or "").strip():
+        return True
+    marker_id = args.get("marker_id")
+    return marker_id is not None and str(marker_id) == str(item.get("source_marker_id"))
+
+
+def _mark_result_card_active(queue: list[dict], args: dict) -> tuple[list[dict], dict]:
+    updated = []
+    active: dict = {}
+    for raw in queue or []:
+        item = dict(raw)
+        if not active and item.get("status") == "pending" and _same_queue_card(item, args):
+            item["status"] = "active"
+            active = dict(item)
+        updated.append(item)
+    return updated, active
+
+
+def _result_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
+    """LLM이 공고 카드 클릭을 넓게 표현해도 큐 항목 제목과 맞으면 카드 클릭으로 인정한다."""
+    if not queue:
+        return False
+    if args.get("queue_id"):
+        return True
+
+    component = str(args.get("target_component") or "")
+    role = str(args.get("target_role") or "")
+    if component in {"job_card", "job_card_title"} or role in {"job_card", "job_card_title"}:
+        return True
+
+    label = str(args.get("target_label") or "").strip()
+    if not label:
+        return False
+    return any(label == str(item.get("title") or "").strip() for item in queue if isinstance(item, dict))
+
+
+def _complete_active_result_card(queue: list[dict], active_card: dict) -> tuple[list[dict], dict]:
+    if not active_card:
+        return queue, {}
+    active_id = str(active_card.get("queue_id") or "")
+    updated = []
+    for raw in queue or []:
+        item = dict(raw)
+        if active_id and str(item.get("queue_id") or "") == active_id:
+            item["status"] = "done"
+        updated.append(item)
+    return updated, {}
+
+
+def _queue_return_screen_matches(memory: dict, current_url: str, state_key: str, current_signature: dict) -> tuple[bool, dict]:
+    if not memory:
+        return False, {"reason": "queue_memory_missing"}
+    if _looks_like_job_detail_url(current_url):
+        return False, {"reason": "still_on_detail_url", "url": current_url}
+    saved_state_key = str(memory.get("state_key") or "")
+    if saved_state_key and state_key and saved_state_key == state_key:
+        return True, {"reason": "state_key_match", "state_key": state_key}
+
+    saved_signature = dict(memory.get("screen_signature") or {})
+    saved_phash = str(saved_signature.get("phash") or "")
+    current_phash = str((current_signature or {}).get("phash") or "")
+    if not saved_phash or not current_phash:
+        return False, {"reason": "phash_missing", "saved_phash": bool(saved_phash), "current_phash": bool(current_phash)}
+    try:
+        from agent.recipe.phash_replay import anchor_overlap
+        from agent.vision.screen_signature import hamming_distance
+
+        distance = hamming_distance(saved_phash, current_phash)
+        overlap = anchor_overlap(saved_signature.get("anchors") or [], (current_signature or {}).get("anchors") or [])
+    except Exception as exc:
+        return False, {"reason": "phash_compare_failed", "error": str(exc)}
+
+    try:
+        max_distance = int(os.getenv("VISION_CARD_QUEUE_RETURN_PHASH_MAX_DISTANCE", "16"))
+        min_overlap = float(os.getenv("VISION_CARD_QUEUE_RETURN_MIN_ANCHOR_OVERLAP", "0.20"))
+    except ValueError:
+        max_distance = 16
+        min_overlap = 0.20
+    matched = distance is not None and distance <= max_distance and overlap >= min_overlap
+    return matched, {
+        "reason": "phash_anchor_match" if matched else "phash_anchor_mismatch",
+        "distance": distance,
+        "max_distance": max_distance,
+        "anchor_overlap": overlap,
+        "min_anchor_overlap": min_overlap,
+    }
+
+
+def _queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> tuple[int | None, list[dict], dict]:
+    target = dict(item.get("target") or {})
+    target.setdefault("text", item.get("title", ""))
+    target.setdefault("semantic_label", item.get("title", ""))
+    target.setdefault("bbox_ratio", item.get("bbox_ratio") or [])
+    target.setdefault("center_ratio", item.get("center_ratio") or [])
+    target.setdefault("evidence_texts", item.get("evidence_texts") or [])
+    try:
+        from agent.recipe.phash_replay import match_target_by_ratio
+
+        marker_id = match_target_by_ratio(target, markers, _screen_size_from_signature(signature))
+        if marker_id is not None:
+            return marker_id, markers, {"reason": "current_marker_ratio_match"}
+    except Exception as exc:
+        ratio_error = str(exc)
+    else:
+        ratio_error = ""
+
+    size = _screen_size_from_signature(signature)
+    bbox = _bbox_from_ratio(item.get("bbox_ratio") or [], size)
+    if bbox == [0, 0, 0, 0]:
+        return None, markers, {"reason": "cached_bbox_missing", "ratio_error": ratio_error}
+    next_id = max([int(marker.get("id") or 0) for marker in markers or [] if isinstance(marker, dict)] + [-1]) + 1
+    synthetic = {
+        "id": next_id,
+        "bbox": bbox,
+        "text": item.get("title") or "queued result card",
+        "type": "queue_cached_card",
+    }
+    return next_id, [*markers, synthetic], {"reason": "synthetic_marker_from_cached_bbox", "bbox": bbox, "ratio_error": ratio_error}
+
+
+def _queue_replay_after_return(
+    state: GraphState,
+    observed_transition: dict,
+    current_url: str,
+    state_key: str,
+    markers: list[dict],
+    screen_signature: dict,
+) -> tuple[AIMessage | None, list[dict], dict]:
+    """상세 페이지에서 목록으로 돌아온 직후 pending 카드가 있으면 다음 카드 클릭을 준비한다."""
+    if not _card_queue_enabled():
+        return None, markers, {"reason": "queue_disabled"}
+    if str(observed_transition.get("action") or "") != "go_back":
+        return None, markers, {"reason": "last_transition_not_go_back"}
+    queue = [dict(item) for item in (state.get("result_card_queue", []) or []) if isinstance(item, dict)]
+    pending = _pending_result_cards(queue)
+    if not pending:
+        return None, markers, {"reason": "queue_empty"}
+    active_card = dict(state.get("active_result_card", {}) or {})
+    if active_card:
+        return None, markers, {
+            "reason": "active_card_not_completed",
+            "queue_id": active_card.get("queue_id", ""),
+            "title": active_card.get("title", ""),
+        }
+
+    matched, match_trace = _queue_return_screen_matches(
+        dict(state.get("result_page_memory", {}) or {}),
+        current_url,
+        state_key,
+        screen_signature,
+    )
+    if not matched:
+        return None, markers, match_trace
+
+    item = pending[0]
+    marker_id, next_markers, marker_trace = _queue_marker_for_item(item, markers, screen_signature)
+    if marker_id is None:
+        trace = dict(match_trace)
+        trace.update(marker_trace)
+        return None, markers, trace
+    args = {
+        "marker_id": marker_id,
+        "queue_id": item.get("queue_id", ""),
+        "target_label": item.get("title", ""),
+        "target_role": "job_card",
+        "target_component": "job_card_title",
+        "reason": "검색 결과 카드 큐에서 다음 미방문 공고를 선택합니다.",
+        "expected_after": "선택한 공고의 상세 페이지가 열린다.",
+    }
+    msg = AIMessage(
+        content="[card_queue] cached next result card",
+        tool_calls=[{"name": "click_marker", "args": args, "id": f"card_queue_{item.get('queue_id', 'next')}"}],
+    )
+    trace = {
+        "hit": True,
+        "queue_id": item.get("queue_id", ""),
+        "title": item.get("title", ""),
+        "return_match": match_trace,
+        "marker": marker_trace,
+    }
+    return msg, next_markers, trace
 
 
 def _action_target_metadata(state: GraphState, action_name: str, args: dict) -> dict | None:
@@ -1077,7 +1145,220 @@ def _marker_prompt_rank(marker: dict) -> tuple[int, int, int]:
     return (priority, y, x)
 
 
-def _build_ui_context(markers: list[dict]) -> str:
+def _env_enabled(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _marker_bbox(marker: dict) -> list[int]:
+    bbox = marker.get("bbox", [])
+    if len(bbox) != 4:
+        return [0, 0, 0, 0]
+    try:
+        return [int(float(value)) for value in bbox]
+    except (TypeError, ValueError):
+        return [0, 0, 0, 0]
+
+
+def _is_icon_marker(marker: dict) -> bool:
+    text = str(marker.get("text") or "")
+    marker_type = str(marker.get("type") or "").strip().lower()
+    return (
+        marker_type == "icon"
+        or text == "icon"
+        or text.startswith("상호작용 가능한 요소 (")
+        or text == "상호작용 가능한 요소"
+    )
+
+
+def _line_bbox(markers: list[dict]) -> list[int]:
+    boxes = [_marker_bbox(marker) for marker in markers]
+    boxes = [box for box in boxes if box != [0, 0, 0, 0]]
+    if not boxes:
+        return [0, 0, 0, 0]
+    return [
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    ]
+
+
+def _join_line_marker_text(markers: list[dict]) -> str:
+    ordered = sorted(markers, key=lambda marker: (_marker_bbox(marker)[0], _marker_bbox(marker)[1]))
+    pieces: list[str] = []
+    for marker in ordered:
+        text = str(marker.get("text") or "").strip()
+        if not text:
+            continue
+        pieces.append(text)
+    joined = " ".join(pieces)
+    joined = re.sub(r"\s+([,.;:!?%)\]\}])", r"\1", joined)
+    joined = re.sub(r"([(\[\{])\s+", r"\1", joined)
+    return re.sub(r"\s+", " ", joined).strip()
+
+
+def _group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
+    text_markers = [
+        marker
+        for marker in markers
+        if str(marker.get("text") or "").strip() and not _is_icon_marker(marker)
+    ]
+    if not text_markers:
+        return []
+    heights = sorted(max(1, _marker_bbox(marker)[3] - _marker_bbox(marker)[1]) for marker in text_markers)
+    median_height = heights[len(heights) // 2] if heights else 16
+    tolerance = max(8, min(24, int(median_height * 0.7)))
+    lines: list[dict] = []
+    for marker in sorted(text_markers, key=lambda item: ((_marker_bbox(item)[1] + _marker_bbox(item)[3]) / 2, _marker_bbox(item)[0])):
+        bbox = _marker_bbox(marker)
+        center_y = (bbox[1] + bbox[3]) / 2
+        matched = None
+        for line in lines:
+            if abs(center_y - line["center_y"]) <= tolerance:
+                matched = line
+                break
+        if matched is None:
+            lines.append({"center_y": center_y, "markers": [marker]})
+        else:
+            matched["markers"].append(marker)
+            count = len(matched["markers"])
+            matched["center_y"] = ((matched["center_y"] * (count - 1)) + center_y) / count
+
+    compacted: list[dict] = []
+    for line in lines:
+        ordered = sorted(line["markers"], key=lambda marker: _marker_bbox(marker)[0])
+        segments: list[list[dict]] = []
+        current_segment: list[dict] = []
+        previous_right: int | None = None
+        max_inline_gap = max(160, int(median_height * 8))
+        for marker in ordered:
+            bbox = _marker_bbox(marker)
+            if current_segment and previous_right is not None and bbox[0] - previous_right > max_inline_gap:
+                segments.append(current_segment)
+                current_segment = [marker]
+            else:
+                current_segment.append(marker)
+            previous_right = max(previous_right or bbox[2], bbox[2])
+        if current_segment:
+            segments.append(current_segment)
+
+        for segment in segments:
+            ids = [marker.get("id") for marker in segment if marker.get("id") is not None]
+            text = _join_line_marker_text(segment)
+            if text:
+                compacted.append({"text": text, "ids": ids, "bbox": _line_bbox(segment)})
+    return sorted(compacted, key=lambda item: (item["bbox"][1], item["bbox"][0]))
+
+
+def _is_probable_detail_noise_line(line: dict) -> bool:
+    bbox = line.get("bbox") or [0, 0, 0, 0]
+    text = str(line.get("text") or "").strip()
+    if not text:
+        return True
+    collapsed = re.sub(r"\s+", "", text)
+    lowered = collapsed.lower()
+    # 브라우저/사이트 헤더는 상세 본문 추출에는 잡음이지만 클릭 마커 목록에는 별도로 남긴다.
+    if len(bbox) == 4 and bbox[1] < 120:
+        return True
+    browser_terms = ("youtube", "github", "gmail", "naver", "chzzk", "모든북마크")
+    if sum(1 for term in browser_terms if term in lowered) >= 2:
+        return True
+    site_nav_terms = ("wanted", "채용", "이력서", "교육이벤트", "콘텐츠", "소셜", "프리랜서", "회원가입", "기업서비스")
+    if ("wanted" in lowered or "원티드" in collapsed) and sum(1 for term in site_nav_terms if term in lowered) >= 2:
+        return True
+    if any(term in collapsed for term in ("상세정보더보기", "지원하기", "합격확률확인하기", "북마크", "공유하기")):
+        return True
+    if any(term in collapsed for term in ("회원가입/로그인", "회원가입로그인", "기업서비스", "합격확률", "이포지션나의합격확률은")):
+        return True
+    if len(bbox) == 4 and bbox[1] < 180 and any(
+        term in collapsed
+        for term in ("wanted", "원티드", "채용", "이력서", "교육이벤트", "콘텐츠", "소셜", "프리랜서", "회원가입", "기업서비스")
+    ):
+        return True
+    if text in {"wanted", "원티드", "채용", "이력서", "교육·이벤트", "콘텐츠", "소셜", "프리랜서", "더보기"}:
+        return True
+    return False
+
+
+def _append_limited_ocr_line(parts: list[str], index: int, line: dict, max_line_chars: int) -> None:
+    text = str(line.get("text") or "").strip()
+    if len(text) > max_line_chars:
+        text = text[: max_line_chars - 1].rstrip() + "…"
+    parts.append(f"{index}. {text}")
+
+
+def _detail_action_marker_candidates(markers: list[dict], limit: int) -> list[dict]:
+    primary_terms = (
+        "상세 정보 더 보기",
+        "더 보기",
+        "더보기",
+        "상세정보더보기",
+    )
+    primary: list[dict] = []
+    seen: set[int] = set()
+    for marker in sorted(markers, key=_marker_prompt_rank):
+        marker_id = marker.get("id")
+        if marker_id in seen:
+            continue
+        text = str(marker.get("text") or "").strip()
+        collapsed = re.sub(r"\s+", "", text)
+        bbox = _marker_bbox(marker)
+        if any(term.replace(" ", "") in collapsed for term in primary_terms):
+            if "상세" in collapsed or (len(bbox) == 4 and bbox[1] > 240):
+                primary.append(marker)
+                seen.add(marker_id)
+        if len(primary) >= limit:
+            break
+    return primary
+
+
+def _build_detail_section_context(markers: list[dict]) -> str:
+    try:
+        min_text_markers = int(os.getenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "120"))
+        max_lines = int(os.getenv("VISION_DETAIL_OCR_MAX_LINES", "90"))
+        max_line_chars = int(os.getenv("VISION_DETAIL_SECTION_MAX_LINE_CHARS", "180"))
+        action_limit = int(os.getenv("VISION_DETAIL_ACTION_MARKER_LIMIT", "35"))
+    except ValueError:
+        min_text_markers = 120
+        max_lines = 90
+        max_line_chars = 180
+        action_limit = 35
+
+    text_marker_count = sum(1 for marker in markers if str(marker.get("text") or "").strip() and not _is_icon_marker(marker))
+    if text_marker_count < min_text_markers:
+        return ""
+
+    lines = [line for line in _group_text_markers_into_lines(markers) if not _is_probable_detail_noise_line(line)]
+    if not lines:
+        return ""
+
+    parts = ["상세 페이지 OCR 본문(읽기용, 위에서 아래 순서. 원본 마커는 클릭/좌표용으로 유지됨):"]
+    shown_lines = lines[:max_lines]
+    for index, line in enumerate(shown_lines, start=1):
+        _append_limited_ocr_line(parts, index, line, max_line_chars)
+    omitted_lines = max(0, len(lines) - len(shown_lines))
+    if omitted_lines:
+        parts.append(f"본문 압축으로 생략된 줄: {omitted_lines}개")
+
+    action_markers = _detail_action_marker_candidates(markers, action_limit)
+    if action_markers:
+        parts.append("수집 진행용 클릭 후보:")
+        for marker in action_markers:
+            parts.append(f"[id: {marker.get('id')}] {marker.get('text', '')}")
+
+    parts.append(f"원본 텍스트 마커 {text_marker_count}개를 읽기용 줄 {len(lines)}개로 압축")
+    return "\n".join(parts)
+
+
+def _build_ui_context(markers: list[dict], current_url: str = "") -> str:
+    if current_url and _looks_like_job_detail_url(current_url) and _env_enabled("VISION_DETAIL_SECTION_CONTEXT_ENABLED", True):
+        section_context = _build_detail_section_context(markers)
+        if section_context:
+            return section_context
+
     try:
         text_limit = int(os.getenv("VISION_UI_TEXT_MARKER_LIMIT", "90"))
         icon_limit = int(os.getenv("VISION_UI_ICON_MARKER_LIMIT", "45"))
@@ -1087,8 +1368,7 @@ def _build_ui_context(markers: list[dict]) -> str:
     text_markers = []
     icon_markers = []
     for marker in markers:
-        text = marker.get("text", "")
-        if text.startswith("상호작용 가능한 요소 (") or text == "상호작용 가능한 요소":
+        if _is_icon_marker(marker):
             icon_markers.append(marker)
         else:
             text_markers.append(marker)
@@ -1318,6 +1598,28 @@ def _compact_recent_actions_context(action_history: list[dict]) -> str:
     )
 
 
+def _compact_result_card_queue_context(state: GraphState) -> str:
+    queue = [item for item in (state.get("result_card_queue", []) or []) if isinstance(item, dict)]
+    if not queue:
+        return "공고 카드 큐: []\n\n"
+    compact = [
+        {
+            "queue_id": item.get("queue_id", ""),
+            "status": item.get("status", "pending"),
+            "title": item.get("title", ""),
+            "company": item.get("company", ""),
+        }
+        for item in queue
+    ]
+    pending_count = len(_pending_result_cards(queue))
+    return (
+        "공고 카드 큐:\n"
+        f"- pending_count: {pending_count}\n"
+        f"- cards: {json.dumps(compact, ensure_ascii=False, separators=(',', ':'))}\n"
+        "- 큐가 있으면 상세 수집 완료 후 다음 카드 선택은 executor가 처리합니다. 같은 목록에서 다음 카드를 다시 고르지 마십시오.\n\n"
+    )
+
+
 def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
     """
     reasoning_node용 LLM 메시지 리스트를 조립합니다.
@@ -1374,6 +1676,7 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
         f"{_compact_extracted_context(extracted_jd, current_url)}"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"{collection_context}"
+        f"{_compact_result_card_queue_context(state)}"
         f"{transition_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
@@ -1782,7 +2085,11 @@ def _dispatch_ui(action_name: str, args: dict, get_bbox, current_url: str = "") 
 
 def _dispatch_state(
     action_name: str, args: dict,
-    current_jd: dict, current_plan: list, current_plan_step: int, current_url: str = ""
+    current_jd: dict,
+    current_plan: list,
+    current_plan_step: int,
+    current_url: str = "",
+    state: GraphState | None = None,
 ) -> Tuple[dict, dict, list, int]:
     """그래프 상태 변경 도구를 실행하고 (result, jd, plan, step)을 반환합니다."""
     if action_name == "update_plan_progress":
@@ -1820,6 +2127,17 @@ def _dispatch_state(
         result = {"action": "update_extracted_info", "status": status, "result": result_str}
         if reason:
             result["reason"] = reason
+    elif action_name == "set_result_card_queue":
+        queue, memory = _normalize_result_card_queue(args, state or {}, current_url)
+        result = {
+            "action": "set_result_card_queue",
+            "status": "success" if queue else "skipped",
+            "result": f"Result card queue stored: {len(queue)} card(s)." if queue else "No valid visible result cards were queued.",
+            "queued_count": len(queue),
+            "queued_titles": [item.get("title", "") for item in queue],
+            "_result_card_queue": queue,
+            "_result_page_memory": memory,
+        }
     else:
         raise ValueError(f"Unknown state action: {action_name}")
     return result, current_jd, current_plan, current_plan_step
@@ -1872,6 +2190,9 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     latest_ui_context = state.get("ui_context", "")
     latest_marked_image = state.get("marked_image", "")
     latest_recent_images: list = []
+    result_card_queue = [dict(item) for item in (state.get("result_card_queue", []) or []) if isinstance(item, dict)]
+    result_page_memory = dict(state.get("result_page_memory", {}) or {})
+    active_result_card = dict(state.get("active_result_card", {}) or {})
     screen_changed    = False
     chain_boundary    = False
     previous_ui_action: str | None = None
@@ -2061,7 +2382,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
     URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "close_browser", "go_back"}
     OBSERVATION_REQUIRED_ACTIONS = {"click_marker", "press_key", "open_browser", "go_back"}
-    STATE_ACTIONS = {"update_plan_progress", "update_extracted_info"}
+    STATE_ACTIONS = {"update_plan_progress", "update_extracted_info", "set_result_card_queue"}
 
     for idx, tool_call in enumerate(ai_msg.tool_calls):
         action_name = tool_call["name"]
@@ -2144,23 +2465,47 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 previous_ui_action = action_name
                 if action_changed_screen:
                     contract = reflex_transition_contracts.get(str(tool_call.get("id") or ""))
+                    transition_source = (
+                        "card_queue"
+                        if state.get("queue_replay_hit")
+                        else ("reflex" if state.get("reflex_hit") else "autonomous")
+                    )
                     set_pending_transition(
                         action_seq,
                         action_name,
                         args,
                         contract,
-                        "reflex" if state.get("reflex_hit") else "autonomous",
+                        transition_source,
                     )
                 if action_changed_screen and _chain_boundary_reached(action_name):
                     chain_boundary = True
                 if record_ui_step:
                     record_ui_step(recorded_steps, state, action_name, args, action_seq)
+                if (
+                    result.get("status") == "success"
+                    and action_name == "click_marker"
+                    and _result_card_click_matches_queue(result_card_queue, args)
+                ):
+                    result_card_queue, active_result_card = _mark_result_card_active(result_card_queue, args)
 
             elif action_name in STATE_ACTIONS:
                 result, current_jd, current_plan, current_plan_step = _dispatch_state(
-                    action_name, args, current_jd, current_plan, current_plan_step, current_url=current_url
+                    action_name,
+                    args,
+                    current_jd,
+                    current_plan,
+                    current_plan_step,
+                    current_url=current_url,
+                    state={
+                        **state,
+                        "extracted_jd": current_jd,
+                        "current_url": current_url,
+                    },
                 )
                 action_changed_screen = False
+                if action_name == "set_result_card_queue":
+                    result_card_queue = list(result.pop("_result_card_queue", []) or [])
+                    result_page_memory = dict(result.pop("_result_page_memory", {}) or {})
                 if (
                     action_name == "update_extracted_info"
                     and result.get("status") == "success"
@@ -2170,6 +2515,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     collected_count = _extracted_job_count(current_jd)
                     detail_complete = args.get("detail_complete")
                     if detail_complete is True:
+                        result_card_queue, active_result_card = _complete_active_result_card(result_card_queue, active_result_card)
                         result["detail_policy"] = "detail_complete"
                         if target_count > 0 and collected_count < target_count:
                             policy_ui_action = (
@@ -2310,6 +2656,11 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "transition_status": "",
         "transition_outcome": "",
         "transition_source": "",
+        "result_card_queue": result_card_queue,
+        "result_page_memory": result_page_memory,
+        "active_result_card": active_result_card,
+        "queue_replay_hit": False,
+        "queue_replay_trace": {},
         "recorded_steps":    recorded_steps,
         "feedback_episodes": feedback_episodes,
         "pending_human_approval": pending_human_approval,

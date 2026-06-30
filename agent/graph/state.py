@@ -94,6 +94,13 @@ class GraphState(TypedDict):
     # [Transition Contract] 행동 뒤 관찰된 OCR 화면 기록
     transition_observations: Annotated[List[Dict[str, Any]], operator.add]
 
+    # [Result Card Queue] 한 worker 실행 안에서만 쓰는 검색 결과 카드 큐
+    result_card_queue: List[Dict[str, Any]]
+    result_page_memory: Dict[str, Any]
+    active_result_card: Dict[str, Any]
+    queue_replay_hit: bool
+    queue_replay_trace: Dict[str, Any]
+
     # [HITL] Stop autonomous execution before sensitive or irreversible steps
     pending_human_approval: bool
     human_approval_request: Dict[str, Any]

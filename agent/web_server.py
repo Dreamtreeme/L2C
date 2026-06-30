@@ -114,6 +114,11 @@ async def chat_endpoint(req: ChatRequest):
             transition_outcome="",
             transition_source="",
             transition_observations=[],
+            result_card_queue=[],
+            result_page_memory={},
+            active_result_card={},
+            queue_replay_hit=False,
+            queue_replay_trace={},
             pending_human_approval=False,
             human_approval_request={},
         )

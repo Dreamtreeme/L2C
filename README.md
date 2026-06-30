@@ -224,7 +224,9 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     - [ ] 같은 사이트·페이지 역할·작업 유형에서 반복 성공한 패턴만 confidence 상승
     - [ ] 실패 패턴은 negative example로 저장하고 Reflex 후보에서 제외
     - [ ] Codex 승인창, 브라우저 툴바, 광고/팝업처럼 사이트 고유 동작이 아닌 요소는 승격 금지
-    - [x] Critic이 각 단계를 `fixed / parameterized / reasoning`으로 분류하고 `reasoning` 단계는 활성 레시피에서 제외
+    - [x] Critic이 각 단계를 `fixed / parameterized / reasoning`으로 분류하도록 후보 검토 결과에 기록
+    - [x] 검증 전 자동 활성 레시피 쓰기는 비활성화하고 후보 저장/검토만 유지
+    - [ ] 승인된 후보를 활성 Recipe Memory에 반영하는 수동/승인 정책 결정
   - [x] 5. 슬롯 기반 Reflex 실행기
     - [x] 검색어가 바뀌면 `query` 슬롯만 교체하고 고정 UI 절차는 유지
     - [x] 행동 후 `common_ready_cues + outcomes`가 충족될 때까지 재관찰하고, 시간 초과 시 Explore로 폴백
@@ -236,9 +238,6 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     - [x] `ios 개발자 공고 2개`에서 기존 자율탐색과 동일한 2건 저장 확인
     - [x] reasoning 횟수 24회 → 9회, reasoning 시간 141.92초 → 64.94초 감소 확인
     - [x] pHash/OCR 검증 실패 시 무리하게 실행하지 않고 reasoning으로 폴백하는 로그 확인
-    - [x] pHash hit 후보는 전체 SoM/OCR 전에 target bbox 주변 ROI OCR로 먼저 검증하는 fast path 추가
-    - [x] `ios 개발자 공고 2개` 재검증에서 pHash ROI fast hit 3회, 동일 URL 2건 저장 확인
-    - [ ] ROI miss 반복과 상세 페이지 전체 OCR 병목을 줄여 perception 총시간 감소까지 연결
     - [ ] 검색어/수집 개수 변경 시 파라미터만 바뀌고 고정 절차가 재사용되는지 추가 검증
     - [ ] 원티드 외 사이트에서 같은 구조가 유지되는지 검증
 
@@ -346,7 +345,7 @@ Windows Python을 WSL/Git Bash에서 직접 호출해 한글이나 이모지가 
 
 ## 향후 작업
 
-Phase 8은 현재 진행 중입니다. 다음 작업은 pHash ROI fast path의 miss 반복을 줄이고 상세 페이지 OCR 병목을 분리한 뒤, pHash 기반 반복탐색을 원티드의 다른 검색어·수집 개수와 잡코리아·사람인·워크넷·로켓펀치로 확장 검증하는 것입니다. 진행 중이거나 검토 중인 항목은 [Issues](../../issues)에서 확인할 수 있습니다.
+Phase 8은 현재 진행 중입니다. 다음 작업은 pHash 기반 반복탐색을 원티드의 다른 검색어·수집 개수로 확장 검증하고, 이후 잡코리아·사람인·워크넷·로켓펀치에서도 같은 부모 경로 replay 구조가 유지되는지 확인하는 것입니다. 진행 중이거나 검토 중인 항목은 [Issues](../../issues)에서 확인할 수 있습니다.
 
 ---
 

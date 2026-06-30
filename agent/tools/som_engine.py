@@ -372,52 +372,6 @@ class SomEngine:
                 except Exception:
                     pass
 
-    def run_ocr_roi(self, image_path: Path, bbox: List[int]) -> List[Dict[str, Any]]:
-        """전체 SoM 대신 지정된 화면 영역만 OCR로 읽어 원본 좌표계 bbox를 반환한다."""
-        if not image_path.exists():
-            raise FileNotFoundError(f"Image not found at: {image_path}")
-        if not isinstance(bbox, list) or len(bbox) != 4:
-            return []
-
-        with Image.open(image_path) as img:
-            width, height = img.size
-            left = max(0, min(width - 1, int(bbox[0])))
-            top = max(0, min(height - 1, int(bbox[1])))
-            right = max(left + 1, min(width, int(bbox[2])))
-            bottom = max(top + 1, min(height, int(bbox[3])))
-            crop = img.crop((left, top, right, bottom))
-
-            ocr_scale = self._ocr_scale_for_image(crop.width, crop.height)
-            ocr_image = crop
-            if ocr_scale != 1.0:
-                ocr_image = crop.resize(
-                    (int(crop.width * ocr_scale), int(crop.height * ocr_scale)),
-                    Image.Resampling.BILINEAR,
-                )
-
-            text_boxes = self._filter_overlaps(self._run_paddle_ocr(ocr_image, scale=ocr_scale))
-
-        adjusted: List[Dict[str, Any]] = []
-        for item in text_boxes:
-            item_bbox = item.get("bbox") or []
-            if len(item_bbox) != 4:
-                continue
-            adjusted_item = dict(item)
-            adjusted_item["bbox"] = [
-                float(item_bbox[0]) + left,
-                float(item_bbox[1]) + top,
-                float(item_bbox[2]) + left,
-                float(item_bbox[3]) + top,
-            ]
-            adjusted.append(adjusted_item)
-
-        logger.info(
-            "ROI OCR complete",
-            roi=[left, top, right, bottom],
-            text=len(adjusted),
-        )
-        return adjusted
-
     def _run_yolo(self, inference_img: Image.Image, scale: float) -> List[Dict]:
         raw_boxes = []
         try:

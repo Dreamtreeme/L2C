@@ -32,6 +32,10 @@ def _reflex_enabled() -> bool:
 
 def route_after_perception(state: GraphState) -> str:
     """전환 계약 판정 뒤 재관찰, reflex 재생 또는 reasoning 폴백을 선택한다."""
+    if state.get("queue_replay_hit"):
+        logger.info("Result card queue hit; executing cached next-card action.")
+        return "action"
+
     transition_status = state.get("transition_status", "")
     if transition_status == "pending":
         logger.info("Transition still pending; observing the screen again.")
@@ -77,6 +81,7 @@ def build_graph():
         "perception",
         route_after_perception,
         {
+            "action": "action",
             "perception": "perception",
             "reflex": "reflex",
             "reasoning": "reasoning",

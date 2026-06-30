@@ -553,6 +553,11 @@ def _initial_worker_state(goal: str) -> dict:
         "transition_outcome": "",
         "transition_source": "",
         "transition_observations": [],
+        "result_card_queue": [],
+        "result_page_memory": {},
+        "active_result_card": {},
+        "queue_replay_hit": False,
+        "queue_replay_trace": {},
         "pending_human_approval": False,
         "human_approval_request": {},
     }
@@ -722,7 +727,8 @@ def commit_worker_review(
 
 def _recipe_learning_mode() -> str:
     mode = os.getenv("VISION_RECIPE_LEARNING_MODE", "record").strip().lower()
-    return mode if mode in {"off", "record", "review", "promote"} else "record"
+    return mode if mode in {"off", "record"} else "record"
+
 
 def _commit_recipe_candidate(
     submission: dict,
@@ -730,10 +736,10 @@ def _commit_recipe_candidate(
     source: str,
     submission_id: str,
     mode: str,
-) -> tuple[str, dict]:
-    """Persist and optionally Critic-review a Reflex recipe candidate according to learning mode."""
+) -> str:
+    """학습 모드에 따라 Reflex 레시피 후보를 저장한다."""
     if mode == "off" or not review.get("recipe_candidate"):
-        return "", {}
+        return ""
     try:
         from agent.recipe.candidate_store import RecipeCandidateStore
 
@@ -745,19 +751,10 @@ def _commit_recipe_candidate(
         )
         if candidate_id:
             logger.info("[realtime_scraping] Recipe candidate stored: id=%s mode=%s", candidate_id, mode)
-        if candidate_id and mode in {"review", "promote"}:
-            from agent.recipe.candidate_reviewer import review_and_apply_candidate
-
-            critic_review = review_and_apply_candidate(
-                candidate_id,
-                critic=None,
-                allow_promote=(mode == "promote"),
-            )
-            return candidate_id, critic_review
-        return candidate_id, {}
+        return candidate_id
     except Exception as e:
         logger.debug("[realtime_scraping] Recipe candidate commit skipped: %s", e)
-        return "", {}
+        return ""
 
 
 def persist_accepted_worker_result(worker_result: dict, review: dict, source: str = "realtime_scraping") -> tuple[int, dict, dict, str]:
@@ -778,12 +775,10 @@ def persist_accepted_worker_result(worker_result: dict, review: dict, source: st
     )
     learning_mode = _recipe_learning_mode()
     if learning_mode != "off":
-        candidate_id, candidate_review = _commit_recipe_candidate(submission, review, source, submission_id, learning_mode)
+        candidate_id = _commit_recipe_candidate(submission, review, source, submission_id, learning_mode)
         if candidate_id:
             submission["recipe_candidate_id"] = candidate_id
             submission["recipe_learning_mode"] = learning_mode
-        if candidate_review:
-            submission["recipe_candidate_review"] = candidate_review
     return persisted_count, submission, review, submission_id
 
 
