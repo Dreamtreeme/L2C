@@ -909,6 +909,139 @@ def test_non_detail_ui_context_keeps_raw_marker_list(monkeypatch):
     assert "[id: 2] iOS 개발자" in context
 
 
+def test_detail_lightweight_marked_image_draws_action_candidates(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED", "1")
+    image_path = tmp_path / "screen_detail.png"
+    Image.new("RGB", (420, 360), "white").save(image_path)
+    markers = [
+        {"id": 1, "bbox": [40, 40, 180, 80], "text": "채용"},
+        {"id": 30, "bbox": [100, 270, 260, 310], "text": "상세 정보 더 보기"},
+    ]
+
+    output_path = nodes._build_detail_lightweight_marked_image(
+        image_path,
+        markers,
+        "https://www.wanted.co.kr/wd/1",
+    )
+
+    assert output_path
+    assert output_path.endswith(".jpg")
+    assert (tmp_path / "light_marked_screen_detail.jpg").exists()
+
+
+def test_detail_lightweight_marked_image_skips_non_detail_page(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED", "1")
+    image_path = tmp_path / "screen_search.png"
+    Image.new("RGB", (420, 360), "white").save(image_path)
+
+    output_path = nodes._build_detail_lightweight_marked_image(
+        image_path,
+        [{"id": 30, "bbox": [100, 270, 260, 310], "text": "상세 정보 더 보기"}],
+        "https://www.wanted.co.kr/search?query=ios",
+    )
+
+    assert output_path == ""
+
+
+def test_detail_ocr_buffer_accumulates_unique_detail_lines(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_OCR_BUFFER_ENABLED", "1")
+    markers = [
+        {"id": 1, "bbox": [100, 200, 210, 235], "text": "주요업무"},
+        {"id": 2, "bbox": [100, 250, 160, 280], "text": "iOS"},
+        {"id": 3, "bbox": [180, 250, 250, 280], "text": "개발"},
+        {"id": 4, "bbox": [100, 320, 180, 350], "text": "자격요건"},
+        {"id": 5, "bbox": [100, 370, 180, 400], "text": "Swift"},
+    ]
+
+    first = nodes._update_detail_ocr_buffer(
+        {},
+        markers,
+        "https://www.wanted.co.kr/wd/1",
+        "screen_a.png",
+    )
+    second = nodes._update_detail_ocr_buffer(
+        first,
+        markers,
+        "https://www.wanted.co.kr/wd/1",
+        "screen_b.png",
+    )
+
+    assert first["stats"]["added_lines_last_screen"] == 4
+    assert len(first["lines"]) == 4
+    assert second["stats"]["added_lines_last_screen"] == 0
+    assert second["stats"]["duplicate_lines_last_screen"] == 4
+    assert len(second["lines"]) == 4
+
+
+def test_detail_ocr_buffer_context_guides_finish_detail_reading(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_OCR_BUFFER_ENABLED", "1")
+    state = {
+        "detail_ocr_buffer": {
+            "url": "https://www.wanted.co.kr/wd/1",
+            "lines": [{"text": "주요업무 iOS 개발"}, {"text": "자격요건 Swift"}],
+            "stats": {
+                "screen_count": 2,
+                "added_lines_last_screen": 1,
+                "duplicate_lines_last_screen": 1,
+            },
+        }
+    }
+
+    context = nodes._compact_detail_ocr_buffer_context(state, "https://www.wanted.co.kr/wd/1")
+
+    assert "상세 OCR 누적 상태" in context
+    assert "finish_detail_reading" in context
+    assert "중간 DB 추출" in context
+
+
+def test_finish_detail_reading_merges_buffer_extraction_and_clears_buffer(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setattr(
+        nodes,
+        "_extract_job_from_detail_ocr_buffer",
+        lambda state, current_url: {
+            "company_name": "보이저엑스",
+            "position": "iOS 개발자",
+            "url": current_url,
+            "requirements": ["Swift"],
+        },
+    )
+
+    result, current_jd, plan, step = nodes._dispatch_state(
+        "finish_detail_reading",
+        {"page_role": "job_detail", "detail_complete": True},
+        {},
+        [],
+        0,
+        current_url="https://www.wanted.co.kr/wd/1",
+        state={
+            "detail_ocr_buffer": {
+                "url": "https://www.wanted.co.kr/wd/1",
+                "lines": [{"text": "자격요건 Swift"}],
+            }
+        },
+    )
+
+    assert result["status"] == "success"
+    assert result["_detail_ocr_buffer"] == {}
+    assert current_jd["공고목록"][0]["position"] == "iOS 개발자"
+    assert plan == []
+    assert step == 0
+
+
 def test_match_marker_uses_evidence_texts_to_disambiguate_repeated_targets():
     from agent.recipe.matcher import match_marker
 

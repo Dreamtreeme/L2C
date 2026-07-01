@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from pathlib import Path
 
 import sentry_sdk
 import structlog
@@ -55,6 +56,22 @@ def setup_agent_logger():
         stream=sys.stdout,
         level=logging.INFO,
     )
+    log_target = os.getenv("LOG_TARGET")
+    if log_target:
+        log_path = Path(log_target)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        root = logging.getLogger()
+        resolved = str(log_path.resolve())
+        has_handler = any(
+            isinstance(handler, logging.FileHandler)
+            and getattr(handler, "baseFilename", "") == resolved
+            for handler in root.handlers
+        )
+        if not has_handler:
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(logging.Formatter("%(message)s"))
+            root.addHandler(file_handler)
 
 setup_agent_logger()
 logger = structlog.get_logger("l2c.agent")

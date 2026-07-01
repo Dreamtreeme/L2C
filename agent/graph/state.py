@@ -101,6 +101,9 @@ class GraphState(TypedDict):
     queue_replay_hit: bool
     queue_replay_trace: Dict[str, Any]
 
+    # [Detail OCR Buffer] 상세 페이지 OCR을 화면별로 누적하고 마지막에 한 번 정제한다.
+    detail_ocr_buffer: Dict[str, Any]
+
     # [HITL] Stop autonomous execution before sensitive or irreversible steps
     pending_human_approval: bool
     human_approval_request: Dict[str, Any]

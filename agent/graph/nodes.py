@@ -20,6 +20,8 @@ _perception = None
 _action_tools = None
 _ui_llm_with_tools = None
 _qa_llm_with_tools = None
+_detail_extraction_llm = None
+_detail_extraction_llm_key = None
 
 # --- LLM 도구 정의용 Pydantic 모델 ---
 class click_marker(BaseModel):
@@ -98,6 +100,16 @@ class update_extracted_info(BaseModel):
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
+class finish_detail_reading(BaseModel):
+    """상세 페이지 OCR 누적을 종료하고, 누적 본문을 한 번만 정제하여 수집 상태에 병합합니다."""
+    reason: Optional[str] = Field(None, description="상세 페이지 읽기를 종료하는 이유(reason)")
+    detail_complete: Optional[bool] = Field(True, description="상세 공고 본문 정보가 충분히 수집되었는지 여부(detail_complete).")
+    expected_after: Optional[str] = Field(None, description="정제 후 정상이라면 다음에 기대되는 상태(expected_after)")
+
+    page_role: Optional[str] = Field("job_detail", description="Current page role.")
+    risk_level: Optional[str] = Field("safe_read", description="safe_read, safe_navigation, or sensitive.")
+    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
+
 class go_back(BaseModel):
     """브라우저의 뒤로가기(이전 페이지 이동) 기능을 실행합니다."""
     reason: Optional[str] = Field(None, description="뒤로가기를 수행한 이유(reason)")
@@ -163,6 +175,7 @@ def _get_ui_llm_with_tools():
             open_browser,
             close_browser,
             update_extracted_info,
+            finish_detail_reading,
             go_back,
             update_plan_progress,
             set_result_card_queue,
@@ -186,6 +199,221 @@ def _get_qa_llm_with_tools():
             review_recipe_candidates,
         ])
     return _qa_llm_with_tools
+
+
+class _OllamaDetailExtractionLLM:
+    """Ollama JSON 모드로 상세 OCR 누적 본문을 JobPosting으로 정제합니다."""
+
+    def __init__(self, model_name: str):
+        import ollama
+        from shared.config import OLLAMA_HOST
+
+        self.model_name = model_name
+        self.client = ollama.Client(host=os.getenv("OLLAMA_HOST", str(OLLAMA_HOST)))
+
+    @staticmethod
+    def _message_content(message: Any) -> str:
+        content = getattr(message, "content", message)
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    parts.append(str(item.get("text") or item.get("content") or ""))
+            return "\n".join(part for part in parts if part)
+        return str(content or "")
+
+    @staticmethod
+    def _response_content(response: Any) -> str:
+        if isinstance(response, dict):
+            message = response.get("message") or {}
+            return str(message.get("content") or "")
+        message = getattr(response, "message", None)
+        if isinstance(message, dict):
+            return str(message.get("content") or "")
+        return str(getattr(message, "content", "") or "")
+
+    def invoke(self, messages: list[Any]) -> Any:
+        from json_repair import repair_json
+        from shared.schema.jd_schema import JobPosting
+
+        system_text = "\n".join(
+            self._message_content(message)
+            for message in messages
+            if isinstance(message, SystemMessage)
+        )
+        user_text = "\n\n".join(
+            self._message_content(message)
+            for message in messages
+            if not isinstance(message, SystemMessage)
+        )
+        schema = JobPosting.model_json_schema()
+        prompt = (
+            f"{system_text}\n\n"
+            "반드시 아래 JSON 스키마와 호환되는 JSON 객체 하나만 출력하십시오.\n"
+            f"{json.dumps(schema, ensure_ascii=False)}\n\n"
+            f"{user_text}"
+        )
+        response = self.client.chat(
+            model=self.model_name,
+            messages=[{"role": "user", "content": prompt}],
+            format="json",
+            options={
+                "temperature": 0,
+                "num_predict": int(os.getenv("VISION_DETAIL_OLLAMA_NUM_PREDICT", "2048")),
+            },
+        )
+        content = self._response_content(response)
+        parsed = repair_json(content, return_objects=True)
+        if not isinstance(parsed, dict):
+            parsed = {}
+        return JobPosting.model_validate(parsed)
+
+
+class _OpenAIDetailExtractionLLM:
+    """OpenAI Responses API로 상세 OCR 누적 본문을 JobPosting으로 정제합니다."""
+
+    def __init__(self, model_name: str):
+        import requests
+        from shared.config import BASE_DIR  # noqa: F401 - .env 로드를 보장합니다.
+
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set")
+        self.model_name = model_name
+        self.api_key = api_key
+        self.requests = requests
+
+    @staticmethod
+    def _message_content(message: Any) -> str:
+        content = getattr(message, "content", message)
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    parts.append(str(item.get("text") or item.get("content") or ""))
+            return "\n".join(part for part in parts if part)
+        return str(content or "")
+
+    @staticmethod
+    def _output_text(response_json: dict[str, Any]) -> str:
+        if isinstance(response_json.get("output_text"), str):
+            return response_json["output_text"]
+        parts: list[str] = []
+        for item in response_json.get("output") or []:
+            for content in item.get("content") or []:
+                if content.get("type") == "output_text":
+                    parts.append(str(content.get("text") or ""))
+        return "\n".join(parts)
+
+    @staticmethod
+    def _job_posting_schema() -> dict[str, Any]:
+        from shared.schema.jd_schema import JobPosting
+
+        schema = JobPosting.model_json_schema()
+        properties = dict(schema.get("properties") or {})
+        for noisy_field in ("raw_ocr_text", "content_hash"):
+            properties.pop(noisy_field, None)
+        schema["properties"] = properties
+        if isinstance(schema.get("required"), list):
+            schema["required"] = [key for key in schema["required"] if key in properties]
+        schema["additionalProperties"] = False
+        return schema
+
+    def invoke(self, messages: list[Any]) -> Any:
+        from json_repair import repair_json
+        from shared.schema.jd_schema import JobPosting
+
+        system_text = "\n".join(
+            self._message_content(message)
+            for message in messages
+            if isinstance(message, SystemMessage)
+        )
+        user_text = "\n\n".join(
+            self._message_content(message)
+            for message in messages
+            if not isinstance(message, SystemMessage)
+        )
+        system_prompt = (
+            f"{system_text} "
+            "북마크, 브라우저 메뉴, 보상 배지, 추천인 현금, 로그인 문구 같은 주변 UI 노이즈는 무시하십시오. "
+            "채용 도메인에서 명확한 OCR 혼동은 문맥으로 보정하십시오. 예를 들어 Swift, Xcode, 앱 개발, 모바일 문맥에서 "
+            "'ios', 'i0S', 'j0s', '10s'처럼 보이는 토큰은 직무명과 기술스택에서 'iOS'로 정규화하십시오. "
+            "대괄호로 나뉜 직무명 조각은 한 줄 직무명으로 합치고, 직무명에는 브라우저/광고/보상 문구를 넣지 마십시오. "
+            "회사명은 로고, 영문 브랜드, 회사소개 문장 주변의 반복 토큰을 우선하고, 깨진 한글 OCR만으로 확정하지 마십시오. "
+            "기술스택은 실제 업무에 쓰는 기술만 넣고, 면접 질문 예시나 CS 개념 목록은 requirements에 요약하십시오. "
+            "salary, deadline, location, benefits는 서로 섞지 말고 해당 필드에만 넣으십시오. "
+            "목록 필드는 핵심 항목만 간결하게 유지하십시오. "
+            "raw_ocr_text와 content_hash는 출력하지 마십시오. JSON 객체 하나만 출력하십시오."
+        )
+        payload = {
+            "model": self.model_name,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_text},
+            ],
+            "max_output_tokens": int(os.getenv("VISION_DETAIL_OPENAI_MAX_OUTPUT_TOKENS", "2048")),
+            "temperature": 0,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "job_posting",
+                    "schema": self._job_posting_schema(),
+                    "strict": False,
+                }
+            },
+            "store": False,
+        }
+        response = self.requests.post(
+            "https://api.openai.com/v1/responses",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=int(os.getenv("VISION_DETAIL_OPENAI_TIMEOUT", "120")),
+        )
+        try:
+            response_json = response.json()
+        except ValueError:
+            response_json = {"raw_text": response.text}
+        if response.status_code >= 400:
+            raise RuntimeError(json.dumps(response_json, ensure_ascii=False)[:2000])
+        parsed = repair_json(self._output_text(response_json), return_objects=True)
+        if not isinstance(parsed, dict):
+            parsed = {}
+        return JobPosting.model_validate(parsed)
+
+
+def _detail_extraction_model_spec() -> str:
+    return os.getenv("VISION_DETAIL_FINAL_EXTRACTION_MODEL", "gemini-3.5-flash").strip()
+
+
+def _get_detail_extraction_llm():
+    """상세 OCR 누적 본문을 최종 채용공고 스키마로 정제하는 전용 LLM입니다."""
+    global _detail_extraction_llm
+    global _detail_extraction_llm_key
+    model_spec = _detail_extraction_model_spec()
+    if _detail_extraction_llm is None or _detail_extraction_llm_key != model_spec:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        from shared.schema.jd_schema import JobPosting
+
+        if model_spec.startswith("ollama:"):
+            model_name = model_spec.removeprefix("ollama:").strip()
+            _detail_extraction_llm = _OllamaDetailExtractionLLM(model_name)
+        elif model_spec.startswith("openai:"):
+            model_name = model_spec.removeprefix("openai:").strip()
+            _detail_extraction_llm = _OpenAIDetailExtractionLLM(model_name)
+        else:
+            _detail_extraction_llm = ChatGoogleGenerativeAI(
+                model=model_spec,
+                temperature=0.0,
+            ).with_structured_output(JobPosting)
+        _detail_extraction_llm_key = model_spec
+    return _detail_extraction_llm
 
 
 def perception_node(state: GraphState) -> Dict[str, Any]:
@@ -306,6 +534,15 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
             )
 
     ui_context = _build_ui_context(markers, current_url=current_url)
+    detail_marked_image = _build_detail_lightweight_marked_image(image_path, markers, current_url)
+    if detail_marked_image:
+        marked_image = detail_marked_image
+    detail_ocr_buffer = _update_detail_ocr_buffer(
+        state.get("detail_ocr_buffer", {}),
+        markers,
+        current_url,
+        image_path,
+    )
     
     elapsed = time.time() - start_time
     logger.info(f"Perception Node completed in {elapsed:.2f} seconds")
@@ -325,6 +562,7 @@ def perception_node(state: GraphState) -> Dict[str, Any]:
         "transition_observations": transition_observations,
         "queue_replay_hit": bool(queue_msg),
         "queue_replay_trace": queue_trace if queue_msg else {},
+        "detail_ocr_buffer": detail_ocr_buffer,
         "step_durations": [{"node": "perception", "duration": elapsed}]
     }
     if queue_msg:
@@ -528,47 +766,6 @@ def _is_detail_update(args: dict[str, Any]) -> bool:
     return role in {"job_detail", "detail", "posting_detail"}
 
 
-_SENSITIVE_ACTION_TERMS = (
-    "login",
-    "password",
-    "auth",
-    "verify",
-    "submit",
-    "apply",
-    "agree",
-    "payment",
-    "pay",
-    "transfer",
-    "account",
-    "finance",
-    "legal",
-    "로그인",
-    "비밀번호",
-    "인증",
-    "제출",
-    "신청",
-    "가입",
-    "동의",
-    "약관",
-    "결제",
-    "송금",
-    "계좌",
-    "금융",
-)
-
-
-def _joined_action_text(args: dict[str, Any], marker: dict | None = None) -> str:
-    parts = []
-    for key in ("text", "target_label", "target_role", "target_component", "reason", "expected_after", "page_role"):
-        value = args.get(key)
-        if value:
-            parts.append(str(value))
-    if marker:
-        parts.append(str(marker.get("text") or ""))
-        parts.append(str(marker.get("type") or ""))
-    return " ".join(parts).lower()
-
-
 def _sensitive_action_reason(state: GraphState, action_name: str, args: dict[str, Any]) -> str:
     if action_name in {"close_browser", "go_back", "scroll"}:
         return ""
@@ -576,15 +773,16 @@ def _sensitive_action_reason(state: GraphState, action_name: str, args: dict[str
         return "tool_args_requested_user_confirmation"
     if str(args.get("risk_level") or "").strip().lower() == "sensitive":
         return "tool_args_marked_sensitive"
-    marker = _marker_by_id(state.get("current_markers", []), args.get("marker_id")) if action_name in {"click_marker", "type_in_marker"} else None
-    text = _joined_action_text(args, marker)
-    for term in _SENSITIVE_ACTION_TERMS:
-        if term.lower() in text:
-            return f"sensitive_term:{term}"
     return ""
 
 
 def _compact_action_args(action_name: str, args: dict) -> dict:
+    if action_name == "finish_detail_reading":
+        return {
+            "page_role": args.get("page_role", "job_detail"),
+            "detail_complete": args.get("detail_complete", True),
+            "reason": _clip_prompt_text(args.get("reason", ""), 120),
+        }
     if action_name == "set_result_card_queue":
         cards = args.get("cards") if isinstance(args, dict) else []
         titles = []
@@ -1315,6 +1513,65 @@ def _detail_action_marker_candidates(markers: list[dict], limit: int) -> list[di
     return primary
 
 
+def _detail_lightweight_marked_image_enabled() -> bool:
+    return _env_enabled("VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED", True)
+
+
+def _draw_detail_lightweight_marker(draw: Any, marker: dict, color: tuple[int, int, int], font: Any) -> None:
+    bbox = _marker_bbox(marker)
+    if bbox == [0, 0, 0, 0]:
+        return
+    x1, y1, x2, y2 = bbox
+    pad = 4
+    draw.rectangle([x1 - pad, y1 - pad, x2 + pad, y2 + pad], outline=color, width=4)
+    label = f"[{marker.get('id')}]"
+    label_box = [x1 - pad, max(0, y1 - 30), x1 + 70, max(24, y1 - 4)]
+    draw.rectangle(label_box, fill=color)
+    draw.text((label_box[0] + 4, label_box[1] + 2), label, fill=(255, 255, 255), font=font)
+
+
+def _build_detail_lightweight_marked_image(image_path: Any, markers: list[dict], current_url: str) -> str:
+    """상세 페이지 reasoning에는 클릭 후보만 표시한 가벼운 화면 이미지를 사용한다."""
+    if not current_url or not _looks_like_job_detail_url(current_url):
+        return ""
+    if not _detail_lightweight_marked_image_enabled():
+        return ""
+    try:
+        from pathlib import Path
+        from PIL import Image, ImageDraw, ImageFont
+
+        source_path = Path(image_path)
+        if not source_path.exists():
+            return ""
+        try:
+            action_limit = int(os.getenv("VISION_DETAIL_ACTION_MARKER_LIMIT", "35"))
+        except ValueError:
+            action_limit = 35
+        candidates = _detail_action_marker_candidates(markers, action_limit)
+
+        image = Image.open(source_path).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        try:
+            font = ImageFont.truetype("arial.ttf", 18)
+        except Exception:
+            font = ImageFont.load_default()
+        for marker in candidates:
+            _draw_detail_lightweight_marker(draw, marker, (0, 120, 255), font)
+
+        output_path = source_path.with_name(f"light_marked_{source_path.stem}.jpg")
+        image.save(output_path, "JPEG", quality=88)
+        logger.info(
+            "Detail lightweight marked image prepared",
+            markers_count=len(markers),
+            highlighted_markers=len(candidates),
+            output_path=str(output_path),
+        )
+        return str(output_path)
+    except Exception as exc:
+        logger.debug("detail lightweight marked image skipped", error=str(exc))
+        return ""
+
+
 def _build_detail_section_context(markers: list[dict]) -> str:
     try:
         min_text_markers = int(os.getenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "120"))
@@ -1351,6 +1608,230 @@ def _build_detail_section_context(markers: list[dict]) -> str:
 
     parts.append(f"원본 텍스트 마커 {text_marker_count}개를 읽기용 줄 {len(lines)}개로 압축")
     return "\n".join(parts)
+
+
+def _detail_ocr_buffer_enabled() -> bool:
+    return _env_enabled("VISION_DETAIL_OCR_BUFFER_ENABLED", True)
+
+
+def _detail_buffer_line_key(text: str) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+    return text
+
+
+def _detail_lines_for_buffer(markers: list[dict]) -> list[dict]:
+    return [
+        line
+        for line in _group_text_markers_into_lines(markers)
+        if not _is_probable_detail_noise_line(line)
+    ]
+
+
+def _new_detail_ocr_buffer(current_url: str) -> dict[str, Any]:
+    return {
+        "url": current_url,
+        "lines": [],
+        "seen_keys": [],
+        "screens": [],
+        "stats": {
+            "screen_count": 0,
+            "added_lines_last_screen": 0,
+            "duplicate_lines_last_screen": 0,
+            "total_lines": 0,
+        },
+    }
+
+
+def _update_detail_ocr_buffer(
+    existing: dict[str, Any] | None,
+    markers: list[dict],
+    current_url: str,
+    image_path: Any = "",
+) -> dict[str, Any]:
+    """상세 페이지 OCR 본문 줄을 URL 단위 버퍼에 누적한다."""
+    if not _detail_ocr_buffer_enabled():
+        return dict(existing or {})
+    if not current_url or not _looks_like_job_detail_url(current_url):
+        return dict(existing or {})
+
+    try:
+        max_lines = int(os.getenv("VISION_DETAIL_OCR_BUFFER_MAX_LINES", "260"))
+        max_line_chars = int(os.getenv("VISION_DETAIL_OCR_BUFFER_MAX_LINE_CHARS", "220"))
+    except ValueError:
+        max_lines = 260
+        max_line_chars = 220
+
+    buffer = dict(existing or {})
+    if buffer.get("url") != current_url:
+        buffer = _new_detail_ocr_buffer(current_url)
+    lines = [dict(item) for item in (buffer.get("lines") or []) if isinstance(item, dict)]
+    seen_keys = [str(item) for item in (buffer.get("seen_keys") or []) if str(item)]
+    seen = set(seen_keys)
+    added = 0
+    duplicate = 0
+    screen_name = ""
+    try:
+        from pathlib import Path
+
+        screen_name = Path(image_path).name if image_path else ""
+    except Exception:
+        screen_name = str(image_path or "")
+
+    for line in _detail_lines_for_buffer(markers):
+        text = str(line.get("text") or "").strip()
+        if len(text) < 2:
+            continue
+        if len(text) > max_line_chars:
+            text = text[: max_line_chars - 1].rstrip() + "…"
+        key = _detail_buffer_line_key(text)
+        if not key:
+            continue
+        if key in seen:
+            duplicate += 1
+            continue
+        seen.add(key)
+        seen_keys.append(key)
+        lines.append(
+            {
+                "text": text,
+                "bbox": line.get("bbox") or [0, 0, 0, 0],
+                "first_screen": screen_name,
+            }
+        )
+        added += 1
+        if len(lines) >= max_lines:
+            break
+
+    screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]
+    if screen_name and (not screens or screens[-1] != screen_name):
+        screens.append(screen_name)
+    stats = dict(buffer.get("stats") or {})
+    stats["screen_count"] = int(stats.get("screen_count") or 0) + 1
+    stats["added_lines_last_screen"] = added
+    stats["duplicate_lines_last_screen"] = duplicate
+    stats["total_lines"] = len(lines)
+    buffer.update(
+        {
+            "url": current_url,
+            "lines": lines[:max_lines],
+            "seen_keys": seen_keys[:max_lines],
+            "screens": screens[-20:],
+            "stats": stats,
+        }
+    )
+    logger.info(
+        "Detail OCR buffer updated",
+        url=current_url,
+        added_lines=added,
+        duplicate_lines=duplicate,
+        total_lines=len(lines[:max_lines]),
+        screen_count=stats["screen_count"],
+    )
+    return buffer
+
+
+def _compact_detail_ocr_buffer_context(state: GraphState, current_url: str) -> str:
+    if not _detail_ocr_buffer_enabled() or not current_url or not _looks_like_job_detail_url(current_url):
+        return ""
+    buffer = dict(state.get("detail_ocr_buffer", {}) or {})
+    if buffer.get("url") != current_url:
+        return ""
+    stats = dict(buffer.get("stats") or {})
+    lines = [item for item in (buffer.get("lines") or []) if isinstance(item, dict)]
+    preview = [str(item.get("text") or "").strip() for item in lines[-8:]]
+    preview = [line for line in preview if line]
+    parts = [
+        "상세 OCR 누적 상태:",
+        f"- 누적 본문 줄 수: {len(lines)}",
+        f"- 이번 화면 새 줄 수: {stats.get('added_lines_last_screen', 0)}",
+        f"- 이번 화면 중복 줄 수: {stats.get('duplicate_lines_last_screen', 0)}",
+        f"- 상세 화면 관찰 횟수: {stats.get('screen_count', 0)}",
+        "- 상세 페이지에서는 중간 DB 추출을 위해 update_extracted_info를 호출하지 마십시오.",
+        "- 더 읽어야 하면 scroll 또는 보이는 상세 펼치기 버튼 클릭을 선택하십시오.",
+        "- 현재 공고 정보가 충분하면 finish_detail_reading(page_role=\"job_detail\", detail_complete=true)을 호출하십시오.",
+    ]
+    if preview:
+        parts.append("- 최근 누적 본문 미리보기: " + json.dumps(preview, ensure_ascii=False, separators=(",", ":")))
+    return "\n".join(parts) + "\n\n"
+
+
+def _detail_buffer_text(buffer: dict[str, Any]) -> str:
+    try:
+        max_chars = int(os.getenv("VISION_DETAIL_FINAL_OCR_MAX_CHARS", "16000"))
+    except ValueError:
+        max_chars = 16000
+    lines = [item for item in (buffer.get("lines") or []) if isinstance(item, dict)]
+    rendered: list[str] = []
+    total = 0
+    for index, line in enumerate(lines, start=1):
+        text = str(line.get("text") or "").strip()
+        if not text:
+            continue
+        row = f"{index}. {text}"
+        if total + len(row) + 1 > max_chars:
+            break
+        rendered.append(row)
+        total += len(row) + 1
+    return "\n".join(rendered)
+
+
+def _model_to_dict(model: Any) -> dict[str, Any]:
+    if model is None:
+        return {}
+    if isinstance(model, dict):
+        return dict(model)
+    if hasattr(model, "model_dump"):
+        return dict(model.model_dump())
+    if hasattr(model, "dict"):
+        return dict(model.dict())
+    return {}
+
+
+def _extract_job_from_detail_ocr_buffer(state: GraphState, current_url: str) -> dict[str, Any]:
+    buffer = dict(state.get("detail_ocr_buffer", {}) or {})
+    ocr_text = _detail_buffer_text(buffer)
+    if not ocr_text.strip():
+        return {}
+    active_card = dict(state.get("active_result_card", {}) or {})
+    messages = [
+        SystemMessage(
+            content=(
+                "누적 OCR 본문에서 채용공고 1건을 JobPosting 스키마로 정리하십시오. "
+                "OCR에 없는 사실은 만들지 말고, 알 수 없는 필드는 비우십시오. "
+                "현재 상세 URL은 보존하십시오."
+            )
+        ),
+        HumanMessage(
+            content=json.dumps(
+                {
+                    "current_url": current_url,
+                    "active_result_card": {
+                        "title": active_card.get("title") or active_card.get("target_label") or "",
+                        "company": active_card.get("company") or "",
+                    },
+                    "ocr_text": ocr_text,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        ),
+    ]
+    start = time.time()
+    extracted = _model_to_dict(_get_detail_extraction_llm().invoke(messages))
+    logger.info(
+        "Detail OCR final extraction completed",
+        duration=f"{time.time() - start:.2f}s",
+        ocr_chars=len(ocr_text),
+        ocr_lines=len(buffer.get("lines") or []),
+    )
+    extracted = {key: value for key, value in extracted.items() if value not in (None, "", [], {})}
+    if current_url and not extracted.get("url"):
+        extracted["url"] = current_url
+    if active_card.get("title") and not (extracted.get("position") or extracted.get("직무명")):
+        extracted["position"] = active_card.get("title")
+    if active_card.get("company") and not (extracted.get("company_name") or extracted.get("회사명")):
+        extracted["company_name"] = active_card.get("company")
+    return extracted
 
 
 def _build_ui_context(markers: list[dict], current_url: str = "") -> str:
@@ -1399,8 +1880,9 @@ def _safety_page_role_contract() -> str:
         "- For every UI tool call, include page_role when you can infer it: home, search, list, detail, form, popup, error, or unknown.\n"
         "- Include risk_level: safe_read, safe_navigation, or sensitive.\n"
         "- Set needs_user_confirmation=true before login, password/authentication, personal data, agreement/terms, application/submission, payment, transfer, account, finance, or legal-effect steps. The executor will stop and ask the user.\n"
+        "- For public job collection, do not attempt login, signup, authentication, or account switching unless the user explicitly asked for it. If such a screen appears, leave that flow and return to a public search/list/home surface. Use neutral action reasons such as 'return to public search surface' instead of describing a login/signup action.\n"
         "- Unknown or newly released tasks should be researched and narrowed before execution. Do not try random branches first.\n"
-        "- On detail pages, your main judgment is whether enough information has been collected. If not enough, call update_extracted_info(page_role=\"job_detail\", detail_complete=false), then choose the next visible UI action yourself, such as scrolling down or clicking a clearly relevant reveal/details control.\n"
+        "- On detail pages, your main judgment is whether enough information has been read. If detail OCR buffering is active, do not call update_extracted_info for intermediate extraction; scroll, click a clearly relevant reveal/details control, or call finish_detail_reading(page_role=\"job_detail\", detail_complete=true) when the current posting is sufficiently read.\n"
     )
 
 
@@ -1677,11 +2159,13 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"{collection_context}"
         f"{_compact_result_card_queue_context(state)}"
+        f"{_compact_detail_ocr_buffer_context(state, current_url)}"
         f"{transition_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
         f"{_compact_recent_actions_context(action_history)}"
-        f"다음 행동을 결정하세요. 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
+        f"다음 행동을 결정하세요. 상세 페이지에서 OCR 버퍼가 활성화되어 있으면 중간 정보 추출 대신 finish_detail_reading으로 읽기 종료를 알리고, "
+        f"그 외 화면에서 새로운 정보가 식별되었다면 update_extracted_info를 먼저 부르고, "
         f"계획 단계 전환이 일어났다면 update_plan_progress를 함께 체이닝 호출하여 계획 진행률을 반영하십시오."
     )
 
@@ -2127,6 +2611,42 @@ def _dispatch_state(
         result = {"action": "update_extracted_info", "status": status, "result": result_str}
         if reason:
             result["reason"] = reason
+    elif action_name == "finish_detail_reading":
+        try:
+            extracted_job = _extract_job_from_detail_ocr_buffer(state or {}, current_url)
+            if not extracted_job:
+                result = {
+                    "action": "finish_detail_reading",
+                    "status": "skipped",
+                    "result": "No accumulated detail OCR text to extract.",
+                    "reason": "empty_detail_ocr_buffer",
+                    "_detail_ocr_buffer": {},
+                }
+            else:
+                current_jd, summary = _merge_extracted_info(
+                    current_jd,
+                    {"공고목록": [extracted_job]},
+                    current_url=current_url,
+                )
+                result = {
+                    "action": "finish_detail_reading",
+                    "status": "success",
+                    "result": (
+                        "Detail OCR buffer extracted and merged "
+                        f"(incoming_jobs={summary['incoming_jobs']}, total_jobs={summary['total_jobs']}, "
+                        f"fields={summary['fields']})"
+                    ),
+                    "incoming_jobs": summary["incoming_jobs"],
+                    "total_jobs": summary["total_jobs"],
+                    "fields": summary["fields"],
+                    "_detail_ocr_buffer": {},
+                }
+        except Exception as e:
+            result = {
+                "action": "finish_detail_reading",
+                "status": "error",
+                "result": f"Failed to extract detail OCR buffer: {e}",
+            }
     elif action_name == "set_result_card_queue":
         queue, memory = _normalize_result_card_queue(args, state or {}, current_url)
         result = {
@@ -2193,6 +2713,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     result_card_queue = [dict(item) for item in (state.get("result_card_queue", []) or []) if isinstance(item, dict)]
     result_page_memory = dict(state.get("result_page_memory", {}) or {})
     active_result_card = dict(state.get("active_result_card", {}) or {})
+    detail_ocr_buffer = dict(state.get("detail_ocr_buffer", {}) or {})
     screen_changed    = False
     chain_boundary    = False
     previous_ui_action: str | None = None
@@ -2382,11 +2903,14 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
     URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "close_browser", "go_back"}
     OBSERVATION_REQUIRED_ACTIONS = {"click_marker", "press_key", "open_browser", "go_back"}
-    STATE_ACTIONS = {"update_plan_progress", "update_extracted_info", "set_result_card_queue"}
+    STATE_ACTIONS = {"update_plan_progress", "update_extracted_info", "finish_detail_reading", "set_result_card_queue"}
 
     for idx, tool_call in enumerate(ai_msg.tool_calls):
         action_name = tool_call["name"]
         args        = tool_call["args"]
+        if action_name == "finish_detail_reading":
+            args.setdefault("page_role", "job_detail")
+            args.setdefault("detail_complete", True)
         compact_args = _compact_action_args(action_name, args)
 
         logger.info(
@@ -2500,14 +3024,17 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         **state,
                         "extracted_jd": current_jd,
                         "current_url": current_url,
+                        "detail_ocr_buffer": detail_ocr_buffer,
                     },
                 )
                 action_changed_screen = False
                 if action_name == "set_result_card_queue":
                     result_card_queue = list(result.pop("_result_card_queue", []) or [])
                     result_page_memory = dict(result.pop("_result_page_memory", {}) or {})
+                if action_name == "finish_detail_reading":
+                    detail_ocr_buffer = dict(result.pop("_detail_ocr_buffer", detail_ocr_buffer) or {})
                 if (
-                    action_name == "update_extracted_info"
+                    action_name in {"update_extracted_info", "finish_detail_reading"}
                     and result.get("status") == "success"
                     and _is_detail_update(args)
                 ):
@@ -2527,7 +3054,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                                 "detail_complete_more_items",
                             )
                 if (
-                    action_name == "update_extracted_info"
+                    action_name in {"update_extracted_info", "finish_detail_reading"}
                     and result.get("status") == "success"
                     and _auto_finish_on_target_enabled()
                     and args.get("detail_complete") is not False
@@ -2661,6 +3188,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "active_result_card": active_result_card,
         "queue_replay_hit": False,
         "queue_replay_trace": {},
+        "detail_ocr_buffer": detail_ocr_buffer,
         "recorded_steps":    recorded_steps,
         "feedback_episodes": feedback_episodes,
         "pending_human_approval": pending_human_approval,

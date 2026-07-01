@@ -558,6 +558,7 @@ def _initial_worker_state(goal: str) -> dict:
         "active_result_card": {},
         "queue_replay_hit": False,
         "queue_replay_trace": {},
+        "detail_ocr_buffer": {},
         "pending_human_approval": False,
         "human_approval_request": {},
     }
