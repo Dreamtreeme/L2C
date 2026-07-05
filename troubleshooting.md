@@ -479,3 +479,66 @@ pHash 기반 replay는 `ios 개발자 공고 2개` 반복탐색에서 추론 횟
 - pHash/OCR 검증이 맞지 않는 화면에서는 무리하게 실행하지 않고 reasoning으로 폴백했다.
 - 아직 범용 성공이라고 보기는 어렵고, 원티드의 유사 채용공고 수집 흐름에서 성공한 결과다.
 - 다음 검증은 다른 검색어, 다른 수집 개수, 다른 사이트에서 같은 구조가 유지되는지 확인하는 것이다.
+
+---
+
+## 14. PaddleOCR GPU worker 장기 재사용 시 OCR 지연 폭증
+
+### [증상]
+Realtime/Vision E2E에서 같은 종류의 전체 화면 OCR인데도 `Perception Node` 시간이 간헐적으로 크게 튀었다.
+
+- 정상 구간: 대체로 1~4초대
+- 문제 구간: 55초, 65초, 113초, 121초 수준까지 증가
+- 로그상 지연 위치: `Resized image for OCR inference` 이후 첫 OCR 결과/overlap filtering 로그가 나오기 전
+
+즉, 지연은 후처리나 LLM reasoning이 아니라 PaddleOCR worker의 `ocr.ocr(...)` 호출 또는 그 응답 대기 구간에서 발생했다.
+
+### [반증한 가설]
+처음에는 상세 페이지처럼 OCR 박스가 많은 화면이라서 full OCR 자체가 느린 것으로 의심했다. 하지만 같은 스크린샷을 단독으로 반복 OCR하면 대부분 빠르게 끝났다. 문제는 이미지 한 장의 복잡도만으로 설명되지 않았다.
+
+또한 worker를 매번 껐다 켜서 느린 것도 아니었다. 기존 구조는 worker를 유지해 재사용하고 있었고, 오히려 장기 재사용된 worker에서 뒤쪽 요청의 latency가 비결정적으로 커지는 패턴이 관찰됐다.
+
+`stderr=PIPE`도 확인했다. 8장 재현에서는 pipe 자체가 직접 원인으로 증명되지는 않았지만, subprocess stderr pipe가 꽉 차면 부모 프로세스가 block될 수 있는 구조적 위험이 있으므로 제거 대상으로 남겼다.
+
+### [실제 원인 판단]
+가장 그럴듯한 원인은 PaddleOCR GPU worker를 오래 재사용할 때 Paddle/PaddleOCR predictor, CUDA context, GPU memory pool, 내부 cache 상태 중 하나가 누적되며 간헐적인 tail latency를 만드는 것이다.
+
+이 판단의 근거는 다음이다.
+
+- 같은 화면을 단독 OCR할 때는 빠르다.
+- 같은 worker를 오래 재사용하면 뒤쪽 요청에서 긴 지연이 다시 나타난다.
+- 일정 요청 수마다 worker를 재시작하면 긴 지연이 사라진다.
+- CPU fallback은 첫 요청 30초 이상, 이후에도 9~18초 수준으로 느려 기본 대안으로 부적합했다.
+
+### [ablation 결과]
+15장 스크린샷을 같은 worker로 처리하는 재현 테스트에서 다음 차이가 확인됐다.
+
+| 설정 | 최대 OCR 시간 | 총 OCR 시간 | 판단 |
+|---|---:|---:|---|
+| worker 재시작 없음 | 16.13초 | 31.43초 | 뒤쪽 요청에서 tail latency 재현 |
+| 10회 요청마다 재시작 | 4.05초 | 19.79초 | 가장 균형적 |
+| 최종 기본값 | 3.81초 | 18.61초 | 긴 지연 억제 |
+
+이전 E2E에서는 같은 계열의 문제가 121초까지 튄 적이 있었으므로, worker 재시작은 단순 최적화가 아니라 tail latency 폭증을 제한하는 안정화 조치다.
+
+반대로 `느린 요청이 한 번 발생한 뒤 worker 재시작` 방식은 제거했다. 이미 느려진 요청을 줄이지 못하고, 요청 수 기반 재시작 및 timeout/retry와 역할이 겹쳤기 때문이다.
+
+### [남긴 해결책]
+최종적으로 남긴 조치는 다음이다.
+
+- PaddleOCR worker stdout을 별도 reader thread와 queue로 읽어 main thread가 `readline()`에 무기한 묶이지 않게 했다.
+- 요청 timeout/retry를 추가해 worker가 hang 상태에 들어가도 작업 전체가 멈추지 않게 했다.
+- worker를 기본 10회 요청마다 재시작하도록 했다.
+- `stderr=PIPE`를 제거하고 `DEVNULL`로 돌려 subprocess pipe block 위험을 없앴다.
+- 요청별 OCR duration, worker pid, request count를 로그로 남겨 이후 outlier를 추적할 수 있게 했다.
+
+관련 환경 변수는 다음과 같다.
+
+- `SOM_OCR_WORKER_MAX_REQUESTS`: worker 재시작 기준 요청 수, 기본값 `10`
+- `SOM_OCR_REQUEST_TIMEOUT_SEC`: worker 단일 요청 timeout, 기본값 `20`
+- `SOM_OCR_WORKER_MAX_ATTEMPTS`: 요청 실패 시 재시도 횟수, 기본값 `2`
+- `SOM_OCR_WORKER_START_TIMEOUT_SEC`: worker 시작 대기 timeout, 기본값 `45`
+- `SOM_OCR_ONESHOT_TIMEOUT_SEC`: one-shot OCR fallback timeout, 기본값 `60`
+
+### [결론]
+이번 문제는 채용 사이트별 하드코딩이나 화면 의미 판단 문제가 아니라 OCR worker 생명주기 관리 문제였다. 따라서 LLM 판단 로직을 늘리는 대신, worker timeout, request budget 기반 재시작, subprocess pipe 정리처럼 인프라 레벨의 안정화만 남기는 것이 맞다.

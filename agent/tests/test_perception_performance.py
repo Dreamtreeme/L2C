@@ -190,6 +190,46 @@ def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
     assert engine._ocr_scale_for_image(3846, 2094) == 1.0
 
 
+def test_som_engine_recycles_ocr_worker_after_request_budget(monkeypatch):
+    from agent.tools.som_engine import SomEngine
+
+    class FakeWorker:
+        pid = 1234
+
+        def poll(self):
+            return None
+
+    engine = object.__new__(SomEngine)
+    engine._ocr_worker = FakeWorker()
+    engine._ocr_worker_request_count = 5
+    stopped = []
+
+    monkeypatch.setenv("SOM_OCR_WORKER_MAX_REQUESTS", "5")
+    monkeypatch.setattr(engine, "_stop_ocr_worker", lambda: stopped.append(True))
+
+    assert engine._recycle_ocr_worker_if_needed() is True
+    assert stopped == [True]
+
+
+def test_som_engine_does_not_recycle_before_request_budget(monkeypatch):
+    from agent.tools.som_engine import SomEngine
+
+    class FakeWorker:
+        def poll(self):
+            return None
+
+    engine = object.__new__(SomEngine)
+    engine._ocr_worker = FakeWorker()
+    engine._ocr_worker_request_count = 4
+    stopped = []
+
+    monkeypatch.setenv("SOM_OCR_WORKER_MAX_REQUESTS", "5")
+    monkeypatch.setattr(engine, "_stop_ocr_worker", lambda: stopped.append(True))
+
+    assert engine._recycle_ocr_worker_if_needed() is False
+    assert stopped == []
+
+
 def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):
     from agent.tools.som_engine import SomEngine
 

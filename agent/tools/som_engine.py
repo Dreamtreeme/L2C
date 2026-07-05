@@ -1,9 +1,12 @@
 import os
 import json
+import queue
 import site
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -24,6 +27,9 @@ class SomEngine:
         self.paddleocr_dir.mkdir(parents=True, exist_ok=True)
         os.environ["PADDLE_OCR_BASE_DIR"] = str(self.paddleocr_dir)
         self._ocr_worker = None
+        self._ocr_worker_stdout_queue = None
+        self._ocr_worker_generation = 0
+        self._ocr_worker_request_count = 0
 
         self.model_dir = self.root_dir / "models" / "omniparser"
         self.model_path = self.model_dir / "icon_detect" / "model.pt"
@@ -138,17 +144,82 @@ class SomEngine:
         env["PADDLE_OCR_BASE_DIR"] = str(self.paddleocr_dir)
         return env
 
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return max(0.0, float(os.getenv(name, str(default))))
+        except ValueError:
+            return default
+
+    def _ocr_worker_start_timeout_sec(self) -> float:
+        return max(1.0, self._env_float("SOM_OCR_WORKER_START_TIMEOUT_SEC", 45.0))
+
+    def _ocr_worker_request_timeout_sec(self) -> float:
+        return max(1.0, self._env_float("SOM_OCR_REQUEST_TIMEOUT_SEC", 20.0))
+
+    def _ocr_worker_max_requests(self) -> int:
+        return self._env_int("SOM_OCR_WORKER_MAX_REQUESTS", 10)
+
+    def _ocr_worker_attempts(self) -> int:
+        return max(1, self._env_int("SOM_OCR_WORKER_MAX_ATTEMPTS", 2))
+
+    def _read_ocr_worker_stdout(self, worker: subprocess.Popen, generation: int, output_queue: queue.Queue) -> None:
+        try:
+            assert worker.stdout is not None
+            while True:
+                line = worker.stdout.readline()
+                output_queue.put((generation, line))
+                if line == "":
+                    return
+        except Exception:
+            output_queue.put((generation, ""))
+
+    def _next_ocr_worker_line(self, timeout_sec: float) -> str | None:
+        output_queue = self._ocr_worker_stdout_queue
+        if output_queue is None:
+            return None
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                generation, line = output_queue.get(timeout=remaining)
+            except queue.Empty:
+                return None
+            if generation == self._ocr_worker_generation:
+                return line
+
+    def _recycle_ocr_worker_if_needed(self) -> bool:
+        max_requests = self._ocr_worker_max_requests()
+        worker = getattr(self, "_ocr_worker", None)
+        if max_requests <= 0 or worker is None or worker.poll() is not None:
+            return False
+        if self._ocr_worker_request_count < max_requests:
+            return False
+        logger.info(
+            "Recycling PaddleOCR worker after request budget",
+            pid=worker.pid,
+            requests=self._ocr_worker_request_count,
+            max_requests=max_requests,
+        )
+        self._stop_ocr_worker()
+        return True
+
     def _start_ocr_worker(self):
         if self._ocr_worker and self._ocr_worker.poll() is None:
             return self._ocr_worker
 
         runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
         logger.info("Starting isolated PaddleOCR worker", script=str(runner_script))
+        self._ocr_worker_generation += 1
+        generation = self._ocr_worker_generation
+        self._ocr_worker_stdout_queue = queue.Queue()
         self._ocr_worker = subprocess.Popen(
             [sys.executable, str(runner_script), "--worker"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="ignore",
@@ -157,66 +228,133 @@ class SomEngine:
         )
 
         assert self._ocr_worker.stdout is not None
+        threading.Thread(
+            target=self._read_ocr_worker_stdout,
+            args=(self._ocr_worker, generation, self._ocr_worker_stdout_queue),
+            daemon=True,
+        ).start()
+        start_timeout = self._ocr_worker_start_timeout_sec()
+        started = time.monotonic()
         while True:
-            line = self._ocr_worker.stdout.readline()
+            remaining = start_timeout - (time.monotonic() - started)
+            if remaining <= 0:
+                self._stop_ocr_worker()
+                raise TimeoutError(f"PaddleOCR worker startup timed out after {start_timeout:.1f}s")
+            line = self._next_ocr_worker_line(remaining)
+            if line is None:
+                self._stop_ocr_worker()
+                raise TimeoutError(f"PaddleOCR worker startup timed out after {start_timeout:.1f}s")
             if line == "":
-                stderr = ""
-                if self._ocr_worker.stderr is not None:
-                    stderr = self._ocr_worker.stderr.read()
                 self._ocr_worker = None
-                raise RuntimeError(f"PaddleOCR worker exited during startup: {stderr.strip()}")
+                raise RuntimeError("PaddleOCR worker exited during startup")
             stripped = line.strip()
             if stripped == "__OCR_WORKER_READY__":
+                self._ocr_worker_request_count = 0
+                logger.info(
+                    "PaddleOCR worker ready",
+                    pid=self._ocr_worker.pid,
+                    startup=f"{time.monotonic() - started:.2f}s",
+                )
                 return self._ocr_worker
             if stripped.startswith("__OCR_WORKER_FAILED__"):
-                stderr = ""
-                if self._ocr_worker.stderr is not None:
-                    stderr = self._ocr_worker.stderr.read()
                 self._ocr_worker = None
-                raise RuntimeError(f"PaddleOCR worker failed during startup: {stderr.strip()}")
+                raise RuntimeError("PaddleOCR worker failed during startup")
+            if stripped:
+                logger.debug("PaddleOCR worker startup output", line=stripped[:200])
 
     def _stop_ocr_worker(self) -> None:
         worker = getattr(self, "_ocr_worker", None)
         self._ocr_worker = None
+        self._ocr_worker_stdout_queue = None
+        self._ocr_worker_request_count = 0
         if not worker:
             return
         try:
             if worker.poll() is None:
                 worker.terminate()
+                try:
+                    worker.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    worker.kill()
+                    worker.wait(timeout=2)
         except Exception:
             pass
 
     def _run_paddle_ocr_worker(self, image_path: Path) -> List[Dict[str, Any]]:
-        worker = self._start_ocr_worker()
-        if not worker.stdin or not worker.stdout:
-            raise RuntimeError("PaddleOCR worker pipes are unavailable")
+        attempts = self._ocr_worker_attempts()
+        request_timeout = self._ocr_worker_request_timeout_sec()
+        last_error: Exception | None = None
 
-        request = json.dumps({"image_path": str(image_path)}, ensure_ascii=False)
-        worker.stdin.write(request + "\n")
-        worker.stdin.flush()
+        for attempt in range(1, attempts + 1):
+            self._recycle_ocr_worker_if_needed()
+            worker = self._start_ocr_worker()
+            if not worker.stdin or not worker.stdout:
+                raise RuntimeError("PaddleOCR worker pipes are unavailable")
 
-        while True:
-            line = worker.stdout.readline()
-            if line == "":
+            request = json.dumps({"image_path": str(image_path)}, ensure_ascii=False)
+            started = time.monotonic()
+            try:
+                worker.stdin.write(request + "\n")
+                worker.stdin.flush()
+
+                while True:
+                    remaining = request_timeout - (time.monotonic() - started)
+                    if remaining <= 0:
+                        raise TimeoutError(f"PaddleOCR worker request timed out after {request_timeout:.1f}s")
+                    line = self._next_ocr_worker_line(remaining)
+                    if line is None:
+                        raise TimeoutError(f"PaddleOCR worker request timed out after {request_timeout:.1f}s")
+                    if line == "":
+                        raise RuntimeError("PaddleOCR worker exited before returning a result")
+                    stripped = line.strip()
+                    if not stripped.startswith("__OCR_JSON_RESULT__"):
+                        continue
+                    payload = stripped.removeprefix("__OCR_JSON_RESULT__").strip()
+                    results = json.loads(payload) if payload else []
+                    duration = time.monotonic() - started
+                    self._ocr_worker_request_count += 1
+                    logger.info(
+                        "PaddleOCR worker request completed",
+                        pid=worker.pid,
+                        attempt=attempt,
+                        request_count=self._ocr_worker_request_count,
+                        duration=f"{duration:.2f}s",
+                        boxes=len(results),
+                    )
+                    return results
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "PaddleOCR worker request failed",
+                    attempt=attempt,
+                    attempts=attempts,
+                    error=str(exc),
+                )
                 self._stop_ocr_worker()
-                raise RuntimeError("PaddleOCR worker exited before returning a result")
-            stripped = line.strip()
-            if not stripped.startswith("__OCR_JSON_RESULT__"):
-                continue
-            payload = stripped.removeprefix("__OCR_JSON_RESULT__").strip()
-            return json.loads(payload) if payload else []
+                if attempt >= attempts:
+                    raise
+
+        if last_error:
+            raise last_error
+        return []
 
     def _run_paddle_ocr_once(self, image_path: Path) -> List[Dict[str, Any]]:
         runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
-        result = subprocess.run(
-            [sys.executable, str(runner_script), str(image_path)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-            env=self._ocr_worker_env(),
-            check=False,
-        )
+        timeout = max(1.0, self._env_float("SOM_OCR_ONESHOT_TIMEOUT_SEC", 60.0))
+        try:
+            result = subprocess.run(
+                [sys.executable, str(runner_script), str(image_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                env=self._ocr_worker_env(),
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("PaddleOCR one-shot runner timed out", timeout=f"{timeout:.1f}s")
+            return []
         marker = "__OCR_JSON_START__"
         if marker not in result.stdout:
             if result.stderr:
