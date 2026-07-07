@@ -12,6 +12,13 @@ from agent.graph.state import GraphState
 from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT, QA_COMMANDER_SYSTEM_PROMPT
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
+from agent.vision.marker_geometry import (
+    bbox_from_ratio,
+    bbox_to_ratio,
+    center_ratio_from_bbox,
+    marker_bbox,
+    screen_size_from_signature,
+)
 from agent.tools.sqlite_query import sqlite_query
 from agent.tools.realtime_scraping import realtime_scraping
 from agent.tools.site_registry import list_collection_sites, get_collection_site_profile
@@ -828,28 +835,6 @@ def _card_queue_enabled() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _screen_size_from_signature(signature: dict) -> list[int]:
-    size = signature.get("size") if isinstance(signature, dict) else []
-    if isinstance(size, list) and len(size) == 2:
-        try:
-            return [int(size[0]), int(size[1])]
-        except (TypeError, ValueError):
-            return []
-    return []
-
-
-def _bbox_from_ratio(bbox_ratio: list, size: list[int]) -> list[int]:
-    if not isinstance(bbox_ratio, list) or len(bbox_ratio) != 4 or len(size) != 2:
-        return [0, 0, 0, 0]
-    width, height = int(size[0]), int(size[1])
-    return [
-        int(float(bbox_ratio[0]) * width),
-        int(float(bbox_ratio[1]) * height),
-        int(float(bbox_ratio[2]) * width),
-        int(float(bbox_ratio[3]) * height),
-    ]
-
-
 def _queue_card_label(card: dict) -> str:
     for key in ("title", "target_label", "position", "text", "label"):
         value = card.get(key)
@@ -865,7 +850,7 @@ def _normalize_result_card_queue(args: dict, state: GraphState, current_url: str
         cards = []
     markers = list(state.get("current_markers", []) or [])
     signature = dict(state.get("screen_signature", {}) or {})
-    size = _screen_size_from_signature(signature)
+    size = screen_size_from_signature(signature)
     queue: list[dict] = []
     target_count = _target_count_from_state(state)
     remaining = target_count - _collected_job_count(state.get("extracted_jd", {}) or {}) if target_count > 0 else len(cards)
@@ -891,8 +876,6 @@ def _normalize_result_card_queue(args: dict, state: GraphState, current_url: str
         center_ratio = raw.get("center_ratio")
         if marker and size and not bbox_ratio:
             try:
-                from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox
-
                 bbox_ratio = bbox_to_ratio(bbox, size)
                 center_ratio = center_ratio_from_bbox(bbox, size)
             except Exception:
@@ -1049,7 +1032,7 @@ def _queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> 
     try:
         from agent.recipe.phash_replay import match_target_by_ratio
 
-        marker_id = match_target_by_ratio(target, markers, _screen_size_from_signature(signature))
+        marker_id = match_target_by_ratio(target, markers, screen_size_from_signature(signature))
         if marker_id is not None:
             return marker_id, markers, {"reason": "current_marker_ratio_match"}
     except Exception as exc:
@@ -1057,8 +1040,8 @@ def _queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> 
     else:
         ratio_error = ""
 
-    size = _screen_size_from_signature(signature)
-    bbox = _bbox_from_ratio(item.get("bbox_ratio") or [], size)
+    size = screen_size_from_signature(signature)
+    bbox = bbox_from_ratio(item.get("bbox_ratio") or [], size)
     if bbox == [0, 0, 0, 0]:
         return None, markers, {"reason": "cached_bbox_missing", "ratio_error": ratio_error}
     next_id = max([int(marker.get("id") or 0) for marker in markers or [] if isinstance(marker, dict)] + [-1]) + 1
@@ -1154,8 +1137,6 @@ def _action_target_metadata(state: GraphState, action_name: str, args: dict) -> 
     size = signature.get("size") or []
     if isinstance(size, list) and len(size) == 2 and isinstance(bbox, list) and len(bbox) == 4:
         try:
-            from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox
-
             metadata["bbox_ratio"] = bbox_to_ratio(bbox, size)
             metadata["center_ratio"] = center_ratio_from_bbox(bbox, size)
         except Exception:
@@ -1351,16 +1332,6 @@ def _env_enabled(name: str, default: bool = True) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _marker_bbox(marker: dict) -> list[int]:
-    bbox = marker.get("bbox", [])
-    if len(bbox) != 4:
-        return [0, 0, 0, 0]
-    try:
-        return [int(float(value)) for value in bbox]
-    except (TypeError, ValueError):
-        return [0, 0, 0, 0]
-
-
 def _is_icon_marker(marker: dict) -> bool:
     text = str(marker.get("text") or "")
     marker_type = str(marker.get("type") or "").strip().lower()
@@ -1373,7 +1344,7 @@ def _is_icon_marker(marker: dict) -> bool:
 
 
 def _line_bbox(markers: list[dict]) -> list[int]:
-    boxes = [_marker_bbox(marker) for marker in markers]
+    boxes = [marker_bbox(marker) for marker in markers]
     boxes = [box for box in boxes if box != [0, 0, 0, 0]]
     if not boxes:
         return [0, 0, 0, 0]
@@ -1386,7 +1357,7 @@ def _line_bbox(markers: list[dict]) -> list[int]:
 
 
 def _join_line_marker_text(markers: list[dict]) -> str:
-    ordered = sorted(markers, key=lambda marker: (_marker_bbox(marker)[0], _marker_bbox(marker)[1]))
+    ordered = sorted(markers, key=lambda marker: (marker_bbox(marker)[0], marker_bbox(marker)[1]))
     pieces: list[str] = []
     for marker in ordered:
         text = str(marker.get("text") or "").strip()
@@ -1407,12 +1378,12 @@ def _group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
     ]
     if not text_markers:
         return []
-    heights = sorted(max(1, _marker_bbox(marker)[3] - _marker_bbox(marker)[1]) for marker in text_markers)
+    heights = sorted(max(1, marker_bbox(marker)[3] - marker_bbox(marker)[1]) for marker in text_markers)
     median_height = heights[len(heights) // 2] if heights else 16
     tolerance = max(8, min(24, int(median_height * 0.7)))
     lines: list[dict] = []
-    for marker in sorted(text_markers, key=lambda item: ((_marker_bbox(item)[1] + _marker_bbox(item)[3]) / 2, _marker_bbox(item)[0])):
-        bbox = _marker_bbox(marker)
+    for marker in sorted(text_markers, key=lambda item: ((marker_bbox(item)[1] + marker_bbox(item)[3]) / 2, marker_bbox(item)[0])):
+        bbox = marker_bbox(marker)
         center_y = (bbox[1] + bbox[3]) / 2
         matched = None
         for line in lines:
@@ -1428,13 +1399,13 @@ def _group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
 
     compacted: list[dict] = []
     for line in lines:
-        ordered = sorted(line["markers"], key=lambda marker: _marker_bbox(marker)[0])
+        ordered = sorted(line["markers"], key=lambda marker: marker_bbox(marker)[0])
         segments: list[list[dict]] = []
         current_segment: list[dict] = []
         previous_right: int | None = None
         max_inline_gap = max(160, int(median_height * 8))
         for marker in ordered:
-            bbox = _marker_bbox(marker)
+            bbox = marker_bbox(marker)
             if current_segment and previous_right is not None and bbox[0] - previous_right > max_inline_gap:
                 segments.append(current_segment)
                 current_segment = [marker]
@@ -1504,7 +1475,7 @@ def _detail_action_marker_candidates(markers: list[dict], limit: int) -> list[di
             continue
         text = str(marker.get("text") or "").strip()
         collapsed = re.sub(r"\s+", "", text)
-        bbox = _marker_bbox(marker)
+        bbox = marker_bbox(marker)
         if any(term.replace(" ", "") in collapsed for term in primary_terms):
             if "상세" in collapsed or (len(bbox) == 4 and bbox[1] > 240):
                 primary.append(marker)
@@ -1519,7 +1490,7 @@ def _detail_lightweight_marked_image_enabled() -> bool:
 
 
 def _draw_detail_lightweight_marker(draw: Any, marker: dict, color: tuple[int, int, int], font: Any) -> None:
-    bbox = _marker_bbox(marker)
+    bbox = marker_bbox(marker)
     if bbox == [0, 0, 0, 0]:
         return
     x1, y1, x2, y2 = bbox
@@ -2358,12 +2329,13 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
         params = dict(state.get("recipe_params", {}) or {})
         params.setdefault("goal", state.get("goal", ""))
         requested_task_category = str(params.get("task_category") or "").strip()
+        site = str(params.get("site") or "").strip()
         store = RecipeStore()
         recent_images = state.get("recent_images", []) or []
         current_image_path = str(recent_images[-1]) if recent_images else ""
         recipe_candidates = []
         task_category_skips = 0
-        exact_recipe = store.get_recipe(state_key)
+        exact_recipe = store.get_recipe(state_key, site=site or None, task_category=requested_task_category or None)
         if exact_recipe and exact_recipe.steps:
             if _recipe_matches_task_category(exact_recipe, params):
                 recipe_candidates.append((state_key, exact_recipe, 1.0, "exact"))
@@ -2379,9 +2351,8 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                 return False
             return bool(first_step.get("roi_signature"))
 
-        site = str(params.get("site") or "").strip()
         if site:
-            for recipe_key, recipe in store.get_site_recipes(site):
+            for recipe_key, recipe in store.get_site_recipes(site, task_category=requested_task_category or None):
                 if not _recipe_matches_task_category(recipe, params):
                     task_category_skips += 1
                     continue

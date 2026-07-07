@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.utils.model_dump import dump_model
 from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 from shared.schema.skill_schema import RecipeSkillMetadata
@@ -83,7 +84,18 @@ class RecipeStore:
     def _metadata_dict(metadata: dict[str, Any] | RecipeSkillMetadata | None) -> dict[str, Any]:
         return dump_model(metadata)
 
-    def record_step(
+    @staticmethod
+    def _metadata_task_category(metadata: dict[str, Any] | RecipeSkillMetadata | None) -> str:
+        return normalize_task_category(RecipeStore._metadata_dict(metadata).get("task_category"))
+
+    @staticmethod
+    def _metadata_matches_task_category(
+        metadata: dict[str, Any] | RecipeSkillMetadata | None,
+        task_category: str | None,
+    ) -> bool:
+        return task_category_matches(task_category, RecipeStore._metadata_task_category(metadata))
+
+    def _upsert_recipe_steps(
         self,
         site: str,
         goal: str,
@@ -140,7 +152,7 @@ class RecipeStore:
             groups[-1].append(dict(step))
 
         for group in groups:
-            if self.record_step(site, goal, group, metadata=metadata):
+            if self._upsert_recipe_steps(site, goal, group, metadata=metadata):
                 saved += 1
         return saved
 
@@ -169,15 +181,7 @@ class RecipeStore:
                 )
         return self.commit_recipe(site, goal, replay_steps, metadata=metadata)
 
-    def get_recipe(self, state_key: str) -> SiteRecipe | None:
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT state_key, site, goal, steps_json, metadata_json, success_count, updated_at "
-                "FROM recipes WHERE state_key=?",
-                (state_key,),
-            ).fetchone()
-        if not row:
-            return None
+    def _row_to_recipe(self, row: sqlite3.Row) -> SiteRecipe:
         steps = [RecipeStep(**step) for step in json.loads(row["steps_json"] or "[]")]
         metadata = RecipeSkillMetadata(**json.loads(row["metadata_json"] or "{}"))
         return SiteRecipe(
@@ -188,6 +192,32 @@ class RecipeStore:
             success_count=row["success_count"] or 0,
             updated_at=row["updated_at"] or "",
         )
+
+    def get_recipe(
+        self,
+        state_key: str,
+        *,
+        site: str | None = None,
+        task_category: str | None = None,
+    ) -> SiteRecipe | None:
+        """state_key에 해당하는 활성 레시피를 site/task_category 조건으로 조회한다."""
+        conditions = ["state_key=?"]
+        params: list[Any] = [state_key]
+        if site:
+            conditions.append("site=?")
+            params.append(site)
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT state_key, site, goal, steps_json, metadata_json, success_count, updated_at "
+                f"FROM recipes WHERE {' AND '.join(conditions)}",
+                params,
+            ).fetchone()
+        if not row:
+            return None
+        recipe = self._row_to_recipe(row)
+        if not self._metadata_matches_task_category(recipe.skill_metadata, task_category):
+            return None
+        return recipe
 
     def get_by_site(self, site: str):
         with self._conn() as conn:
@@ -204,18 +234,21 @@ class RecipeStore:
             out.append(item)
         return out
 
-    def get_site_recipes(self, site: str) -> list[tuple[str, SiteRecipe]]:
+    def get_site_recipes(self, site: str, *, task_category: str | None = None) -> list[tuple[str, SiteRecipe]]:
         """같은 사이트의 활성 레시피를 성공 횟수 순으로 반환한다."""
         candidates: list[tuple[str, SiteRecipe]] = []
         for item in self.get_by_site(site):
             steps = list(item.get("steps") or [])
             if not steps:
                 continue
+            metadata = RecipeSkillMetadata(**(item.get("skill_metadata") or {}))
+            if not self._metadata_matches_task_category(metadata, task_category):
+                continue
             recipe = SiteRecipe(
                 site=item.get("site") or site,
                 goal=item.get("goal") or "",
                 steps=[RecipeStep(**step) for step in steps],
-                skill_metadata=RecipeSkillMetadata(**(item.get("skill_metadata") or {})),
+                skill_metadata=metadata,
                 success_count=item.get("success_count") or 0,
             )
             candidates.append((item.get("state_key") or "", recipe))

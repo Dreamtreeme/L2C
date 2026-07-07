@@ -7,7 +7,8 @@ from typing import Any
 
 from agent.recipe.state_key import normalize_text
 from agent.utils.model_dump import dump_model
-from agent.vision.screen_signature import compute_roi_signature, hamming_distance, marker_center_ratio
+from agent.vision.marker_geometry import marker_center_ratio
+from agent.vision.screen_signature import compute_roi_signature, hamming_distance
 
 
 def _step_get(step: Any, key: str, default: Any = None) -> Any:

@@ -6,18 +6,7 @@ import os
 from typing import Any
 
 from agent.recipe.state_key import normalize_text
-
-
-def _bbox(marker: dict) -> list[int]:
-    raw = marker.get("bbox") or [0, 0, 0, 0]
-    if len(raw) != 4:
-        return [0, 0, 0, 0]
-    return [int(v or 0) for v in raw]
-
-
-def _center(marker: dict) -> tuple[int, int]:
-    x1, y1, x2, y2 = _bbox(marker)
-    return ((x1 + x2) // 2, (y1 + y2) // 2)
+from agent.vision.marker_geometry import marker_bbox, marker_center
 
 
 def marker_region(marker: dict, markers: list[dict]) -> str:
@@ -28,7 +17,7 @@ def marker_region(marker: dict, markers: list[dict]) -> str:
     ys = []
     for item in markers or []:
         if isinstance(item, dict):
-            x, y = _center(item)
+            x, y = marker_center(item)
             xs.append(x)
             ys.append(y)
     if not xs or not ys:
@@ -36,7 +25,7 @@ def marker_region(marker: dict, markers: list[dict]) -> str:
 
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
-    x, y = _center(marker)
+    x, y = marker_center(marker)
 
     def band(value: int, low: int, high: int, names: tuple[str, str, str]) -> str:
         span = max(1, high - low)
@@ -69,11 +58,11 @@ def marker_ordinal(target_marker: dict, markers: list[dict]) -> int | None:
         content_top = int(os.getenv("VISION_INTERACTIVE_CONTENT_TOP_PX", "180"))
     except ValueError:
         content_top = 180
-    if _bbox(target_marker)[1] >= content_top:
-        content_matches = [marker for marker in matches if _bbox(marker)[1] >= content_top]
+    if marker_bbox(target_marker)[1] >= content_top:
+        content_matches = [marker for marker in matches if marker_bbox(marker)[1] >= content_top]
         if content_matches:
             matches = content_matches
-    matches = sorted(matches, key=lambda marker: (_bbox(marker)[1], _bbox(marker)[0], marker.get("id", 0)))
+    matches = sorted(matches, key=lambda marker: (marker_bbox(marker)[1], marker_bbox(marker)[0], marker.get("id", 0)))
     for idx, marker in enumerate(matches):
         if marker.get("id") == target_marker.get("id"):
             return idx

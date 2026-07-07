@@ -176,6 +176,29 @@ def test_record_ui_step_stores_target_roi_signature(tmp_path):
     assert roi_signature["target_center_ratio"] == [0.8, 0.15]
 
 
+def test_marker_geometry_ratio_helpers_are_consistent():
+    from agent.vision.marker_geometry import (
+        bbox_from_ratio,
+        bbox_to_ratio,
+        center_ratio_from_bbox,
+        marker_bbox,
+        marker_center,
+        marker_center_ratio,
+        screen_size_from_signature,
+    )
+
+    marker = {"bbox": ["10", "20", "30", "60"]}
+    size = [100, 200]
+
+    assert marker_bbox(marker) == [10, 20, 30, 60]
+    assert marker_center(marker) == (20, 40)
+    assert bbox_to_ratio(marker_bbox(marker), size) == [0.1, 0.1, 0.3, 0.3]
+    assert center_ratio_from_bbox(marker_bbox(marker), size) == [0.2, 0.2]
+    assert marker_center_ratio(marker, size) == [0.2, 0.2]
+    assert bbox_from_ratio([0.1, 0.1, 0.3, 0.3], size) == [10, 20, 30, 60]
+    assert screen_size_from_signature({"size": ["100", "200"]}) == [100, 200]
+
+
 def test_roi_phash_replay_matches_when_full_phash_differs(tmp_path):
     from PIL import Image, ImageDraw
     from agent.recipe.phash_replay import match_step_by_screen_signature
@@ -553,6 +576,24 @@ def test_recipe_store_groups_same_state_action_chain(tmp_path):
     assert recipe.steps[1].transition_contract is None
 
 
+def test_recipe_store_filters_recipe_by_site_and_task_category(tmp_path):
+    from agent.recipe.store import RecipeStore
+
+    store = RecipeStore(tmp_path / "recipes.db")
+    store.commit_recipe(
+        "wanted",
+        "goal",
+        [{"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "검색"}}],
+        metadata={"task_category": "검색"},
+    )
+
+    assert store.get_recipe("state-a", site="wanted", task_category="검색") is not None
+    assert store.get_recipe("state-a", site="wanted", task_category="로그인") is None
+    assert store.get_recipe("state-a", site="other", task_category="검색") is None
+    assert len(store.get_site_recipes("wanted", task_category="검색")) == 1
+    assert store.get_site_recipes("wanted", task_category="로그인") == []
+
+
 def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
     from agent.graph import nodes
@@ -569,7 +610,7 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
     roi_signature = compute_target_roi_signature(saved, [10, 10, 70, 40], [200, 120])
 
     class FakeStore:
-        def get_recipe(self, state_key):
+        def get_recipe(self, state_key, site=None, task_category=None):
             assert state_key == "state-a"
             return SiteRecipe(
                 site="wanted.co.kr",
@@ -629,7 +670,7 @@ def test_reflex_node_uses_roi_signature_when_available(monkeypatch, tmp_path):
     roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
 
     class FakeStore:
-        def get_recipe(self, state_key):
+        def get_recipe(self, state_key, site=None, task_category=None):
             return SiteRecipe(
                 site="wanted.co.kr",
                 goal="goal",
@@ -685,7 +726,7 @@ def test_reflex_node_rejects_signed_step_when_roi_missing(monkeypatch):
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     class FakeStore:
-        def get_recipe(self, state_key):
+        def get_recipe(self, state_key, site=None, task_category=None):
             return SiteRecipe(
                 site="wanted.co.kr",
                 goal="goal",
@@ -731,10 +772,10 @@ def test_reflex_node_does_not_broad_match_legacy_site_recipe(monkeypatch):
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     class FakeStore:
-        def get_recipe(self, state_key):
+        def get_recipe(self, state_key, site=None, task_category=None):
             return None
 
-        def get_site_recipes(self, site):
+        def get_site_recipes(self, site, task_category=None):
             return [
                 (
                     "old-scroll",
@@ -805,7 +846,7 @@ def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
     roi_signature = compute_target_roi_signature(saved, [10, 10, 70, 40], [200, 120])
 
     class FakeStore:
-        def get_recipe(self, state_key):
+        def get_recipe(self, state_key, site=None, task_category=None):
             return SiteRecipe(
                 site="wanted",
                 goal="old goal",
@@ -871,11 +912,11 @@ def test_reflex_node_uses_site_recipe_when_exact_state_misses(monkeypatch, tmp_p
     roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
 
     class FakeStore:
-        def get_recipe(self, state_key):
+        def get_recipe(self, state_key, site=None, task_category=None):
             assert state_key == "new-state"
             return None
 
-        def get_site_recipes(self, site):
+        def get_site_recipes(self, site, task_category=None):
             assert site == "wanted"
             return [
                 (
@@ -928,10 +969,10 @@ def test_reflex_node_skips_site_recipe_when_task_category_mismatches(monkeypatch
     from shared.schema.skill_schema import RecipeSkillMetadata
 
     class FakeStore:
-        def get_recipe(self, state_key):
+        def get_recipe(self, state_key, site=None, task_category=None):
             return None
 
-        def get_site_recipes(self, site):
+        def get_site_recipes(self, site, task_category=None):
             assert site == "wanted"
             return [
                 (
@@ -976,10 +1017,10 @@ def test_reflex_node_rejects_similar_recipe_when_target_does_not_match(monkeypat
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     class FakeStore:
-        def get_recipe(self, state_key):
+        def get_recipe(self, state_key, site=None, task_category=None):
             return None
 
-        def get_site_recipes(self, site):
+        def get_site_recipes(self, site, task_category=None):
             return [
                 (
                     "recorded-state",

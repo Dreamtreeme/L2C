@@ -8,7 +8,8 @@ from __future__ import annotations
 from agent.recipe.matcher import marker_ordinal, marker_region
 from agent.recipe.state_key import compute_state_key, normalize_text, site_of, state_anchor_texts, url_template
 from agent.utils.logger import logger
-from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox, compute_target_roi_signature
+from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox, marker_bbox, marker_center
+from agent.vision.screen_signature import compute_target_roi_signature
 
 _TARGET_ACTIONS = {"click_marker", "type_in_marker"}
 _RECORDED_ACTIONS = _TARGET_ACTIONS | {"scroll", "press_key", "go_back"}
@@ -23,18 +24,6 @@ def _marker(markers, marker_id):
         if isinstance(m, dict) and m.get("id") == marker_id:
             return m
     return None
-
-
-def _bbox(marker: dict) -> list[int]:
-    raw = marker.get("bbox") or [0, 0, 0, 0]
-    if not isinstance(raw, list) or len(raw) != 4:
-        return [0, 0, 0, 0]
-    return [int(v or 0) for v in raw]
-
-
-def _center(marker: dict) -> tuple[int, int]:
-    x1, y1, x2, y2 = _bbox(marker)
-    return ((x1 + x2) // 2, (y1 + y2) // 2)
 
 
 def _has_letter(text: str) -> bool:
@@ -65,7 +54,7 @@ def _collect_evidence_candidates(
     max_dy: int,
 ) -> list[tuple[int, int, int, int, str]]:
     seen = {target_text} if target_text else set()
-    tx, ty = _center(target_marker)
+    tx, ty = marker_center(target_marker)
     scored = []
     for marker in markers or []:
         if not isinstance(marker, dict) or marker.get("id") == target_marker.get("id"):
@@ -76,7 +65,7 @@ def _collect_evidence_candidates(
             continue
         if unique_only and counts.get(key, 0) != 1:
             continue
-        x, y = _center(marker)
+        x, y = marker_center(marker)
         dx = abs(x - tx)
         dy = abs(y - ty)
         if dx > max_dx or dy > max_dy:
@@ -156,11 +145,12 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             }
             screen_size = (step.get("screen_signature") or {}).get("size") or []
             if isinstance(screen_size, list) and len(screen_size) == 2:
-                target["bbox_ratio"] = bbox_to_ratio(_bbox(marker), screen_size)
-                target["center_ratio"] = center_ratio_from_bbox(_bbox(marker), screen_size)
+                bbox = marker_bbox(marker)
+                target["bbox_ratio"] = bbox_to_ratio(bbox, screen_size)
+                target["center_ratio"] = center_ratio_from_bbox(bbox, screen_size)
                 recent_images = state.get("recent_images", []) or []
                 image_path = recent_images[-1] if recent_images else ""
-                roi_signature = compute_target_roi_signature(image_path, _bbox(marker), screen_size) if image_path else {}
+                roi_signature = compute_target_roi_signature(image_path, bbox, screen_size) if image_path else {}
                 if roi_signature:
                     step["roi_signature"] = roi_signature
             target_label = normalize_text(args.get("target_label") or args.get("semantic_label"))

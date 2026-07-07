@@ -38,7 +38,7 @@
    - 저장된 `roi_signature.crop_rect_ratio`로 현재 화면의 같은 영역을 자르고 ROI pHash 거리를 비교한다.
    - ROI가 같으면 `target.center_ratio`에 가까운 현재 OCR marker를 찾아 클릭/입력한다. 실패 시 즉시 reasoning으로 폴백한다.
 4. **`agent/recipe/store.py`** — `Database` 위 thin wrapper
-   - `get_recipe(state_key)`, `commit_recipe(...)`.
+   - `get_recipe(state_key, site?, task_category?)`, `get_site_recipes(site, task_category?)`, `commit_recipe(...)`.
    - DB에 `recipes` 테이블(`state_key`, `steps_json`, `skill_metadata_json`, `success_count`, `updated_at`) 추가 — 기존 동적 ALTER 마이그레이션 패턴 그대로.
 5. **`reflex_node` + 라우터** — `workflow.py`
    - `perception → [reflex | reasoning]` 조건부 엣지로 교체.

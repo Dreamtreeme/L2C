@@ -12,6 +12,7 @@ from typing import Any
 from agent.recipe.state_key import normalize_text, site_of
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
+from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox
 from shared.schema.feedback_schema import (
     ActionFeedback,
     ActionObservation,
@@ -104,8 +105,6 @@ def _target_snapshot(state: dict, action_name: str, args: dict[str, Any]) -> dic
     size = signature.get("size") or []
     if isinstance(size, list) and len(size) == 2:
         try:
-            from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox
-
             target["bbox_ratio"] = bbox_to_ratio(marker.get("bbox", []), size)
             target["center_ratio"] = center_ratio_from_bbox(marker.get("bbox", []), size)
         except Exception:
