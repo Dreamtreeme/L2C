@@ -2432,23 +2432,6 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
             else:
                 task_category_skips += 1
 
-        def broad_site_recipe_allowed(recipe: Any) -> bool:
-            steps = list(getattr(recipe, "steps", []) or [])
-            if not steps:
-                return False
-            first_step = dump_model(steps[0])
-            if first_step.get("action") not in {"click_marker", "type_in_marker"}:
-                return False
-            return bool(first_step.get("roi_signature"))
-
-        if site:
-            for recipe_key, recipe in store.get_site_recipes(site, task_category=requested_task_category or None):
-                if not _recipe_matches_task_category(recipe, params):
-                    task_category_skips += 1
-                    continue
-                if recipe_key != state_key and broad_site_recipe_allowed(recipe):
-                    recipe_candidates.append((recipe_key, recipe, 0.0, "site"))
-
         if not recipe_candidates:
             elapsed = time.time() - start_time
             logger.info("Reflex miss: no recipe", state_key=state_key[:24], site=site)

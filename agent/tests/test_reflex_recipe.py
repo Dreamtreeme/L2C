@@ -971,21 +971,9 @@ def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
     }
 
 
-def test_reflex_node_uses_site_recipe_when_exact_state_misses(monkeypatch, tmp_path):
-    from PIL import Image, ImageDraw
+def test_reflex_node_does_not_use_site_recipe_when_exact_state_misses(monkeypatch, tmp_path):
     from agent.graph import nodes
-    from agent.vision.screen_signature import compute_target_roi_signature
-    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
-    from shared.schema.skill_schema import RecipeSkillMetadata
-
-    saved = tmp_path / "site-saved.png"
     current = tmp_path / "site-current.png"
-    for path in [saved, current]:
-        image = Image.new("RGB", (200, 200), "white")
-        draw = ImageDraw.Draw(image)
-        draw.rectangle([150, 20, 170, 40], fill="black")
-        image.save(path)
-    roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
 
     class FakeStore:
         def get_recipe(self, state_key, site=None, task_category=None):
@@ -993,32 +981,7 @@ def test_reflex_node_uses_site_recipe_when_exact_state_misses(monkeypatch, tmp_p
             return None
 
         def get_site_recipes(self, site, task_category=None):
-            assert site == "wanted"
-            return [
-                (
-                    "recorded-state",
-                    SiteRecipe(
-                        site="wanted",
-                        goal="collect jobs",
-                        skill_metadata=RecipeSkillMetadata(task_category="검색"),
-                        steps=[
-                            RecipeStep(
-                                seq=0,
-                                state_key="recorded-state",
-                                state_anchors=["검색", "채용"],
-                                action="click_marker",
-                                replay_mode="fixed",
-                                roi_signature=roi_signature,
-                                target={
-                                    "text": "검색",
-                                    "bbox_ratio": [0.75, 0.1, 0.85, 0.2],
-                                    "center_ratio": [0.8, 0.15],
-                                },
-                            )
-                        ],
-                    ),
-                )
-            ]
+            raise AssertionError("Reflex replay must not scan site recipes without an exact state_key match")
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
@@ -1033,43 +996,38 @@ def test_reflex_node_uses_site_recipe_when_exact_state_misses(monkeypatch, tmp_p
         }
     )
 
-    assert result["reflex_hit"] is True
+    assert result["reflex_hit"] is False
     assert result["reflex_state_key"] == "new-state"
-    assert result["reflex_trace"]["lookup"] == "site"
-    assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 7}
+    assert result["reflex_trace"]["reason"] == "no_recipe"
+    assert result["reflex_trace"]["candidate_count"] == 0
 
 
-def test_reflex_node_skips_site_recipe_when_task_category_mismatches(monkeypatch):
+def test_reflex_node_skips_exact_recipe_when_task_category_mismatches(monkeypatch):
     from agent.graph import nodes
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
     from shared.schema.skill_schema import RecipeSkillMetadata
 
     class FakeStore:
         def get_recipe(self, state_key, site=None, task_category=None):
-            return None
+            assert state_key == "new-state"
+            return SiteRecipe(
+                site="wanted",
+                goal="login",
+                skill_metadata=RecipeSkillMetadata(task_category="로그인"),
+                steps=[
+                    RecipeStep(
+                        seq=0,
+                        state_key="new-state",
+                        action="click_marker",
+                        replay_mode="fixed",
+                        roi_signature={"phash": "0" * 16},
+                        target={"text": "로그인"},
+                    )
+                ],
+            )
 
         def get_site_recipes(self, site, task_category=None):
-            assert site == "wanted"
-            return [
-                (
-                    "login-state",
-                    SiteRecipe(
-                        site="wanted",
-                        goal="login",
-                        skill_metadata=RecipeSkillMetadata(task_category="로그인"),
-                        steps=[
-                            RecipeStep(
-                                seq=0,
-                                state_key="login-state",
-                                action="click_marker",
-                                replay_mode="fixed",
-                                roi_signature={"phash": "0" * 16},
-                                target={"text": "로그인"},
-                            )
-                        ],
-                    ),
-                )
-            ]
+            raise AssertionError("Reflex replay must not scan site recipes without an exact state_key match")
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
