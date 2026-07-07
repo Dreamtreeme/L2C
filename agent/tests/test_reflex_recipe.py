@@ -388,6 +388,82 @@ def test_set_result_card_queue_stores_visible_card_ratios():
     assert result["_result_page_memory"]["state_key"] == "ocr#list"
 
 
+def test_set_result_card_queue_accepts_title_fallback():
+    from agent.graph import nodes
+
+    state = {
+        "current_markers": [
+            {"id": 10, "bbox": [100, 200, 300, 240], "text": "iOS 개발자"},
+            {"id": 11, "bbox": [100, 260, 360, 300], "text": "Backend Engineer"},
+            {"id": 12, "bbox": [100, 320, 360, 360], "text": "Android 개발자"},
+        ],
+        "screen_signature": {
+            "phash": "0" * 16,
+            "size": [1000, 1000],
+            "anchors": ["iOS 개발자", "Backend Engineer", "Android 개발자"],
+        },
+        "reflex_state_key": "ocr#list",
+        "recent_images": ["screen.png"],
+        "marked_image": "marked.png",
+        "recipe_params": {"target_count": 2},
+        "extracted_jd": {},
+    }
+
+    result, _jd, _plan, _step = nodes._dispatch_state(
+        "set_result_card_queue",
+        {
+            "cards": 4,
+            "titles": ["iOS 개발자", "Backend Engineer", "Android 개발자"],
+            "companies": ["보이저엑스", "샘플"],
+        },
+        {},
+        [],
+        0,
+        current_url="https://www.wanted.co.kr/search?query=ios",
+        state=state,
+    )
+
+    assert result["status"] == "success"
+    assert result["queued_titles"] == ["iOS 개발자", "Backend Engineer"]
+    queue = result["_result_card_queue"]
+    assert queue[0]["source_marker_id"] == 10
+    assert queue[0]["bbox_ratio"] == [0.1, 0.2, 0.3, 0.24]
+    assert queue[1]["source_marker_id"] == 11
+    assert queue[1]["company"] == "샘플"
+
+
+def test_set_result_card_queue_skips_title_without_visible_marker():
+    from agent.graph import nodes
+
+    state = {
+        "current_markers": [
+            {"id": 10, "bbox": [100, 200, 300, 240], "text": "iOS 개발자"},
+        ],
+        "screen_signature": {
+            "phash": "0" * 16,
+            "size": [1000, 1000],
+            "anchors": ["iOS 개발자"],
+        },
+        "reflex_state_key": "ocr#list",
+        "recipe_params": {"target_count": 1},
+        "extracted_jd": {},
+    }
+
+    result, _jd, _plan, _step = nodes._dispatch_state(
+        "set_result_card_queue",
+        {"cards": 1, "titles": ["화면에 없는 공고"]},
+        {},
+        [],
+        0,
+        current_url="https://www.wanted.co.kr/search?query=ios",
+        state=state,
+    )
+
+    assert result["status"] == "skipped"
+    assert result["queued_count"] == 0
+    assert result["_result_card_queue"] == []
+
+
 def test_card_queue_replay_after_go_back_uses_cached_bbox():
     from agent.graph import nodes
 

@@ -134,12 +134,23 @@ class update_plan_progress(BaseModel):
 
 class set_result_card_queue(BaseModel):
     """검색 결과 목록에서 현재 화면에 보이는 수집 대상 공고 카드들을 런타임 작업 큐에 저장합니다."""
-    cards: List[Dict[str, Any]] = Field(
-        ...,
+    cards: Optional[List[Dict[str, Any]]] = Field(
+        None,
         description=(
             "수집할 공고 카드 목록. 각 항목에는 marker_id와 title/target_label, company를 가능한 만큼 넣으십시오. "
             "현재 화면에 보이는 카드만 넣어야 합니다."
         ),
+    )
+    titles: Optional[List[str]] = Field(
+        None,
+        description=(
+            "cards 객체를 만들기 어려울 때만 사용합니다. 현재 화면에 보이는 수집 대상 공고 제목 목록입니다. "
+            "executor는 OCR 마커 텍스트와 정확히 대응되는 제목만 큐에 저장합니다."
+        ),
+    )
+    companies: Optional[List[str]] = Field(
+        None,
+        description="titles와 같은 순서로 대응되는 회사명 목록입니다. 모르면 생략하십시오.",
     )
     reason: Optional[str] = Field(None, description="이 카드들을 큐에 넣은 이유")
 
@@ -792,15 +803,13 @@ def _compact_action_args(action_name: str, args: dict) -> dict:
             "reason": _clip_prompt_text(args.get("reason", ""), 120),
         }
     if action_name == "set_result_card_queue":
-        cards = args.get("cards") if isinstance(args, dict) else []
+        cards = _result_card_entries_from_args(args if isinstance(args, dict) else {})
         titles = []
-        if isinstance(cards, list):
-            for card in cards:
-                if isinstance(card, dict):
-                    label = _queue_card_label(card)
-                    if label:
-                        titles.append(label)
-        return {"cards": len(cards) if isinstance(cards, list) else 0, "titles": titles[:5]}
+        for card in cards:
+            label = _queue_card_label(card)
+            if label:
+                titles.append(label)
+        return {"cards": len(cards), "titles": titles[:5]}
     if action_name != "update_extracted_info":
         return args
     try:
@@ -843,20 +852,92 @@ def _queue_card_label(card: dict) -> str:
     return ""
 
 
+def _text_list_arg(args: dict, key: str) -> list[str]:
+    value = args.get(key)
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _result_card_entries_from_args(args: dict) -> list[dict]:
+    """도구 입력을 카드 후보 목록으로 통일한다.
+
+    모델이 cards 객체 목록을 정상 제공하면 그대로 쓰고, titles 목록만 준 경우에는
+    제목 기반 후보로 변환한다. 실제 좌표 검증은 큐 정규화 단계에서만 수행한다.
+    """
+    cards = args.get("cards")
+    if isinstance(cards, list):
+        entries: list[dict] = []
+        for raw in cards:
+            if isinstance(raw, dict):
+                entries.append(dict(raw))
+            elif isinstance(raw, str) and raw.strip():
+                entries.append({"title": raw.strip()})
+        if entries:
+            return entries
+
+    titles = _text_list_arg(args, "titles")
+    if not titles:
+        titles = _text_list_arg(args, "target_labels")
+    companies = _text_list_arg(args, "companies")
+    entries = []
+    for index, title in enumerate(titles):
+        entry = {"title": title}
+        if index < len(companies):
+            entry["company"] = companies[index]
+        entries.append(entry)
+    return entries
+
+
+def _queue_match_text(value: Any) -> str:
+    try:
+        from agent.recipe.state_key import normalize_text
+
+        text = normalize_text(value)
+    except Exception:
+        text = str(value or "").strip()
+    return text.casefold().replace(" ", "")
+
+
+def _marker_by_label(markers: list[dict], label: str, used_marker_ids: set[int]) -> dict | None:
+    label_key = _queue_match_text(label)
+    if not label_key:
+        return None
+    for marker in markers or []:
+        if not isinstance(marker, dict):
+            continue
+        try:
+            marker_id = int(marker.get("id"))
+        except (TypeError, ValueError):
+            marker_id = -1
+        if marker_id in used_marker_ids:
+            continue
+        if _queue_match_text(marker.get("text")) == label_key:
+            return marker
+    return None
+
+
 def _normalize_result_card_queue(args: dict, state: GraphState, current_url: str) -> tuple[list[dict], dict]:
     """LLM이 고른 현재 화면의 공고 카드를 런타임 큐 항목으로 정규화한다."""
-    cards = args.get("cards") or []
-    if not isinstance(cards, list):
-        cards = []
+    cards = _result_card_entries_from_args(args)
     markers = list(state.get("current_markers", []) or [])
     signature = dict(state.get("screen_signature", {}) or {})
     size = screen_size_from_signature(signature)
     queue: list[dict] = []
+    used_marker_ids: set[int] = set()
     target_count = _target_count_from_state(state)
     remaining = target_count - _collected_job_count(state.get("extracted_jd", {}) or {}) if target_count > 0 else len(cards)
     limit = max(0, remaining) if target_count > 0 else len(cards)
 
-    for index, raw in enumerate(cards[:limit]):
+    for raw in cards[:limit]:
         if not isinstance(raw, dict):
             continue
         marker_id = raw.get("marker_id", raw.get("id"))
@@ -866,8 +947,17 @@ def _normalize_result_card_queue(args: dict, state: GraphState, current_url: str
             marker_id = None
         marker = _marker_by_id(markers, marker_id)
         label = _queue_card_label(raw) or (str(marker.get("text") or "").strip() if marker else "")
+        if marker is None and label:
+            marker = _marker_by_label(markers, label, used_marker_ids)
+            if marker:
+                try:
+                    marker_id = int(marker.get("id"))
+                except (TypeError, ValueError):
+                    marker_id = None
         if not label:
             continue
+        if marker_id is not None:
+            used_marker_ids.add(marker_id)
 
         bbox = marker.get("bbox") if marker else raw.get("bbox")
         if not isinstance(bbox, list) or len(bbox) != 4:
