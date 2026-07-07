@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from agent.recipe.state_key import normalize_text
-from agent.vision.screen_signature import hamming_distance, marker_center_ratio
+from agent.vision.screen_signature import compute_roi_signature, hamming_distance, marker_center_ratio
 
 
 def _step_get(step: Any, key: str, default: Any = None) -> Any:
@@ -27,8 +27,8 @@ def _target_for_step(step: Any) -> Any:
     return _step_get(step, "target")
 
 
-def _screen_signature_for_step(step: Any) -> dict[str, Any]:
-    raw = _step_get(step, "screen_signature") or _step_get(step, "before_screen_signature") or {}
+def _roi_signature_for_step(step: Any) -> dict[str, Any]:
+    raw = _step_get(step, "roi_signature") or {}
     if hasattr(raw, "model_dump"):
         raw = raw.model_dump()
     return dict(raw or {}) if isinstance(raw, dict) else {}
@@ -46,18 +46,38 @@ def anchor_overlap(saved: list[Any], current: list[Any]) -> float:
     return len(saved_set & current_set) / max(1, len(saved_set))
 
 
-def screen_signature_match(saved: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
-    max_distance = int(os.getenv("REFLEX_PHASH_MAX_DISTANCE", "10"))
-    min_anchor_overlap = float(os.getenv("REFLEX_PHASH_MIN_ANCHOR_OVERLAP", "0.20"))
+# 전체 화면 pHash replay fallback은 ROI pHash 전환 후 비활성화했다.
+# target 주변 ROI가 없는 오래된 레시피는 reasoning으로 폴백한다.
+
+
+def roi_signature_match(saved: dict[str, Any], current_image_path: str) -> dict[str, Any]:
+    max_distance = int(os.getenv("REFLEX_ROI_PHASH_MAX_DISTANCE", "22"))
+    crop_rect_ratio = saved.get("crop_rect_ratio") or []
+    if not current_image_path:
+        return {"matched": False, "reason": "roi_current_image_missing", "distance": None, "mode": "roi_phash"}
+    if not saved.get("phash") or not crop_rect_ratio:
+        return {"matched": False, "reason": "roi_signature_missing", "distance": None, "mode": "roi_phash"}
+    current = compute_roi_signature(current_image_path, crop_rect_ratio)
     distance = hamming_distance(str(saved.get("phash") or ""), str(current.get("phash") or ""))
-    overlap = anchor_overlap(saved.get("anchors") or [], current.get("anchors") or [])
     if distance is None:
-        return {"matched": False, "reason": "phash_missing", "distance": None, "anchor_overlap": overlap}
+        return {"matched": False, "reason": "roi_phash_missing", "distance": None, "mode": "roi_phash"}
     if distance > max_distance:
-        return {"matched": False, "reason": "phash_distance", "distance": distance, "anchor_overlap": overlap}
-    if (saved.get("anchors") or []) and (current.get("anchors") or []) and overlap < min_anchor_overlap:
-        return {"matched": False, "reason": "anchor_overlap", "distance": distance, "anchor_overlap": overlap}
-    return {"matched": True, "reason": "matched", "distance": distance, "anchor_overlap": overlap}
+        return {
+            "matched": False,
+            "reason": "roi_phash_distance",
+            "distance": distance,
+            "max_distance": max_distance,
+            "mode": "roi_phash",
+            "crop_rect_ratio": crop_rect_ratio,
+        }
+    return {
+        "matched": True,
+        "reason": "roi_matched",
+        "distance": distance,
+        "max_distance": max_distance,
+        "mode": "roi_phash",
+        "crop_rect_ratio": crop_rect_ratio,
+    }
 
 
 def _target_center_ratio(target: Any) -> list[float]:
@@ -119,9 +139,17 @@ def match_step_by_screen_signature(
     step: Any,
     current_signature: dict[str, Any],
     markers: list[dict[str, Any]],
+    current_image_path: str = "",
 ) -> tuple[int | None, dict[str, Any]]:
-    saved_signature = _screen_signature_for_step(step)
-    signature_result = screen_signature_match(saved_signature, current_signature or {})
+    saved_roi_signature = _roi_signature_for_step(step)
+    if not saved_roi_signature:
+        return None, {
+            "matched": False,
+            "reason": "roi_signature_missing",
+            "distance": None,
+            "mode": "roi_phash",
+        }
+    signature_result = roi_signature_match(saved_roi_signature, current_image_path)
     if not signature_result.get("matched"):
         return None, signature_result
     marker_id = match_target_by_ratio(_target_for_step(step), markers, list((current_signature or {}).get("size") or []))

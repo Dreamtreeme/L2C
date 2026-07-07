@@ -8,7 +8,7 @@ from __future__ import annotations
 from agent.recipe.matcher import marker_ordinal, marker_region
 from agent.recipe.state_key import compute_state_key, normalize_text, site_of, state_anchor_texts, url_template
 from agent.utils.logger import logger
-from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox
+from agent.vision.screen_signature import bbox_to_ratio, center_ratio_from_bbox, compute_target_roi_signature
 
 _TARGET_ACTIONS = {"click_marker", "type_in_marker"}
 _RECORDED_ACTIONS = _TARGET_ACTIONS | {"scroll", "press_key", "go_back"}
@@ -158,6 +158,11 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             if isinstance(screen_size, list) and len(screen_size) == 2:
                 target["bbox_ratio"] = bbox_to_ratio(_bbox(marker), screen_size)
                 target["center_ratio"] = center_ratio_from_bbox(_bbox(marker), screen_size)
+                recent_images = state.get("recent_images", []) or []
+                image_path = recent_images[-1] if recent_images else ""
+                roi_signature = compute_target_roi_signature(image_path, _bbox(marker), screen_size) if image_path else {}
+                if roi_signature:
+                    step["roi_signature"] = roi_signature
             target_label = normalize_text(args.get("target_label") or args.get("semantic_label"))
             if target_label:
                 target["semantic_label"] = target_label

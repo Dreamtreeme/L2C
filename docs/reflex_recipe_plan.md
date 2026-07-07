@@ -1,5 +1,7 @@
 # L2C 반사 레시피(Reflex Recipe) 구현 계획
 
+> 네이밍 기준은 `docs/naming_conventions.md`를 따른다. 특히 `recorded_step`, `recipe_candidate`, `replay_step`, `active_recipe`, `roi_signature`, `task_category`를 구분해서 쓴다.
+
 ## 1. 목표
 - **새 사이트**: 비전 ReAct 에이전트가 1회 개척 (현행 그대로).
 - **본 적 있는 화면-상태**: 추론 LLM을 건너뛰고, OCR/마커 직후 캐시된 규칙으로 *반사적으로* 마커를 클릭.
@@ -27,26 +29,27 @@
 
 ## 4. 신규 요소 (작게)
 1. **`shared/schema/recipe_schema.py`** — Pydantic
-   - `RecipeStep`: `{ state_key, target:{text, region?, ordinal?}, action, param?, transition_contract? }`
+   - `RecipeStep`: `{ state_key, target:{text?, bbox_ratio?, center_ratio?}, roi_signature?, action, param?, transition_contract? }`
    - `TransitionContract`: `{ common_ready_cues, outcomes, loading_cues?, timeout_sec }`
    - `SiteRecipe`: `{ site, steps: list[RecipeStep], success_count, updated_at }`
 2. **`agent/recipe/state_key.py`** — `compute_state_key(url, markers) -> str`
-   - 정규화된 *앵커 마커 텍스트 집합*으로 현재 화면의 레시피 조회 키를 계산한다. 픽셀 해시나 URL 판정은 사용하지 않는다.
-3. **`agent/recipe/matcher.py`** — `match_marker(step, markers, params) -> marker_id | None`
-   - `target.text`를 `clean_text` 정규화 후 현재 마커와 매칭. 동률이면 region/ordinal로 타이브레이크. 실패 시 `None` → 폴백.
+   - 정규화된 *앵커 마커 텍스트 집합*으로 현재 화면의 레시피 조회 키를 계산한다. 레시피 후보 조회용 키이며, 최종 재생 판정은 ROI 검증이 맡는다.
+3. **`agent/recipe/phash_replay.py`** — `match_step_by_screen_signature(step, signature, markers, current_image_path) -> marker_id | result`
+   - 저장된 `roi_signature.crop_rect_ratio`로 현재 화면의 같은 영역을 자르고 ROI pHash 거리를 비교한다.
+   - ROI가 같으면 `target.center_ratio`에 가까운 현재 OCR marker를 찾아 클릭/입력한다. 실패 시 즉시 reasoning으로 폴백한다.
 4. **`agent/recipe/store.py`** — `Database` 위 thin wrapper
-   - `get_recipe(state_key)`, `record_step(...)`, `commit_recipe(run)`.
-   - DB에 `recipes` 테이블(`state_key` UNIQUE, `steps_json`, `success_count`, `updated_at`) 추가 — 기존 동적 ALTER 마이그레이션 패턴 그대로.
+   - `get_recipe(state_key)`, `commit_recipe(...)`.
+   - DB에 `recipes` 테이블(`state_key`, `steps_json`, `skill_metadata_json`, `success_count`, `updated_at`) 추가 — 기존 동적 ALTER 마이그레이션 패턴 그대로.
 5. **`reflex_node` + 라우터** — `workflow.py`
    - `perception → [reflex | reasoning]` 조건부 엣지로 교체.
-   - `reflex_node`: 현재 `state_key`로 레시피 조회 → `match_marker` → 성공 시 `click_marker`/`type_in_marker` `tool_calls`를 담은 `AIMessage`를 `last_action_result`에 세팅(= reasoning 출력과 동일 형태). 미스/매칭실패 → reasoning.
+   - `reflex_node`: 현재 `state_key`와 `task_category`로 active recipe 조회 → ROI pHash/target center ratio 검증 → 성공 시 `click_marker`/`type_in_marker` `tool_calls`를 담은 `AIMessage`를 `last_action_result`에 세팅(= reasoning 출력과 동일 형태). 미스/검증실패 → reasoning.
 6. **`GraphState` 신규 필드**: `recorded_steps`, `reflex_state_key`, `reflex_hit`, `pending_transition`, `transition_status`, `transition_observations`.
 
 ## 5. 페이즈
 
 ### Phase 0 — 기록 전용 (실행 흐름 무변경, 다크 출시)
-- `action_node`의 UI 액션 디스패치 직후에 **기록 훅**: `click_marker`/`type_in_marker` 실행 시 `{ state_key=compute_state_key(url, markers), target=클릭한 마커 text/region/ordinal, action, param=goal 역매핑 }`을 `recorded_steps`에 append.
-- 그래프 종료(`finish_task`) 시 `recorded_steps`를 `SiteRecipe`로 컴파일해 store에 UPSERT. **성공 런만**(`is_finished` + 유효 `JobPosting` 적재)을 학습.
+- `action_node`의 UI 액션 디스패치 직후에 **기록 훅**: `click_marker`/`type_in_marker` 실행 시 `{ state_key=compute_state_key(url, markers), target=클릭한 마커 text/bbox_ratio/center_ratio, roi_signature, action, param=goal 역매핑 }`을 `recorded_steps`에 append.
+- 그래프 종료(`finish_task`) 시 accepted worker submission을 `recipe_candidates`에 저장한다. active `recipes` 승격은 후처리 Critic/replay 검토에서만 수행한다.
 - 리스크 0(분기·동작 불변). 산출물: 실데이터로 상태키·타깃 텍스트 분포 검증.
 
 ### Phase 1 — 반사 재생 (플래그 `REFLEX_ENABLED`)
@@ -74,7 +77,7 @@
 - 반사 적중률(%) ↑ · 런당 gemini 호출수 ↓ · 추출 1건당 벽시계·API$ ↓ — `step_durations` + `benchmark/profile_steps.py`로 측정.
 
 ## 8. 의존성 순서
-`recipe_schema` → `state_key` + `matcher` → `store`(+DB 마이그레이션) → Phase 0 기록 훅 → Phase 1 `reflex_node`/라우터 → 측정 → Phase 2 → Phase 3.
+`recipe_schema` → `state_key` + `roi_signature` → `store`(+DB 마이그레이션) → Phase 0 기록 훅 → Phase 1 `reflex_node`/라우터 → 후보 저장/후처리 승격 → 측정 → Phase 2 → Phase 3.
 
 ## Current implementation update: worker submission review gate
 
@@ -108,12 +111,12 @@ The candidate promotion gate is LLM-led. Code only packages the candidate row, w
 
 Only `fixed` and `parameterized` steps are written to active `recipes`. A job title observed during exploration is evidence, not a reusable target, so current search-result card selection remains a reasoning step unless a current runtime title is explicitly supplied. Re-promoting a candidate replaces the state rows owned by that candidate so an older specific-card recipe cannot remain active.
 
-`VISION_RECIPE_LEARNING_MODE` controls how far this path runs:
+`VISION_RECIPE_LEARNING_MODE` controls only whether the worker stores replay candidates during collection:
 
 - `off`: do not store recipe candidates.
 - `record`: store accepted candidates only. This is the default.
-- `review`: store candidates and run Critic review, but do not promote active recipes.
-- `promote`: store candidates, run Critic review, and allow Critic-approved promotion into active `recipes`.
+
+Critic review and active recipe promotion are separated into a post-run step. This keeps the worker focused on collection and makes newly recorded evidence available from the next run only after explicit review/promotion.
 
 ## Top-level commander graph
 

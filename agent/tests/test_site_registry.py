@@ -172,3 +172,63 @@ def test_realtime_scraping_wanted_starts_from_home_without_query_url():
     assert "Code-generated search URL" not in goal
     assert "Open only the site home page with open_browser: https://www.wanted.co.kr" in goal
     assert "Do not construct or open a search/query URL yourself" in goal
+
+
+def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
+    from agent.tools import realtime_scraping as rt
+
+    captured = {}
+
+    class FakeApp:
+        pass
+
+    def fake_extract_search_intent(raw_query, profile):
+        return {"search_keyword": "iOS 개발자", "target_count": 0, "source": "test"}
+
+    def fake_run_graph_with_last_state(app, initial_state, recursion_limit):
+        captured["recipe_params"] = dict(initial_state.get("recipe_params") or {})
+        captured["goal"] = initial_state.get("goal", "")
+        return {**initial_state, "is_finished": True, "extracted_jd": {}}, False
+
+    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
+    monkeypatch.setattr(rt, "_extract_search_intent", fake_extract_search_intent)
+    monkeypatch.setattr(rt, "_prepare_worker_start_screen", lambda initial_state, profile: initial_state)
+    monkeypatch.setattr(rt, "_run_graph_with_last_state", fake_run_graph_with_last_state)
+    monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
+
+    result = rt.run_worker_once("iOS 개발자", site="wanted", target_count=2, task_category="검색")
+
+    assert result["target_count"] == 2
+    assert result["task_category"] == "검색"
+    assert result["submission"]["target_count"] == 2
+    assert result["submission"]["task_category"] == "검색"
+    assert captured["recipe_params"]["target_count"] == 2
+    assert captured["recipe_params"]["task_category"] == "검색"
+    assert "Collect up to 2 distinct job postings" in captured["goal"]
+
+
+def test_realtime_scraping_target_count_falls_back_to_intent(monkeypatch):
+    from agent.tools import realtime_scraping as rt
+
+    class FakeApp:
+        pass
+
+    def fake_extract_search_intent(raw_query, profile):
+        return {"search_keyword": "iOS 개발자", "target_count": 3, "source": "test"}
+
+    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
+    monkeypatch.setattr(rt, "_extract_search_intent", fake_extract_search_intent)
+    monkeypatch.setattr(rt, "_prepare_worker_start_screen", lambda initial_state, profile: initial_state)
+    monkeypatch.setattr(
+        rt,
+        "_run_graph_with_last_state",
+        lambda app, initial_state, recursion_limit: ({**initial_state, "is_finished": True, "extracted_jd": {}}, False),
+    )
+    monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
+
+    result = rt.run_worker_once("원티드에서 iOS 개발자 공고 3개", site="wanted")
+
+    assert result["target_count"] == 3
+    assert result["task_category"] == "검색"
+    assert result["submission"]["target_count"] == 3
+    assert result["submission"]["task_category"] == "검색"

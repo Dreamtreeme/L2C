@@ -63,6 +63,7 @@ class RecipeStep(BaseModel):
         description="행동 전 화면의 정규화된 OCR 앵커(state anchors)",
     )
     screen_signature: Dict[str, Any] = Field(default_factory=dict, description="행동 전 화면 pHash/OCR 서명(screen signature)")
+    roi_signature: Dict[str, Any] = Field(default_factory=dict, description="타깃 주변 ROI pHash 서명(ROI signature)")
     url_template: str = Field("", description="URL 템플릿(url template)")
     action: str = Field(..., description="도구 이름(tool action)")
     target: Optional[RecipeTarget] = Field(None, description="클릭/입력 대상(target)")

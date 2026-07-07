@@ -102,14 +102,5 @@ def state_anchor_texts(markers) -> list[str]:
     return anchor_texts_from_values(values)
 
 
-def anchor_similarity(saved_anchors, markers) -> float:
-    """기록 화면과 현재 화면의 OCR 앵커 자카드 유사도(Jaccard similarity)를 계산한다."""
-    saved = set(anchor_texts_from_values(saved_anchors))
-    current = set(state_anchor_texts(markers))
-    if not saved or not current:
-        return 0.0
-    return len(saved & current) / len(saved | current)
-
-
 def compute_state_key(url: str, markers) -> str:
     return f"ocr#{anchor_signature(markers)}"

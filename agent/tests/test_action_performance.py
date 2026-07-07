@@ -277,7 +277,7 @@ def test_action_node_carries_reflex_transition_contract_to_next_perception(monke
                     "reflex-call": {
                         "seq": 0,
                         "action": "click_marker",
-                        "match_mode": "phash",
+                        "match_mode": "roi_phash",
                         "marker_id": 1,
                     }
                 },
@@ -296,7 +296,7 @@ def test_action_node_carries_reflex_transition_contract_to_next_perception(monke
     assert pending["contract"] == contract
     assert pending["params"]["query"] == "android 개발자"
     assert result["action_history"][0]["reflex_recipe_key"] == "recipe-home"
-    assert result["action_history"][0]["reflex_match"]["match_mode"] == "phash"
+    assert result["action_history"][0]["reflex_match"]["match_mode"] == "roi_phash"
 
 
 def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
@@ -337,10 +337,10 @@ def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
     assert action["status"] == "skipped"
     assert action["reason"] == "same_state_repeat_blocked"
     assert action["target"]["text"] == "Data Scientist"
-    assert action["observation_required"] is True
+    assert "observation_required" not in action
     assert result["error_count"] == 0
-    assert result["last_action_screen_changed"] is True
-    assert result["current_url_stale"] is True
+    assert result["last_action_screen_changed"] is False
+    assert result["current_url_stale"] is False
     repeat_episode = result["feedback_episodes"][0]
     assert repeat_episode["feedback"]["label"] == "loop_risk"
     assert repeat_episode["feedback"]["reason"] == "same_state_repeat_blocked"
@@ -633,8 +633,8 @@ def test_action_node_blocks_same_state_repeat_across_intervening_states(monkeypa
     assert action["status"] == "skipped"
     assert action["reason"] == "same_state_repeat_blocked"
     assert result["error_count"] == 0
-    assert result["last_action_screen_changed"] is True
-    assert result["current_url_stale"] is True
+    assert result["last_action_screen_changed"] is False
+    assert result["current_url_stale"] is False
     repeat_episode = result["feedback_episodes"][0]
     assert repeat_episode["feedback"]["label"] == "loop_risk"
     assert repeat_episode["feedback"]["reason"] == "same_state_repeat_blocked"
@@ -678,8 +678,8 @@ def test_action_node_blocks_same_state_repeat_when_marker_id_changes_but_target_
     assert action["status"] == "skipped"
     assert action["reason"] == "same_state_repeat_blocked"
     assert result["error_count"] == 0
-    assert result["last_action_screen_changed"] is True
-    assert result["current_url_stale"] is True
+    assert result["last_action_screen_changed"] is False
+    assert result["current_url_stale"] is False
 
 def test_action_node_allows_state_update_after_screen_boundary(monkeypatch):
     from langchain_core.messages import AIMessage

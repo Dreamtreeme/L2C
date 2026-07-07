@@ -8,6 +8,8 @@ from langchain_core.tools import tool
 from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel, Field
 
+from agent.recipe.task_category import DEFAULT_SEARCH_TASK_CATEGORY, normalize_task_category
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECURSION_LIMIT = 60
@@ -32,6 +34,15 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _normalize_target_count(value: Any) -> int:
+    """사용자가 요청한 수집 개수를 안전한 정수 범위로 정규화한다."""
+    try:
+        count = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(100, count))
 
 
 def _suggested_recursion_limit(current_limit: int) -> int:
@@ -148,11 +159,6 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
         intent["source"] = "llm_failed"
         intent["error"] = str(exc)[:200]
         return intent
-
-
-def _normalize_search_keyword(raw_query: str, profile: dict) -> str:
-    """Backward-compatible wrapper around LLM intent extraction."""
-    return str(_extract_search_intent(raw_query, profile).get("search_keyword") or "").strip()
 
 
 def _build_direct_search_url(search_keyword: str, profile: dict) -> str:
@@ -620,6 +626,8 @@ def _prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dic
 def run_worker_once(
     search_keyword: str,
     site: str | None = None,
+    target_count: int = 0,
+    task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
     review_feedback: str | None = None,
     review_attempt: int = 0,
     run_id: str | None = None,
@@ -638,7 +646,10 @@ def run_worker_once(
     raw_search_keyword = search_keyword
     search_intent = _extract_search_intent(search_keyword, site_profile)
     search_keyword = str(search_intent.get("search_keyword") or search_keyword or "").strip()
-    target_count = int(search_intent.get("target_count") or 0)
+    requested_target_count = _normalize_target_count(target_count)
+    inferred_target_count = _normalize_target_count(search_intent.get("target_count") or 0)
+    target_count = requested_target_count or inferred_target_count
+    task_category = normalize_task_category(task_category or DEFAULT_SEARCH_TASK_CATEGORY)
     direct_search_url = _build_direct_search_url(search_keyword, site_profile)
     goal = _append_review_feedback(
         _build_site_goal(
@@ -656,6 +667,7 @@ def run_worker_once(
         "keyword": search_keyword,
         "target_count": target_count,
         "site": site_slug,
+        "task_category": task_category,
     }
     initial_state = _prepare_worker_start_screen(initial_state, site_profile)
 
@@ -682,6 +694,7 @@ def run_worker_once(
         review_attempt=review_attempt,
         run_id=run_id,
         target_count=target_count,
+        task_category=task_category,
     )
 
     return {
@@ -693,6 +706,7 @@ def run_worker_once(
         "keyword": search_keyword,
         "raw_keyword": raw_search_keyword,
         "target_count": target_count,
+        "task_category": task_category,
         "search_intent": search_intent,
         "task_context": task_context or {},
         "run_status": run_status,
@@ -728,6 +742,7 @@ def commit_worker_review(
 
 def _recipe_learning_mode() -> str:
     mode = os.getenv("VISION_RECIPE_LEARNING_MODE", "record").strip().lower()
+    # worker 실행 중에는 후보 저장까지만 한다. review/promote는 별도 후처리 도구에서 수행한다.
     return mode if mode in {"off", "record"} else "record"
 
 
@@ -798,6 +813,7 @@ def _result_payload(
     is_finished: bool,
     needs_human_approval: bool = False,
     intermediate_report: dict | None = None,
+    task_category: str = "",
 ) -> str:
     return json.dumps(
         {
@@ -806,6 +822,7 @@ def _result_payload(
             "site_name": site_name,
             "keyword": keyword,
             "target_count": int(target_count or 0),
+            "task_category": normalize_task_category(task_category),
             "item_count": item_count,
             "persisted_count": persisted_count,
             "submission_id": submission_id,
@@ -826,11 +843,14 @@ def realtime_scraping(
     tech_stack: str = None,
     site: str = None,
     query: str = None,
+    target_count: int = 0,
+    task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
     review_feedback: str = None,
     review_attempt: int = 0,
 ) -> str:
     """
     Run the child vision worker, review its structured submission, and persist only accepted data.
+    task_category는 Reflex 증거에 저장되어 반복 실행 시 같은 작업 유형의 레시피를 고르는 데 사용된다.
     """
     search_keyword = ""
     if query:
@@ -845,6 +865,8 @@ def realtime_scraping(
         return json.dumps({"message": "collection failed: missing search keyword", "review": {"decision": "reject"}}, ensure_ascii=False)
 
     logger.info("[realtime_scraping] Invoking vision worker for keyword=%r", search_keyword)
+    requested_target_count = _normalize_target_count(target_count)
+    requested_task_category = normalize_task_category(task_category or DEFAULT_SEARCH_TASK_CATEGORY)
 
     try:
         from agent.recipe.reviewer import render_review_feedback
@@ -857,6 +879,8 @@ def realtime_scraping(
             worker_result = run_worker_once(
                 search_keyword,
                 site=site,
+                target_count=requested_target_count,
+                task_category=requested_task_category,
                 review_feedback=pending_feedback,
                 review_attempt=attempt,
                 run_id=run_id,
@@ -883,6 +907,7 @@ def realtime_scraping(
             is_finished = bool(worker_result.get("is_finished", False))
             recursion_limit = int(worker_result.get("recursion_limit") or DEFAULT_RECURSION_LIMIT)
             target_count = int(worker_result.get("target_count") or submission.get("target_count") or 0)
+            task_category = worker_result.get("task_category") or submission.get("task_category") or requested_task_category
             base_needs_approval = needs_human_limit_approval(
                 hit_recursion_limit=hit_recursion_limit,
                 is_finished=is_finished,
@@ -925,6 +950,7 @@ def realtime_scraping(
                 site_slug=site_slug,
                 keyword=effective_keyword,
                 target_count=target_count,
+                task_category=task_category,
                 item_count=item_count,
                 persisted_count=persisted_count,
                 submission_id=submission_id,

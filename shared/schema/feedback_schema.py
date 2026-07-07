@@ -95,6 +95,7 @@ class WorkerSubmission(BaseModel):
     run_id: str = ""
     goal: str = ""
     site: str = ""
+    task_category: str = ""
     keyword: str = ""
     run_status: str = ""
     review_attempt: int = 0

@@ -20,8 +20,7 @@ def review_recipe_candidates(mode: str = "review", limit: int = 5, status: str =
     try:
         from agent.recipe.candidate_reviewer import process_recipe_candidates
 
-        # 활성 레시피 자동 승격은 제거했으므로 입력 mode와 무관하게 검토로만 처리한다.
-        payload = process_recipe_candidates(limit=limit, mode="review", status=status)
+        payload = process_recipe_candidates(limit=limit, mode=mode, status=status)
         return json.dumps(payload, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error("[review_recipe_candidates] Failed to process candidates: %s", e, exc_info=True)

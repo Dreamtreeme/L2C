@@ -27,7 +27,7 @@ def should_continue(state: GraphState) -> str:
 
 
 def _reflex_enabled() -> bool:
-    return os.getenv("REFLEX_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("REFLEX_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def route_after_perception(state: GraphState) -> str:

@@ -389,7 +389,7 @@ class _OpenAIDetailExtractionLLM:
 
 
 def _detail_extraction_model_spec() -> str:
-    return os.getenv("VISION_DETAIL_FINAL_EXTRACTION_MODEL", "gemini-3.5-flash").strip()
+    return os.getenv("VISION_DETAIL_FINAL_EXTRACTION_MODEL", "openai:gpt-5.4-mini").strip()
 
 
 def _get_detail_extraction_llm():
@@ -1821,6 +1821,7 @@ def _extract_job_from_detail_ocr_buffer(state: GraphState, current_url: str) -> 
     logger.info(
         "Detail OCR final extraction completed",
         duration=f"{time.time() - start:.2f}s",
+        model=_detail_extraction_model_spec(),
         ocr_chars=len(ocr_text),
         ocr_lines=len(buffer.get("lines") or []),
     )
@@ -2318,6 +2319,23 @@ def _missing_required_recipe_inputs(recipe, params: dict) -> list[str]:
     return missing
 
 
+def _recipe_task_category(recipe: Any) -> str:
+    """레시피 메타데이터에 저장된 작업 카테고리를 읽는다."""
+
+    from agent.recipe.task_category import normalize_task_category
+
+    metadata = getattr(recipe, "skill_metadata", None)
+    return normalize_task_category(getattr(metadata, "task_category", "") if metadata is not None else "")
+
+
+def _recipe_matches_task_category(recipe: Any, params: dict) -> bool:
+    """요청 작업 카테고리와 레시피 카테고리가 맞는지 확인한다."""
+
+    from agent.recipe.task_category import task_category_matches
+
+    return task_category_matches(params.get("task_category"), _recipe_task_category(recipe))
+
+
 def reflex_node(state: GraphState) -> Dict[str, Any]:
     """캐시된 Reflex Recipe가 있으면 reasoning을 우회해 같은 tool_call 형태를 만든다."""
     start_time = time.time()
@@ -2341,7 +2359,7 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
         }
 
     try:
-        from agent.recipe.matcher import is_replayable_step, match_marker
+        from agent.recipe.matcher import is_replayable_step
         from agent.recipe.phash_replay import match_step_by_screen_signature
         from agent.recipe.state_key import compute_state_key
         from agent.recipe.store import RecipeStore
@@ -2350,22 +2368,36 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
         state_key = state.get("reflex_state_key") or compute_state_key(state.get("current_url", ""), markers)
         params = dict(state.get("recipe_params", {}) or {})
         params.setdefault("goal", state.get("goal", ""))
+        requested_task_category = str(params.get("task_category") or "").strip()
         store = RecipeStore()
+        recent_images = state.get("recent_images", []) or []
+        current_image_path = str(recent_images[-1]) if recent_images else ""
         recipe_candidates = []
+        task_category_skips = 0
         exact_recipe = store.get_recipe(state_key)
         if exact_recipe and exact_recipe.steps:
-            recipe_candidates.append((state_key, exact_recipe, 1.0, "exact"))
+            if _recipe_matches_task_category(exact_recipe, params):
+                recipe_candidates.append((state_key, exact_recipe, 1.0, "exact"))
+            else:
+                task_category_skips += 1
+
+        def broad_site_recipe_allowed(recipe: Any) -> bool:
+            steps = list(getattr(recipe, "steps", []) or [])
+            if not steps:
+                return False
+            first_step = steps[0].model_dump() if hasattr(steps[0], "model_dump") else dict(steps[0])
+            if first_step.get("action") not in {"click_marker", "type_in_marker"}:
+                return False
+            return bool(first_step.get("roi_signature"))
 
         site = str(params.get("site") or "").strip()
-        min_similarity = float(os.getenv("REFLEX_STATE_SIMILARITY_MIN", "0.25"))
         if site:
-            for recipe_key, recipe, similarity in store.get_similar_recipes(
-                site,
-                markers,
-                min_similarity=min_similarity,
-            ):
-                if recipe_key != state_key:
-                    recipe_candidates.append((recipe_key, recipe, similarity, "ocr_similarity"))
+            for recipe_key, recipe in store.get_site_recipes(site):
+                if not _recipe_matches_task_category(recipe, params):
+                    task_category_skips += 1
+                    continue
+                if recipe_key != state_key and broad_site_recipe_allowed(recipe):
+                    recipe_candidates.append((recipe_key, recipe, 0.0, "site"))
 
         if not recipe_candidates:
             elapsed = time.time() - start_time
@@ -2374,7 +2406,13 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                 state_key,
                 elapsed,
                 "no_recipe",
-                {"candidate_count": 0, "site": site, "current_phash": (state.get("screen_signature") or {}).get("phash", "")},
+                {
+                    "candidate_count": 0,
+                    "site": site,
+                    "task_category": requested_task_category,
+                    "task_category_skips": task_category_skips,
+                    "current_phash": (state.get("screen_signature") or {}).get("phash", ""),
+                },
             )
 
         selected = None
@@ -2384,6 +2422,7 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                 "recipe_key": recipe_key,
                 "lookup": lookup,
                 "similarity": similarity,
+                "task_category": _recipe_task_category(recipe),
                 "steps": [],
             }
             missing_inputs = _missing_required_recipe_inputs(recipe, params)
@@ -2420,38 +2459,34 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                     candidate_trace["steps"].append(step_trace)
                     candidate_valid = False
                     break
-                if action in {"click_marker", "type_in_marker"}:
-                    if step.get("screen_signature"):
-                        step_trace["match_mode"] = "phash"
-                        marker_id, phash_result = match_step_by_screen_signature(
-                            step,
-                            dict(state.get("screen_signature", {}) or {}),
-                            markers,
-                        )
-                        step_trace["phash"] = phash_result
-                        if marker_id is None:
-                            logger.info(
-                                "Reflex candidate skipped: pHash replay check failed",
-                                recipe_key=recipe_key[:24],
-                                reason=phash_result.get("reason"),
-                                distance=phash_result.get("distance"),
-                                anchor_overlap=phash_result.get("anchor_overlap"),
-                            )
-                            step_trace["accepted"] = False
-                            step_trace["reason"] = phash_result.get("reason", "phash_check_failed")
-                            candidate_trace["steps"].append(step_trace)
-                            candidate_valid = False
-                            break
-                    else:
-                        step_trace["match_mode"] = "ocr_text"
-                        marker_id = match_marker(step, markers, params=params)
-                    if marker_id is None:
-                        step_trace["accepted"] = False
-                        step_trace["reason"] = "marker_match_failed"
-                        candidate_trace["steps"].append(step_trace)
-                        candidate_valid = False
-                        break
-                    step_trace["marker_id"] = marker_id
+                if action not in {"click_marker", "type_in_marker"}:
+                    step_trace["accepted"] = False
+                    step_trace["reason"] = "non_roi_action"
+                    candidate_trace["steps"].append(step_trace)
+                    candidate_valid = False
+                    break
+                step_trace["match_mode"] = "roi_phash"
+                marker_id, phash_result = match_step_by_screen_signature(
+                    step,
+                    dict(state.get("screen_signature", {}) or {}),
+                    markers,
+                    current_image_path=current_image_path,
+                )
+                step_trace["phash"] = phash_result
+                step_trace["match_mode"] = phash_result.get("mode") or step_trace["match_mode"]
+                if marker_id is None:
+                    logger.info(
+                        "Reflex candidate skipped: ROI replay check failed",
+                        recipe_key=recipe_key[:24],
+                        reason=phash_result.get("reason"),
+                        distance=phash_result.get("distance"),
+                    )
+                    step_trace["accepted"] = False
+                    step_trace["reason"] = phash_result.get("reason", "phash_check_failed")
+                    candidate_trace["steps"].append(step_trace)
+                    candidate_valid = False
+                    break
+                step_trace["marker_id"] = marker_id
                 args = _reflex_action_args(step, marker_id, params=params)
                 if args is None:
                     step_trace["accepted"] = False
@@ -2521,6 +2556,7 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
                 "lookup": lookup,
                 "similarity": similarity,
                 "candidate_count": len(recipe_candidates),
+                "task_category": requested_task_category,
                 "actions": [call["name"] for call in tool_calls],
                 "tool_calls": tool_call_traces,
                 "candidates": candidate_traces,
@@ -2958,7 +2994,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     break
 
                 if _same_state_action_seen(state, action_name, args, before_state_key):
-                    observation_required = action_name in OBSERVATION_REQUIRED_ACTIONS
                     append_guard_result(
                         action_name,
                         args,
@@ -2967,7 +3002,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         "same_state_repeat_blocked",
                         "Blocked repeated UI action in the same screen state.",
                         step_start,
-                        observation_required=observation_required,
+                        observation_required=False,
                     )
                     break
 

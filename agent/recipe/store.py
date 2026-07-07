@@ -13,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from agent.recipe.state_key import anchor_similarity
 from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 from shared.schema.skill_schema import RecipeSkillMetadata
 
@@ -175,12 +174,6 @@ class RecipeStore:
                 )
         return self.commit_recipe(site, goal, replay_steps, metadata=metadata)
 
-    def save_run(self, site: str, goal: str, steps) -> str:
-        """이전 단계 API(save_run) 호환용 래퍼."""
-
-        self.commit_recipe(site, goal, list(steps or []))
-        return (steps or [{}])[0].get("state_key", "")
-
     def get_recipe(self, state_key: str) -> SiteRecipe | None:
         with self._conn() as conn:
             row = conn.execute(
@@ -216,15 +209,12 @@ class RecipeStore:
             out.append(item)
         return out
 
-    def get_similar_recipes(self, site: str, markers, min_similarity: float = 0.0):
-        """같은 사이트의 활성 레시피를 현재 OCR 화면과의 유사도 순으로 반환한다."""
-        candidates = []
+    def get_site_recipes(self, site: str) -> list[tuple[str, SiteRecipe]]:
+        """같은 사이트의 활성 레시피를 성공 횟수 순으로 반환한다."""
+        candidates: list[tuple[str, SiteRecipe]] = []
         for item in self.get_by_site(site):
             steps = list(item.get("steps") or [])
             if not steps:
-                continue
-            score = anchor_similarity(steps[0].get("state_anchors") or [], markers)
-            if score < min_similarity:
                 continue
             recipe = SiteRecipe(
                 site=item.get("site") or site,
@@ -233,14 +223,5 @@ class RecipeStore:
                 skill_metadata=RecipeSkillMetadata(**(item.get("skill_metadata") or {})),
                 success_count=item.get("success_count") or 0,
             )
-            candidates.append((item.get("state_key") or "", recipe, score))
-        return sorted(candidates, key=lambda item: (item[2], item[1].success_count), reverse=True)
-
-    def get_step(self, state_key: str):
-        """해당 상태 키(state_key)의 첫 재생 단계(recipe step)를 반환한다."""
-
-        recipe = self.get_recipe(state_key)
-        if not recipe or not recipe.steps:
-            return None
-        step = recipe.steps[0]
-        return step.model_dump() if hasattr(step, "model_dump") else step.dict()
+            candidates.append((item.get("state_key") or "", recipe))
+        return candidates

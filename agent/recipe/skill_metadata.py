@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.recipe.state_key import normalize_text
+from agent.recipe.task_category import normalize_task_category
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -152,6 +153,7 @@ def build_skill_metadata_evidence(
     site: str,
     keyword: str,
     target_count: int,
+    task_category: str = "",
     recorded_steps: list[dict[str, Any]],
     feedback_episodes: list[dict[str, Any]],
     extracted_summary: dict[str, Any],
@@ -162,6 +164,7 @@ def build_skill_metadata_evidence(
     return {
         "goal": goal,
         "site": site,
+        "task_category": normalize_task_category(task_category),
         "keyword": keyword,
         "target_count": target_count,
         "inputs": _input_slots(feedback_episodes, keyword, target_count),

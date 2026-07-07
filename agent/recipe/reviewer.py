@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from agent.recipe.state_key import site_of
+from agent.recipe.task_category import normalize_task_category
 from agent.utils.job_fields import deterministic_report_item
 from shared.schema.feedback_schema import CommanderReview, SubmissionIssue, WorkerSubmission
 
@@ -130,12 +131,15 @@ def build_worker_submission(
     review_attempt: int = 0,
     run_id: str | None = None,
     target_count: int = 0,
+    task_category: str = "",
 ) -> dict[str, Any]:
     """작업자 그래프 실행 결과를 구조화된 제출물(WorkerSubmission)로 만든다."""
     extracted_jd = final_state.get("extracted_jd", {}) or {}
     jobs = _job_items(extracted_jd)
     current_url = final_state.get("current_url", "") or ""
     resolved_site = site or site_of(current_url) or "unknown"
+    recipe_params = final_state.get("recipe_params", {}) if isinstance(final_state.get("recipe_params"), dict) else {}
+    resolved_task_category = normalize_task_category(task_category or recipe_params.get("task_category") or "")
     run_id = run_id or new_worker_run_id()
     report_jobs, report_source, report_error = _report_job_summary(jobs)
     recorded_steps = list(final_state.get("recorded_steps", []) or [])
@@ -155,6 +159,7 @@ def build_worker_submission(
     skill_metadata_evidence = build_skill_metadata_evidence(
         goal=final_state.get("goal", "") or "",
         site=resolved_site,
+        task_category=resolved_task_category,
         keyword=keyword,
         target_count=int(target_count or 0),
         recorded_steps=recorded_steps,
@@ -165,6 +170,7 @@ def build_worker_submission(
         run_id=run_id,
         goal=final_state.get("goal", "") or "",
         site=resolved_site,
+        task_category=resolved_task_category,
         keyword=keyword,
         run_status=run_status,
         review_attempt=review_attempt,

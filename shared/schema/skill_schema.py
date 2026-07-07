@@ -56,6 +56,7 @@ class RecipeSkillMetadata(BaseModel):
     when_to_use: str = Field("", description="사용 조건(when to use)")
     goal_pattern: str = Field("", description="목표 패턴(goal pattern)")
     site: str = Field("", description="대상 사이트(site)")
+    task_category: str = Field("", description="작업 카테고리(task category)")
     page_type: str = Field("", description="화면 유형(page type)")
     inputs: List[SkillInputSlot] = Field(default_factory=list, description="가변 입력 목록(input slots)")
     step_intents: List[SkillStepIntent] = Field(default_factory=list, description="단계별 의도(step intents)")
