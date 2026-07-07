@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agent.utils.model_dump import dump_model
 from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 from shared.schema.skill_schema import RecipeSkillMetadata
 
@@ -80,13 +81,7 @@ class RecipeStore:
 
     @staticmethod
     def _metadata_dict(metadata: dict[str, Any] | RecipeSkillMetadata | None) -> dict[str, Any]:
-        if metadata is None:
-            return {}
-        if hasattr(metadata, "model_dump"):
-            return metadata.model_dump()
-        if hasattr(metadata, "dict"):
-            return metadata.dict()
-        return dict(metadata or {})
+        return dump_model(metadata)
 
     def record_step(
         self,

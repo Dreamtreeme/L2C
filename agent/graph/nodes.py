@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from agent.graph.state import GraphState
 from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT, QA_COMMANDER_SYSTEM_PROMPT
 from agent.utils.logger import logger
+from agent.utils.model_dump import dump_model
 from agent.tools.sqlite_query import sqlite_query
 from agent.tools.realtime_scraping import realtime_scraping
 from agent.tools.site_registry import list_collection_sites, get_collection_site_profile
@@ -1775,18 +1776,6 @@ def _detail_buffer_text(buffer: dict[str, Any]) -> str:
     return "\n".join(rendered)
 
 
-def _model_to_dict(model: Any) -> dict[str, Any]:
-    if model is None:
-        return {}
-    if isinstance(model, dict):
-        return dict(model)
-    if hasattr(model, "model_dump"):
-        return dict(model.model_dump())
-    if hasattr(model, "dict"):
-        return dict(model.dict())
-    return {}
-
-
 def _extract_job_from_detail_ocr_buffer(state: GraphState, current_url: str) -> dict[str, Any]:
     buffer = dict(state.get("detail_ocr_buffer", {}) or {})
     ocr_text = _detail_buffer_text(buffer)
@@ -1817,7 +1806,7 @@ def _extract_job_from_detail_ocr_buffer(state: GraphState, current_url: str) -> 
         ),
     ]
     start = time.time()
-    extracted = _model_to_dict(_get_detail_extraction_llm().invoke(messages))
+    extracted = dump_model(_get_detail_extraction_llm().invoke(messages))
     logger.info(
         "Detail OCR final extraction completed",
         duration=f"{time.time() - start:.2f}s",
@@ -2385,7 +2374,7 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
             steps = list(getattr(recipe, "steps", []) or [])
             if not steps:
                 return False
-            first_step = steps[0].model_dump() if hasattr(steps[0], "model_dump") else dict(steps[0])
+            first_step = dump_model(steps[0])
             if first_step.get("action") not in {"click_marker", "type_in_marker"}:
                 return False
             return bool(first_step.get("roi_signature"))
@@ -2443,7 +2432,7 @@ def reflex_node(state: GraphState) -> Dict[str, Any]:
             tool_call_traces: dict[str, dict[str, Any]] = {}
             candidate_valid = True
             for idx, recipe_step in enumerate(recipe.steps):
-                step = recipe_step.model_dump() if hasattr(recipe_step, "model_dump") else recipe_step.dict()
+                step = dump_model(recipe_step)
                 action = step.get("action")
                 marker_id = None
                 step_trace: dict[str, Any] = {

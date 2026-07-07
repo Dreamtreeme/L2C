@@ -18,6 +18,7 @@ from agent.tools.realtime_scraping import (
 from agent.tools.sqlite_query import sqlite_query
 from agent.tools.task_triage import research_public_web, triage_user_task
 from agent.utils.logger import logger
+from agent.utils.model_dump import dump_model
 
 
 def _max_review_retries() -> int:
@@ -66,7 +67,7 @@ def commander_plan_node(state: CommanderState) -> dict:
 
 def task_triage_node(state: CommanderState) -> dict:
     triage = triage_user_task(state.get("user_query", ""))
-    payload = triage.model_dump() if hasattr(triage, "model_dump") else dict(triage)
+    payload = dump_model(triage)
     logger.info("[commander_graph] task triage: %s", payload)
     return {
         "task_triage": payload,
@@ -84,7 +85,7 @@ def task_triage_node(state: CommanderState) -> dict:
 def research_node(state: CommanderState) -> dict:
     triage = dict(state.get("task_triage") or {})
     report = research_public_web(state.get("user_query", ""), triage)
-    report_payload = report.model_dump() if hasattr(report, "model_dump") else dict(report)
+    report_payload = dump_model(report)
     context = dict(state.get("task_context") or {})
     context["research_report"] = report_payload
     logger.info("[commander_graph] public research status=%s", report_payload.get("status"))

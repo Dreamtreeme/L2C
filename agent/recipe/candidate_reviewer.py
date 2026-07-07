@@ -12,24 +12,21 @@ import os
 from typing import Any, Callable
 
 from agent.recipe.task_category import normalize_task_category
+from agent.utils.model_dump import dump_model
 from shared.schema.feedback_schema import RecipeCandidateReview
 
 
 CriticFn = Callable[[dict[str, Any]], dict[str, Any] | RecipeCandidateReview]
 
 
-def _dump_model(model) -> dict[str, Any]:
-    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
-
-
 def _coerce_review(raw: dict[str, Any] | RecipeCandidateReview) -> dict[str, Any]:
     if isinstance(raw, RecipeCandidateReview):
-        return _dump_model(raw)
-    return _dump_model(RecipeCandidateReview(**(raw or {})))
+        return dump_model(raw)
+    return dump_model(RecipeCandidateReview(**(raw or {})))
 
 
 def _fallback_review(reason: str) -> dict[str, Any]:
-    return _dump_model(
+    return dump_model(
         RecipeCandidateReview(
             decision="revise",
             reasons=[reason],

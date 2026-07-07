@@ -11,6 +11,7 @@ from typing import Any
 
 from agent.recipe.state_key import normalize_text, site_of
 from agent.utils.logger import logger
+from agent.utils.model_dump import dump_model
 from shared.schema.feedback_schema import (
     ActionFeedback,
     ActionObservation,
@@ -21,10 +22,6 @@ from shared.schema.feedback_schema import (
 
 _UI_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
 _STATE_ACTIONS = {"update_plan_progress", "update_extracted_info", "finish_task"}
-
-
-def _dump_model(model) -> dict[str, Any]:
-    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
 
 
 def _message_text(content: Any) -> str:
@@ -237,6 +234,6 @@ def record_action_episode(
             observation=observation,
             feedback=feedback,
         )
-        episodes.append(_dump_model(episode))
+        episodes.append(dump_model(episode))
     except Exception as e:
         logger.debug("feedback record_action_episode skipped", error=str(e))

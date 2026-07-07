@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from agent.recipe.state_key import normalize_text
+from agent.utils.model_dump import dump_model
 from agent.vision.screen_signature import compute_roi_signature, hamming_distance, marker_center_ratio
 
 
@@ -29,9 +30,7 @@ def _target_for_step(step: Any) -> Any:
 
 def _roi_signature_for_step(step: Any) -> dict[str, Any]:
     raw = _step_get(step, "roi_signature") or {}
-    if hasattr(raw, "model_dump"):
-        raw = raw.model_dump()
-    return dict(raw or {}) if isinstance(raw, dict) else {}
+    return dump_model(raw)
 
 
 def _norm_key(value: Any) -> str:

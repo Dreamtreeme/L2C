@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from agent.recipe.state_key import site_of
 from agent.recipe.task_category import normalize_task_category
 from agent.utils.job_fields import deterministic_report_item
+from agent.utils.model_dump import dump_model
 from shared.schema.feedback_schema import CommanderReview, SubmissionIssue, WorkerSubmission
 
 
@@ -30,10 +31,6 @@ class ReportJobSummaryItem(BaseModel):
 
 class ReportJobSummary(BaseModel):
     jobs: list[ReportJobSummaryItem] = Field(default_factory=list)
-
-
-def _dump_model(model) -> dict[str, Any]:
-    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
 
 
 def _looks_like_job_list(value: Any) -> bool:
@@ -84,7 +81,7 @@ def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[s
         HumanMessage(content=json.dumps({"jobs": compact_jobs}, ensure_ascii=False, indent=2)),
     ]
     response = llm.invoke(messages)
-    summary = _dump_model(response)
+    summary = dump_model(response)
     out: list[dict[str, Any]] = []
     for idx, item in enumerate(summary.get("jobs") or []):
         if not isinstance(item, dict):
@@ -187,7 +184,7 @@ def build_worker_submission(
         extracted_summary=extracted_summary,
         worker_notes="submitted after autonomous/reflex worker run",
     )
-    return _dump_model(submission)
+    return dump_model(submission)
 
 
 def validate_submission_shape(submission: dict[str, Any]) -> list[dict[str, Any]]:
@@ -234,7 +231,7 @@ def validate_submission_shape(submission: dict[str, Any]) -> list[dict[str, Any]
         if not feedback.get("label"):
             add(f"feedback_episodes[{idx}].feedback.label", "missing feedback label", "warning")
 
-    return [_dump_model(issue) for issue in issues]
+    return [dump_model(issue) for issue in issues]
 
 
 def shape_review(submission: dict[str, Any], issues: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -253,7 +250,7 @@ def shape_review(submission: dict[str, Any], issues: list[dict[str, Any]] | None
             recipe_candidate=False,
             confidence=0.78,
         )
-        return _dump_model(review)
+        return dump_model(review)
 
     warnings = [f"{issue['field']}: {issue['reason']}" for issue in issues]
     review = CommanderReview(
@@ -263,7 +260,7 @@ def shape_review(submission: dict[str, Any], issues: list[dict[str, Any]] | None
         recipe_candidate=bool(submission.get("recorded_steps")) and int(submission.get("collected_count") or 0) > 0,
         confidence=0.62 if warnings else 0.72,
     )
-    return _dump_model(review)
+    return dump_model(review)
 
 
 def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallback: dict[str, Any]) -> dict[str, Any]:
@@ -295,8 +292,8 @@ def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallba
     for _ in range(2):
         try:
             response = llm.invoke(messages)
-            review = _dump_model(response)
-            return _dump_model(CommanderReview(**review))
+            review = dump_model(response)
+            return dump_model(CommanderReview(**review))
         except Exception as exc:  # pragma: no cover - provider/schema failures are best-effort
             last_error = str(exc)
             messages.append(

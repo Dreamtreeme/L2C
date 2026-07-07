@@ -9,6 +9,7 @@ from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel, Field
 
 from agent.recipe.task_category import DEFAULT_SEARCH_TASK_CATEGORY, normalize_task_category
+from agent.utils.model_dump import dump_model
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +89,6 @@ def _profile_site_terms(profile: dict) -> list[str]:
     return sorted(cleaned, key=len, reverse=True)
 
 
-def _dump_model(model) -> dict[str, Any]:
-    if isinstance(model, dict):
-        return model
-    return model.model_dump() if hasattr(model, "model_dump") else model.dict()
-
-
 def _search_intent_mode() -> str:
     mode = os.getenv("VISION_SEARCH_INTENT_MODE", "llm").strip().lower()
     return mode if mode in {"llm", "off"} else "llm"
@@ -103,11 +98,11 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
     """Ask the intent model for the search phrase and requested item count."""
     original = str(raw_query or "").strip()
     if not original:
-        return _dump_model(SearchIntent())
+        return dump_model(SearchIntent())
 
     mode = _search_intent_mode()
     if mode == "off":
-        intent = _dump_model(SearchIntent(search_keyword=original))
+        intent = dump_model(SearchIntent(search_keyword=original))
         intent["source"] = "disabled"
         intent["error"] = ""
         return intent
@@ -143,19 +138,19 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
                 )
             ),
         ]
-        data = _dump_model(llm.invoke(messages))
+        data = dump_model(llm.invoke(messages))
         keyword = str(data.get("search_keyword") or "").strip() or original
         try:
             target_count = max(0, int(data.get("target_count") or 0))
         except (TypeError, ValueError):
             target_count = 0
-        intent = _dump_model(SearchIntent(search_keyword=keyword, target_count=target_count))
+        intent = dump_model(SearchIntent(search_keyword=keyword, target_count=target_count))
         intent["source"] = "llm"
         intent["error"] = ""
         return intent
     except Exception as exc:  # pragma: no cover - provider failures are best-effort
         logger.warning("[realtime_scraping] Search intent extraction failed; using raw query: %s", exc)
-        intent = _dump_model(SearchIntent(search_keyword=original))
+        intent = dump_model(SearchIntent(search_keyword=original))
         intent["source"] = "llm_failed"
         intent["error"] = str(exc)[:200]
         return intent
@@ -492,7 +487,7 @@ def _normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> di
                 )
             ),
         ]
-        normalized = _dump_model(llm.invoke(messages))
+        normalized = dump_model(llm.invoke(messages))
         raw_url = job.get("url") or job.get("URL") or job.get("공고url")
         if raw_url and not normalized.get("url"):
             normalized["url"] = raw_url
@@ -1008,7 +1003,7 @@ def _persist_collected_data(extracted_jd: dict, keyword: str) -> int:
         try:
             normalized_job["url"] = str(url).strip()
             job_posting = Preprocessor.process_raw_jd(normalized_job)
-            db.upsert(url=url, data=job_posting.model_dump())
+            db.upsert(url=url, data=dump_model(job_posting))
             persisted_count += 1
             logger.info(f"[_persist] Successfully upserted job #{idx}: {job_posting.company_name} - {job_posting.position}")
 
