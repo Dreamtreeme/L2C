@@ -150,6 +150,10 @@ class CollectionService:
                     collection_intent=intent_payload,
                 )
         except Exception as exc:
+            from agent.application.run_context import RunCancelled
+
+            if isinstance(exc, RunCancelled):
+                raise
             logger.exception("Vision worker execution failed", error=str(exc))
             return {
                 "message": f"collection error: {exc}",

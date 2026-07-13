@@ -57,6 +57,55 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 class ChatRequest(BaseModel):
     query: str
     resume_run_id: str | None = None
+    conversation_id: str = ""
+
+
+def _effective_chat_query(
+    query: str,
+    *,
+    resume_run_id: str | None,
+    conversation_id: str,
+) -> str:
+    """확인 질문 또는 최근 대화의 텍스트 문맥을 현재 요청에 결합합니다."""
+
+    registry = get_run_registry()
+    if resume_run_id:
+        previous = registry.get(resume_run_id)
+        previous_result = dict((previous or {}).get("result") or {})
+        clarification = dict(previous_result.get("clarification") or {})
+        if (
+            previous
+            and previous.get("status") == RunStatus.WAITING_INPUT.value
+            and clarification.get("question")
+        ):
+            return (
+                f"[이전 사용자 요청]\n{previous.get('user_query') or previous.get('query', '')}\n\n"
+                f"[지휘자의 확인 질문]\n{clarification['question']}\n\n"
+                f"[사용자의 추가 답변]\n{query}"
+            )
+        if previous and previous.get("status") == RunStatus.CANCELLED.value:
+            return (
+                f"[취소된 사용자 요청]\n{previous.get('user_query') or previous.get('query', '')}\n\n"
+                "[재개 방식]\n오래된 화면 좌표는 재사용하지 말고 현재 화면에서 안전하게 다시 시작하십시오.\n\n"
+                f"[사용자의 재개 지시]\n{query}"
+            )
+
+    history = get_run_registry().conversation_history(conversation_id, limit=4)
+    if not history:
+        return query
+    turns: list[str] = []
+    for item in history:
+        result = dict(item.get("result") or {})
+        answer = str(result.get("last_action_result") or "").strip()
+        if not answer:
+            continue
+        turns.append(
+            f"사용자: {str(item.get('user_query') or item.get('query') or '')[:2000]}\n"
+            f"도우미: {answer[:2000]}"
+        )
+    if not turns:
+        return query
+    return "[최근 대화 문맥]\n" + "\n\n".join(turns) + f"\n\n[현재 사용자 요청]\n{query}"
 
 @app.get("/")
 async def redirect_to_index():
@@ -105,6 +154,20 @@ async def get_run_status(run_id: str):
         raise HTTPException(status_code=404, detail="Run not found")
     return item
 
+
+@app.post("/api/runs/{run_id}/cancel")
+async def cancel_run(run_id: str):
+    """실행 중인 요청이 다음 안전 지점에서 중단되도록 표시합니다."""
+
+    item = get_run_registry().request_cancel(run_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {
+        "run_id": run_id,
+        "cancel_requested": bool(item.get("cancel_requested")),
+        "status": item.get("status"),
+    }
+
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
     """
@@ -118,22 +181,17 @@ async def chat_endpoint(req: ChatRequest):
 
         run_id = new_run_id("chat")
         registry = get_run_registry()
-        effective_query = query
-        if req.resume_run_id:
-            previous = registry.get(req.resume_run_id)
-            previous_result = dict((previous or {}).get("result") or {})
-            clarification = dict(previous_result.get("clarification") or {})
-            if (
-                previous
-                and previous.get("status") == RunStatus.WAITING_INPUT.value
-                and clarification.get("question")
-            ):
-                effective_query = (
-                    f"[이전 사용자 요청]\n{previous.get('query', '')}\n\n"
-                    f"[지휘자의 확인 질문]\n{clarification['question']}\n\n"
-                    f"[사용자의 추가 답변]\n{query}"
-                )
-        registry.start(run_id, effective_query)
+        effective_query = _effective_chat_query(
+            query,
+            resume_run_id=req.resume_run_id,
+            conversation_id=req.conversation_id,
+        )
+        registry.start(
+            run_id,
+            effective_query,
+            conversation_id=req.conversation_id,
+            user_query=query,
+        )
         event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
         loop = asyncio.get_running_loop()
 
@@ -163,6 +221,9 @@ async def chat_endpoint(req: ChatRequest):
                 yield f"data: [EVENT] {payload}\n\n"
 
             result = await task
+        except asyncio.CancelledError:
+            registry.request_cancel(run_id)
+            raise
         except Exception as exc:
             registry.fail(run_id, str(exc))
             logger.exception("Commander execution failed", error=str(exc), run_id=run_id)
@@ -181,6 +242,8 @@ async def chat_endpoint(req: ChatRequest):
                 "status": result.get("run_status", "completed"),
                 "clarification": result.get("clarification"),
                 "resumed_from_run_id": req.resume_run_id,
+                "resume_mode": "restart_from_request" if req.resume_run_id else "",
+                "conversation_id": req.conversation_id,
                 "metrics": result.get("metrics", {}),
             },
             ensure_ascii=False,

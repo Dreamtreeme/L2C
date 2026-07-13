@@ -672,6 +672,9 @@ def _schedule_recipe_candidate_promotion(candidate_id: str) -> bool:
 
 def persist_accepted_worker_result(worker_result: dict, review: dict, source: str = "realtime_scraping") -> tuple[int, dict, dict, str]:
     """Persist accepted worker data and update the stored submission row."""
+    from agent.application.run_context import raise_if_cancelled
+
+    raise_if_cancelled()
     submission = dict(worker_result.get("submission") or {})
     if review.get("decision") != "accept" or not worker_result.get("extracted_jd"):
         return 0, submission, review, ""

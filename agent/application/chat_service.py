@@ -11,10 +11,12 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from agent.prompts.commander import build_qa_commander_system_prompt
 from agent.application.run_context import (
+    RunCancelled,
     emit_run_event,
     invoke_with_metrics,
     measure_step,
     run_context,
+    raise_if_cancelled,
 )
 from agent.application.run_contracts import RunEventSink, RunPhase, RunStatus
 from agent.tools.recipe_learning import review_recipe_candidates
@@ -135,6 +137,7 @@ class ChatService:
 
             try:
                 for turn in range(self.max_turns):
+                    raise_if_cancelled()
                     logger.info("Chat orchestrator turn", turn=turn + 1)
                     with measure_step("chat_orchestrator_reasoning", turn=turn + 1):
                         response = invoke_with_metrics(
@@ -230,6 +233,19 @@ class ChatService:
                         messages.append(
                             ToolMessage(content=tool_result, tool_call_id=tool_id)
                         )
+            except RunCancelled:
+                emit_run_event(
+                    "run_cancelled",
+                    RunPhase.CANCELLED,
+                    "사용자 요청으로 실행을 중단했습니다.",
+                    status=RunStatus.CANCELLED,
+                )
+                return self._result(
+                    "실행을 취소했습니다.",
+                    context=context,
+                    started=started,
+                    status=RunStatus.CANCELLED,
+                )
             except Exception as exc:
                 emit_run_event(
                     "run_failed",

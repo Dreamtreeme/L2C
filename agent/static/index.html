@@ -99,6 +99,14 @@
                     >
                         <i data-lucide="send" class="w-5 h-5"></i>
                     </button>
+                    <button
+                        type="button"
+                        id="cancel-btn"
+                        title="실행 취소"
+                        class="hidden absolute right-2 top-2 bottom-2 bg-red-600 hover:bg-red-500 text-white rounded-xl px-4 items-center justify-center transition-colors cursor-pointer"
+                    >
+                        <i data-lucide="square" class="w-4 h-4"></i>
+                    </button>
                 </form>
                 <p class="text-center text-[11px] text-slate-500 mt-3 font-medium">본 시스템은 SQLite 로컬 Cosine Similarity 연산 및 엄격한 인용 검증 필터로 환각을 방지합니다.</p>
             </div>
@@ -169,7 +177,10 @@
         const chatForm = document.getElementById('chat-form');
         const queryInput = document.getElementById('query-input');
         let pendingClarificationRunId = null;
+        const conversationId = crypto.randomUUID();
+        let activeRunId = null;
         const submitBtn = document.getElementById('submit-btn');
+        const cancelBtn = document.getElementById('cancel-btn');
 
         const sidebarPanel = document.getElementById('sidebar-panel');
         const sidebarLoader = document.getElementById('sidebar-loader');
@@ -181,6 +192,16 @@
         const jobCollected = document.getElementById('job-collected');
         const jobUrl = document.getElementById('job-url');
         const jobText = document.getElementById('job-text');
+
+        cancelBtn.addEventListener('click', async () => {
+            if (!activeRunId) return;
+            cancelBtn.disabled = true;
+            try {
+                await fetch(`/api/runs/${activeRunId}/cancel`, { method: 'POST' });
+            } finally {
+                cancelBtn.disabled = false;
+            }
+        });
 
         // Citation token replace logic — MUST be run before Markdown Parsing
         function replaceCitations(text) {
@@ -240,6 +261,9 @@
             queryInput.value = '';
             queryInput.disabled = true;
             submitBtn.disabled = true;
+            submitBtn.classList.add('hidden');
+            cancelBtn.classList.remove('hidden');
+            cancelBtn.classList.add('flex');
 
             // Add User Bubble
             const userMsgId = 'msg-' + Date.now();
@@ -278,7 +302,8 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         query: query,
-                        resume_run_id: pendingClarificationRunId
+                        resume_run_id: pendingClarificationRunId,
+                        conversation_id: conversationId
                     })
                 });
 
@@ -310,7 +335,7 @@
                                         const finalObj = JSON.parse(dataContent.slice(7).trim());
                                         const finalProcessed = replaceCitations(finalObj.text);
                                         agentContainer.innerHTML = marked.parse(finalProcessed);
-                                        pendingClarificationRunId = finalObj.status === 'waiting_input'
+                                        pendingClarificationRunId = ['waiting_input', 'cancelled'].includes(finalObj.status)
                                             ? finalObj.run_id
                                             : null;
                                     } catch (err) {
@@ -319,6 +344,11 @@
                                     continue;
                                 }
                                 if (dataContent.startsWith('[PROCESSING]')) {
+                                    try {
+                                        activeRunId = JSON.parse(dataContent.slice(12).trim()).run_id;
+                                    } catch (err) {
+                                        console.error('Processing payload parse error:', err);
+                                    }
                                     agentContainer.innerHTML = '<span class="text-slate-400">요청을 접수했습니다.</span><span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-1"></span>';
                                     continue;
                                 }
@@ -364,6 +394,10 @@
                 
                 queryInput.disabled = false;
                 submitBtn.disabled = false;
+                submitBtn.classList.remove('hidden');
+                cancelBtn.classList.add('hidden');
+                cancelBtn.classList.remove('flex');
+                activeRunId = null;
                 queryInput.focus();
             }
         });

@@ -31,6 +31,7 @@ class RunPhase(str, Enum):
     ANSWERING = "answering"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class RunEvent(BaseModel):

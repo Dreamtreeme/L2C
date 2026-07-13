@@ -25,6 +25,10 @@ from agent.application.llm_cost import estimate_llm_cost
 from agent.utils.logger import logger
 
 
+class RunCancelled(RuntimeError):
+    """사용자가 현재 실행의 중단을 요청했습니다."""
+
+
 def _usage_value(usage: dict[str, Any], key: str) -> int:
     try:
         return max(0, int(usage.get(key) or 0))
@@ -208,6 +212,16 @@ def current_run_context() -> RunContext | None:
     return _CURRENT_RUN_CONTEXT.get()
 
 
+def raise_if_cancelled() -> None:
+    context = current_run_context()
+    if context is None:
+        return
+    from agent.application.run_registry import get_run_registry
+
+    if get_run_registry().is_cancel_requested(context.run_id):
+        raise RunCancelled(f"run cancelled: {context.run_id}")
+
+
 @contextmanager
 def run_context(
     *,
@@ -292,6 +306,7 @@ def _supports_invoke_config(runnable: Any) -> bool:
 def invoke_with_metrics(runnable: Any, inputs: Any, component: str) -> Any:
     """LangChain 호출을 실행하고 구성 요소별 토큰과 시간을 기록한다."""
 
+    raise_if_cancelled()
     callback = UsageMetadataCallbackHandler()
     context = current_run_context()
     config = {
@@ -335,6 +350,7 @@ def invoke_with_metrics(runnable: Any, inputs: Any, component: str) -> Any:
                 )
         else:
             context.record_llm_call(component, "langchain", "unknown", {}, duration)
+    raise_if_cancelled()
     return result
 
 
@@ -389,6 +405,7 @@ def record_graph_state_metrics(state: dict[str, Any]) -> None:
 
 __all__ = [
     "RunContext",
+    "RunCancelled",
     "current_run_context",
     "emit_run_event",
     "invoke_with_metrics",
@@ -396,5 +413,6 @@ __all__ = [
     "normalize_usage",
     "record_external_llm_usage",
     "record_graph_state_metrics",
+    "raise_if_cancelled",
     "run_context",
 ]

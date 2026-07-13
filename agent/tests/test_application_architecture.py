@@ -246,6 +246,52 @@ def test_run_registry_preserves_waiting_input_status():
     assert item["phase"] == "clarification"
 
 
+def test_run_registry_tracks_cancellation_and_conversation_history():
+    from agent.application.run_registry import RunRegistry
+
+    registry = RunRegistry(limit=10)
+    registry.start(
+        "conversation-run-1",
+        "첫 질문",
+        conversation_id="conversation-1",
+        user_query="첫 질문",
+    )
+    registry.complete(
+        "conversation-run-1",
+        {"run_status": "completed", "last_action_result": "첫 답변"},
+    )
+    registry.start("conversation-run-2", "두 번째 질문", conversation_id="conversation-1")
+
+    cancelled = registry.request_cancel("conversation-run-2")
+    history = registry.conversation_history("conversation-1")
+
+    assert cancelled["cancel_requested"] is True
+    assert registry.is_cancel_requested("conversation-run-2") is True
+    assert [item["run_id"] for item in history] == ["conversation-run-1"]
+
+
+def test_chat_service_stops_before_llm_when_cancel_is_requested():
+    from agent.application.chat_service import ChatService
+    from agent.application.run_registry import get_run_registry
+
+    class FailingLLM:
+        def invoke(self, messages):
+            raise AssertionError("취소된 실행이 LLM을 호출함")
+
+    registry = get_run_registry()
+    registry.start("cancel-before-llm", "취소할 질문")
+    registry.request_cancel("cancel-before-llm")
+
+    result = ChatService(llm_with_tools=FailingLLM()).run(
+        "취소할 질문",
+        run_id="cancel-before-llm",
+    )
+
+    assert result["run_status"] == "cancelled"
+    assert result["is_finished"] is False
+    assert result["last_action_result"] == "실행을 취소했습니다."
+
+
 def test_chat_api_streams_structured_progress_without_character_delay(monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -331,6 +377,92 @@ def test_chat_api_resumes_from_clarification_context(monkeypatch):
     assert response.status_code == 200
     assert "개발 공고를 찾았습니다." in response.text
     assert '"resumed_from_run_id": "previous-clarification"' in response.text
+
+
+def test_chat_api_uses_recent_conversation_context(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from agent.application.run_registry import get_run_registry
+    from agent.web_server import app
+
+    registry = get_run_registry()
+    registry.start(
+        "conversation-context-1",
+        "iOS 공고 두 개 찾아줘",
+        conversation_id="conversation-context",
+        user_query="iOS 공고 두 개 찾아줘",
+    )
+    registry.complete(
+        "conversation-context-1",
+        {"run_status": "completed", "last_action_result": "두 건을 찾았습니다."},
+    )
+
+    class FakeChatService:
+        def run(self, query, *, run_id=None, event_sink=None):
+            assert "[최근 대화 문맥]" in query
+            assert "사용자: iOS 공고 두 개 찾아줘" in query
+            assert "도우미: 두 건을 찾았습니다." in query
+            assert "[현재 사용자 요청]\n그중 경력 조건만 비교해줘" in query
+            return {
+                "run_id": run_id,
+                "run_status": "completed",
+                "last_action_result": "비교했습니다.",
+                "metrics": {},
+            }
+
+    monkeypatch.setattr("agent.web_server.get_chat_service", lambda: FakeChatService())
+    response = TestClient(app).post(
+        "/api/chat",
+        json={
+            "query": "그중 경력 조건만 비교해줘",
+            "conversation_id": "conversation-context",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "비교했습니다." in response.text
+
+
+def test_cancel_run_api_marks_active_run():
+    from fastapi.testclient import TestClient
+
+    from agent.application.run_registry import get_run_registry
+    from agent.web_server import app
+
+    registry = get_run_registry()
+    registry.start("cancel-api-run", "중단할 요청")
+
+    response = TestClient(app).post("/api/runs/cancel-api-run/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["cancel_requested"] is True
+    assert registry.is_cancel_requested("cancel-api-run") is True
+
+
+def test_cancelled_run_resume_restarts_from_original_request():
+    from agent.application.run_registry import get_run_registry
+    from agent.web_server import _effective_chat_query
+
+    registry = get_run_registry()
+    registry.start(
+        "cancelled-resume-run",
+        "원티드 iOS 공고 두 개",
+        user_query="원티드 iOS 공고 두 개",
+    )
+    registry.complete(
+        "cancelled-resume-run",
+        {"run_status": "cancelled", "last_action_result": "실행을 취소했습니다."},
+    )
+
+    query = _effective_chat_query(
+        "다시 계속해줘",
+        resume_run_id="cancelled-resume-run",
+        conversation_id="",
+    )
+
+    assert "[취소된 사용자 요청]\n원티드 iOS 공고 두 개" in query
+    assert "오래된 화면 좌표는 재사용하지 말고" in query
+    assert "[사용자의 재개 지시]\n다시 계속해줘" in query
 
 
 def test_worker_state_factory_returns_independent_mutable_values():

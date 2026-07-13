@@ -142,6 +142,9 @@ def perception_node(
     max_capture_attempts: int | None = None,
 ) -> Dict[str, Any]:
     """화면을 캡처하고 마커를 파싱하여 상태를 업데이트합니다."""
+    from agent.application.run_context import raise_if_cancelled
+
+    raise_if_cancelled()
     started_monotonic = time.perf_counter()
     logger.info("Executing Perception Node")
     perception = _get_perception()
@@ -1231,6 +1234,9 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
 
 def reasoning_node(state: GraphState) -> Dict[str, Any]:
     """Gemini Flash를 호출하여 다음 행동을 결정합니다."""
+    from agent.application.run_context import raise_if_cancelled
+
+    raise_if_cancelled()
     start_time = time.perf_counter()
     logger.info("Executing Reasoning Node")
 
@@ -1434,6 +1440,9 @@ def _dispatch_state(
 
 def action_node(state: GraphState) -> Dict[str, Any]:
     """Reasoning Node가 선택한 도구(들)를 순차적으로 실행(Action Chaining)합니다."""
+    from agent.application.run_context import raise_if_cancelled
+
+    raise_if_cancelled()
     started_monotonic = time.perf_counter()
     logger.info("Executing Action Node (with potential Action Chaining)")
 

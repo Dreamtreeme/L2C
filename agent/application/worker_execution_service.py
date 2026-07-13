@@ -114,6 +114,9 @@ def run_graph_with_last_state(
             config={"recursion_limit": recursion_limit},
             stream_mode="values",
         ):
+            from agent.application.run_context import raise_if_cancelled
+
+            raise_if_cancelled()
             if isinstance(state, dict):
                 last_state = state
         return last_state, False
