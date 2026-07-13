@@ -65,15 +65,17 @@ class LLMEngine:
 
         if getattr(self, "use_gemini", False):
             logger.info("[LLMEngine] 텍스트 정제 시작 (모델: gemini-3.5-flash)")
-            t0 = time.time()
+            t0 = time.perf_counter()
             try:
                 from langchain_google_genai import ChatGoogleGenerativeAI
                 llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=LLM_TEMPERATURE)
-                response = llm.invoke(prompt)
+                from agent.application.run_context import invoke_with_metrics
+
+                response = invoke_with_metrics(llm, prompt, "classic_extraction")
                 output = response.content
                 if isinstance(output, list):
                     output = "\n".join(item if isinstance(item, str) else item.get("text", "") if isinstance(item, dict) else str(item) for item in output)
-                elapsed = time.time() - t0
+                elapsed = time.perf_counter() - t0
                 logger.info(f"[LLMEngine] Gemini 정제 완료 ({elapsed:.1f}s)")
                 logger.debug(f"LLM 원본 응답: {output[:300]}")
                 parsed = self._parse_json(output)
@@ -94,7 +96,7 @@ class LLMEngine:
         prompt += "\n\n/no_think"
 
         logger.info(f"[LLMEngine] 텍스트 정제 시작 (모델: {OLLAMA_MODEL})")
-        t0 = time.time()
+        t0 = time.perf_counter()
 
         # format="json"으로 Ollama JSON 모드 강제.
         # 토큰 디코딩 단계에서 유효한 JSON만 나오도록 제약을 걸어,
@@ -108,7 +110,19 @@ class LLMEngine:
             options={"temperature": LLM_TEMPERATURE},
         )
         
-        elapsed = time.time() - t0
+        elapsed = time.perf_counter() - t0
+        from agent.application.run_context import record_external_llm_usage
+
+        record_external_llm_usage(
+            component="classic_extraction",
+            provider="ollama",
+            model=OLLAMA_MODEL,
+            usage={
+                "input_tokens": response.get("prompt_eval_count", 0),
+                "output_tokens": response.get("eval_count", 0),
+            },
+            duration_sec=elapsed,
+        )
         output = response.get("message", {}).get("content", "")
         logger.info(f"[LLMEngine] 정제 완료 ({elapsed:.1f}s)")
         logger.debug(f"LLM 원본 응답: {output[:300]}")

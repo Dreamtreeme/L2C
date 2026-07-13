@@ -17,4 +17,8 @@ Files per site:
 - `prompt.md`: short child-agent instruction block for that site.
 - `tools.json`: allowed tool policy and Reflex boundaries.
 
-`realtime_scraping` can load these profiles to build site-specific collection goals. `agent.graph.commander_workflow` now provides the top-level LangGraph fan-out path: plan sites, run a child worker, review the structured submission, retry on feedback, persist accepted data, then query DB evidence for summarization.
+`ChatService` is the canonical user-facing orchestrator. It asks these registry tools which site profile to use and invokes `realtime_scraping` only when DB evidence is insufficient. `agent.graph.commander_workflow` remains an explicitly invoked multi-site batch experiment; it is not selected by an environment-variable branch in the normal chat path.
+
+## 공식 시작 주소
+
+`registry.json`의 `base_url`은 각 사이트의 공식 HTTPS 시작 주소를 나타내는 단일 기준입니다. `get_official_site_url()`은 slug, 한글 이름, 별칭, 도메인 요청을 이 주소로 변환하고 등록 도메인과 일치하는지 검증합니다. Vision 작업자는 LLM에게 주소 선택을 맡기지 않고 `open_browser(site=...)`로 이 주소를 먼저 연 뒤 화면 탐색을 시작합니다.

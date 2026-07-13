@@ -35,8 +35,9 @@ def test_record_ui_step_stays_in_marker_text_space():
         0,
     )
 
-    assert steps[0]["state_key"].startswith("ocr#")
-    assert steps[0]["screen_signature"]["phash"] == "0" * 16
+    assert "state_key" not in steps[0]
+    assert "state_anchors" not in steps[0]
+    assert "screen_signature" not in steps[0]
     assert steps[0]["target"] == {
         "text": "지원하기",
         "region": "top-left",
@@ -141,6 +142,7 @@ def test_record_ui_step_stores_target_roi_signature(tmp_path):
     state = {
         "goal": "검색",
         "current_url": "https://www.wanted.co.kr",
+        "current_page_role": "home",
         "screen_signature": {
             "phash": "0" * 16,
             "size": [200, 200],
@@ -169,7 +171,8 @@ def test_record_ui_step_stores_target_roi_signature(tmp_path):
     roi_signature = steps[0]["roi_signature"]
     crop_rect = roi_signature["crop_rect_ratio"]
 
-    assert roi_signature["algorithm"] == "roi-phash-dct64-v1"
+    assert steps[0]["page_role"] == "home"
+    assert roi_signature["algorithm"] == "roi-phash-dct64-v2"
     assert len(roi_signature["phash"]) == 16
     assert crop_rect[0] <= steps[0]["target"]["bbox_ratio"][0]
     assert crop_rect[2] >= steps[0]["target"]["bbox_ratio"][2]
@@ -246,22 +249,125 @@ def test_roi_phash_replay_matches_when_full_phash_differs(tmp_path):
     assert result["reason"] == "roi_matched"
 
 
-def test_state_key_ignores_dynamic_numeric_changes():
-    from agent.recipe.state_key import compute_state_key
+def test_roi_phash_replay_rejects_different_capture_size(tmp_path):
+    from PIL import Image, ImageDraw
+    from agent.recipe.phash_replay import match_step_by_screen_signature
+    from agent.vision.screen_signature import compute_target_roi_signature
 
-    before = [
-        {"id": 1, "bbox": [0, 0, 10, 10], "text": "추천 0"},
-        {"id": 2, "bbox": [0, 20, 10, 30], "text": "지원하기"},
-        {"id": 3, "bbox": [0, 40, 10, 50], "text": "회사 소개"},
-    ]
-    after_count_change = [
-        {"id": 1, "bbox": [0, 0, 10, 10], "text": "추천 1"},
-        {"id": 2, "bbox": [0, 20, 10, 30], "text": "지원하기"},
-        {"id": 3, "bbox": [0, 40, 10, 50], "text": "회사 소개"},
-    ]
-    url = "https://www.wanted.co.kr/wd/12345"
-    assert compute_state_key(url, before) == compute_state_key(url, after_count_change)
-    assert compute_state_key(url, before) == compute_state_key("https://example.com/other", before)
+    saved = tmp_path / "saved.png"
+    current = tmp_path / "current.png"
+    image = Image.new("RGB", (200, 200), "white")
+    ImageDraw.Draw(image).rectangle([150, 20, 170, 40], fill="black")
+    image.save(saved)
+    Image.new("RGB", (300, 200), "white").save(current)
+
+    roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
+    marker_id, result = match_step_by_screen_signature(
+        {
+            "roi_signature": roi_signature,
+            "target": {"text": "검색", "center_ratio": [0.8, 0.15]},
+        },
+        {"size": [300, 200]},
+        [{"id": 7, "bbox": [225, 20, 255, 40], "text": "검색"}],
+        current_image_path=str(current),
+    )
+
+    assert marker_id is None
+    assert result["reason"] == "capture_size_mismatch"
+    assert result["saved_size"] == [200, 200]
+    assert result["current_size"] == [300, 200]
+
+
+def test_roi_phash_replay_scans_marker_center_when_target_moves(tmp_path):
+    from PIL import Image, ImageDraw
+    from agent.recipe.phash_replay import match_step_by_screen_signature
+    from agent.vision.screen_signature import compute_target_roi_signature
+
+    saved = tmp_path / "saved.png"
+    current = tmp_path / "current.png"
+    saved_image = Image.new("RGB", (200, 200), "white")
+    ImageDraw.Draw(saved_image).rectangle([150, 20, 170, 40], fill="black")
+    saved_image.save(saved)
+    current_image = Image.new("RGB", (200, 200), "white")
+    ImageDraw.Draw(current_image).rectangle([125, 20, 145, 40], fill="black")
+    current_image.save(current)
+
+    roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
+    marker_id, result = match_step_by_screen_signature(
+        {
+            "roi_signature": roi_signature,
+            "target": {"text": "검색", "center_ratio": [0.8, 0.15]},
+        },
+        {"size": [200, 200]},
+        [{"id": 9, "bbox": [125, 20, 145, 40], "text": "검색"}],
+        current_image_path=str(current),
+    )
+
+    assert marker_id == 9
+    assert result["matched"] is True
+    assert result["reason"] == "roi_marker_scan_matched"
+
+
+def test_roi_caption_selects_semantic_icon_candidate(tmp_path, monkeypatch):
+    from PIL import Image, ImageDraw
+    from agent.recipe.phash_replay import match_step_by_screen_signature
+    from agent.vision.screen_signature import compute_target_roi_signature
+    import agent.vision.roi_caption as roi_caption
+
+    image_path = tmp_path / "screen.png"
+    image = Image.new("RGB", (200, 200), "white")
+    ImageDraw.Draw(image).rectangle([150, 20, 170, 40], fill="black")
+    image.save(image_path)
+    signature = compute_target_roi_signature(image_path, [150, 20, 170, 40], [200, 200])
+    seen = {}
+
+    def fake_caption(_path, markers, target):
+        seen["ids"] = [marker["id"] for marker in markers]
+        seen["target"] = target
+        return 9, {"reason": "roi_caption_matched", "caption": "검색 아이콘"}
+
+    monkeypatch.setattr(roi_caption, "select_marker_by_roi_caption", fake_caption)
+    marker_id, result = match_step_by_screen_signature(
+        {
+            "roi_signature": signature,
+            "component": "search_button",
+            "intent": "검색창을 연다",
+            "target": {
+                "center_ratio": [0.8, 0.15],
+                "marker_type": "icon",
+                "semantic_label": "검색 아이콘",
+            },
+        },
+        {"size": [200, 200]},
+        [
+            {"id": 7, "bbox": [150, 20, 170, 40], "type": "icon"},
+            {"id": 9, "bbox": [125, 20, 145, 40], "type": "icon"},
+        ],
+        current_image_path=str(image_path),
+    )
+
+    assert marker_id == 9
+    assert result["mode"] == "roi_caption"
+    assert seen == {
+        "ids": [7, 9],
+        "target": {
+            "label": "검색 아이콘",
+            "component": "search_button",
+            "intent": "검색창을 연다",
+        },
+    }
+
+
+def test_text_utils_normalizes_marker_noise_and_url_template():
+    from agent.recipe.text_utils import normalize_text, recipe_url_scope_matches, url_template
+
+    assert normalize_text("[id: 3] 검색어를 입력해주세요") == "검색어를 입력해주세요"
+    assert url_template("https://www.wanted.co.kr/wd/12345?query=ios&tab=position") == (
+        "wanted.co.kr/wd/{id}?query,tab"
+    )
+    assert recipe_url_scope_matches("wanted.co.kr/wd/{id}", "https://www.wanted.co.kr/wd/98765") is True
+    assert recipe_url_scope_matches("wanted.co.kr/", "https://social.wanted.co.kr/community") is False
+    assert recipe_url_scope_matches("wanted.co.kr/search?query", "https://www.wanted.co.kr/search?query=ios") is True
 
 
 def test_transition_contract_waits_for_known_result_outcomes():
@@ -350,6 +456,217 @@ def test_perception_node_records_and_resolves_pending_transition(monkeypatch, tm
     assert "Android App 개발자" in result["transition_observations"][0]["marker_texts"]
 
 
+def test_perception_node_blocks_reflex_recipe_after_unknown_transition(monkeypatch, tmp_path):
+    import time
+    from PIL import Image
+    from agent.graph import nodes
+
+    screenshot = tmp_path / "screen.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+
+    class FakePerception:
+        def capture_screen(self):
+            return screenshot
+
+        def analyze_ui(self, _path):
+            return {
+                "markers": [{"id": 1, "bbox": [10, 150, 200, 180], "text": "검색"}],
+                "marked_image": str(screenshot),
+            }
+
+    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    result = nodes.perception_node(
+        {
+            "current_url": "https://www.wanted.co.kr",
+            "current_url_stale": False,
+            "reflex_blocked_recipe_keys": [],
+            "pending_transition": {
+                "action_seq": 3,
+                "action": "click_marker",
+                "expected_after": "검색 결과가 나타남",
+                "source": "reflex",
+                "recipe_key": "roi#bad",
+                "started_at": time.time(),
+                "attempts": 0,
+                "params": {},
+                "contract": {},
+            },
+        }
+    )
+
+    assert result["transition_status"] == "unknown"
+    assert result["pending_transition"] == {}
+    assert result["transition_observations"][0]["recipe_key"] == "roi#bad"
+    assert result["reflex_blocked_recipe_keys"] == ["roi#bad"]
+
+
+def test_perception_node_blocks_reflex_click_when_screen_does_not_change(monkeypatch, tmp_path):
+    import time
+    from PIL import Image
+    from agent.graph import nodes
+
+    screenshot = tmp_path / "screen.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+
+    class FakePerception:
+        def capture_screen(self):
+            return screenshot
+
+        def analyze_ui(self, _path):
+            raise AssertionError("pHash no-effect precheck should skip OCR")
+
+    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(
+        nodes,
+        "_raw_screen_phash_signature",
+        lambda _image_path: {"phash": "0" * 16, "size": [800, 600]},
+    )
+    result = nodes.perception_node(
+        {
+            "current_url": "https://www.wanted.co.kr/search?query=ios",
+            "current_url_stale": False,
+            "current_markers": [{"id": 1, "bbox": [10, 150, 200, 180], "text": "포지션"}],
+            "marked_image": str(screenshot),
+            "ui_context": "포지션",
+            "reflex_blocked_recipe_keys": [],
+            "pending_transition": {
+                "action_seq": 3,
+                "action": "click_marker",
+                "expected_after": "포지션 결과가 보임",
+                "source": "reflex",
+                "recipe_key": "roi#tab",
+                "step": {"seq": 3, "action": "click_marker", "marker_id": 1},
+                "before_url": "https://www.wanted.co.kr/search?query=ios",
+                "before_phash": "0" * 16,
+                "started_at": time.time(),
+                "attempts": 0,
+                "params": {},
+                "contract": {
+                    "common_ready_cues": [{"kind": "text_any", "values": ["포지션"]}],
+                },
+            },
+        }
+    )
+
+    assert result["transition_status"] == "unknown"
+    assert result["transition_observations"][0]["reason"] == "reflex_no_screen_change"
+    assert result["transition_observations"][0]["phash_distance"] == 0
+    assert result["transition_observations"][0]["ocr_skipped"] is True
+    assert result["transition_observations"][0]["step"]["action"] == "click_marker"
+    assert result["reflex_blocked_recipe_keys"] == ["roi#tab"]
+
+
+def test_perception_node_accepts_tab_visual_change_when_ocr_cue_is_pending(monkeypatch, tmp_path):
+    import time
+    from PIL import Image
+    from agent.graph import nodes
+
+    screenshot = tmp_path / "screen.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+
+    class FakePerception:
+        def capture_screen(self):
+            return screenshot
+
+        def analyze_ui(self, _path):
+            return {
+                "markers": [{"id": 1, "bbox": [10, 150, 200, 180], "text": "아직 다른 문구"}],
+                "marked_image": str(screenshot),
+            }
+
+    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+
+    result = nodes.perception_node(
+        {
+            "current_url": "https://www.wanted.co.kr/search?query=ios",
+            "current_url_stale": False,
+            "reflex_blocked_recipe_keys": [],
+            "pending_transition": {
+                "action_seq": 3,
+                "action": "click_marker",
+                "expected_after": "포지션 결과가 보임",
+                "source": "reflex",
+                "recipe_key": "roi#tab",
+                "step": {"seq": 3, "action": "click_marker", "component": "tab_button"},
+                "before_url": "https://www.wanted.co.kr/search?query=ios",
+                "before_phash": "0" * 16,
+                "started_at": time.time(),
+                "attempts": 0,
+                "params": {},
+                "contract": {
+                    "common_ready_cues": [{"kind": "text_any", "values": ["포지션"]}],
+                    "timeout_sec": 12,
+                },
+            },
+        }
+    )
+
+    assert result["transition_status"] == "ready"
+    assert result["pending_transition"] == {}
+    assert result["transition_observations"][0]["reason"] == "screen_change_phash_matched"
+    assert result["transition_observations"][0]["phash_distance"] > 2
+
+
+def test_perception_node_accepts_ready_cue_when_pixels_changed_but_phash_is_same(monkeypatch, tmp_path):
+    import time
+    from PIL import Image, ImageDraw
+    from agent.graph import nodes
+
+    before = tmp_path / "before.png"
+    screenshot = tmp_path / "screen.png"
+    Image.new("RGB", (800, 600), "white").save(before)
+    current = Image.new("RGB", (800, 600), "white")
+    ImageDraw.Draw(current).rectangle((40, 160, 760, 500), fill="black")
+    current.save(screenshot)
+
+    class FakePerception:
+        def capture_screen(self):
+            return screenshot
+
+        def analyze_ui(self, _path):
+            return {
+                "markers": [{"id": 1, "bbox": [10, 150, 200, 180], "text": "포지션"}],
+                "marked_image": str(screenshot),
+            }
+
+    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(
+        nodes,
+        "_raw_screen_phash_signature",
+        lambda _image_path: {"phash": "0" * 16, "size": [800, 600]},
+    )
+    result = nodes.perception_node(
+        {
+            "current_url": "https://www.wanted.co.kr/search?query=ios",
+            "current_url_stale": False,
+            "reflex_blocked_recipe_keys": [],
+            "pending_transition": {
+                "action_seq": 3,
+                "action": "click_marker",
+                "expected_after": "포지션 결과가 보임",
+                "source": "reflex",
+                "recipe_key": "roi#tab",
+                "step": {"seq": 3, "action": "click_marker", "component": "tab_button"},
+                "before_url": "https://www.wanted.co.kr/search?query=ios",
+                "before_phash": "0" * 16,
+                "before_screenshot": str(before),
+                "started_at": time.time(),
+                "attempts": 0,
+                "params": {},
+                "contract": {
+                    "common_ready_cues": [{"kind": "text_any", "values": ["포지션"]}],
+                    "timeout_sec": 12,
+                },
+            },
+        }
+    )
+
+    assert result["transition_status"] == "ready"
+    assert result["pending_transition"] == {}
+    assert result["transition_observations"][0]["reason"] == "common_ready_cues_matched"
+    assert result["transition_observations"][0]["visual_change_ratio"] >= 0.03
+
+
 def test_set_result_card_queue_stores_visible_card_ratios():
     from agent.graph import nodes
 
@@ -363,7 +680,6 @@ def test_set_result_card_queue_stores_visible_card_ratios():
             "size": [1000, 1000],
             "anchors": ["iOS 개발자", "보이저엑스"],
         },
-        "reflex_state_key": "ocr#list",
         "recent_images": ["screen.png"],
         "marked_image": "marked.png",
         "recipe_params": {"target_count": 2},
@@ -385,7 +701,7 @@ def test_set_result_card_queue_stores_visible_card_ratios():
     assert queue[0]["title"] == "iOS 개발자"
     assert queue[0]["company"] == "보이저엑스"
     assert queue[0]["bbox_ratio"] == [0.1, 0.2, 0.3, 0.24]
-    assert result["_result_page_memory"]["state_key"] == "ocr#list"
+    assert "state_key" not in result["_result_page_memory"]
 
 
 def test_set_result_card_queue_accepts_title_fallback():
@@ -402,7 +718,6 @@ def test_set_result_card_queue_accepts_title_fallback():
             "size": [1000, 1000],
             "anchors": ["iOS 개발자", "Backend Engineer", "Android 개발자"],
         },
-        "reflex_state_key": "ocr#list",
         "recent_images": ["screen.png"],
         "marked_image": "marked.png",
         "recipe_params": {"target_count": 2},
@@ -444,7 +759,6 @@ def test_set_result_card_queue_skips_title_without_visible_marker():
             "size": [1000, 1000],
             "anchors": ["iOS 개발자"],
         },
-        "reflex_state_key": "ocr#list",
         "recipe_params": {"target_count": 1},
         "extracted_jd": {},
     }
@@ -482,10 +796,9 @@ def test_card_queue_replay_after_go_back_uses_cached_bbox():
                     "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
                     "center_ratio": [0.4, 0.425],
                 },
-            }
-        ],
-        "result_page_memory": {
-            "state_key": "ocr#list",
+        }
+    ],
+    "result_page_memory": {
             "screen_signature": {
                 "phash": "0" * 16,
                 "anchors": ["두번째 iOS 개발자"],
@@ -498,7 +811,6 @@ def test_card_queue_replay_after_go_back_uses_cached_bbox():
         state,
         {"action": "go_back"},
         "https://www.wanted.co.kr/search?query=ios",
-        "ocr#list",
         [],
         {"phash": "0" * 16, "anchors": ["두번째 iOS 개발자"], "size": [1000, 1000]},
     )
@@ -526,7 +838,6 @@ def test_card_queue_replay_waits_until_active_card_is_done():
             },
         ],
         "result_page_memory": {
-            "state_key": "ocr#list",
             "screen_signature": {"phash": "0" * 16, "anchors": ["두번째 iOS 개발자"], "size": [1000, 1000]},
         },
     }
@@ -535,7 +846,6 @@ def test_card_queue_replay_waits_until_active_card_is_done():
         state,
         {"action": "go_back"},
         "https://www.wanted.co.kr/search?query=ios",
-        "ocr#list",
         [],
         {"phash": "0" * 16, "anchors": ["두번째 iOS 개발자"], "size": [1000, 1000]},
     )
@@ -575,7 +885,7 @@ def test_card_queue_marks_active_when_card_click_uses_title_label():
     assert active["queue_id"] == "card-1"
 
 
-def test_recipe_store_commits_and_reads_by_state_key(tmp_path):
+def test_recipe_store_commits_and_reads_by_recipe_key(tmp_path):
     from agent.recipe.store import RecipeStore
 
     db_path = tmp_path / "recipes.db"
@@ -586,10 +896,11 @@ def test_recipe_store_commits_and_reads_by_state_key(tmp_path):
         [
             {
                 "seq": 0,
-                "state_key": "state-a",
                 "url_template": "wanted.co.kr",
+                "page_role": "home",
                 "action": "click_marker",
                 "target": {"text": "검색", "region": "top-left", "ordinal": 0},
+                "roi_signature": {"phash": "0" * 16, "target_center_ratio": [0.8, 0.1]},
                 "param": {},
                 "transition_contract": {
                     "common_ready_cues": [{"kind": "text_any", "values": ["검색 결과"]}],
@@ -600,7 +911,8 @@ def test_recipe_store_commits_and_reads_by_state_key(tmp_path):
     )
 
     assert saved == 1
-    recipe = store.get_recipe("state-a")
+    rows = store.get_by_site("wanted.co.kr")
+    recipe = store.get_recipe(rows[0]["recipe_key"])
     assert recipe is not None
     assert recipe.steps[0].action == "click_marker"
     assert recipe.steps[0].transition_contract.common_ready_cues[0].values == ["검색 결과"]
@@ -608,12 +920,107 @@ def test_recipe_store_commits_and_reads_by_state_key(tmp_path):
     conn = sqlite3.connect(db_path)
     columns = [row[1] for row in conn.execute("PRAGMA table_info(recipes)").fetchall()]
     conn.close()
-    assert "state_key" in columns
+    assert "recipe_key" in columns
     assert "metadata_json" in columns
-    assert "recipe_key" not in columns
+    assert "state_key" not in columns
 
 
-def test_recipe_store_groups_same_state_action_chain(tmp_path):
+def test_recipe_key_ignores_layout_measurements_within_same_page_family():
+    from agent.recipe.store import RecipeStore
+
+    base_step = {
+        "url_template": "wanted.co.kr",
+        "page_role": "home",
+        "action": "click_marker",
+        "component": "search_button",
+        "target_role": "button",
+        "target": {"region": "top-right", "center_ratio": [0.8, 0.1]},
+        "roi_signature": {"phash": "0" * 16},
+    }
+    moved_step = {
+        **base_step,
+        "page_role": "search_overlay",
+        "target": {"region": "top-right", "center_ratio": [0.7, 0.1]},
+        "roi_signature": {"phash": "f" * 16},
+    }
+
+    first = RecipeStore._recipe_key_for_step("wanted", base_step, {"task_category": "검색"})
+    second = RecipeStore._recipe_key_for_step("wanted", moved_step, {"task_category": "검색"})
+
+    assert first.startswith("roi2#")
+    assert first == second
+
+
+def test_recipe_store_recreates_old_state_key_schema_without_legacy_tables(tmp_path):
+    from agent.recipe.store import RecipeStore
+
+    db_path = tmp_path / "recipes.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE recipes (
+            state_key TEXT PRIMARY KEY,
+            site TEXT NOT NULL,
+            goal TEXT,
+            steps_json TEXT NOT NULL,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO recipes (
+            state_key, site, goal, steps_json, success_count, created_at, updated_at
+        ) VALUES ('old-state', 'wanted', 'old goal', '[]', 1, 'old', 'old')
+        """
+    )
+    conn.execute("CREATE TABLE recipes_legacy_20260101000000 (state_key TEXT)")
+    conn.commit()
+    conn.close()
+
+    RecipeStore(db_path)
+
+    conn = sqlite3.connect(db_path)
+    tables = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(recipes)").fetchall()]
+    count = conn.execute("SELECT count(*) FROM recipes").fetchone()[0]
+    conn.close()
+
+    assert "recipes" in tables
+    assert not any(name.startswith("recipes_legacy_") for name in tables)
+    assert "recipe_key" in columns
+    assert "state_key" not in columns
+    assert count == 0
+
+
+def test_recipe_store_rejects_target_steps_without_page_role(tmp_path):
+    from agent.recipe.store import RecipeStore
+
+    store = RecipeStore(tmp_path / "recipes.db")
+    saved = store.commit_recipe(
+        "wanted",
+        "goal",
+        [
+            {
+                "seq": 0,
+                "action": "click_marker",
+                "target": {"text": "검색", "center_ratio": [0.8, 0.1]},
+                "roi_signature": {"phash": "0" * 16, "target_center_ratio": [0.8, 0.1]},
+            }
+        ],
+        metadata={"task_category": "검색"},
+    )
+
+    assert saved == 0
+    assert store.get_by_site("wanted") == []
+
+
+def test_recipe_store_stores_each_roi_step_as_recipe(tmp_path):
     from agent.recipe.store import RecipeStore
 
     store = RecipeStore(tmp_path / "recipes.db")
@@ -623,33 +1030,27 @@ def test_recipe_store_groups_same_state_action_chain(tmp_path):
         [
             {
                 "seq": 0,
-                "state_key": "search-state",
+                "page_role": "home",
                 "action": "type_in_marker",
                 "target": {"text": "검색", "region": "top-left", "ordinal": 0},
+                "roi_signature": {"phash": "1" * 16, "target_center_ratio": [0.2, 0.2]},
                 "param": {"text": "ai 엔지니어"},
             },
             {
                 "seq": 1,
-                "state_key": "search-state",
-                "action": "press_key",
-                "param": {"key": "enter"},
-            },
-            {
-                "seq": 2,
-                "state_key": "results-state",
+                "page_role": "home",
                 "action": "click_marker",
                 "target": {"text": "공고", "region": "middle-left", "ordinal": 0},
+                "roi_signature": {"phash": "2" * 16, "target_center_ratio": [0.4, 0.4]},
                 "param": {},
             },
         ],
     )
 
-    recipe = store.get_recipe("search-state")
+    recipes = store.get_site_recipes("wanted.co.kr")
 
-    assert recipe is not None
-    assert [step.action for step in recipe.steps] == ["type_in_marker", "press_key"]
-    assert recipe.steps[0].transition_contract is None
-    assert recipe.steps[1].transition_contract is None
+    assert len(recipes) == 2
+    assert sorted(recipe.steps[0].action for _key, recipe in recipes) == ["click_marker", "type_in_marker"]
 
 
 def test_recipe_store_filters_recipe_by_site_and_task_category(tmp_path):
@@ -659,13 +1060,18 @@ def test_recipe_store_filters_recipe_by_site_and_task_category(tmp_path):
     store.commit_recipe(
         "wanted",
         "goal",
-        [{"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "검색"}}],
+        [
+            {
+                "seq": 0,
+                "page_role": "home",
+                "action": "click_marker",
+                "target": {"text": "검색", "center_ratio": [0.8, 0.1]},
+                "roi_signature": {"phash": "0" * 16, "target_center_ratio": [0.8, 0.1]},
+            }
+        ],
         metadata={"task_category": "검색"},
     )
 
-    assert store.get_recipe("state-a", site="wanted", task_category="검색") is not None
-    assert store.get_recipe("state-a", site="wanted", task_category="로그인") is None
-    assert store.get_recipe("state-a", site="other", task_category="검색") is None
     assert len(store.get_site_recipes("wanted", task_category="검색")) == 1
     assert store.get_site_recipes("wanted", task_category="로그인") == []
 
@@ -686,29 +1092,33 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
     roi_signature = compute_target_roi_signature(saved, [10, 10, 70, 40], [200, 120])
 
     class FakeStore:
-        def get_recipe(self, state_key, site=None, task_category=None):
-            assert state_key == "state-a"
-            return SiteRecipe(
-                site="wanted.co.kr",
-                goal="goal",
-                steps=[
-                    RecipeStep(
-                        seq=0,
-                        state_key="state-a",
-                        action="type_in_marker",
-                        replay_mode="parameterized",
-                        roi_signature=roi_signature,
-                        target={
-                            "text": "검색",
-                            "region": "top-left",
-                            "ordinal": 0,
-                            "bbox_ratio": [0.05, 0.0833, 0.35, 0.3333],
-                            "center_ratio": [0.2, 0.2083],
-                        },
-                        param={"text": "ai 엔지니어"},
-                    )
-                ],
-            )
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-search-input",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="goal",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="type_in_marker",
+                                page_role="home",
+                                replay_mode="parameterized",
+                                roi_signature=roi_signature,
+                                target={
+                                    "text": "검색",
+                                    "region": "top-left",
+                                    "ordinal": 0,
+                                    "bbox_ratio": [0.05, 0.0833, 0.35, 0.3333],
+                                    "center_ratio": [0.2, 0.2083],
+                                },
+                                param={"text": "ai 엔지니어"},
+                            )
+                        ],
+                    ),
+                )
+            ]
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
@@ -716,18 +1126,87 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
         {
             "goal": "ai 엔지니어 공고 찾아줘",
             "current_url": "https://www.wanted.co.kr",
-            "reflex_state_key": "state-a",
+            "current_page_role": "home",
             "screen_signature": {"size": [200, 120]},
             "recent_images": [current],
             "current_markers": [{"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"}],
+            "recipe_params": {"site": "wanted"},
         }
     )
 
     msg = result["last_action_result"]
     assert result["reflex_hit"] is True
     assert msg.tool_calls[0]["name"] == "type_in_marker"
-    assert msg.tool_calls[0]["args"] == {"marker_id": 7, "text": "ai 엔지니어"}
+    assert msg.tool_calls[0]["args"] == {"marker_id": 7, "text": "ai 엔지니어", "page_role": "home"}
     assert len(msg.tool_calls) == 1
+
+
+def test_reflex_node_appends_enter_for_search_input_compound(monkeypatch, tmp_path):
+    from PIL import Image, ImageDraw
+    from agent.graph import nodes
+    from agent.vision.screen_signature import compute_target_roi_signature
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    saved = tmp_path / "saved-search-input.png"
+    current = tmp_path / "current-search-input.png"
+    for path in [saved, current]:
+        image = Image.new("RGB", (240, 120), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([20, 20, 190, 50], fill="black")
+        image.save(path)
+    roi_signature = compute_target_roi_signature(saved, [20, 20, 190, 50], [240, 120])
+
+    class FakeStore:
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-search-input",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="goal",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="type_in_marker",
+                                page_role="search_overlay",
+                                replay_mode="parameterized",
+                                roi_signature=roi_signature,
+                                target={
+                                    "text": "검색어를 입력해주세요",
+                                    "bbox_ratio": [0.0833, 0.1667, 0.7917, 0.4167],
+                                    "center_ratio": [0.4375, 0.2917],
+                                },
+                                param={"text": "old query", "slot_name": "query"},
+                                slot_refs=["query"],
+                                target_role="search_input",
+                                component="search_input_field",
+                            )
+                        ],
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "ios 개발자 공고 2개",
+            "current_url": "https://www.wanted.co.kr",
+            "current_page_role": "search_overlay",
+            "screen_signature": {"size": [240, 120]},
+            "recent_images": [current],
+            "current_markers": [{"id": 24, "bbox": [20, 20, 190, 50], "text": "검색어를 입력해주세요"}],
+            "recipe_params": {"site": "wanted", "query": "ios 개발자", "task_category": "검색"},
+        }
+    )
+
+    msg = result["last_action_result"]
+    assert result["reflex_hit"] is True
+    assert [call["name"] for call in msg.tool_calls] == ["type_in_marker", "press_key"]
+    assert msg.tool_calls[0]["args"]["text"] == "ios 개발자"
+    assert msg.tool_calls[1]["args"]["key"] == "enter"
+    assert msg.tool_calls[1]["args"]["_transition_source"] == "reflex_compound"
+    assert result["reflex_trace"]["actions"] == ["type_in_marker", "press_key"]
 
 
 def test_reflex_node_uses_roi_signature_when_available(monkeypatch, tmp_path):
@@ -746,30 +1225,30 @@ def test_reflex_node_uses_roi_signature_when_available(monkeypatch, tmp_path):
     roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
 
     class FakeStore:
-        def get_recipe(self, state_key, site=None, task_category=None):
-            return SiteRecipe(
-                site="wanted.co.kr",
-                goal="goal",
-                steps=[
-                    RecipeStep(
-                        seq=0,
-                        state_key="state-a",
-                        action="click_marker",
-                        replay_mode="fixed",
-                        screen_signature={
-                            "phash": "f0f0f0f0f0f0f0f0",
-                            "size": [200, 200],
-                            "anchors": ["검색"],
-                        },
-                        roi_signature=roi_signature,
-                        target={
-                            "text": "검색",
-                            "bbox_ratio": [0.75, 0.1, 0.85, 0.2],
-                            "center_ratio": [0.8, 0.15],
-                        },
-                    )
-                ],
-            )
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-search-button",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="goal",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="click_marker",
+                                page_role="home",
+                                replay_mode="fixed",
+                                roi_signature=roi_signature,
+                                target={
+                                    "text": "검색",
+                                    "bbox_ratio": [0.75, 0.1, 0.85, 0.2],
+                                    "center_ratio": [0.8, 0.15],
+                                },
+                            )
+                        ],
+                    ),
+                )
+            ]
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
@@ -777,7 +1256,7 @@ def test_reflex_node_uses_roi_signature_when_available(monkeypatch, tmp_path):
         {
             "goal": "ai 엔지니어 공고 찾아줘",
             "current_url": "https://www.wanted.co.kr",
-            "reflex_state_key": "state-a",
+            "current_page_role": "home",
             "screen_signature": {
                 "phash": "0" * 16,
                 "size": [200, 200],
@@ -785,16 +1264,250 @@ def test_reflex_node_uses_roi_signature_when_available(monkeypatch, tmp_path):
             },
             "recent_images": [current],
             "current_markers": [{"id": 77, "bbox": [150, 20, 170, 40], "text": "검색"}],
+            "recipe_params": {"site": "wanted"},
         }
     )
 
     assert result["reflex_hit"] is True
-    assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 77}
+    assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 77, "page_role": "home"}
     assert result["reflex_trace"]["hit"] is True
-    assert result["reflex_trace"]["lookup"] == "exact"
     call_id = result["last_action_result"].tool_calls[0]["id"]
     assert result["reflex_trace"]["tool_calls"][call_id]["match_mode"] == "roi_phash"
     assert result["reflex_trace"]["tool_calls"][call_id]["phash"]["distance"] == 0
+
+
+def test_reflex_node_rejects_page_role_mismatch(monkeypatch, tmp_path):
+    from PIL import Image, ImageDraw
+    from agent.graph import nodes
+    from agent.vision.screen_signature import compute_target_roi_signature
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    saved = tmp_path / "saved.png"
+    current = tmp_path / "current.png"
+    for path in [saved, current]:
+        image = Image.new("RGB", (200, 200), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([150, 20, 170, 40], fill="black")
+        image.save(path)
+    roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
+
+    class FakeStore:
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-search-button",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="goal",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="click_marker",
+                                page_role="home",
+                                replay_mode="fixed",
+                                roi_signature=roi_signature,
+                                target={"text": "검색", "center_ratio": [0.8, 0.15]},
+                            )
+                        ],
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "ai 엔지니어 공고 찾아줘",
+            "current_page_role": "job_detail",
+            "screen_signature": {"size": [200, 200]},
+            "recent_images": [current],
+            "current_markers": [{"id": 77, "bbox": [150, 20, 170, 40], "text": "검색"}],
+            "recipe_params": {"site": "wanted"},
+        }
+    )
+
+    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["last_reason"] == "page_role_mismatch"
+
+
+def test_reflex_node_rejects_recipe_from_different_url_scope(monkeypatch):
+    from agent.graph import nodes
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    class FakeStore:
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-social-search",
+                    SiteRecipe(
+                        site="wanted",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                url_template="social.wanted.co.kr/community",
+                                action="click_marker",
+                                page_role="home",
+                                replay_mode="fixed",
+                                roi_signature={"phash": "0" * 16, "crop_rect_ratio": [0, 0, 1, 1]},
+                                target={"text": "검색", "center_ratio": [0.8, 0.15]},
+                            )
+                        ],
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+    monkeypatch.setattr(
+        "agent.recipe.phash_replay.match_step_by_screen_signature",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("URL 범위 검사보다 먼저 ROI를 검사함")),
+    )
+
+    result = nodes.reflex_node(
+        {
+            "goal": "ios 개발자 공고 2개",
+            "current_url": "https://www.wanted.co.kr/",
+            "current_page_role": "home",
+            "screen_signature": {"size": [200, 200]},
+            "recent_images": ["screen.png"],
+            "current_markers": [{"id": 7, "bbox": [150, 20, 170, 40], "text": "검색"}],
+            "recipe_params": {"site": "wanted", "task_category": "검색"},
+        }
+    )
+
+    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["last_reason"] == "url_scope_mismatch"
+    assert result["reflex_trace"]["candidate_rejections"][0]["current_url_template"] == "wanted.co.kr/"
+
+
+def test_search_button_transition_accepts_verified_visual_change():
+    from agent.runtime.transition_runtime import transition_accepts_visual_change
+
+    assert transition_accepts_visual_change(
+        {
+            "source": "reflex",
+            "action": "click_marker",
+            "step": {"component": "search_button"},
+        }
+    ) is True
+
+
+def test_reflex_node_skips_blocked_recipe_key(monkeypatch, tmp_path):
+    from PIL import Image, ImageDraw
+    from agent.graph import nodes
+    from agent.vision.screen_signature import compute_target_roi_signature
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    saved = tmp_path / "saved.png"
+    current = tmp_path / "current.png"
+    for path in [saved, current]:
+        image = Image.new("RGB", (200, 200), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([150, 20, 170, 40], fill="black")
+        image.save(path)
+    roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
+
+    class FakeStore:
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-search-button",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="goal",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="click_marker",
+                                page_role="home",
+                                replay_mode="fixed",
+                                roi_signature=roi_signature,
+                                target={"text": "검색", "center_ratio": [0.8, 0.15]},
+                            )
+                        ],
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "ai 엔지니어 공고 찾아줘",
+            "current_page_role": "home",
+            "screen_signature": {"size": [200, 200]},
+            "recent_images": [current],
+            "current_markers": [{"id": 77, "bbox": [150, 20, 170, 40], "text": "검색"}],
+            "recipe_params": {"site": "wanted"},
+            "reflex_blocked_recipe_keys": ["recipe-search-button"],
+        }
+    )
+
+    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["last_reason"] == "recipe_blocked_after_transition_failure"
+
+
+def test_reflex_node_skips_idempotent_recipe_used_on_same_url(monkeypatch, tmp_path):
+    from PIL import Image, ImageDraw
+    from agent.graph import nodes
+    from agent.vision.screen_signature import compute_target_roi_signature
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    saved = tmp_path / "saved-tab.png"
+    current = tmp_path / "current-tab.png"
+    for path in [saved, current]:
+        image = Image.new("RGB", (200, 200), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([80, 50, 130, 80], fill="black")
+        image.save(path)
+    roi_signature = compute_target_roi_signature(saved, [80, 50, 130, 80], [200, 200])
+
+    class FakeStore:
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-tab",
+                    SiteRecipe(
+                        site="wanted",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="click_marker",
+                                page_role="search",
+                                replay_mode="fixed",
+                                roi_signature=roi_signature,
+                                target={"text": "포지션", "center_ratio": [0.525, 0.325]},
+                                component="tab_button",
+                            )
+                        ],
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = nodes.reflex_node(
+        {
+            "goal": "ios 개발자 공고 2개",
+            "current_url": "https://www.wanted.co.kr/search?query=ios&tab=position",
+            "current_page_role": "search",
+            "screen_signature": {"size": [200, 200]},
+            "recent_images": [current],
+            "current_markers": [{"id": 9, "bbox": [80, 50, 130, 80], "text": "포지션"}],
+            "recipe_params": {"site": "wanted", "task_category": "검색"},
+            "action_history": [
+                {
+                    "status": "success",
+                    "action": "click_marker",
+                    "before_url": "https://www.wanted.co.kr/search?query=ios",
+                    "reflex_recipe_key": "recipe-tab",
+                    "args": {"target_component": "tab_button"},
+                }
+            ],
+        }
+    )
+
+    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["last_reason"] == "recipe_already_used_on_page"
 
 
 def test_reflex_node_rejects_signed_step_when_roi_missing(monkeypatch):
@@ -802,25 +1515,25 @@ def test_reflex_node_rejects_signed_step_when_roi_missing(monkeypatch):
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     class FakeStore:
-        def get_recipe(self, state_key, site=None, task_category=None):
-            return SiteRecipe(
-                site="wanted.co.kr",
-                goal="goal",
-                steps=[
-                    RecipeStep(
-                        seq=0,
-                        state_key="state-a",
-                        action="click_marker",
-                        replay_mode="fixed",
-                        screen_signature={
-                            "phash": "ffffffffffffffff",
-                            "size": [1000, 1000],
-                            "anchors": ["검색"],
-                        },
-                        target={"text": "검색", "center_ratio": [0.81, 0.10]},
-                    )
-                ],
-            )
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-without-roi",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="goal",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="click_marker",
+                                page_role="home",
+                                replay_mode="fixed",
+                                target={"text": "검색", "center_ratio": [0.81, 0.10]},
+                            )
+                        ],
+                    ),
+                )
+            ]
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
@@ -828,19 +1541,20 @@ def test_reflex_node_rejects_signed_step_when_roi_missing(monkeypatch):
         {
             "goal": "ai 엔지니어 공고 찾아줘",
             "current_url": "https://www.wanted.co.kr",
-            "reflex_state_key": "state-a",
+            "current_page_role": "home",
             "screen_signature": {
                 "phash": "0000000000000000",
                 "size": [1000, 1000],
                 "anchors": ["검색"],
             },
             "current_markers": [{"id": 77, "bbox": [790, 80, 830, 120], "text": "검색"}],
+            "recipe_params": {"site": "wanted"},
         }
     )
 
     assert result["reflex_hit"] is False
     assert result["reflex_trace"]["reason"] == "no_candidate_passed"
-    assert result["reflex_trace"]["candidates"][0]["steps"][0]["reason"] == "roi_signature_missing"
+    assert result["reflex_trace"]["last_reason"] == "roi_signature_missing"
 
 
 def test_reflex_node_does_not_broad_match_legacy_site_recipe(monkeypatch):
@@ -848,9 +1562,6 @@ def test_reflex_node_does_not_broad_match_legacy_site_recipe(monkeypatch):
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     class FakeStore:
-        def get_recipe(self, state_key, site=None, task_category=None):
-            return None
-
         def get_site_recipes(self, site, task_category=None):
             return [
                 (
@@ -861,7 +1572,6 @@ def test_reflex_node_does_not_broad_match_legacy_site_recipe(monkeypatch):
                         steps=[
                             RecipeStep(
                                 seq=0,
-                                state_key="old-scroll-state",
                                 action="scroll",
                                 replay_mode="fixed",
                                 param={"direction": "down"},
@@ -877,7 +1587,6 @@ def test_reflex_node_does_not_broad_match_legacy_site_recipe(monkeypatch):
                         steps=[
                             RecipeStep(
                                 seq=0,
-                                state_key="old-click-state",
                                 action="click_marker",
                                 replay_mode="fixed",
                                 target={"text": "검색", "center_ratio": [0.8, 0.1]},
@@ -893,7 +1602,6 @@ def test_reflex_node_does_not_broad_match_legacy_site_recipe(monkeypatch):
         {
             "goal": "ios 개발자 공고 2개 찾아줘",
             "current_url": "https://www.wanted.co.kr",
-            "reflex_state_key": "current-state",
             "recipe_params": {"site": "wanted"},
             "screen_signature": {"size": [1000, 1000]},
             "current_markers": [{"id": 77, "bbox": [790, 80, 830, 120], "text": "검색"}],
@@ -901,8 +1609,8 @@ def test_reflex_node_does_not_broad_match_legacy_site_recipe(monkeypatch):
     )
 
     assert result["reflex_hit"] is False
-    assert result["reflex_trace"]["reason"] == "no_recipe"
-    assert result["reflex_trace"]["candidate_count"] == 0
+    assert result["reflex_trace"]["reason"] == "no_candidate_passed"
+    assert result["reflex_trace"]["candidate_count"] == 2
 
 
 def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
@@ -922,32 +1630,37 @@ def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
     roi_signature = compute_target_roi_signature(saved, [10, 10, 70, 40], [200, 120])
 
     class FakeStore:
-        def get_recipe(self, state_key, site=None, task_category=None):
-            return SiteRecipe(
-                site="wanted",
-                goal="old goal",
-                skill_metadata=RecipeSkillMetadata(
-                    inputs=[SkillInputSlot(name="query", required=True)]
-                ),
-                steps=[
-                    RecipeStep(
-                        seq=0,
-                        state_key="state-a",
-                        action="type_in_marker",
-                        replay_mode="parameterized",
-                        roi_signature=roi_signature,
-                        target={
-                            "text": "Search",
-                            "region": "top-left",
-                            "ordinal": 0,
-                            "bbox_ratio": [0.05, 0.0833, 0.35, 0.3333],
-                            "center_ratio": [0.2, 0.2083],
-                        },
-                        param={"text": "old query", "slot_name": "query"},
-                        slot_refs=["query"],
-                    )
-                ],
-            )
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-slot-input",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="old goal",
+                        skill_metadata=RecipeSkillMetadata(
+                            inputs=[SkillInputSlot(name="query", required=True)]
+                        ),
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="type_in_marker",
+                                page_role="home",
+                                replay_mode="parameterized",
+                                roi_signature=roi_signature,
+                                target={
+                                    "text": "Search",
+                                    "region": "top-left",
+                                    "ordinal": 0,
+                                    "bbox_ratio": [0.05, 0.0833, 0.35, 0.3333],
+                                    "center_ratio": [0.2, 0.2083],
+                                },
+                                param={"text": "old query", "slot_name": "query"},
+                                slot_refs=["query"],
+                            )
+                        ],
+                    ),
+                )
+            ]
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
@@ -955,11 +1668,11 @@ def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
         {
             "goal": "find android jobs",
             "current_url": "https://www.wanted.co.kr",
-            "reflex_state_key": "state-a",
+            "current_page_role": "home",
             "screen_signature": {"size": [200, 120]},
             "recent_images": [current],
             "current_markers": [{"id": 7, "bbox": [10, 10, 70, 40], "text": "Search"}],
-            "recipe_params": {"query": "android developer"},
+            "recipe_params": {"site": "wanted", "query": "android developer"},
         }
     )
 
@@ -967,28 +1680,54 @@ def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
     assert result["last_action_result"].tool_calls[0]["args"] == {
         "marker_id": 7,
         "text": "android developer",
+        "page_role": "home",
         "slot_name": "query",
     }
 
 
-def test_reflex_node_does_not_use_site_recipe_when_exact_state_misses(monkeypatch, tmp_path):
+def test_reflex_node_uses_site_candidates_without_state_lookup(monkeypatch, tmp_path):
+    from PIL import Image, ImageDraw
     from agent.graph import nodes
+    from agent.vision.screen_signature import compute_target_roi_signature
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
     current = tmp_path / "site-current.png"
+    saved = tmp_path / "site-saved.png"
+    for path in [saved, current]:
+        image = Image.new("RGB", (200, 200), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([150, 20, 170, 40], fill="black")
+        image.save(path)
+    roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
 
     class FakeStore:
-        def get_recipe(self, state_key, site=None, task_category=None):
-            assert state_key == "new-state"
-            return None
-
         def get_site_recipes(self, site, task_category=None):
-            raise AssertionError("Reflex replay must not scan site recipes without an exact state_key match")
+            assert site == "wanted"
+            assert task_category == "검색"
+            return [
+                (
+                    "recipe-search",
+                    SiteRecipe(
+                        site="wanted",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="click_marker",
+                                page_role="home",
+                                replay_mode="fixed",
+                                roi_signature=roi_signature,
+                                target={"text": "검색", "center_ratio": [0.8, 0.15]},
+                            )
+                        ],
+                    ),
+                )
+            ]
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
     result = nodes.reflex_node(
         {
             "goal": "android 개발자 공고 찾아줘",
-            "reflex_state_key": "new-state",
+            "current_page_role": "home",
             "screen_signature": {"size": [200, 200]},
             "recent_images": [current],
             "current_markers": [{"id": 7, "bbox": [150, 20, 170, 40], "text": "검색"}],
@@ -996,45 +1735,23 @@ def test_reflex_node_does_not_use_site_recipe_when_exact_state_misses(monkeypatc
         }
     )
 
-    assert result["reflex_hit"] is False
-    assert result["reflex_state_key"] == "new-state"
-    assert result["reflex_trace"]["reason"] == "no_recipe"
-    assert result["reflex_trace"]["candidate_count"] == 0
+    assert result["reflex_hit"] is True
+    assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 7, "page_role": "home"}
 
 
-def test_reflex_node_skips_exact_recipe_when_task_category_mismatches(monkeypatch):
+def test_reflex_node_skips_recipe_when_task_category_mismatches(monkeypatch):
     from agent.graph import nodes
-    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
-    from shared.schema.skill_schema import RecipeSkillMetadata
 
     class FakeStore:
-        def get_recipe(self, state_key, site=None, task_category=None):
-            assert state_key == "new-state"
-            return SiteRecipe(
-                site="wanted",
-                goal="login",
-                skill_metadata=RecipeSkillMetadata(task_category="로그인"),
-                steps=[
-                    RecipeStep(
-                        seq=0,
-                        state_key="new-state",
-                        action="click_marker",
-                        replay_mode="fixed",
-                        roi_signature={"phash": "0" * 16},
-                        target={"text": "로그인"},
-                    )
-                ],
-            )
-
         def get_site_recipes(self, site, task_category=None):
-            raise AssertionError("Reflex replay must not scan site recipes without an exact state_key match")
+            assert task_category == "검색"
+            return []
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
     result = nodes.reflex_node(
         {
             "goal": "android 개발자 공고 찾아줘",
-            "reflex_state_key": "new-state",
             "screen_signature": {"size": [200, 200]},
             "current_markers": [{"id": 7, "bbox": [150, 20, 170, 40], "text": "검색"}],
             "recipe_params": {"site": "wanted", "query": "android 개발자", "task_category": "검색"},
@@ -1043,7 +1760,7 @@ def test_reflex_node_skips_exact_recipe_when_task_category_mismatches(monkeypatc
 
     assert result["reflex_hit"] is False
     assert result["reflex_trace"]["reason"] == "no_recipe"
-    assert result["reflex_trace"]["task_category_skips"] == 1
+    assert result["reflex_trace"]["candidate_count"] == 0
 
 
 def test_reflex_node_rejects_similar_recipe_when_target_does_not_match(monkeypatch):
@@ -1051,20 +1768,15 @@ def test_reflex_node_rejects_similar_recipe_when_target_does_not_match(monkeypat
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     class FakeStore:
-        def get_recipe(self, state_key, site=None, task_category=None):
-            return None
-
         def get_site_recipes(self, site, task_category=None):
             return [
                 (
-                    "recorded-state",
+                    "recipe-recorded",
                     SiteRecipe(
                         site="wanted",
                         steps=[
                             RecipeStep(
                                 seq=0,
-                                state_key="recorded-state",
-                                state_anchors=["검색", "채용"],
                                 action="click_marker",
                                 replay_mode="fixed",
                                 target={"text": "상세 정보 더 보기"},
@@ -1079,7 +1791,6 @@ def test_reflex_node_rejects_similar_recipe_when_target_does_not_match(monkeypat
     result = nodes.reflex_node(
         {
             "goal": "android 개발자 공고 찾아줘",
-            "reflex_state_key": "new-state",
             "current_markers": [{"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"}],
             "recipe_params": {"site": "wanted", "query": "android 개발자"},
         }
@@ -1141,23 +1852,137 @@ def test_action_node_commits_accumulated_recorded_steps(monkeypatch):
     assert seen["current_url"] == "https://www.wanted.co.kr"
 
 
+def test_action_node_skips_stale_reasoning_screen_click(monkeypatch):
+    from agent.graph import nodes
+
+    dispatched = []
+
+    class FakeTools:
+        def click_marker(self, bbox):
+            dispatched.append(bbox)
+            return {"status": "success", "action": "click_marker", "result": "clicked"}
+
+    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeTools())
+    monkeypatch.setattr(
+        nodes,
+        "_check_current_reasoning_screen",
+        lambda state: {
+            "checked": True,
+            "stale": True,
+            "reason": "screen_changed_during_reasoning",
+            "distance": 22,
+            "max_distance": 10,
+        },
+    )
+
+    result = nodes.action_node(
+        {
+            "goal": "ios 개발자 공고 2개",
+            "current_markers": [{"id": 7, "bbox": [500, 500, 560, 540], "text": "포지션"}],
+            "current_url": "https://www.wanted.co.kr/search?query=ios",
+            "current_url_stale": False,
+            "current_page_role": "search",
+            "screen_signature": {"phash": "0" * 16, "size": [1000, 1000]},
+            "last_action_result": AIMessage(
+                content="",
+                tool_calls=[{"name": "click_marker", "args": {"marker_id": 7}, "id": "stale-click"}],
+            ),
+        }
+    )
+
+    action = result["action_history"][0]
+    assert dispatched == []
+    assert action["status"] == "skipped"
+    assert action["reason"] == "screen_changed_during_reasoning"
+    assert action["guard"]["distance"] == 22
+    assert result["current_url_stale"] is True
+
+
+def test_action_node_bundles_reflex_action_as_transition_step(monkeypatch):
+    from agent.graph import nodes
+
+    class FakeTools:
+        def click_marker(self, bbox):
+            return {"status": "success", "action": "click_marker", "result": f"clicked {bbox}"}
+
+    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeTools())
+
+    result = nodes.action_node(
+        {
+            "goal": "ios 개발자 공고 2개",
+            "current_markers": [{"id": 7, "bbox": [500, 500, 560, 540], "text": "포지션"}],
+            "current_url": "https://www.wanted.co.kr/search?query=ios",
+            "current_url_stale": False,
+            "current_page_role": "search",
+            "screen_signature": {"phash": "0" * 16, "size": [1000, 1000]},
+            "extracted_jd": {},
+            "is_finished": False,
+            "collected_data": [],
+            "error_count": 0,
+            "current_plan_step": 0,
+            "plan": [],
+            "recorded_steps": [],
+            "reflex_hit": True,
+            "reflex_trace": {
+                "recipe_key": "roi#tab",
+                "tool_calls": {
+                    "reflex_call": {
+                        "seq": 2,
+                        "replay_mode": "fixed",
+                        "match_mode": "roi_phash",
+                        "target_text": "포지션",
+                        "marker_id": 7,
+                        "phash": {"distance": 0, "mode": "roi_phash"},
+                    }
+                },
+            },
+            "reflex_transition_contracts": {
+                "reflex_call": {"common_ready_cues": [{"kind": "text_any", "values": ["포지션"]}]}
+            },
+            "last_action_result": AIMessage(
+                content="[reflex]",
+                tool_calls=[
+                    {
+                        "name": "click_marker",
+                        "args": {"marker_id": 7, "page_role": "search", "target_component": "tab_button"},
+                        "id": "reflex_call",
+                    }
+                ],
+            ),
+        }
+    )
+
+    pending = result["pending_transition"]
+    assert pending["action"] == "click_marker"
+    assert pending["recipe_key"] == "roi#tab"
+    assert pending["step"]["action"] == "click_marker"
+    assert pending["step"]["recipe_key"] == "roi#tab"
+    assert pending["step"]["target_text"] == "포지션"
+    assert pending["step"]["phash"]["distance"] == 0
+
+
 def test_reflex_routing_respects_flag_and_validation(monkeypatch):
-    from agent.graph.workflow import route_after_perception, route_after_reflex
+    from agent.graph.workflow import route_after_perception, route_after_reflex, route_after_start
 
     monkeypatch.delenv("REFLEX_ENABLED", raising=False)
     assert route_after_perception({}) == "reflex"
+    assert route_after_start({"current_markers": [{"id": 1}], "current_page_role": "home", "recent_images": ["s.png"]}) == "reflex"
+    assert route_after_start({}) == "reasoning"
 
     monkeypatch.setenv("REFLEX_ENABLED", "0")
     assert route_after_perception({}) == "reasoning"
+    assert route_after_start({"current_markers": [{"id": 1}], "current_page_role": "home", "recent_images": ["s.png"]}) == "reasoning"
 
     monkeypatch.setenv("REFLEX_ENABLED", "1")
     assert route_after_perception({}) == "reflex"
     assert route_after_perception({"transition_status": "pending"}) == "perception"
     assert route_after_perception({"transition_status": "unknown", "transition_source": "reflex"}) == "reasoning"
     assert route_after_perception({"transition_status": "unknown", "transition_source": "page_policy"}) == "reasoning"
+    assert route_after_perception({"transition_status": "unknown", "transition_source": "reflex_compound"}) == "reflex"
     assert route_after_perception({"transition_status": "unknown", "transition_source": "autonomous"}) == "reflex"
     assert route_after_perception({"transition_status": "ready"}) == "reflex"
     assert route_after_perception({"queue_replay_hit": True}) == "action"
+    assert route_after_perception({"page_policy_hit": True}) == "action"
 
     assert route_after_reflex({"reflex_hit": True}) == "action"
     assert route_after_reflex({"reflex_hit": False}) == "reasoning"
@@ -1335,6 +2160,59 @@ def test_detail_ocr_buffer_context_guides_finish_detail_reading(monkeypatch):
     assert "중간 DB 추출" in context
 
 
+def test_detail_page_policy_scrolls_until_reading_limit(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
+    monkeypatch.setenv("VISION_DETAIL_POLICY_MIN_SCREENS", "3")
+    monkeypatch.setenv("VISION_DETAIL_POLICY_MAX_SCREENS", "4")
+    buffer = {
+        "url": "https://www.wanted.co.kr/wd/1",
+        "lines": [{"text": "주요업무 iOS 개발"}],
+        "stats": {
+            "screen_count": 2,
+            "added_lines_last_screen": 12,
+            "duplicate_lines_last_screen": 0,
+        },
+    }
+
+    msg, trace = nodes._detail_page_policy_message(
+        "https://www.wanted.co.kr/wd/1",
+        [{"id": 1, "bbox": [100, 200, 200, 230], "text": "주요업무"}],
+        buffer,
+    )
+
+    assert trace["policy"] == "detail_scroll"
+    assert msg.tool_calls[0]["name"] == "scroll"
+    assert msg.tool_calls[0]["args"]["_transition_source"] == "page_policy"
+
+
+def test_detail_page_policy_finishes_at_reading_limit(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
+    monkeypatch.setenv("VISION_DETAIL_POLICY_MAX_SCREENS", "4")
+    buffer = {
+        "url": "https://www.wanted.co.kr/wd/1",
+        "lines": [{"text": "자격요건 Swift"} for _ in range(100)],
+        "stats": {
+            "screen_count": 4,
+            "added_lines_last_screen": 20,
+            "duplicate_lines_last_screen": 10,
+        },
+    }
+
+    msg, trace = nodes._detail_page_policy_message(
+        "https://www.wanted.co.kr/wd/1",
+        [{"id": 1, "bbox": [100, 200, 200, 230], "text": "자격요건"}],
+        buffer,
+    )
+
+    assert trace["policy"] == "detail_finish"
+    assert msg.tool_calls[0]["name"] == "finish_detail_reading"
+    assert msg.tool_calls[0]["args"]["detail_complete"] is True
+
+
 def test_finish_detail_reading_merges_buffer_extraction_and_clears_buffer(monkeypatch):
     from agent.graph import nodes
 
@@ -1443,7 +2321,7 @@ def test_feedback_episode_records_parameter_candidate_and_observation():
             "expected_after": "search keyword is entered",
         },
         enriched,
-        {"state_key": "state-home", "url": "https://www.wanted.co.kr", "screenshot": "s.png", "marked_image": "m.png"},
+        {"url": "https://www.wanted.co.kr", "screenshot": "s.png", "marked_image": "m.png"},
         {"current_url": "https://www.wanted.co.kr", "current_url_stale": True, "screen_changed": True, "extracted_jd": {}, "is_finished": False},
         0,
     )
@@ -1454,7 +2332,7 @@ def test_feedback_episode_records_parameter_candidate_and_observation():
     assert episode["proposal"]["llm_thought"] == "검색어를 입력한다"
     assert episode["proposal"]["expected_after"] == "search keyword is entered"
     assert episode["proposal"]["parameter_candidates"][0]["slot_candidate"] == "query"
-    assert episode["observation"]["before"]["state_key"] == "state-home"
+    assert "state_key" not in episode["observation"]["before"]
     assert episode["observation"]["after"]["screen_changed"] is True
     assert episode["feedback"]["label"] == "partial"
 
@@ -1525,6 +2403,8 @@ def test_feedback_store_commits_and_reads_recent(tmp_path):
     assert rows[0]["site"] == "wanted.co.kr"
     assert rows[0]["action"] == "type_in_marker"
     assert rows[0]["feedback_label"] == "partial"
+    assert "page_state_key" not in rows[0]["payload"]
+    assert "state_key" not in rows[0]["payload"]["observation"]["before"]
     assert rows[0]["payload"]["proposal"]["parameter_candidates"][0]["slot_candidate"] == "query"
 
 
@@ -1727,6 +2607,11 @@ def test_submission_store_commits_and_reads_recent(tmp_path):
         "run_status": "finished",
         "review_attempt": 0,
         "collected_count": 1,
+        "reflex_state_key": "state-a",
+        "screen_signature": {"phash": "0" * 16},
+        "recorded_steps": [
+            {"seq": 0, "state_key": "state-a", "screen_signature": {"phash": "1" * 16}},
+        ],
     }
     review = {"decision": "accept", "confidence": 0.7, "feedback_to_worker": ""}
     store = SubmissionStore(tmp_path / "submissions.db")
@@ -1738,6 +2623,10 @@ def test_submission_store_commits_and_reads_recent(tmp_path):
     assert len(rows) == 1
     assert rows[0]["review_decision"] == "accept"
     assert rows[0]["payload"]["keyword"] == "ai engineer"
+    assert "reflex_state_key" not in rows[0]["payload"]
+    assert "screen_signature" not in rows[0]["payload"]
+    assert "state_key" not in rows[0]["payload"]["recorded_steps"][0]
+    assert "screen_signature" not in rows[0]["payload"]["recorded_steps"][0]
     assert rows[0]["review"]["confidence"] == 0.7
 
 
@@ -1750,8 +2639,16 @@ def test_recipe_candidate_store_commits_reviewed_candidate(tmp_path):
         "site": "wanted",
         "keyword": "ai engineer",
         "review_attempt": 0,
+        "reflex_state_key": "state-a",
+        "screen_signature": {"phash": "0" * 16},
         "recorded_steps": [
-            {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
+            {
+                "seq": 0,
+                "state_key": "state-a",
+                "screen_signature": {"phash": "1" * 16},
+                "action": "click_marker",
+                "target": {"text": "AI Engineer"},
+            }
         ],
         "transition_observations": [
             {
@@ -1771,7 +2668,12 @@ def test_recipe_candidate_store_commits_reviewed_candidate(tmp_path):
     assert len(rows) == 1
     assert rows[0]["status"] == "pending_replay"
     assert rows[0]["site"] == "wanted"
-    assert rows[0]["steps"][0]["state_key"] == "state-a"
+    assert "state_key" not in rows[0]["steps"][0]
+    assert "screen_signature" not in rows[0]["steps"][0]
+    assert "reflex_state_key" not in rows[0]["payload"]
+    assert "screen_signature" not in rows[0]["payload"]
+    assert "state_key" not in rows[0]["payload"]["recorded_steps"][0]
+    assert "screen_signature" not in rows[0]["payload"]["recorded_steps"][0]
     assert rows[0]["payload"]["keyword"] == "ai engineer"
     assert rows[0]["review"]["recipe_candidate"] is True
 
@@ -1799,7 +2701,13 @@ def _sample_recipe_candidate_submission():
         "review_attempt": 0,
         "skill_metadata_evidence": {"site": "wanted", "task_category": "검색"},
         "recorded_steps": [
-            {"seq": 0, "state_key": "state-a", "action": "click_marker", "target": {"text": "AI Engineer"}}
+            {
+                "seq": 0,
+                "state_key": "state-a",
+                "page_role": "home",
+                "action": "click_marker",
+                "target": {"text": "AI Engineer"},
+            }
         ],
         "transition_observations": [
             {
@@ -1811,6 +2719,7 @@ def _sample_recipe_candidate_submission():
         "feedback_episodes": [
             {
                 "seq": 0,
+                "proposal": {"args": {"page_role": "home"}},
                 "observation": {
                     "before": {
                         "marker_texts": ["채용", "검색", "AI Engineer"],
@@ -1899,7 +2808,11 @@ def test_candidate_reviewer_records_review_without_active_promotion(tmp_path):
 
     assert seen["payload"]["candidate_id"] == candidate_id
     assert seen["payload"]["task_category"] == "검색"
-    assert seen["payload"]["steps"][0]["state_key"] == "state-a"
+    assert "state_key" not in seen["payload"]["steps"][0]
+    assert "worker_submission" not in seen["payload"]
+    assert seen["payload"]["worker_execution"] == {"extracted_summary": {}}
+    assert seen["payload"]["feedback_evidence"][0]["before_marker_texts"] == ["채용", "검색", "AI Engineer"]
+    assert "overall successful run does not prove" in seen["payload"]["review_task"]
     assert seen["payload"]["transition_observations"][0]["action_seq"] == 0
     assert review["decision"] == "accept"
     assert candidate["status"] == "accepted"
@@ -2041,12 +2954,183 @@ def test_candidate_reviewer_promotes_roi_fixed_steps_only(tmp_path):
     assert review["promotion"]["promoted"] is True
     assert review["promotion"]["promoted_step_count"] == 1
     assert len(recipes) == 1
-    assert recipes[0]["steps"][0]["state_key"] == "state-a"
+    assert "state_key" not in recipes[0]["steps"][0]
     assert recipes[0]["steps"][0]["replay_mode"] == "fixed"
     assert len(recipes[0]["steps"]) == 1
     assert recipes[0]["skill_metadata"]["task_category"] == "검색"
     assert recipes[0]["steps"][0]["transition_contract"]["common_ready_cues"][0]["values"] == ["검색어"]
     assert {"seq": 2, "action": "press_key", "reason": "non_target_action"} in review["promotion"]["skipped_steps"]
+
+
+def test_candidate_promotion_blocks_page_policy_managed_target(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    submission = _sample_recipe_candidate_submission()
+    submission["recorded_steps"][0].update(
+        {
+            "component": "expand_detail_button",
+            "roi_signature": {
+                "algorithm": "roi-phash-dct64-v2",
+                "phash": "0" * 16,
+                "crop_rect_ratio": [0.2, 0.2, 0.5, 0.4],
+            },
+            "target": {"text": "정보더보기", "center_ratio": [0.35, 0.3]},
+        }
+    )
+    submission["transition_observations"][0].update(
+        {"source": "page_policy", "visual_change_ratio": 0.2}
+    )
+    store = RecipeCandidateStore(tmp_path / "critic.db")
+    candidate_id = store.commit_candidate(
+        submission,
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-policy:0",
+    )
+
+    review = review_and_apply_candidate(
+        candidate_id,
+        db_path=tmp_path / "critic.db",
+        mode="promote",
+        critic=lambda payload: {
+            "decision": "accept",
+            "reasons": ["critic incorrectly accepted the deterministic action"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "site": "wanted",
+                "task_category": "검색",
+                "step_intents": [{"seq": 0, "action": "click_marker", "replay_mode": "fixed"}],
+            },
+            "confidence": 0.9,
+        },
+    )
+
+    assert review["promotion"]["promoted"] is False
+    assert review["promotion"]["skipped_steps"][0]["reason"] == "managed_by_page_policy"
+    assert RecipeStore(tmp_path / "critic.db").get_by_site("wanted") == []
+
+
+def test_candidate_promotion_blocks_explicit_no_effect_target(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    submission = _sample_recipe_candidate_submission()
+    submission["recorded_steps"][0].update(
+        {
+            "component": "tab_button",
+            "roi_signature": {
+                "algorithm": "roi-phash-dct64-v2",
+                "phash": "1" * 16,
+                "crop_rect_ratio": [0.1, 0.1, 0.4, 0.3],
+            },
+            "target": {"text": "포지션", "center_ratio": [0.25, 0.2]},
+        }
+    )
+    submission["feedback_episodes"][0]["feedback"] = {
+        "label": "no_effect",
+        "reason": "screen_changed_during_reasoning",
+    }
+    store = RecipeCandidateStore(tmp_path / "critic.db")
+    candidate_id = store.commit_candidate(
+        submission,
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-no-effect:0",
+    )
+
+    review = review_and_apply_candidate(
+        candidate_id,
+        db_path=tmp_path / "critic.db",
+        mode="promote",
+        critic=lambda payload: {
+            "decision": "accept",
+            "reasons": ["critic incorrectly accepted the no-op"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "site": "wanted",
+                "task_category": "검색",
+                "step_intents": [{"seq": 0, "action": "click_marker", "replay_mode": "fixed"}],
+            },
+            "confidence": 0.9,
+        },
+    )
+
+    assert review["promotion"]["promoted"] is False
+    assert review["promotion"]["skipped_steps"][0]["reason"] == "feedback_no_effect"
+    assert RecipeStore(tmp_path / "critic.db").get_by_site("wanted") == []
+
+
+def test_candidate_reviewer_promotes_observed_page_role_over_llm_args(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    submission = _sample_recipe_candidate_submission()
+    submission["recorded_steps"][0].update(
+        {
+            "page_role": "home",
+            "action": "type_in_marker",
+            "roi_signature": {
+                "algorithm": "roi-phash-dct64-v1",
+                "phash": "0" * 16,
+                "crop_rect_ratio": [0.2, 0.1, 0.5, 0.2],
+            },
+            "target": {
+                "text": "검색어를 입력해주세요",
+                "bbox_ratio": [0.25, 0.12, 0.5, 0.18],
+                "center_ratio": [0.375, 0.15],
+            },
+            "param": {"text": "ios 개발자", "slot_name": "query"},
+            "slot_refs": ["query"],
+        }
+    )
+    submission["feedback_episodes"][0] = {
+        "seq": 0,
+        "proposal": {"args": {"page_role": "home"}},
+        "observation": {
+            "before": {
+                "url": "https://www.wanted.co.kr/",
+                "marker_texts": ["검색어를 입력해주세요", "인기검색어"],
+            }
+        },
+    }
+    store = RecipeCandidateStore(tmp_path / "critic.db")
+    candidate_id = store.commit_candidate(
+        submission,
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="worker-run-critic:0",
+    )
+
+    review_and_apply_candidate(
+        candidate_id,
+        db_path=tmp_path / "critic.db",
+        mode="promote",
+        critic=lambda payload: {
+            "decision": "accept",
+            "reasons": ["search overlay input is reusable"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "site": "wanted",
+                "inputs": [{"name": "query", "required": True}],
+                "step_intents": [
+                    {"seq": 0, "action": "type_in_marker", "replay_mode": "parameterized"}
+                ],
+            },
+            "confidence": 0.9,
+        },
+    )
+
+    recipes = RecipeStore(tmp_path / "critic.db").get_by_site("wanted")
+
+    assert len(recipes) == 1
+    assert recipes[0]["steps"][0]["page_role"] == "search_overlay"
 
 
 def test_candidate_reviewer_revise_does_not_promote(tmp_path):
@@ -2104,6 +3188,33 @@ def test_candidate_reviewer_invalid_llm_shape_falls_back_to_revise(tmp_path):
     assert candidate["status"] == "revise"
     assert "critic_review_failed" in candidate["validation"]["review"]["reasons"][0]
 
+
+def test_recipe_promotion_service_reviews_candidate_in_background(monkeypatch):
+    import time
+
+    from agent.application import recipe_promotion_service as service
+    from agent.recipe import candidate_reviewer
+
+    seen = []
+    candidate_id = f"candidate-background-{time.time_ns()}"
+    monkeypatch.setenv("VISION_RECIPE_AUTO_PROMOTE", "1")
+    monkeypatch.setattr(
+        candidate_reviewer,
+        "review_and_apply_candidate",
+        lambda value, mode="review": seen.append((value, mode))
+        or {
+            "decision": "accept",
+            "promotion": {"promoted": True, "saved_count": 1},
+        },
+    )
+
+    assert service.schedule_recipe_candidate_promotion(candidate_id) is True
+    result = service.wait_for_recipe_candidate_promotion(candidate_id, timeout=2)
+
+    assert seen == [(candidate_id, "promote")]
+    assert result["decision"] == "accept"
+    assert result["promotion"]["saved_count"] == 1
+
 def _sample_worker_result_for_learning_mode():
     return {
         "submission": _sample_recipe_candidate_submission(),
@@ -2146,6 +3257,8 @@ def test_realtime_recipe_learning_mode_record_saves_candidate_without_critic(mon
         return "candidate-1"
 
     monkeypatch.setattr(rs, "_commit_recipe_candidate", fake_commit_recipe_candidate)
+    scheduled = []
+    monkeypatch.setattr(rs, "_schedule_recipe_candidate_promotion", lambda candidate_id: scheduled.append(candidate_id) or True)
     monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
 
     _count, submission, _review, _submission_id = rs.persist_accepted_worker_result(
@@ -2157,6 +3270,7 @@ def test_realtime_recipe_learning_mode_record_saves_candidate_without_critic(mon
     assert submission["recipe_candidate_id"] == "candidate-1"
     assert submission["recipe_learning_mode"] == "record"
     assert "recipe_candidate_review" not in submission
+    assert scheduled == ["candidate-1"]
 
 
 def test_realtime_recipe_learning_mode_promote_is_record_only(monkeypatch):
@@ -2174,6 +3288,8 @@ def test_realtime_recipe_learning_mode_promote_is_record_only(monkeypatch):
         "_commit_recipe_candidate",
         fake_commit_recipe_candidate,
     )
+    scheduled = []
+    monkeypatch.setattr(rs, "_schedule_recipe_candidate_promotion", lambda candidate_id: scheduled.append(candidate_id) or True)
     monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
 
     _count, submission, _review, _submission_id = rs.persist_accepted_worker_result(
@@ -2185,6 +3301,7 @@ def test_realtime_recipe_learning_mode_promote_is_record_only(monkeypatch):
     assert submission["recipe_learning_mode"] == "record"
     assert submission["recipe_candidate_id"] == "candidate-1"
     assert "recipe_candidate_review" not in submission
+    assert scheduled == ["candidate-1"]
 
 
 def test_process_recipe_candidates_review_mode_does_not_promote(tmp_path):

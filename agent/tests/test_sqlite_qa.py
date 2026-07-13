@@ -12,7 +12,9 @@ from agent.graph.state import GraphState
 TEST_DB_PATH = Path("data/test_qa_jobs.db")
 
 @pytest.fixture(scope="module", autouse=True)
-def setup_test_db():
+def setup_test_db(tmp_path_factory):
+    global TEST_DB_PATH
+    TEST_DB_PATH = tmp_path_factory.mktemp("sqlite_qa") / "test_qa_jobs.db"
     # 이전 테스트 DB 정리
     if TEST_DB_PATH.exists():
         os.remove(TEST_DB_PATH)
@@ -101,6 +103,7 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
     monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "off")
     monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "off")
+    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "0")
     
     # 비전 에이전트 그래프를 모킹: stream 시 수집된 JD 데이터를 반환하는 가짜 앱 생성
     class FakeGraphApp:
@@ -154,12 +157,13 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     assert row[0] == "테스트컴퍼니"
 
 
-def test_realtime_scraping_closes_browser_after_run(setup_test_db, monkeypatch):
+def test_realtime_scraping_keeps_browser_after_run_by_default(setup_test_db, monkeypatch):
     import agent.graph.nodes as nodes
 
     monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
     monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "off")
     monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "off")
+    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "0")
 
     closed = []
 
@@ -180,10 +184,11 @@ def test_realtime_scraping_closes_browser_after_run(setup_test_db, monkeypatch):
     result = realtime_scraping.invoke({"company": "cleanup-test"})
 
     assert "cleanup-test" in result
-    assert closed == ["close_browser"]
+    assert closed == []
 
 
 def test_persistence_job_normalization_uses_llm(monkeypatch):
+    from agent.application.model_clients import clear_model_client_cache
     from shared.schema.jd_schema import JobPosting
     from agent.tools.realtime_scraping import _normalize_job_for_persistence
 
@@ -209,6 +214,7 @@ def test_persistence_job_normalization_uses_llm(monkeypatch):
 
     monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "llm")
     monkeypatch.setattr("langchain_google_genai.ChatGoogleGenerativeAI", FakeLLM)
+    clear_model_client_cache()
 
     normalized = _normalize_job_for_persistence(
         {"URL": "https://example.com/job/1", "raw": "ignored"},
@@ -220,6 +226,7 @@ def test_persistence_job_normalization_uses_llm(monkeypatch):
     assert normalized["url"] == "https://example.com/job/1"
     assert normalized["tech_stack"] == ["SwiftUI"]
     assert normalized["_normalization_source"] == "llm"
+    clear_model_client_cache()
 
 
 def test_persistence_job_normalization_defaults_to_deterministic(monkeypatch):
@@ -247,6 +254,7 @@ def test_persistence_job_normalization_defaults_to_deterministic(monkeypatch):
 def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_db, monkeypatch):
     """recursion limit에 걸려도 마지막 partial state의 수집 데이터는 저장합니다."""
     import shared.config as cfg
+    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "0")
     from langgraph.errors import GraphRecursionError
 
     monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
@@ -339,11 +347,12 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     assert submission_row[0] == "accept"
     submission_payload = json.loads(submission_row[1])
     assert [step["action"] for step in submission_payload["recorded_steps"]] == ["click_marker", "go_back", "scroll"]
-    assert submission_payload["recorded_steps"][0]["state_key"] == "state-a"
+    assert "state_key" not in submission_payload["recorded_steps"][0]
     assert candidate_row is not None
     assert candidate_row[0] == "pending_replay"
     candidate_steps = json.loads(candidate_row[1])
     assert [step["action"] for step in candidate_steps] == ["click_marker", "go_back", "scroll"]
+    assert all("state_key" not in step for step in candidate_steps)
 
 
 def test_browser_back_marker_detection():
@@ -674,27 +683,27 @@ def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
 
         def get_current_url(self):
             self.url_reads += 1
-            return "https://www.wanted.co.kr/wd/fresh"
+            return "https://www.wanted.co.kr/wd/101"
 
     fake_perception = FakePerception()
     monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
 
     fresh_result = nodes.perception_node({
-        "current_url": "https://www.wanted.co.kr/wd/cached",
+        "current_url": "https://www.wanted.co.kr/wd/100",
         "current_url_stale": False,
     })
     assert fake_perception.url_reads == 0
-    assert fresh_result["current_url"] == "https://www.wanted.co.kr/wd/cached"
+    assert fresh_result["current_url"] == "https://www.wanted.co.kr/wd/100"
     assert fresh_result["current_url_stale"] is False
     assert fresh_result["screen_signature"]["size"] == [200, 200]
     assert len(fresh_result["screen_signature"]["phash"]) == 16
 
     stale_result = nodes.perception_node({
-        "current_url": "https://www.wanted.co.kr/wd/cached",
+        "current_url": "https://www.wanted.co.kr/wd/100",
         "current_url_stale": True,
     })
     assert fake_perception.url_reads == 1
-    assert stale_result["current_url"] == "https://www.wanted.co.kr/wd/fresh"
+    assert stale_result["current_url"] == "https://www.wanted.co.kr/wd/101"
     assert stale_result["current_url_stale"] is False
 
 
@@ -793,6 +802,7 @@ def test_go_back_releases_address_bar_focus_and_uses_browserback(monkeypatch):
     assert calls == ["region", ("release_focus", 0.02), ("press", "browserback")]
 
 
+@pytest.mark.external
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
     import shared.config as cfg
@@ -804,7 +814,8 @@ def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
     def mock_realtime_scraping(company: str = None, tech_stack: str = None, site: str = None, query: str = None) -> str:
         """실시간 채용 공고를 수집하는 모킹 도구입니다."""
         return f"실시간 수집 완료: '{query or company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
-    monkeypatch.setattr("agent.graph.nodes.realtime_scraping", mock_realtime_scraping)
+    monkeypatch.setattr("agent.application.chat_service.realtime_scraping", mock_realtime_scraping)
+    monkeypatch.setattr("agent.application.chat_service._chat_service", None)
     
     # 1. 팩트 기반 질문 테스트
     state = GraphState(goal="토스 iOS 개발자의 자격요건과 복지 혜택을 알려줘")
@@ -821,6 +832,7 @@ def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
     assert "[job_id:" in answer or "찾을 수 없습니다" in answer or "확인되지 않음" in answer
 
 
+@pytest.mark.external
 @pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
 def test_hallucination_rejection(setup_test_db, monkeypatch):
     import shared.config as cfg
@@ -832,7 +844,8 @@ def test_hallucination_rejection(setup_test_db, monkeypatch):
     def mock_realtime_scraping(company: str = None, tech_stack: str = None, site: str = None, query: str = None) -> str:
         """실시간 채용 공고를 수집하는 모킹 도구입니다."""
         return f"실시간 수집 완료: '{query or company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
-    monkeypatch.setattr("agent.graph.nodes.realtime_scraping", mock_realtime_scraping)
+    monkeypatch.setattr("agent.application.chat_service.realtime_scraping", mock_realtime_scraping)
+    monkeypatch.setattr("agent.application.chat_service._chat_service", None)
     
     # 2. 환각 거절 질문 테스트
     state = GraphState(goal="스페이스X의 화성 탐사선 개발자 공고 우대사항을 알려줘")

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.recipe.state_key import normalize_text
+from agent.recipe.text_utils import normalize_text
 from agent.recipe.task_category import normalize_task_category
 
 

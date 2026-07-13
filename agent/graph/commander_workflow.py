@@ -6,6 +6,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from agent.graph.commander_state import CommanderState
+from agent.application.worker_execution_service import worker_execution_session
 from agent.tools.realtime_scraping import (
     _close_browser_after_run,
     build_limit_intermediate_report,
@@ -445,7 +446,16 @@ def build_commander_graph():
     return workflow.compile()
 
 
-def run_commander_graph(query: str, site_queue: list[str] | None = None) -> dict:
+def run_commander_graph(
+    query: str,
+    site_queue: list[str] | None = None,
+    *,
+    run_id: str | None = None,
+    event_sink=None,
+) -> dict:
+    from agent.application.run_context import emit_run_event, run_context
+    from agent.application.run_contracts import RunPhase, RunStatus
+
     initial: CommanderState = {
         "user_query": query,
         "site_queue": list(site_queue or []),
@@ -462,4 +472,28 @@ def run_commander_graph(query: str, site_queue: list[str] | None = None) -> dict
         "research_report": {},
         "task_context": {},
     }
-    return build_commander_graph().invoke(initial)
+    with run_context(
+        run_id=run_id,
+        query=query,
+        event_sink=event_sink,
+        prefix="commander",
+    ) as (context, created):
+        with worker_execution_session():
+            result = build_commander_graph().invoke(initial)
+        if created:
+            result["run_id"] = context.run_id
+            result["metrics"] = context.snapshot()
+            status = (
+                RunStatus.WAITING_APPROVAL
+                if result.get("pending_human_approval")
+                else RunStatus.COMPLETED
+            )
+            emit_run_event(
+                "approval_required" if status == RunStatus.WAITING_APPROVAL else "run_completed",
+                RunPhase.REVIEW if status == RunStatus.WAITING_APPROVAL else RunPhase.COMPLETED,
+                "사용자 승인이 필요합니다."
+                if status == RunStatus.WAITING_APPROVAL
+                else "지휘자 작업을 완료했습니다.",
+                status=status,
+            )
+        return result

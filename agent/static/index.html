@@ -269,6 +269,7 @@
 
             const agentContainer = document.getElementById(agentMsgId);
             let rawBuffer = '';
+            let pendingChunk = '';
 
             try {
                 const response = await fetch('/api/chat', {
@@ -289,8 +290,9 @@
                     const { value, done: readerDone } = await reader.read();
                     done = readerDone;
                     if (value) {
-                        const chunkStr = decoder.decode(value, { stream: !done });
-                        const lines = chunkStr.split('\n');
+                        pendingChunk += decoder.decode(value, { stream: !done });
+                        const lines = pendingChunk.split('\n');
+                        pendingChunk = lines.pop() || '';
                         
                         for (const line of lines) {
                             if (line.startsWith('data: ')) {
@@ -309,8 +311,29 @@
                                     }
                                     continue;
                                 }
+                                if (dataContent.startsWith('[PROCESSING]')) {
+                                    agentContainer.innerHTML = '<span class="text-slate-400">요청을 접수했습니다.</span><span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-1"></span>';
+                                    continue;
+                                }
+                                if (dataContent.startsWith('[EVENT]')) {
+                                    try {
+                                        const eventObj = JSON.parse(dataContent.slice(7).trim());
+                                        const statusText = eventObj.message || '처리 중입니다.';
+                                        agentContainer.innerHTML = `<span class="text-slate-400">${statusText}</span><span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-1"></span>`;
+                                    } catch (err) {
+                                        console.error('Progress event parse error:', err);
+                                    }
+                                    continue;
+                                }
                                 if (dataContent.startsWith('[ERROR]')) {
-                                    agentContainer.innerHTML = `<span class="text-red-400">${dataContent.slice(7)}</span>`;
+                                    try {
+                                        const errorObj = JSON.parse(dataContent.slice(7).trim());
+                                        agentContainer.textContent = errorObj.message || '오류가 발생했습니다.';
+                                        agentContainer.classList.add('text-red-400');
+                                    } catch (err) {
+                                        agentContainer.textContent = dataContent.slice(7);
+                                        agentContainer.classList.add('text-red-400');
+                                    }
                                     continue;
                                 }
                                 

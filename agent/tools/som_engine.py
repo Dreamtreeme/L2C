@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -28,8 +29,12 @@ class SomEngine:
         os.environ["PADDLE_OCR_BASE_DIR"] = str(self.paddleocr_dir)
         self._ocr_worker = None
         self._ocr_worker_stdout_queue = None
+        self._ocr_worker_stderr_lines = deque(maxlen=40)
+        self._ocr_worker_last_phase: Dict[str, Any] = {}
+        self._ocr_worker_last_result_timings: Dict[str, Any] = {}
         self._ocr_worker_generation = 0
         self._ocr_worker_request_count = 0
+        self._ocr_worker_lifecycle_lock = threading.RLock()
 
         self.model_dir = self.root_dir / "models" / "omniparser"
         self.model_path = self.model_dir / "icon_detect" / "model.pt"
@@ -53,11 +58,16 @@ class SomEngine:
         os.environ["YOLO_CONFIG_DIR"] = str(yolo_config_dir)
 
         for path in self._candidate_cuda_dll_dirs():
-            if path.exists():
-                self._prepend_process_path(path)
-                if hasattr(os, "add_dll_directory"):
-                    _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(path)))
-                logger.debug("Added CUDA DLL search path", path=str(path))
+            try:
+                exists = path.exists()
+            except OSError:
+                exists = False
+            if not exists:
+                continue
+            self._prepend_process_path(path)
+            if hasattr(os, "add_dll_directory"):
+                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(path)))
+            logger.debug("Added CUDA DLL search path", path=str(path))
 
     def _candidate_cuda_dll_dirs(self) -> List[Path]:
         paths: List[Path] = []
@@ -157,11 +167,30 @@ class SomEngine:
     def _ocr_worker_request_timeout_sec(self) -> float:
         return max(1.0, self._env_float("SOM_OCR_REQUEST_TIMEOUT_SEC", 20.0))
 
-    def _ocr_worker_max_requests(self) -> int:
-        return self._env_int("SOM_OCR_WORKER_MAX_REQUESTS", 10)
-
     def _ocr_worker_attempts(self) -> int:
         return max(1, self._env_int("SOM_OCR_WORKER_MAX_ATTEMPTS", 2))
+
+    def _ocr_lifecycle_lock(self):
+        """테스트용 비정상 생성 경로에서도 OCR 작업자 잠금을 지연 생성한다."""
+
+        lock = getattr(self, "_ocr_worker_lifecycle_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._ocr_worker_lifecycle_lock = lock
+        return lock
+
+    def ensure_ocr_worker_ready(self):
+        """재사용 OCR 작업자가 요청을 받을 수 있을 때까지 대기한다."""
+
+        use_worker = os.getenv("SOM_OCR_WORKER_REUSE", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        if not use_worker:
+            raise RuntimeError("OCR worker readiness requires SOM_OCR_WORKER_REUSE")
+        return self._start_ocr_worker()
 
     def _read_ocr_worker_stdout(self, worker: subprocess.Popen, generation: int, output_queue: queue.Queue) -> None:
         try:
@@ -173,6 +202,29 @@ class SomEngine:
                     return
         except Exception:
             output_queue.put((generation, ""))
+
+    def _read_ocr_worker_stderr(self, worker: subprocess.Popen, generation: int) -> None:
+        try:
+            assert worker.stderr is not None
+            for line in worker.stderr:
+                if generation != self._ocr_worker_generation:
+                    return
+                stripped = line.strip()
+                if stripped:
+                    self._ocr_worker_stderr_lines.append(stripped[:500])
+        except Exception:
+            return
+
+    def _ocr_worker_diagnostics(self, request_id: str = "") -> dict[str, Any]:
+        phase = dict(getattr(self, "_ocr_worker_last_phase", {}) or {})
+        if request_id and phase.get("request_id") not in {"", request_id}:
+            phase = {}
+        stderr_lines = list(getattr(self, "_ocr_worker_stderr_lines", []) or [])
+        return {
+            "last_phase": str(phase.get("phase") or ""),
+            "last_phase_details": phase,
+            "worker_stderr": stderr_lines[-8:],
+        }
 
     def _next_ocr_worker_line(self, timeout_sec: float) -> str | None:
         output_queue = self._ocr_worker_stdout_queue
@@ -190,23 +242,11 @@ class SomEngine:
             if generation == self._ocr_worker_generation:
                 return line
 
-    def _recycle_ocr_worker_if_needed(self) -> bool:
-        max_requests = self._ocr_worker_max_requests()
-        worker = getattr(self, "_ocr_worker", None)
-        if max_requests <= 0 or worker is None or worker.poll() is not None:
-            return False
-        if self._ocr_worker_request_count < max_requests:
-            return False
-        logger.info(
-            "Recycling PaddleOCR worker after request budget",
-            pid=worker.pid,
-            requests=self._ocr_worker_request_count,
-            max_requests=max_requests,
-        )
-        self._stop_ocr_worker()
-        return True
-
     def _start_ocr_worker(self):
+        with self._ocr_lifecycle_lock():
+            return self._start_ocr_worker_locked()
+
+    def _start_ocr_worker_locked(self):
         if self._ocr_worker and self._ocr_worker.poll() is None:
             return self._ocr_worker
 
@@ -215,11 +255,14 @@ class SomEngine:
         self._ocr_worker_generation += 1
         generation = self._ocr_worker_generation
         self._ocr_worker_stdout_queue = queue.Queue()
+        self._ocr_worker_stderr_lines = deque(maxlen=40)
+        self._ocr_worker_last_phase = {}
+        self._ocr_worker_last_result_timings = {}
         self._ocr_worker = subprocess.Popen(
             [sys.executable, str(runner_script), "--worker"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="ignore",
@@ -231,6 +274,11 @@ class SomEngine:
         threading.Thread(
             target=self._read_ocr_worker_stdout,
             args=(self._ocr_worker, generation, self._ocr_worker_stdout_queue),
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self._read_ocr_worker_stderr,
+            args=(self._ocr_worker, generation),
             daemon=True,
         ).start()
         start_timeout = self._ocr_worker_start_timeout_sec()
@@ -250,22 +298,41 @@ class SomEngine:
             stripped = line.strip()
             if stripped == "__OCR_WORKER_READY__":
                 self._ocr_worker_request_count = 0
+                startup_duration = time.monotonic() - started
                 logger.info(
                     "PaddleOCR worker ready",
                     pid=self._ocr_worker.pid,
-                    startup=f"{time.monotonic() - started:.2f}s",
+                    startup=f"{startup_duration:.2f}s",
                 )
+                from agent.application.run_context import current_run_context
+
+                context = current_run_context()
+                if context is not None:
+                    context.record_step(
+                        "ocr_startup",
+                        startup_duration,
+                        pid=self._ocr_worker.pid,
+                    )
                 return self._ocr_worker
             if stripped.startswith("__OCR_WORKER_FAILED__"):
+                diagnostics = self._ocr_worker_diagnostics()
                 self._ocr_worker = None
-                raise RuntimeError("PaddleOCR worker failed during startup")
+                raise RuntimeError(
+                    "PaddleOCR worker failed during startup"
+                    + (f": {diagnostics['worker_stderr'][-1]}" if diagnostics["worker_stderr"] else "")
+                )
             if stripped:
                 logger.debug("PaddleOCR worker startup output", line=stripped[:200])
 
     def _stop_ocr_worker(self) -> None:
+        with self._ocr_lifecycle_lock():
+            self._stop_ocr_worker_locked()
+
+    def _stop_ocr_worker_locked(self) -> None:
         worker = getattr(self, "_ocr_worker", None)
         self._ocr_worker = None
         self._ocr_worker_stdout_queue = None
+        self._ocr_worker_last_phase = {}
         self._ocr_worker_request_count = 0
         if not worker:
             return
@@ -286,13 +353,18 @@ class SomEngine:
         last_error: Exception | None = None
 
         for attempt in range(1, attempts + 1):
-            self._recycle_ocr_worker_if_needed()
             worker = self._start_ocr_worker()
             if not worker.stdin or not worker.stdout:
                 raise RuntimeError("PaddleOCR worker pipes are unavailable")
 
-            request = json.dumps({"image_path": str(image_path)}, ensure_ascii=False)
+            request_id = f"{self._ocr_worker_generation}:{time.time_ns()}"
+            request = json.dumps(
+                {"request_id": request_id, "image_path": str(image_path)},
+                ensure_ascii=False,
+            )
             started = time.monotonic()
+            worker_timings: dict[str, Any] = {}
+            self._ocr_worker_last_result_timings = {}
             try:
                 worker.stdin.write(request + "\n")
                 worker.stdin.flush()
@@ -300,18 +372,55 @@ class SomEngine:
                 while True:
                     remaining = request_timeout - (time.monotonic() - started)
                     if remaining <= 0:
-                        raise TimeoutError(f"PaddleOCR worker request timed out after {request_timeout:.1f}s")
+                        diagnostics = self._ocr_worker_diagnostics(request_id)
+                        raise TimeoutError(
+                            f"PaddleOCR worker request timed out after {request_timeout:.1f}s "
+                            f"(last_phase={diagnostics['last_phase'] or 'unknown'}, "
+                            f"stderr={diagnostics['worker_stderr']})"
+                        )
                     line = self._next_ocr_worker_line(remaining)
                     if line is None:
-                        raise TimeoutError(f"PaddleOCR worker request timed out after {request_timeout:.1f}s")
+                        diagnostics = self._ocr_worker_diagnostics(request_id)
+                        raise TimeoutError(
+                            f"PaddleOCR worker request timed out after {request_timeout:.1f}s "
+                            f"(last_phase={diagnostics['last_phase'] or 'unknown'}, "
+                            f"stderr={diagnostics['worker_stderr']})"
+                        )
                     if line == "":
                         raise RuntimeError("PaddleOCR worker exited before returning a result")
                     stripped = line.strip()
+                    if stripped.startswith("__OCR_EVENT__"):
+                        event_payload = json.loads(
+                            stripped.removeprefix("__OCR_EVENT__").strip() or "{}"
+                        )
+                        if str(event_payload.get("request_id") or "") == request_id:
+                            self._ocr_worker_last_phase = event_payload
+                        continue
+                    if stripped.startswith("__OCR_WORKER_ERROR__"):
+                        error_payload = json.loads(
+                            stripped.removeprefix("__OCR_WORKER_ERROR__").strip() or "{}"
+                        )
+                        if str(error_payload.get("request_id") or "") != request_id:
+                            continue
+                        raise RuntimeError(
+                            "PaddleOCR worker error "
+                            f"during {error_payload.get('phase') or 'unknown'}: "
+                            f"{error_payload.get('error_type') or 'Error'}: "
+                            f"{error_payload.get('error') or ''}"
+                        )
                     if not stripped.startswith("__OCR_JSON_RESULT__"):
                         continue
                     payload = stripped.removeprefix("__OCR_JSON_RESULT__").strip()
-                    results = json.loads(payload) if payload else []
+                    decoded = json.loads(payload) if payload else {}
+                    if isinstance(decoded, dict):
+                        if str(decoded.get("request_id") or "") != request_id:
+                            continue
+                        results = list(decoded.get("results") or [])
+                        worker_timings = dict(decoded.get("timings") or {})
+                    else:
+                        results = list(decoded or [])
                     duration = time.monotonic() - started
+                    self._ocr_worker_last_result_timings = worker_timings
                     self._ocr_worker_request_count += 1
                     logger.info(
                         "PaddleOCR worker request completed",
@@ -320,16 +429,44 @@ class SomEngine:
                         request_count=self._ocr_worker_request_count,
                         duration=f"{duration:.2f}s",
                         boxes=len(results),
+                        worker_timings=worker_timings,
                     )
+                    from agent.application.run_context import current_run_context
+
+                    context = current_run_context()
+                    if context is not None:
+                        context.record_step(
+                            "ocr_request",
+                            duration,
+                            pid=worker.pid,
+                            attempt=attempt,
+                            request_count=self._ocr_worker_request_count,
+                            boxes=len(results),
+                            success=True,
+                            **worker_timings,
+                        )
                     return results
             except Exception as exc:
                 last_error = exc
+                failed_duration = time.monotonic() - started
                 logger.warning(
                     "PaddleOCR worker request failed",
                     attempt=attempt,
                     attempts=attempts,
                     error=str(exc),
                 )
+                from agent.application.run_context import current_run_context
+
+                context = current_run_context()
+                if context is not None:
+                    context.record_step(
+                        "ocr_request",
+                        failed_duration,
+                        pid=worker.pid,
+                        attempt=attempt,
+                        success=False,
+                        error=str(exc)[:300],
+                    )
                 self._stop_ocr_worker()
                 if attempt >= attempts:
                     raise
@@ -404,7 +541,7 @@ class SomEngine:
     def _ocr_scale_for_image(self, width: int, height: int) -> float:
         if os.getenv("SOM_OCR_RESIZE", "true").strip().lower() in {"0", "false", "no", "off"}:
             return 1.0
-        max_dim = self._env_int("SOM_OCR_MAX_DIM", 1280)
+        max_dim = self._env_int("SOM_OCR_MAX_DIM", 1152)
         if max_dim <= 0:
             return 1.0
         longest = max(width, height)
@@ -649,8 +786,12 @@ class SomEngine:
                 target=ocr_image.size,
             )
 
+        ocr_started = time.perf_counter()
         text_boxes = self._filter_overlaps(self._run_paddle_ocr(ocr_image, scale=ocr_scale))
+        ocr_duration = time.perf_counter() - ocr_started
+        yolo_started = time.perf_counter()
         icon_boxes = self._filter_overlaps(self._run_yolo(inference_img, yolo_scale))
+        yolo_duration = time.perf_counter() - yolo_started
         final_elements = text_boxes + icon_boxes
         final_elements.sort(key=lambda item: (item["bbox"][1] // 20, item["bbox"][0]))
         logger.info(
@@ -673,5 +814,13 @@ class SomEngine:
             "Set-of-Marks image synthesized and saved successfully",
             output_path=str(output_path),
             markers_count=len(marker_coords),
+        )
+        logger.info(
+            "SoM analysis stages completed",
+            mode="full",
+            ocr_duration_sec=round(ocr_duration, 6),
+            yolo_duration_sec=round(yolo_duration, 6),
+            text_markers=len(text_boxes),
+            icon_markers=len(icon_boxes),
         )
         return output_path, marker_coords, marker_bboxes, final_elements

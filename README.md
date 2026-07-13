@@ -71,46 +71,34 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 ## Agent 아키텍처
 
 ```
-사용자 명령
+사용자 자연어 질의
     ↓
-[지휘자 — Gemini 3.5 Flash]
-  명령 의도 파싱
-  사이트 사전지식 조회
-  도구 선택 및 순차 호출
+[Chat UI → FastAPI]
     ↓
-    ├─ [비전/Reflex 실행 루프 — Gemini 3.5 Flash + 로컬 SoM] (수집이 필요할 때)
-    │   화면 인식 (OmniParser Set-of-Marks + PaddleOCR)
-    │   pHash/OCR 화면 서명 계산
-    │   ├─ Reflex hit: 검증된 부모 경로 행동을 reasoning 없이 실행
-    │   └─ Reflex miss: 현재 화면을 Gemini가 판단해 다음 행동 선택
-    │   Qwen2.5-VL/Ollama는 VLM 캡셔닝 폴백으로 사용 가능
-    │   물리 행동 도구
-    │     - 로그인 (자격증명은 .env 활용)
-    │     - 검색·탐색
-    │     - 추출
-    │   ※ 모든 도구 호출은 LangSmith로 로깅됨 (Phase 8 학습 데이터)
-    │
-    └─ [SQLite 검색 도구] (적재된 DB 조회로 충분할 때)
-        Gemini SQL 직접 생성 및 실행
-        XML escape 및 결과 길이 제한
-        인용 ID 부여
+[ChatService — 사용자 진입점의 단일 지휘자]
+  ├─ SQLite 조회로 기존 DB 근거 확인
+  ├─ 부족할 때만 사이트 프로필 선택 후 realtime_scraping 호출
+  └─ 최종 답변 생성 및 job_id 인용 검증
     ↓
-[Observer / Critic]
-  행동 전후 OCR·URL·화면 변화·수집 데이터 비교
-  success / partial / wrong_target / no_effect / loop_risk 피드백 라벨링
+[CollectionService — 수집 실행 생명주기]
+  Worker 실행 → 제출물 검토 → 승인 데이터 저장
     ↓
-[Recipe Memory]
-  성공 패턴 confidence 상승
-  실패 패턴 감점 및 negative example 기록
-  높은 confidence의 패턴만 Reflex Recipe로 승격
+[WorkerExecutionService — 단일 로컬 작업자 직렬화]
+  브라우저 준비·LangGraph 실행·정리를 하나의 잠금 범위로 실행
     ↓
-[지휘자 — Gemini 3.5 Flash]
-  진행 상황 평가
-  다음 사이트, 재계획, 또는 답변 생성 결정
-  답변 시 인용 검증 적용
+[Vision Worker LangGraph]
+  Perception: OmniParser + PaddleOCR + 화면 서명
+  ├─ 카드 큐/상세 정책 hit: 결정론적 행동 실행
+  ├─ Reflex hit: ROI pHash와 마커 비율 검증 후 행동 실행
+  └─ miss: Gemini가 현재 화면의 다음 행동 판단
+  Action: PyAutoGUI 기반 클릭·입력·스크롤·뒤로가기
+    ↓
+[제출물 검토 → 승인 데이터 SQLite 저장 → ChatService 답변]
 ```
 
-운영 경로는 지연 초기화(lazy initialization)를 적용합니다. DB 질의와 웹 Q&A 서버는 비전 엔진, YOLO 모델, 물리 GUI 제어 도구를 import 시점에 초기화하지 않고, 실시간 수집이 실제로 필요할 때만 비전 파이프라인을 준비합니다.
+Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. 사용자 지휘, 작업자 실행, 상세 정제, DB 적재는 `agent/application/` 서비스가 담당합니다.
+
+운영 경로는 지연 초기화(lazy initialization)를 적용합니다. DB 질의와 웹 Q&A 서버는 비전 엔진, YOLO 모델, 물리 GUI 제어 도구를 import 시점에 초기화하지 않고, 실시간 수집이 실제로 필요할 때만 비전 파이프라인을 준비합니다. PaddleOCR subprocess는 작업 동안 계속 재사용하고, 요청 timeout이나 worker 오류가 발생할 때만 재시작합니다. OCR 입력 최대 변은 1152로 제한합니다.
 
 ## 진행 상황
 
@@ -197,11 +185,11 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     - [x] SQL SELECT 구문을 직접 생성하여 조건에 맞는 데이터를 정밀 조회하는 sqlite_query 도구 탑재
     - [x] 쿼리 유효성 검증 (SELECT 쿼리만 한정하도록 보완) 및 XML 구조화 응답 포맷 연동
     - [x] XML 특수문자 escaping, 최대 결과 개수 및 본문 길이 제한으로 컨텍스트 파손 방지
-  - [x] 2. 지휘자 도구 통합 및 라우팅 (`nodes.py`)
+  - [x] 2. 지휘자 도구 통합 및 라우팅 (`agent/application/chat_service.py`)
     - [x] sqlite_query 검색 도구를 지휘자의 function calling 도구로 등록
     - [x] 기존 비전 에이전트 수집 흐름을 지휘자의 보조 도구로 통합 및 순차 호출 라우팅
     - [x] QA 경로와 비전 수집 경로의 런타임 초기화를 분리하여 서버 import 안정성 개선
-  - [x] 3. 답변 생성 및 인용 검증 (`nodes.py`)
+  - [x] 3. 답변 생성 및 인용 검증 (`agent/application/chat_service.py`)
     - [x] XML 구조화 컨텍스트 주입, 스트리밍 응답, 온도 0.0 설정
     - [x] 답변 생성 후 인용 ID 정합성 검사 및 위반 ID는 `[출처 확인 불가]` 마커로 치환 (`validate_citations`)
   - [x] 4. E2E SQLite 검색 동작 및 미적재 정보 거절 테스트 검증 (`test_sqlite_qa.py`)
@@ -256,7 +244,9 @@ L2C/
 │   └── extractor/        텍스트 구조화 및 정형화 (Gemini/Ollama)
 │
 ├── agent/              비전 LLM 에이전트
-│   ├── graph/            LangGraph 워크플로우 (nodes, workflow, state)
+│   ├── application/      사용자 지휘·작업자 실행·상세 정제·DB 저장 서비스
+│   ├── graph/            LangGraph 연결, 상태, 도구 스키마, 핵심 노드
+│   ├── runtime/          전환·상세 OCR·카드 큐·Reflex 결정론적 런타임
 │   ├── prompts/          지휘자 프롬프트 (commander)
 │   ├── credentials/      .env 자격증명 관리 매니저
 │   ├── tools/            화면 인식(Perception)·물리 제어·SQLite 검색·실시간 수집 도구
@@ -288,8 +278,10 @@ L2C/
 | 카테고리 | 기술 |
 |---------|------|
 | 언어·런타임 | Python 3.10+ |
-| 브라우저 자동화 | Playwright |
+| Classic 브라우저 자동화 | Playwright DOM/selector |
+| Realtime 브라우저 자동화 | 화면/OCR + PyAutoGUI 물리 입력 |
 | UI 요소 검출 | OmniParser (Microsoft) |
+| OCR | PaddleOCR GPU subprocess 재사용 |
 | 에이전트 워크플로우 | LangGraph |
 | 지휘자 모델 | Gemini 3.5 Flash |
 | 비전 판단 모델 | Gemini 3.5 Flash |
@@ -308,22 +300,20 @@ L2C/
 
 ## 빠른 시작
 
-```bash
+```powershell
 git clone https://github.com/Dreamtreeme/L2C.git
 cd L2C
 
 # 환경 설정
-cp .env.example .env
-python -m venv .venv && source .venv/bin/activate
+Copy-Item .env.example .env
+& 'C:\Program Files\Python310\python.exe' -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python -m playwright install chromium
 
 # Gemini 기반 지휘자/QA 사용 시 .env에 GEMINI_API_KEY를 설정
 # 기본값 SKIP_VLM_CAPTION=true 로 VLM 캡셔닝 단계를 우회
 # 비전 자율 수집은 VISION_AGENT_RECURSION_LIMIT=60 기본값으로 실행
-
-# 자격증명 등록 (최초 1회)
-python agent/setup_credentials.py wanted
 
 # Classic 방식 — URL 직접 입력
 python -m classic.main extract https://www.wanted.co.kr/wd/350432
@@ -337,9 +327,23 @@ python -m agent.main "수집된 공고 중 신입 가능한 곳 알려줘"
 # 웹 Q&A 서버
 uvicorn agent.web_server:app --reload
 
-# 두 방식 비교 (정합성 검증 테스트 스크립트 실행)
-python -m benchmark.run_compare_only
+# 기본 회귀 테스트 (외부 API와 물리 브라우저 E2E 제외)
+python -m pytest -q
+
+# 실제 외부 API 테스트를 명시적으로 포함
+python -m pytest -m external -q
+
+# 두 방식 비교. 실패 시 정상 데이터를 임의로 채우지 않음
+python -m benchmark.run_compare_jd
+
+# Realtime E2E: 로그와 구조화된 요약을 함께 생성
+python -m benchmark.run_realtime_e2e --site wanted --query "ios 개발자 공고 2개" --log logs/e2e_wanted_ios2.log
+
+# 기존 로그 또는 새 summary의 p50/p95/max, Reflex, OCR 지표 확인
+python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 ```
+
+E2E 요약은 `run_id`, 실행시간, 단계별 시간, 모델별 토큰, 선택적 비용 추정, 수집 품질을 한 파일에 기록합니다. 모델 단가는 `config/model_pricing.example.json` 형식을 참고해 별도 파일로 관리하고 `LLM_PRICING_FILE`에 지정합니다. 가격표가 없으면 부정확한 비용을 만들지 않고 토큰 원시값만 보존합니다.
 
 Windows Python을 WSL/Git Bash에서 직접 호출해 한글이나 이모지가 깨지는 경우에는 `python -X utf8 -m ...` 형태로 실행하세요.
 

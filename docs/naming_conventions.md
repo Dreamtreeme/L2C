@@ -23,6 +23,8 @@
 | `recipe_step` | 레시피 안의 단일 행동 단계 |
 | `replay_step` | Critic이 fixed/parameterized로 승인한 재생 단계 |
 | `task_category` | 검색, 로그인, 결제, 사이트 탐색 같은 작업 카테고리 |
+| `page_role` | home, search, job_detail, popup처럼 replay 적용 범위를 나누는 화면 역할 |
+| `recipe_key` | active recipe row의 DB 식별자. `site`, `task_category`, `page_role`, ROI/target 정보로 계산 |
 | `recipe_params` | 반복 실행 시 주입되는 런타임 입력값 |
 | `screen_signature` | 현재 전체 화면 관찰 서명. 기본 replay 판단용 이름으로 쓰지 않는다 |
 | `roi_signature` | 타깃 주변 crop의 pHash 서명. active replay 판단의 기준 |
@@ -92,7 +94,7 @@
 - `recipe`: 단독 사용 금지. `recipe_candidate`, `active_recipe`, `site_recipe`, `recipe_step` 중 하나를 쓴다.
 - `metadata`: 단독 사용 지양. `skill_metadata`, `target_metadata`, `promotion_metadata`처럼 범위를 붙인다.
 - `signature`: 단독 사용 지양. `screen_signature`, `roi_signature`로 구분한다.
-- `state_key`: active recipe 식별자로 단독 사용하지 않는다. 저장/조회에는 `site`, `task_category`와 함께 다룬다.
+- `state_key`: 새 active recipe 코드에서 사용하지 않는다. 저장/조회는 `recipe_key`, `site`, `task_category`, `page_role`, `roi_signature` 기준으로 한다.
 - `similar`, `similarity`: active replay 기본 경로에는 쓰지 않는다. ROI replay는 `roi_phash_distance`, `target_ratio_miss`처럼 명확한 실패 사유를 쓴다.
 - `data`, `info`, `item`: 지역 범위가 5줄 이상이면 더 구체적인 이름으로 바꾼다.
 
@@ -127,7 +129,7 @@ def test_candidate_promotion_skips_non_target_action():
 ## 기존 코드 정리 우선순위
 
 1. `target_snapshot` 생성 로직을 공통화한다.
-2. `nodes.py`에서 `result_card_queue`, `detail_ocr_buffer`, `reflex_runtime`, `action_executor`를 분리한다.
+2. [완료] `nodes.py`에서 `result_card_queue`, `detail_ocr_buffer`, `reflex_runtime`을 분리한다. 다음 대상은 `action_executor`다.
 3. `candidate_reviewer.py`에서 promotion 로직을 `candidate_promotion.py`로 분리한다.
-4. `RecipeStore`를 `site + task_category + state_key` 기준 이름과 스키마로 정리한다.
+4. `RecipeStore`를 `recipe_key + site + task_category + page_role + roi_signature` 기준 이름과 스키마로 정리한다.
 5. 남은 `_dump_model`, `_bbox`, `_center` 같은 작은 중복 유틸을 공통 모듈로 옮긴다.

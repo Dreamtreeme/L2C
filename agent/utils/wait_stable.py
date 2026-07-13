@@ -84,11 +84,11 @@ class WaitStable:
         sample_width = self._env_int("VISION_STABLE_SAMPLE_WIDTH", 360)
 
         logger.info("Waiting for screen to stabilize...")
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         prev_img = self._capture_memory_image(region=region, sample_width=sample_width)
         
-        while (time.time() - start_time) < max_wait_sec:
+        while (time.perf_counter() - start_time) < max_wait_sec:
             time.sleep(check_interval_sec)
             curr_img = self._capture_memory_image(region=region, sample_width=sample_width)
             
@@ -102,7 +102,7 @@ class WaitStable:
             diff_ratio = (sum(stat.mean) / (3 * 255.0)) * 100.0
             
             if diff_ratio <= threshold_percent:
-                elapsed = time.time() - start_time
+                elapsed = time.perf_counter() - start_time
                 logger.info(
                     "Screen stabilized", 
                     elapsed_sec=round(elapsed, 2), 

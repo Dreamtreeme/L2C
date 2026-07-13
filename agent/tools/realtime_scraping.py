@@ -5,10 +5,23 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from langchain_core.tools import tool
-from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel, Field
 
+from agent.application.job_persistence_service import (
+    normalize_job_for_persistence as _normalize_job_for_persistence,
+    persist_collected_data as _persist_collected_data,
+)
+from agent.application.worker_execution_service import (
+    close_browser_after_run as _close_browser_after_run,
+    execute_worker_graph as _execute_worker_graph,
+    prepare_worker_start_screen as _prepare_worker_start_screen,
+    run_graph_with_last_state as _run_graph_with_last_state,
+    worker_execution_session,
+    worker_preopen_enabled as _worker_preopen_enabled,
+    worker_start_url as _worker_start_url,
+)
 from agent.recipe.task_category import DEFAULT_SEARCH_TASK_CATEGORY, normalize_task_category
+from agent.runtime.job_collection import job_list_value as _job_list_value
 from agent.utils.model_dump import dump_model
 
 logger = logging.getLogger(__name__)
@@ -109,12 +122,13 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
 
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
-        from langchain_google_genai import ChatGoogleGenerativeAI
+        from agent.application.model_clients import get_structured_google_model
+        from shared.config import BASE_DIR  # noqa: F401 - .env 로드를 보장한다.
 
         entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
         manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
         model_name = os.getenv("VISION_SEARCH_INTENT_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
-        llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(SearchIntent)
+        llm = get_structured_google_model(model_name, SearchIntent, temperature=0.0)
         messages = [
             SystemMessage(
                 content=(
@@ -138,7 +152,9 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
                 )
             ),
         ]
-        data = dump_model(llm.invoke(messages))
+        from agent.application.run_context import invoke_with_metrics
+
+        data = dump_model(invoke_with_metrics(llm, messages, "search_intent"))
         keyword = str(data.get("search_keyword") or "").strip() or original
         try:
             target_count = max(0, int(data.get("target_count") or 0))
@@ -281,43 +297,6 @@ def _build_site_goal(
     )
 
 
-def _run_graph_with_last_state(app: Any, initial_state: dict, recursion_limit: int) -> tuple[dict, bool]:
-    """
-    LangGraph 실행 중 recursion limit에 걸려도 마지막 state를 보존합니다.
-    app.invoke()는 예외 시 partial state를 돌려주지 않으므로 stream(values)을 사용합니다.
-    """
-    last_state = initial_state
-    try:
-        for state in app.stream(
-            initial_state,
-            config={"recursion_limit": recursion_limit},
-            stream_mode="values",
-        ):
-            if isinstance(state, dict):
-                last_state = state
-        return last_state, False
-    except GraphRecursionError as e:
-        logger.warning(f"[realtime_scraping] Graph recursion limit reached; preserving partial state: {e}")
-        return last_state, True
-
-
-
-
-def _close_browser_after_run() -> None:
-    if os.getenv("VISION_CLOSE_BROWSER_AFTER_RUN", "1").strip().lower() in {"0", "false", "no", "off"}:
-        logger.info("[realtime_scraping] Browser cleanup disabled")
-        return
-    try:
-        from agent.graph import nodes
-
-        action_tools = getattr(nodes, "_action_tools", None)
-        if action_tools is None:
-            logger.info("[realtime_scraping] Browser cleanup skipped: action tools were not initialized")
-            return
-        result = action_tools.close_browser()
-        logger.info("[realtime_scraping] Browser cleanup completed: %s", result)
-    except Exception as e:
-        logger.debug("[realtime_scraping] Browser cleanup skipped: %s", e)
 
 def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_finished: bool, run_id: str = "") -> int:
     """Persist feedback episodes for later Critic/Recipe Memory promotion. Best-effort."""
@@ -447,70 +426,6 @@ def limit_report_requires_more_collection(report: dict) -> bool:
 
 
 
-def _jd_normalization_mode() -> str:
-    mode = os.getenv("VISION_JD_NORMALIZATION_MODE", "deterministic").strip().lower()
-    return mode if mode in {"deterministic", "llm", "off"} else "deterministic"
-
-
-def _normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dict[str, Any]:
-    mode = _jd_normalization_mode()
-    if mode == "off":
-        return dict(job)
-    if mode == "deterministic":
-        from agent.utils.job_fields import deterministic_job_for_persistence
-
-        return deterministic_job_for_persistence(job)
-    try:
-        from langchain_core.messages import HumanMessage, SystemMessage
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        from shared.schema.jd_schema import JobPosting
-
-        model_name = os.getenv("VISION_JD_NORMALIZATION_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
-        llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(JobPosting)
-        messages = [
-            SystemMessage(
-                content=(
-                    "Normalize one raw job posting collected by a vision worker into the JobPosting schema. "
-                    "Read field names in any language, including Korean. Preserve the original job URL. "
-                    "Use empty strings or empty lists for unknown fields; do not invent missing facts. "
-                    "Do not compute content_hash."
-                )
-            ),
-            HumanMessage(
-                content=json.dumps(
-                    {
-                        "search_keyword": keyword,
-                        "raw_job": job,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            ),
-        ]
-        normalized = dump_model(llm.invoke(messages))
-        raw_url = job.get("url") or job.get("URL") or job.get("공고url")
-        if raw_url and not normalized.get("url"):
-            normalized["url"] = raw_url
-        normalized["_normalization_source"] = "llm"
-        return normalized
-    except Exception as exc:  # pragma: no cover - provider failures are best-effort
-        logger.warning("[realtime_scraping] JD normalization failed; using raw job: %s", exc)
-        fallback = dict(job)
-        fallback["_normalization_source"] = "llm_failed"
-        fallback["_normalization_error"] = str(exc)[:200]
-        return fallback
-
-
-JOB_LIST_KEYS = ("\uacf5\uace0\ubaa9\ub85d", "jobs", "job_list")
-
-
-def _job_list_value(data: dict) -> Any:
-    for key in JOB_LIST_KEYS:
-        if key in data:
-            return data.get(key)
-    return None
-
-
 def _append_review_feedback(goal: str, review_feedback: str | None) -> str:
     if not review_feedback:
         return goal
@@ -523,99 +438,11 @@ def _append_review_feedback(goal: str, review_feedback: str | None) -> str:
 
 
 def _initial_worker_state(goal: str) -> dict:
-    return {
-        "goal": goal,
-        "ui_context": "",
-        "current_url": "",
-        "current_url_stale": True,
-        "current_markers": [],
-        "action_history": [],
-        "recent_images": [],
-        "marked_image": "",
-        "screen_signature": {},
-        "error_count": 0,
-        "is_finished": False,
-        "collected_data": [],
-        "extracted_jd": {},
-        "last_action_result": None,
-        "plan": [],
-        "current_plan_step": 0,
-        "step_durations": [],
-        "last_action_screen_changed": True,
-        "recorded_steps": [],
-        "feedback_episodes": [],
-        "reflex_state_key": "",
-        "reflex_hit": False,
-        "reflex_trace": {},
-        "reflex_transition_contracts": {},
-        "recipe_params": {},
-        "pending_transition": {},
-        "transition_status": "",
-        "transition_outcome": "",
-        "transition_source": "",
-        "transition_observations": [],
-        "result_card_queue": [],
-        "result_page_memory": {},
-        "active_result_card": {},
-        "queue_replay_hit": False,
-        "queue_replay_trace": {},
-        "detail_ocr_buffer": {},
-        "pending_human_approval": False,
-        "human_approval_request": {},
-    }
+    from agent.graph.state_factory import create_worker_state
+
+    return create_worker_state(goal)
 
 
-def _worker_preopen_enabled() -> bool:
-    return _env_bool("VISION_WORKER_PREOPEN_BROWSER", True)
-
-
-def _worker_start_url(profile: dict) -> str:
-    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
-    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-    navigation = manual.get("navigation_policy", {}) if isinstance(manual, dict) else {}
-    return str(navigation.get("start_url") or entry.get("base_url") or manual.get("base_url") or "").strip()
-
-
-def _prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dict:
-    """사이트 홈을 코드로 먼저 열고 첫 OCR 상태를 채워 worker의 첫 open_browser 추론을 줄인다."""
-    start_url = _worker_start_url(site_profile)
-    if not start_url or not _worker_preopen_enabled():
-        return initial_state
-
-    try:
-        from agent.graph.nodes import _get_action_tools, perception_node
-
-        action_tools = _get_action_tools()
-        result = action_tools.open_browser(start_url, current_url=initial_state.get("current_url", ""))
-        action_history = [
-            {
-                "action": "open_browser",
-                "status": result.get("status", "unknown"),
-                "result": result.get("result"),
-                "args": {"url": start_url},
-                "screen_change_expected": True,
-            }
-        ]
-        observation = perception_node(
-            {
-                **initial_state,
-                "current_url": start_url,
-                "current_url_stale": True,
-                "action_history": action_history,
-                "pending_transition": {},
-            }
-        )
-        prepared = dict(initial_state)
-        prepared.update(observation)
-        prepared["current_url"] = observation.get("current_url") or start_url
-        prepared["current_url_stale"] = bool(observation.get("current_url_stale", False))
-        prepared["action_history"] = action_history
-        prepared["last_action_screen_changed"] = False
-        logger.info("[realtime_scraping] Worker start screen prepared via code-open: %s", start_url)
-        return prepared
-    except Exception as exc:
-        logger.warning("[realtime_scraping] Worker start screen preparation failed; falling back to LLM open_browser: %s", exc)
-        return initial_state
 
 
 def run_worker_once(
@@ -629,10 +456,8 @@ def run_worker_once(
     task_context: dict[str, Any] | None = None,
 ) -> dict:
     """Run one child vision worker attempt and return an unreviewed submission payload."""
-    from agent.graph.workflow import build_graph
     from agent.recipe.reviewer import build_worker_submission, new_worker_run_id
 
-    app = build_graph()
     site_profile = _load_collection_profile(site)
     site_entry = site_profile["entry"]
     site_slug = site_entry.get("slug") or site or "unknown"
@@ -664,7 +489,6 @@ def run_worker_once(
         "site": site_slug,
         "task_category": task_category,
     }
-    initial_state = _prepare_worker_start_screen(initial_state, site_profile)
 
     logger.info(
         "[realtime_scraping] Starting worker graph site=%s attempt=%s",
@@ -672,7 +496,16 @@ def run_worker_once(
         review_attempt,
     )
     recursion_limit = int(os.getenv("VISION_AGENT_RECURSION_LIMIT", str(DEFAULT_RECURSION_LIMIT)))
-    final_state, hit_recursion_limit = _run_graph_with_last_state(app, initial_state, recursion_limit)
+    final_state, hit_recursion_limit = _execute_worker_graph(
+        initial_state,
+        site_profile,
+        recursion_limit,
+        prepare_screen=_prepare_worker_start_screen,
+        run_graph=_run_graph_with_last_state,
+    )
+    from agent.application.run_context import record_graph_state_metrics
+
+    record_graph_state_metrics(final_state)
 
     extracted = final_state.get("extracted_jd", {}) or {}
     is_finished = bool(final_state.get("is_finished", False))
@@ -768,6 +601,14 @@ def _commit_recipe_candidate(
         return ""
 
 
+def _schedule_recipe_candidate_promotion(candidate_id: str) -> bool:
+    """작업자 실행과 분리된 후처리 서비스에 후보 승격을 맡긴다."""
+
+    from agent.application.recipe_promotion_service import schedule_recipe_candidate_promotion
+
+    return schedule_recipe_candidate_promotion(candidate_id)
+
+
 def persist_accepted_worker_result(worker_result: dict, review: dict, source: str = "realtime_scraping") -> tuple[int, dict, dict, str]:
     """Persist accepted worker data and update the stored submission row."""
     submission = dict(worker_result.get("submission") or {})
@@ -790,6 +631,7 @@ def persist_accepted_worker_result(worker_result: dict, review: dict, source: st
         if candidate_id:
             submission["recipe_candidate_id"] = candidate_id
             submission["recipe_learning_mode"] = learning_mode
+            _schedule_recipe_candidate_promotion(candidate_id)
     return persisted_count, submission, review, submission_id
 
 
@@ -832,8 +674,7 @@ def _result_payload(
     )
 
 
-@tool
-def realtime_scraping(
+def _run_realtime_scraping(
     company: str = None,
     tech_stack: str = None,
     site: str = None,
@@ -859,155 +700,85 @@ def realtime_scraping(
     else:
         return json.dumps({"message": "collection failed: missing search keyword", "review": {"decision": "reject"}}, ensure_ascii=False)
 
+    from agent.application.collection_service import (
+        CollectionOperations,
+        CollectionRequest,
+        CollectionService,
+    )
+    from agent.recipe.reviewer import render_review_feedback
+
     logger.info("[realtime_scraping] Invoking vision worker for keyword=%r", search_keyword)
-    requested_target_count = _normalize_target_count(target_count)
-    requested_task_category = normalize_task_category(task_category or DEFAULT_SEARCH_TASK_CATEGORY)
+    operations = CollectionOperations(
+        normalize_target_count=_normalize_target_count,
+        normalize_task_category=normalize_task_category,
+        review_retries=_worker_review_retries,
+        run_worker=run_worker_once,
+        review_worker=commit_worker_review,
+        persist_result=persist_accepted_worker_result,
+        render_review_feedback=render_review_feedback,
+        needs_approval=needs_human_limit_approval,
+        build_intermediate_report=build_limit_intermediate_report,
+        report_requires_more_collection=limit_report_requires_more_collection,
+        close_browser=_close_browser_after_run,
+    )
+    result = CollectionService(operations).collect(
+        CollectionRequest(
+            search_keyword=search_keyword,
+            site=site,
+            target_count=target_count,
+            task_category=task_category or DEFAULT_SEARCH_TASK_CATEGORY,
+            review_feedback=review_feedback or "",
+            review_attempt=review_attempt,
+        )
+    )
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
-    try:
-        from agent.recipe.reviewer import render_review_feedback
 
-        max_review_retries = _worker_review_retries()
-        attempt = max(0, int(review_attempt or 0))
-        pending_feedback = review_feedback or ""
-        run_id = None
-        while True:
-            worker_result = run_worker_once(
-                search_keyword,
+@tool
+def realtime_scraping(
+    company: str = None,
+    tech_stack: str = None,
+    site: str = None,
+    query: str = None,
+    target_count: int = 0,
+    task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
+    review_feedback: str = None,
+    review_attempt: int = 0,
+) -> str:
+    """단일 로컬 비전 작업자로 공고를 수집하고 승인된 결과만 저장한다."""
+
+    from agent.application.run_context import emit_run_event, run_context
+    from agent.application.run_contracts import RunPhase, RunStatus
+
+    context_query = query or " ".join(
+        part for part in (company, tech_stack) if part
+    )
+    with run_context(query=context_query, prefix="collection") as (context, created):
+        with worker_execution_session():
+            result_text = _run_realtime_scraping(
+                company=company,
+                tech_stack=tech_stack,
                 site=site,
-                target_count=requested_target_count,
-                task_category=requested_task_category,
-                review_feedback=pending_feedback,
-                review_attempt=attempt,
-                run_id=run_id,
-            )
-            submission = worker_result["submission"]
-            run_id = submission.get("run_id") or run_id
-            review, submission_id = commit_worker_review(submission)
-
-            if review.get("decision") == "revise" and attempt < max_review_retries:
-                pending_feedback = render_review_feedback(review)
-                attempt += 1
-                logger.info("[realtime_scraping] Retrying worker after commander feedback: attempt=%s", attempt)
-                continue
-
-            persisted_count, submission, review, persisted_submission_id = persist_accepted_worker_result(worker_result, review)
-            if persisted_submission_id:
-                submission_id = persisted_submission_id
-
-            item_count = int(submission.get("collected_count") or 0)
-            site_name = worker_result.get("site_name", site or "unknown")
-            site_slug = worker_result.get("site_slug", site or "unknown")
-            effective_keyword = worker_result.get("keyword") or search_keyword
-            hit_recursion_limit = bool(worker_result.get("hit_recursion_limit", False))
-            is_finished = bool(worker_result.get("is_finished", False))
-            recursion_limit = int(worker_result.get("recursion_limit") or DEFAULT_RECURSION_LIMIT)
-            target_count = int(worker_result.get("target_count") or submission.get("target_count") or 0)
-            task_category = worker_result.get("task_category") or submission.get("task_category") or requested_task_category
-            base_needs_approval = needs_human_limit_approval(
-                hit_recursion_limit=hit_recursion_limit,
-                is_finished=is_finished,
-                persisted_count=persisted_count,
-                target_count=target_count,
-            )
-            intermediate_report = (
-                build_limit_intermediate_report(
-                    worker_result,
-                    submission,
-                    persisted_count=persisted_count,
-                    current_limit=recursion_limit,
-                    target_count=target_count,
-                )
-                if base_needs_approval
-                else {}
-            )
-            needs_approval = base_needs_approval and limit_report_requires_more_collection(intermediate_report)
-
-            if needs_approval:
-                message = (
-                    "intermediate report: recursion limit reached with partial collection persisted; "
-                    f"keyword={effective_keyword!r}, site={site_name}, collected={item_count}, persisted={persisted_count}; "
-                    f"approval required to raise limit to {intermediate_report.get('suggested_recursion_limit')}"
-                )
-            elif review.get("decision") == "accept" and persisted_count > 0:
-                completion_type = "partial collection persisted" if hit_recursion_limit and not is_finished else "vision collection persisted"
-                message = f"{completion_type}: keyword={effective_keyword!r}, site={site_name}, collected={item_count}, persisted={persisted_count}"
-            elif review.get("decision") == "revise":
-                feedback_text = review.get("feedback_to_worker") or "; ".join(review.get("reasons") or [])
-                message = f"worker submission needs revision: {feedback_text}"
-            elif hit_recursion_limit:
-                message = f"collection stopped at recursion limit without accepted data: site={site_name}, keyword={effective_keyword!r}"
-            else:
-                message = f"collection finished without accepted data: site={site_name}, keyword={effective_keyword!r}"
-
-            return _result_payload(
-                message=message,
-                site_name=site_name,
-                site_slug=site_slug,
-                keyword=effective_keyword,
+                query=query,
                 target_count=target_count,
                 task_category=task_category,
-                item_count=item_count,
-                persisted_count=persisted_count,
-                submission_id=submission_id,
-                review=review,
-                hit_recursion_limit=hit_recursion_limit,
-                is_finished=is_finished,
-                needs_human_approval=needs_approval,
-                intermediate_report=intermediate_report,
+                review_feedback=review_feedback,
+                review_attempt=review_attempt,
             )
-
-    except Exception as e:
-        logger.error("[realtime_scraping] Vision worker execution error: %s", e, exc_info=True)
-        return json.dumps({"message": f"collection error: {e}", "review": {"decision": "reject"}}, ensure_ascii=False)
-    finally:
-        _close_browser_after_run()
-
-
-def _persist_collected_data(extracted_jd: dict, keyword: str) -> int:
-    """
-    비전 에이전트가 수집한 extracted_jd 데이터를 전처리 후 DB에 UPSERT합니다.
-    extracted_jd는 단일 공고 dict이거나, '공고목록' 키 아래 리스트를 담고 있을 수 있습니다.
-    전처리(clean_text / extract_tech_stacks / parse_experience / generate_content_hash)는
-    Preprocessor.process_raw_jd 에 전임합니다.
-    """
-    from shared.config import DB_PATH
-    from shared.db.database import Database
-    from agent.utils.preprocessor import Preprocessor
-
-    db = Database(DB_PATH)
-
-    # 공고 목록 추출 (리스트 or 단건)
-    job_list = _job_list_value(extracted_jd)
-    if job_list is not None:
-        if not isinstance(job_list, list):
-            job_list = [job_list]
-    else:
-        job_list = [extracted_jd] if extracted_jd else []
-
-    persisted_count = 0
-    for idx, job in enumerate(job_list):
-        if not isinstance(job, dict) or not job:
-            continue
-
-        normalized_job = _normalize_job_for_persistence(job, keyword=keyword)
-
-        # fallback으로 검색 결과 페이지 URL을 저장하면 이후 원본 공고 조회 시 엉뚱한 페이지로 연결됩니다.
-        # URL을 수집하지 못한 경우 해당 공고는 적재를 건너뜁니다.
-        url = normalized_job.get("url") or job.get("url") or job.get("URL") or job.get("공고url")
-        if not url:
-            company_name = job.get("회사명", job.get("company_name", ""))
-            position = job.get("직무명", job.get("position", ""))
-            logger.warning(f"[_persist] Skipping job #{idx} ({company_name} - {position}): URL not collected")
-            continue
+        if not created:
+            return result_text
 
         try:
-            normalized_job["url"] = str(url).strip()
-            job_posting = Preprocessor.process_raw_jd(normalized_job)
-            db.upsert(url=url, data=dump_model(job_posting))
-            persisted_count += 1
-            logger.info(f"[_persist] Successfully upserted job #{idx}: {job_posting.company_name} - {job_posting.position}")
-
-        except Exception as e:
-            logger.error(f"[_persist] Failed to persist job #{idx}: {e}")
-            continue
-    return persisted_count
+            payload = json.loads(result_text)
+        except (TypeError, json.JSONDecodeError):
+            payload = {"message": str(result_text)}
+        payload["run_id"] = context.run_id
+        payload["metrics"] = context.snapshot()
+        failed = str(payload.get("message") or "").startswith("collection error")
+        emit_run_event(
+            "run_failed" if failed else "run_completed",
+            RunPhase.FAILED if failed else RunPhase.COMPLETED,
+            "수집 작업이 실패했습니다." if failed else "수집 작업을 완료했습니다.",
+            status=RunStatus.FAILED if failed else RunStatus.COMPLETED,
+        )
+        return json.dumps(payload, ensure_ascii=False, indent=2)

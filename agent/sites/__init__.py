@@ -2,6 +2,7 @@
 
 from agent.sites.loader import (
     SiteProfileError,
+    get_official_site_url,
     get_site_entry,
     list_supported_sites,
     load_registry,
@@ -10,6 +11,7 @@ from agent.sites.loader import (
 
 __all__ = [
     "SiteProfileError",
+    "get_official_site_url",
     "get_site_entry",
     "list_supported_sites",
     "load_registry",

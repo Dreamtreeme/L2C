@@ -1,6 +1,6 @@
 """반사 레시피(Reflex Recipe) 스키마.
 
-화면 상태(state_key)와 OCR 마커(marker)를 기준으로 재생할 행동을 저장한다.
+타깃 주변 ROI pHash와 OCR 마커 비율을 기준으로 재생할 행동을 저장한다.
 DOM, Playwright selector, 절대좌표를 저장하지 않고 화면 텍스트/마커 공간에 머문다.
 """
 
@@ -49,22 +49,20 @@ class RecipeTarget(BaseModel):
     region: Optional[str] = Field(None, description="화면 내 대략적 위치(region)")
     ordinal: Optional[int] = Field(None, description="동일 텍스트 중 화면 순서(ordinal)")
     evidence_texts: List[str] = Field(default_factory=list, description="주변 OCR 근거 텍스트(evidence texts)")
+    marker_type: str = Field("", description="OCR/아이콘 마커 유형(marker type)")
     bbox_ratio: List[float] = Field(default_factory=list, description="화면 크기 대비 대상 bbox 비율(bbox ratio)")
     center_ratio: List[float] = Field(default_factory=list, description="화면 크기 대비 대상 중심 비율(center ratio)")
 
 
 class RecipeStep(BaseModel):
-    """한 화면 상태(state_key)에서 실행할 단일 행동 기록(recipe step)."""
+    """ROI 검증 후 실행할 단일 행동 기록(recipe step)."""
 
     seq: int = Field(..., description="단계 순서(step index)")
-    state_key: str = Field(..., description="행동을 실행한 화면 상태 키(state_key)")
-    state_anchors: List[str] = Field(
-        default_factory=list,
-        description="행동 전 화면의 정규화된 OCR 앵커(state anchors)",
-    )
-    screen_signature: Dict[str, Any] = Field(default_factory=dict, description="행동 전 화면 pHash/OCR 서명(screen signature)")
     roi_signature: Dict[str, Any] = Field(default_factory=dict, description="타깃 주변 ROI pHash 서명(ROI signature)")
     url_template: str = Field("", description="URL 템플릿(url template)")
+    page_role: str = Field("", description="행동을 기록한 화면 역할(page role)")
+    observed_page_role: str = Field("", description="코드가 관찰한 화면 역할(observed page role)")
+    declared_page_role: str = Field("", description="행동 계획이 선언한 화면 역할(declared page role)")
     action: str = Field(..., description="도구 이름(tool action)")
     target: Optional[RecipeTarget] = Field(None, description="클릭/입력 대상(target)")
     value: Optional[str] = Field(None, description="입력값 또는 부가 값(value)")

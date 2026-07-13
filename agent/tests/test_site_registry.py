@@ -8,6 +8,91 @@ def test_site_registry_lists_existing_profiles():
     assert all(site["runner"] == "vision_react" for site in sites)
 
 
+def test_official_site_urls_resolve_from_slug_name_and_domain():
+    from agent.sites import get_official_site_url
+
+    expected = {
+        "wanted": "https://www.wanted.co.kr",
+        "잡코리아": "https://www.jobkorea.co.kr",
+        "https://www.saramin.co.kr": "https://www.saramin.co.kr",
+        "고용24": "https://www.work24.go.kr",
+        "rocketpunch.com": "https://www.rocketpunch.com",
+    }
+
+    for requested_site, official_url in expected.items():
+        assert get_official_site_url(requested_site) == official_url
+
+
+def test_open_browser_uses_requested_site_official_url(monkeypatch):
+    from agent.tools.actions import ActionTools
+
+    class FakePerception:
+        _browser_window_id = None
+
+    action_tools = object.__new__(ActionTools)
+    action_tools.perception = FakePerception()
+    opened = []
+    monkeypatch.setattr(action_tools, "_bound_browser_window_exists", lambda: False)
+    monkeypatch.setattr(
+        action_tools,
+        "_open_url_after_window_ready",
+        lambda url: opened.append(url) or {"opened": True, "url": url},
+    )
+
+    result = action_tools.open_browser(site="saramin")
+
+    assert result["status"] == "success"
+    assert opened == ["https://www.saramin.co.kr"]
+
+
+def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch):
+    from agent.application.worker_execution_service import prepare_worker_start_screen
+    from agent.graph import nodes
+    from agent.sites import load_site_profile
+
+    calls = []
+    warmed = []
+
+    class FakeSomEngine:
+        def ensure_ocr_worker_ready(self):
+            warmed.append(True)
+
+    class FakePerception:
+        som_engine = FakeSomEngine()
+
+    class FakeActionTools:
+        perception = FakePerception()
+
+        def open_browser(self, url="", current_url="", site=""):
+            calls.append({"url": url, "current_url": current_url, "site": site})
+            return {
+                "status": "success",
+                "result": {"url": "https://www.jobkorea.co.kr"},
+            }
+
+    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
+    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
+    monkeypatch.setattr(
+        nodes,
+        "perception_node",
+        lambda state, **_kwargs: {
+            "current_url": "https://www.jobkorea.co.kr",
+            "current_url_stale": False,
+            "current_markers": [{"id": 1}],
+            "recent_images": ["screen.png"],
+        },
+    )
+
+    result = prepare_worker_start_screen(
+        {"current_url": "", "action_history": []},
+        load_site_profile("잡코리아"),
+    )
+
+    assert calls == [{"url": "", "current_url": "", "site": "jobkorea"}]
+    assert warmed == [True]
+    assert result["current_url"] == "https://www.jobkorea.co.kr"
+
+
 def test_site_registry_profile_files_exist():
     from agent.sites import list_supported_sites
     from agent.sites.loader import SITES_DIR

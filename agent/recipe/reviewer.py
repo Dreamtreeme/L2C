@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from agent.recipe.state_key import site_of
+from agent.recipe.text_utils import site_of
 from agent.recipe.task_category import normalize_task_category
 from agent.utils.job_fields import deterministic_report_item
 from agent.utils.model_dump import dump_model
@@ -57,7 +57,6 @@ def _report_summary_mode() -> str:
 
 def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     from langchain_core.messages import HumanMessage, SystemMessage
-    from langchain_google_genai import ChatGoogleGenerativeAI
 
     compact_jobs = [
         {
@@ -68,7 +67,9 @@ def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[s
         for idx, job in enumerate(jobs[:limit])
     ]
     model_name = os.getenv("VISION_WORKER_SUMMARY_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
-    llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(ReportJobSummary)
+    from agent.application.model_clients import get_structured_google_model
+
+    llm = get_structured_google_model(model_name, ReportJobSummary, temperature=0.0)
     messages = [
         SystemMessage(
             content=(
@@ -80,7 +81,9 @@ def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[s
         ),
         HumanMessage(content=json.dumps({"jobs": compact_jobs}, ensure_ascii=False, indent=2)),
     ]
-    response = llm.invoke(messages)
+    from agent.application.run_context import invoke_with_metrics
+
+    response = invoke_with_metrics(llm, messages, "worker_summary")
     summary = dump_model(response)
     out: list[dict[str, Any]] = []
     for idx, item in enumerate(summary.get("jobs") or []):
@@ -215,8 +218,6 @@ def validate_submission_shape(submission: dict[str, Any]) -> list[dict[str, Any]
         action = step.get("action")
         if not action:
             add(f"recorded_steps[{idx}].action", "missing action")
-        if not step.get("state_key"):
-            add(f"recorded_steps[{idx}].state_key", "missing OCR state key")
         if action in {"click_marker", "type_in_marker"} and not step.get("target"):
             add(f"recorded_steps[{idx}].target", "target action is missing target metadata", "warning")
 
@@ -265,10 +266,10 @@ def shape_review(submission: dict[str, Any], issues: list[dict[str, Any]] | None
 
 def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallback: dict[str, Any]) -> dict[str, Any]:
     from langchain_core.messages import HumanMessage, SystemMessage
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    from agent.application.model_clients import get_structured_google_model
 
     model_name = os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash")
-    llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(CommanderReview)
+    llm = get_structured_google_model(model_name, CommanderReview, temperature=0.0)
     compact = {
         "submission": submission,
         "shape_issues": issues,
@@ -291,7 +292,9 @@ def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallba
     last_error = ""
     for _ in range(2):
         try:
-            response = llm.invoke(messages)
+            from agent.application.run_context import invoke_with_metrics
+
+            response = invoke_with_metrics(llm, messages, "worker_review")
             review = dump_model(response)
             return dump_model(CommanderReview(**review))
         except Exception as exc:  # pragma: no cover - provider/schema failures are best-effort

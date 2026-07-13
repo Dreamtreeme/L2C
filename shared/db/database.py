@@ -53,7 +53,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_name);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
 
 CREATE TABLE IF NOT EXISTS recipes (
-    state_key     TEXT PRIMARY KEY,
+    recipe_key    TEXT PRIMARY KEY,
     site          TEXT NOT NULL,
     goal          TEXT,
     steps_json    TEXT NOT NULL,

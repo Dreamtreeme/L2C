@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from agent.recipe.payload_sanitizer import strip_state_debug_fields
 from agent.recipe.sqlite_store import SQLiteStore
 from shared.db.reflex_schema import RECIPE_CANDIDATES_INDEX_SQL, RECIPE_CANDIDATES_TABLE_SQL
 
@@ -30,12 +31,13 @@ class RecipeCandidateStore(SQLiteStore):
         review = review or {}
         if review.get("decision") != "accept" or not review.get("recipe_candidate"):
             return ""
-        steps = [step for step in submission.get("recorded_steps", []) or [] if isinstance(step, dict)]
+        clean_submission = strip_state_debug_fields(submission)
+        steps = [step for step in clean_submission.get("recorded_steps", []) or [] if isinstance(step, dict)]
         if not steps:
             return ""
 
-        run_id = submission.get("run_id") or "run-unknown"
-        attempt = int(submission.get("review_attempt") or 0)
+        run_id = clean_submission.get("run_id") or "run-unknown"
+        attempt = int(clean_submission.get("review_attempt") or 0)
         candidate_id = submission_id or f"{run_id}:{attempt}"
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
@@ -57,13 +59,13 @@ class RecipeCandidateStore(SQLiteStore):
                     run_id,
                     submission_id or candidate_id,
                     source,
-                    submission.get("site", "") or "",
-                    submission.get("goal", "") or "",
-                    submission.get("keyword", "") or "",
+                    clean_submission.get("site", "") or "",
+                    clean_submission.get("goal", "") or "",
+                    clean_submission.get("keyword", "") or "",
                     status,
                     float(review.get("confidence") or 0.0),
                     self.dump_json(steps),
-                    self.dump_json(submission),
+                    self.dump_json(clean_submission),
                     self.dump_json(review),
                     "",
                     created_at,
@@ -112,8 +114,8 @@ class RecipeCandidateStore(SQLiteStore):
 
     def _row_to_item(self, row) -> dict[str, Any]:
         item = dict(row)
-        item["steps"] = self.load_json(item.pop("steps_json", ""), [])
-        item["payload"] = self.load_json(item.pop("payload_json", ""), {})
+        item["steps"] = strip_state_debug_fields(self.load_json(item.pop("steps_json", ""), []))
+        item["payload"] = strip_state_debug_fields(self.load_json(item.pop("payload_json", ""), {}))
         item["review"] = self.load_json(item.pop("review_json", ""), {})
         item["validation"] = self.load_json(item.pop("validation_json", ""), {})
         return item

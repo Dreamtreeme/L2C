@@ -5,7 +5,6 @@
   "default_query_target": "position search",
   "navigation_policy": {
     "allow_direct_search_url": false,
-    "start_url": "https://www.wanted.co.kr",
     "search_entry": "Open the home page first, then use the visible search UI. Do not open /search?query URLs directly."
   },
   "persistence_policy": {

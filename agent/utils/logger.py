@@ -9,17 +9,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _sample_rate(name: str, default: float = 0.0) -> float:
+    try:
+        return min(1.0, max(0.0, float(os.getenv(name, str(default)))))
+    except ValueError:
+        return default
+
+
 # Sentry 초기화
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 if SENTRY_DSN:
     sentry_sdk.init(
         dsn=SENTRY_DSN,
-        # Set traces_sample_rate to 1.0 to capture 100%
-        # of transactions for performance monitoring.
-        traces_sample_rate=1.0,
-        # Set profiles_sample_rate to 1.0 to profile 100%
-        # of sampled transactions.
-        profiles_sample_rate=1.0,
+        traces_sample_rate=_sample_rate("SENTRY_TRACES_SAMPLE_RATE"),
+        profiles_sample_rate=_sample_rate("SENTRY_PROFILES_SAMPLE_RATE"),
         environment=os.getenv("APP_ENV", "development"),
     )
 
@@ -38,10 +42,9 @@ def setup_agent_logger():
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
-            # 콘솔 출력을 위한 ConsoleRenderer (터미널에서 가독성 좋음)
-            # 운영 시에는 JSONRenderer로 변경 가능
-            structlog.dev.ConsoleRenderer(colors=True)
-            if os.getenv("APP_ENV") != "production"
+            structlog.dev.ConsoleRenderer(colors=bool(sys.stdout.isatty()))
+            if os.getenv("LOG_FORMAT", "").strip().lower() != "json"
+            and os.getenv("APP_ENV") != "production"
             else structlog.processors.JSONRenderer()
         ],
         context_class=dict,

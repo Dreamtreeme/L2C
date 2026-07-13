@@ -4,8 +4,8 @@ import os
 # Add project root to sys.path to allow execution from outside or inside the folder
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.graph.nodes import qa_reasoning_node
-from agent.graph.state import GraphState
+from agent.application.chat_service import get_chat_service
+from agent.application.run_contracts import new_run_id
 
 def main():
     if len(sys.argv) < 2:
@@ -26,56 +26,16 @@ def main():
     print(f"Goal: {query}")
     print("==========================================\n")
     
-    # Initialize state with required typing matching GraphState
-    state = GraphState(
-        goal=query,
-        ui_context="",
-        current_url="",
-        current_url_stale=True,
-        current_markers=[],
-        action_history=[],
-        recent_images=[],
-        marked_image="",
-        screen_signature={},
-        error_count=0,
-        is_finished=False,
-        collected_data=[],
-        extracted_jd={},
-        last_action_result=None,
-        plan=[],
-        current_plan_step=0,
-        step_durations=[],
-        last_action_screen_changed=True,
-        recorded_steps=[],
-        feedback_episodes=[],
-        reflex_state_key="",
-        reflex_hit=False,
-        reflex_trace={},
-        reflex_transition_contracts={},
-        recipe_params={},
-        pending_transition={},
-        transition_status="",
-        transition_outcome="",
-        transition_source="",
-        transition_observations=[],
-        result_card_queue=[],
-        result_page_memory={},
-        active_result_card={},
-        queue_replay_hit=False,
-        queue_replay_trace={},
-        pending_human_approval=False,
-        human_approval_request={},
-    )
-    
     try:
-        # Invoke the main commander node
-        result = qa_reasoning_node(state)
-        final_answer = result.get("last_action_result", "")
+        run_id = new_run_id("cli")
+        result = get_chat_service().run(query, run_id=run_id)
+        final_answer = str(result.get("last_action_result") or "")
         
         print("\n==========================================")
         print("💡 지휘자 최종 답변:")
         print("==========================================")
         print(final_answer)
+        print(f"실행 식별자: {run_id}")
         print("==========================================\n")
         
     except Exception as e:

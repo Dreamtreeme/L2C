@@ -11,7 +11,7 @@ venv/
 .env.local
 
 # 데이터
-data/
+data/*
 output/
 logs/
 
@@ -35,4 +35,5 @@ Thumbs.db
 
 # 단, 샘플은 커밋
 !data/samples/
+!data/samples/**
 *.fixed

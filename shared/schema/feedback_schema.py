@@ -71,7 +71,6 @@ class FeedbackEpisode(BaseModel):
     seq: int
     goal: str = ""
     site: str = ""
-    page_state_key: str = ""
     proposal: ActionProposal
     observation: ActionObservation
     feedback: ActionFeedback

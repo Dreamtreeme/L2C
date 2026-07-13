@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "currency": "USD",
+  "models": {
+    "provider-model-id": {
+      "input_usd_per_million": 0.0,
+      "cached_input_usd_per_million": 0.0,
+      "output_usd_per_million": 0.0
+    }
+  }
+}

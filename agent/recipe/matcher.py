@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from agent.recipe.state_key import normalize_text
+from agent.recipe.page_context import normalize_page_role
+from agent.recipe.text_utils import normalize_text
 from agent.vision.marker_geometry import marker_bbox, marker_center
 
 
@@ -97,5 +98,7 @@ def is_replayable_step(step: Any, params: dict | None = None) -> bool:
     action = _step_get(step, "action")
     if action not in {"click_marker", "type_in_marker"}:
         return True
+    if not normalize_page_role(_step_get(step, "page_role", "")):
+        return False
     target = _step_get(step, "target")
     return bool(normalize_text(_target_get(target, "text", "")) or _target_semantic_label(target))

@@ -1,8 +1,8 @@
 import operator
-from typing import TypedDict, List, Dict, Any, Annotated, Optional
+from typing import TypedDict, List, Dict, Any, Annotated
 from pathlib import Path
 
-class GraphState(TypedDict):
+class GraphState(TypedDict, total=False):
     """
     LangGraph에서 노드 간에 전달되는 상태 스키마입니다.
     """
@@ -15,8 +15,15 @@ class GraphState(TypedDict):
     # 현재 활성 브라우저 URL
     current_url: str
 
+    # 현재 화면의 대략적 역할. Reflex replay 적용 조건으로만 쓴다.
+    current_page_role: str
+
     # 현재 URL 캐시가 브라우저 실제 주소와 달라졌을 가능성
     current_url_stale: bool
+
+    # 로딩/빈 화면이라 OCR과 LLM 판단을 건너뛰어야 하는지 여부
+    low_information_screen: bool
+    low_information_retry_count: int
 
     # 원본 마커 데이터 (ID 매핑용)
     current_markers: List[Dict[str, Any]]
@@ -62,14 +69,11 @@ class GraphState(TypedDict):
     # 마지막 action이 화면 전환/렌더링 변화를 유발했는지 여부
     last_action_screen_changed: bool
 
-    # [Reflex Recipe / Phase0] 비전 런 중 기록된 (상태->타깃) 스텝. operator.add로 누적.
+    # [Reflex Recipe / Phase0] 비전 런 중 기록된 UI 행동/타깃 ROI 스텝. operator.add로 누적.
     recorded_steps: Annotated[List[Dict[str, Any]], operator.add]
 
     # [Feedback Loop] 행동 제안 -> 실행 -> 관찰 -> 1차 피드백 에피소드. operator.add로 누적.
     feedback_episodes: Annotated[List[Dict[str, Any]], operator.add]
-
-    # [Reflex Recipe] 현재 perception 결과로 계산한 화면-상태 키
-    reflex_state_key: str
 
     # [Reflex Recipe] 직전 reflex_node가 reasoning을 우회했는지 여부
     reflex_hit: bool
@@ -79,6 +83,9 @@ class GraphState(TypedDict):
 
     # [Reflex Recipe] reflex tool_call id별 행동 후 전환 계약
     reflex_transition_contracts: Dict[str, Any]
+
+    # [Reflex Recipe] 같은 worker run 안에서 전환 검증에 실패해 재시도하지 않을 recipe_key 목록
+    reflex_blocked_recipe_keys: List[str]
 
     # [Reflex Recipe] 재생 시 치환할 입력값(recipe_params)
     recipe_params: Dict[str, Any]
@@ -100,6 +107,10 @@ class GraphState(TypedDict):
     active_result_card: Dict[str, Any]
     queue_replay_hit: bool
     queue_replay_trace: Dict[str, Any]
+
+    # [Page Policy] 상세 페이지처럼 구조가 안정적인 반복 읽기 흐름에서 LLM 판단을 우회한 액션
+    page_policy_hit: bool
+    page_policy_trace: Dict[str, Any]
 
     # [Detail OCR Buffer] 상세 페이지 OCR을 화면별로 누적하고 마지막에 한 번 정제한다.
     detail_ocr_buffer: Dict[str, Any]

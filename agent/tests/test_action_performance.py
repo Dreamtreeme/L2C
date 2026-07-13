@@ -59,8 +59,8 @@ def test_open_browser_ignores_current_url_for_decision(monkeypatch):
     monkeypatch.setattr(action_tools, "_bound_browser_window_exists", lambda: False)
     monkeypatch.setattr(
         action_tools,
-        "_open_url_in_new_window",
-        lambda url: opened.append(url) or {"opened": True, "url": url, "reason": "new_browser_window"},
+        "_open_url_after_window_ready",
+        lambda url: opened.append(url) or {"opened": True, "url": url, "reason": "new_browser_window_navigated"},
     )
 
     result = action_tools.open_browser(
@@ -93,8 +93,8 @@ def test_open_browser_does_not_run_duplicate_ocr_readiness_check(monkeypatch):
     monkeypatch.setattr(action_tools, "_bound_browser_window_exists", lambda: False)
     monkeypatch.setattr(
         action_tools,
-        "_open_url_in_new_window",
-        lambda url: opened.append(url) or {"opened": True, "url": url, "reason": "new_browser_window"},
+        "_open_url_after_window_ready",
+        lambda url: opened.append(url) or {"opened": True, "url": url, "reason": "new_browser_window_navigated"},
     )
 
     result = action_tools.open_browser("https://www.wanted.co.kr", current_url="")
@@ -158,7 +158,6 @@ def test_action_node_records_target_metadata(monkeypatch):
         "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "Data Scientist"}],
         "current_url": "https://www.wanted.co.kr/search?query=data",
         "current_url_stale": False,
-        "reflex_state_key": "state-results",
         "marked_image": "marked.jpg",
         "recent_images": ["screen.jpg"],
         "extracted_jd": {},
@@ -174,7 +173,7 @@ def test_action_node_records_target_metadata(monkeypatch):
     })
 
     action = result["action_history"][0]
-    assert action["state_key"] == "state-results"
+    assert "state_key" not in action
     assert action["before_url"] == "https://www.wanted.co.kr/search?query=data"
     assert action["before_screenshot"] == "screen.jpg"
     assert action["before_marked_image"] == "marked.jpg"
@@ -187,7 +186,7 @@ def test_action_node_records_target_metadata(monkeypatch):
     episode = result["feedback_episodes"][0]
     assert episode["proposal"]["action"] == "click_marker"
     assert episode["proposal"]["target"]["text"] == "Data Scientist"
-    assert episode["observation"]["before"]["state_key"] == "state-results"
+    assert "state_key" not in episode["observation"]["before"]
     assert episode["feedback"]["label"] == "partial"
 
 
@@ -271,8 +270,6 @@ def test_action_node_carries_reflex_transition_contract_to_next_perception(monke
             "reflex_trace": {
                 "hit": True,
                 "recipe_key": "recipe-home",
-                "lookup": "exact",
-                "similarity": 1.0,
                 "tool_calls": {
                     "reflex-call": {
                         "seq": 0,
@@ -299,12 +296,12 @@ def test_action_node_carries_reflex_transition_contract_to_next_perception(monke
     assert result["action_history"][0]["reflex_match"]["match_mode"] == "roi_phash"
 
 
-def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
+def test_action_node_does_not_block_repeated_action_by_state_key(monkeypatch):
     from langchain_core.messages import AIMessage
     from agent.graph import nodes
 
-    def fake_dispatch_ui(*_args, **_kwargs):
-        raise AssertionError("repeated action should be blocked before dispatch")
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        return {"status": "success", "action": action_name, "result": "ok"}
 
     monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
 
@@ -312,13 +309,11 @@ def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
         "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "Data Scientist"}],
         "current_url": "https://www.wanted.co.kr/search?query=data",
         "current_url_stale": False,
-        "reflex_state_key": "state-results",
         "action_history": [
             {
                 "status": "success",
                 "action": "click_marker",
                 "args": {"marker_id": 1},
-                "state_key": "state-results",
             }
         ],
         "extracted_jd": {},
@@ -334,16 +329,11 @@ def test_action_node_blocks_repeated_same_state_ui_action(monkeypatch):
     })
 
     action = result["action_history"][0]
-    assert action["status"] == "skipped"
-    assert action["reason"] == "same_state_repeat_blocked"
+    assert action["status"] == "success"
     assert action["target"]["text"] == "Data Scientist"
-    assert "observation_required" not in action
     assert result["error_count"] == 0
-    assert result["last_action_screen_changed"] is False
-    assert result["current_url_stale"] is False
-    repeat_episode = result["feedback_episodes"][0]
-    assert repeat_episode["feedback"]["label"] == "loop_risk"
-    assert repeat_episode["feedback"]["reason"] == "same_state_repeat_blocked"
+    assert result["last_action_screen_changed"] is True
+    assert result["current_url_stale"] is True
 
 
 def test_action_node_stops_ui_chain_after_screen_boundary_action(monkeypatch):
@@ -418,14 +408,82 @@ def test_action_node_allows_type_then_enter_chain(monkeypatch):
             content="",
             tool_calls=[
                 {"name": "type_in_marker", "args": {"marker_id": 1, "text": "데이터 분석가"}, "id": "1"},
-                {"name": "press_key", "args": {"key": "enter"}, "id": "2"},
+                {"name": "press_key", "args": {"key": "enter", "_transition_source": "reflex_compound"}, "id": "2"},
             ],
         ),
     })
 
     assert calls == ["type_in_marker", "press_key"]
     assert [a["status"] for a in result["action_history"]] == ["success", "success"]
+    assert result["action_history"][1]["args"] == {"key": "enter"}
+    assert result["pending_transition"]["source"] == "reflex_compound"
     assert result["last_action_screen_changed"] is True
+
+
+def test_text_input_target_guard_rejects_close_icon_and_accepts_input_container():
+    from agent.runtime.action_validation import text_input_target_rejection
+
+    markers = [
+        {"id": 0, "bbox": [2350, 218, 2423, 297], "type": "icon"},
+        {"id": 1, "bbox": [1398, 317, 2430, 401], "type": "icon"},
+        {"id": 2, "bbox": [1451, 341, 1541, 371], "type": "text"},
+    ]
+
+    rejection = text_input_target_rejection(markers, 0)
+
+    assert rejection == {
+        "reason": "implausible_text_input_target",
+        "marker_id": 0,
+        "marker_type": "icon",
+        "aspect_ratio": 0.924,
+    }
+    assert text_input_target_rejection(markers, 1) is None
+    assert text_input_target_rejection(markers, 2) is None
+
+
+def test_action_node_rejects_type_on_compact_icon_before_physical_input(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def unexpected_dispatch(*args, **kwargs):
+        raise AssertionError("거절된 입력 대상에는 물리 입력을 실행하면 안 됩니다.")
+
+    monkeypatch.setattr(nodes, "_dispatch_ui", unexpected_dispatch)
+
+    result = nodes.action_node(
+        {
+            "current_markers": [
+                {"id": 0, "bbox": [2350, 218, 2423, 297], "type": "icon", "text": "닫기"},
+                {"id": 1, "bbox": [1398, 317, 2430, 401], "type": "icon", "text": "입력 영역"},
+                {"id": 2, "bbox": [1451, 341, 1541, 371], "type": "text", "text": "검색어"},
+            ],
+            "current_url": "https://www.wanted.co.kr",
+            "current_url_stale": False,
+            "extracted_jd": {},
+            "is_finished": False,
+            "collected_data": [],
+            "error_count": 0,
+            "current_plan_step": 0,
+            "plan": [],
+            "last_action_result": AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "type_in_marker",
+                        "args": {"marker_id": 0, "text": "ios 개발자", "target_role": "search_input"},
+                        "id": "1",
+                    },
+                    {"name": "press_key", "args": {"key": "enter"}, "id": "2"},
+                ],
+            ),
+        }
+    )
+
+    assert len(result["action_history"]) == 1
+    assert result["action_history"][0]["status"] == "error"
+    assert result["action_history"][0]["reason"] == "implausible_text_input_target"
+    assert result["last_action_screen_changed"] is False
+    assert result["error_count"] == 1
 
 
 def test_reasoning_prompt_lists_forbidden_same_screen_actions():
@@ -583,12 +641,12 @@ def test_reasoning_prompt_compacts_large_state_inputs(monkeypatch):
     assert "이전 행동 내역" not in human_text
 
 
-def test_action_node_blocks_same_state_repeat_across_intervening_states(monkeypatch):
+def test_action_node_allows_repeat_after_navigation_without_state_key_guard(monkeypatch):
     from langchain_core.messages import AIMessage
     from agent.graph import nodes
 
-    def fake_dispatch_ui(*_args, **_kwargs):
-        raise AssertionError("same state repeat should be blocked even after visiting another screen")
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        return {"status": "success", "action": action_name, "result": "ok"}
 
     monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
 
@@ -596,25 +654,21 @@ def test_action_node_blocks_same_state_repeat_across_intervening_states(monkeypa
         "current_markers": [{"id": 41, "bbox": [10, 20, 110, 80], "text": "Job card"}],
         "current_url": "https://www.wanted.co.kr/search?query=iOS",
         "current_url_stale": False,
-        "reflex_state_key": "state-list",
         "action_history": [
             {
                 "status": "success",
                 "action": "click_marker",
                 "args": {"marker_id": 41},
-                "state_key": "state-list",
             },
             {
                 "status": "success",
                 "action": "scroll",
                 "args": {"direction": "down"},
-                "state_key": "state-detail",
             },
             {
                 "status": "success",
                 "action": "go_back",
                 "args": {},
-                "state_key": "state-detail-bottom",
             },
         ],
         "extracted_jd": {},
@@ -630,21 +684,77 @@ def test_action_node_blocks_same_state_repeat_across_intervening_states(monkeypa
     })
 
     action = result["action_history"][0]
-    assert action["status"] == "skipped"
-    assert action["reason"] == "same_state_repeat_blocked"
+    assert action["status"] == "success"
     assert result["error_count"] == 0
-    assert result["last_action_screen_changed"] is False
-    assert result["current_url_stale"] is False
-    repeat_episode = result["feedback_episodes"][0]
-    assert repeat_episode["feedback"]["label"] == "loop_risk"
-    assert repeat_episode["feedback"]["reason"] == "same_state_repeat_blocked"
+    assert result["last_action_screen_changed"] is True
+    assert result["current_url_stale"] is True
 
-def test_action_node_blocks_same_state_repeat_when_marker_id_changes_but_target_text_matches(monkeypatch):
+def test_action_node_records_policy_go_back_step(monkeypatch):
     from langchain_core.messages import AIMessage
     from agent.graph import nodes
 
-    def fake_dispatch_ui(*_args, **_kwargs):
-        raise AssertionError("semantic repeat should be blocked before dispatch")
+    recorded_actions = []
+
+    def fake_dispatch_state(action_name, _args, _jd, plan, plan_step, **_kwargs):
+        return (
+            {"action": action_name, "status": "success", "_detail_ocr_buffer": {}},
+            {"공고목록": [{"position": "iOS 개발자"}]},
+            plan,
+            plan_step,
+        )
+
+    def fake_dispatch_ui(action_name, _args, _get_bbox, current_url=""):
+        return {"status": "success", "action": action_name, "result": current_url}
+
+    def fake_record_ui_step(_steps, _state, action_name, _args, _seq):
+        recorded_actions.append(action_name)
+
+    monkeypatch.setattr(nodes, "_dispatch_state", fake_dispatch_state)
+    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+    monkeypatch.setattr("agent.recipe.record.record_ui_step", fake_record_ui_step)
+
+    result = nodes.action_node(
+        {
+            "current_url": "https://www.wanted.co.kr/wd/1",
+            "current_url_stale": False,
+            "current_markers": [],
+            "recipe_params": {"target_count": 2},
+            "result_card_queue": [{"queue_id": "card-2", "status": "pending"}],
+            "active_result_card": {"queue_id": "card-1"},
+            "extracted_jd": {},
+            "detail_ocr_buffer": {},
+            "action_history": [],
+            "collected_data": [],
+            "error_count": 0,
+            "current_plan_step": 0,
+            "plan": [],
+            "is_finished": False,
+            "last_action_result": AIMessage(
+                content="[page_policy] detail finish",
+                tool_calls=[
+                    {
+                        "name": "finish_detail_reading",
+                        "args": {"page_role": "job_detail", "detail_complete": True},
+                        "id": "detail-finish",
+                    }
+                ],
+            ),
+        }
+    )
+
+    assert [action["action"] for action in result["action_history"]] == [
+        "finish_detail_reading",
+        "go_back",
+    ]
+    assert recorded_actions == ["go_back"]
+
+
+def test_action_node_allows_same_text_when_marker_id_changes_without_state_key_guard(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
+        return {"status": "success", "action": action_name, "result": "ok"}
 
     monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
 
@@ -652,13 +762,11 @@ def test_action_node_blocks_same_state_repeat_when_marker_id_changes_but_target_
         "current_markers": [{"id": 42, "bbox": [10, 20, 110, 80], "text": "Job card"}],
         "current_url": "https://www.wanted.co.kr/search?query=iOS",
         "current_url_stale": False,
-        "reflex_state_key": "state-list",
         "action_history": [
             {
                 "status": "success",
                 "action": "click_marker",
                 "args": {"marker_id": 41},
-                "state_key": "state-list",
                 "target": {"marker_id": 41, "text": "Job card"},
             }
         ],
@@ -675,11 +783,10 @@ def test_action_node_blocks_same_state_repeat_when_marker_id_changes_but_target_
     })
 
     action = result["action_history"][0]
-    assert action["status"] == "skipped"
-    assert action["reason"] == "same_state_repeat_blocked"
+    assert action["status"] == "success"
     assert result["error_count"] == 0
-    assert result["last_action_screen_changed"] is False
-    assert result["current_url_stale"] is False
+    assert result["last_action_screen_changed"] is True
+    assert result["current_url_stale"] is True
 
 def test_action_node_allows_state_update_after_screen_boundary(monkeypatch):
     from langchain_core.messages import AIMessage
@@ -798,6 +905,7 @@ def test_open_browser_uses_new_window_when_no_browser_is_bound(monkeypatch):
 
     launched = []
     bound_calls = []
+    navigated = []
 
     class FakePerception:
         _browser_window_id = None
@@ -815,18 +923,25 @@ def test_open_browser_uses_new_window_when_no_browser_is_bound(monkeypatch):
     monkeypatch.setattr(action_tools, "_browser_executable", lambda: browser_exe)
     monkeypatch.setattr(action_tools, "_sleep", lambda seconds: None)
     monkeypatch.setattr(action_tools, "_bind_new_or_active_browser_window", lambda before_ids: bound_calls.append(before_ids) or True)
+    monkeypatch.setattr(
+        action_tools,
+        "_navigate_bound_browser",
+        lambda url: navigated.append(url)
+        or {"opened": True, "url": url, "reason": "dedicated_browser_navigated"},
+    )
     monkeypatch.setattr(actions.subprocess, "Popen", fake_popen)
 
     result = action_tools.open_browser("https://www.wanted.co.kr", current_url="")
 
     assert result["status"] == "success"
     assert result["result"]["opened"] is True
-    assert result["result"]["reason"] == "new_browser_window"
-    assert launched == [[str(browser_exe), "--new-window", "https://www.wanted.co.kr"]]
+    assert result["result"]["reason"] == "new_browser_window_navigated"
+    assert launched == [[str(browser_exe), "--new-window", "--window-size=1976,2129", "about:blank"]]
     assert bound_calls == [set()]
+    assert navigated == ["https://www.wanted.co.kr"]
 
 
-def test_open_browser_window_size_is_opt_in(monkeypatch):
+def test_open_browser_window_size_can_be_disabled(monkeypatch):
     from pathlib import Path
 
     from agent.tools import actions
@@ -843,17 +958,79 @@ def test_open_browser_window_size_is_opt_in(monkeypatch):
 
     action_tools = object.__new__(ActionTools)
     action_tools.perception = FakePerception()
-    monkeypatch.setenv("VISION_BROWSER_WINDOW_SIZE", "1")
+    monkeypatch.setenv("VISION_BROWSER_WINDOW_SIZE", "0")
     monkeypatch.setattr(action_tools, "_browser_window_ids", lambda: set())
     monkeypatch.setattr(action_tools, "_browser_executable", lambda: Path("C:/Chrome/chrome.exe"))
     monkeypatch.setattr(action_tools, "_sleep", lambda seconds: None)
     monkeypatch.setattr(action_tools, "_bind_new_or_active_browser_window", lambda before_ids: True)
+    monkeypatch.setattr(
+        action_tools,
+        "_navigate_bound_browser",
+        lambda url: {"opened": True, "url": url, "reason": "dedicated_browser_navigated"},
+    )
     monkeypatch.setattr(actions.subprocess, "Popen", fake_popen)
 
     result = action_tools.open_browser("https://www.wanted.co.kr", current_url="")
 
     assert result["status"] == "success"
-    assert launched == [[str(Path("C:/Chrome/chrome.exe")), "--new-window", "--window-size=1976,2129", "https://www.wanted.co.kr"]]
+    assert launched == [[str(Path("C:/Chrome/chrome.exe")), "--new-window", "about:blank"]]
+
+
+def test_normalize_browser_window_restores_and_resizes(monkeypatch):
+    from agent.tools.actions import ActionTools
+
+    calls = []
+
+    class FakeWindow:
+        isMaximized = True
+        width = 1976
+        height = 2129
+
+        def restore(self):
+            calls.append("restore")
+
+        def resizeTo(self, width, height):
+            calls.append(("resize", width, height))
+
+    action_tools = object.__new__(ActionTools)
+    monkeypatch.setattr(action_tools, "_sleep", lambda seconds: calls.append(("sleep", seconds)))
+
+    assert action_tools._normalize_browser_window(FakeWindow()) is True
+    assert calls[0] == "restore"
+    assert calls[1] == ("resize", 1976, 2129)
+
+
+def test_reasoning_screen_guard_detects_changed_screen(tmp_path, monkeypatch):
+    from PIL import Image, ImageDraw
+
+    from agent.runtime.action_guard import check_reasoning_screen_stale
+    from agent.vision.screen_signature import perceptual_hash
+
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    before_image = Image.new("RGB", (256, 256), "white")
+    ImageDraw.Draw(before_image).rectangle([0, 0, 96, 256], fill="black")
+    before_image.save(before)
+    after_image = Image.new("RGB", (256, 256), "white")
+    ImageDraw.Draw(after_image).ellipse([100, 20, 240, 160], fill="black")
+    after_image.save(after)
+
+    class FakePerception:
+        def capture_screen(self, **kwargs):
+            assert kwargs["initial_wait_sec"] == 0
+            assert kwargs["wait_for_stable"] is False
+            return after
+
+    monkeypatch.setenv("VISION_REASONING_STALE_PHASH_MAX_DISTANCE", "10")
+    result = check_reasoning_screen_stale(
+        {"screen_signature": {"phash": perceptual_hash(before)}},
+        FakePerception(),
+    )
+
+    assert result["checked"] is True
+    assert result["stale"] is True
+    assert result["reason"] == "screen_changed_during_reasoning"
+    assert result["distance"] > result["max_distance"]
 
 
 def test_open_browser_navigates_bound_window_instead_of_opening_another(monkeypatch):

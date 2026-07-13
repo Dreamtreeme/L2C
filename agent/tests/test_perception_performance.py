@@ -17,6 +17,84 @@ class FakeSct:
         return FakeSctImage()
 
 
+def test_paddle_worker_emits_phases_and_request_scoped_result(monkeypatch, capsys):
+    import io
+    import json
+
+    from agent.tools import paddle_ocr_runner as runner
+
+    class FakeOcr:
+        def ocr(self, _image_path, cls=False):
+            assert cls is False
+            return [
+                [
+                    [
+                        [[0, 0], [10, 0], [10, 10], [0, 10]],
+                        ("검색", 0.9),
+                    ]
+                ]
+            ]
+
+    monkeypatch.setattr(runner, "build_ocr", lambda: FakeOcr())
+    monkeypatch.setattr(
+        runner.sys,
+        "stdin",
+        io.StringIO(json.dumps({"request_id": "req-1", "image_path": "screen.png"}) + "\n"),
+    )
+
+    runner.worker_main()
+
+    output_lines = capsys.readouterr().out.splitlines()
+    phases = [
+        json.loads(line.removeprefix("__OCR_EVENT__ "))["phase"]
+        for line in output_lines
+        if line.startswith("__OCR_EVENT__ ")
+    ]
+    result_line = next(line for line in output_lines if line.startswith("__OCR_JSON_RESULT__ "))
+    result = json.loads(result_line.removeprefix("__OCR_JSON_RESULT__ "))
+
+    assert phases == [
+        "request_received",
+        "inference_started",
+        "inference_completed",
+        "result_serialized",
+    ]
+    assert result["request_id"] == "req-1"
+    assert result["results"][0]["text"] == "검색"
+    assert result["timings"]["inference_sec"] >= 0
+
+
+def test_paddle_worker_emits_explicit_error_instead_of_empty_result(monkeypatch, capsys):
+    import io
+    import json
+
+    from agent.tools import paddle_ocr_runner as runner
+
+    class FailingOcr:
+        def ocr(self, _image_path, cls=False):
+            raise RuntimeError("predictor stopped")
+
+    monkeypatch.setattr(runner, "build_ocr", lambda: FailingOcr())
+    monkeypatch.setattr(
+        runner.sys,
+        "stdin",
+        io.StringIO(json.dumps({"request_id": "req-2", "image_path": "screen.png"}) + "\n"),
+    )
+
+    runner.worker_main()
+
+    captured = capsys.readouterr()
+    output_lines = captured.out.splitlines()
+    error_line = next(line for line in output_lines if line.startswith("__OCR_WORKER_ERROR__ "))
+    error = json.loads(error_line.removeprefix("__OCR_WORKER_ERROR__ "))
+
+    assert error["request_id"] == "req-2"
+    assert error["phase"] == "inference_started"
+    assert error["error_type"] == "RuntimeError"
+    assert not any(line.startswith("__OCR_JSON_RESULT__ ") for line in output_lines)
+    assert "predictor stopped" in captured.err
+
+
 def test_wait_stable_uses_supplied_region_without_window_lookup():
     from agent.utils.wait_stable import WaitStable
 
@@ -108,6 +186,52 @@ def test_screen_quality_distinguishes_blank_body_from_content(monkeypatch, tmp_p
     assert engine.screen_quality(content_path)["low_information"] is False
 
 
+def test_screen_quality_excludes_dynamic_browser_chrome_from_blank_page(monkeypatch, tmp_path):
+    from agent.tools.perception import PerceptionEngine
+
+    image_path = tmp_path / "blank-browser.png"
+    image = Image.new("RGB", (800, 900), "white")
+    image.paste((45, 58, 65), (0, 0, 800, 185))
+    image.save(image_path)
+
+    engine = object.__new__(PerceptionEngine)
+    monkeypatch.delenv("VISION_PAGE_CONTENT_TOP_PX", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MAX_STDDEV", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MAX_EDGE_MEAN", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", raising=False)
+
+    quality = engine.screen_quality(image_path)
+
+    assert quality["low_information"] is True
+
+
+def test_screen_quality_preserves_sparse_search_ui(monkeypatch, tmp_path):
+    from PIL import ImageDraw
+    from agent.tools.perception import PerceptionEngine
+
+    image_path = tmp_path / "sparse-search.png"
+    image = Image.new("RGB", (800, 900), "white")
+    image.paste((45, 58, 65), (0, 0, 800, 185))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((290, 220, 510, 260), radius=8, fill=(245, 245, 245))
+    draw.rectangle((300, 232, 430, 237), fill=(120, 120, 120))
+    for row in range(4):
+        y = 300 + row * 35
+        draw.rectangle((300, y, 355, y + 7), fill=(60, 60, 60))
+        draw.rectangle((440, y, 495, y + 7), fill=(60, 60, 60))
+    image.save(image_path)
+
+    engine = object.__new__(PerceptionEngine)
+    monkeypatch.delenv("VISION_PAGE_CONTENT_TOP_PX", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MAX_STDDEV", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MAX_EDGE_MEAN", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", raising=False)
+
+    quality = engine.screen_quality(image_path)
+
+    assert quality["low_information"] is False
+
+
 def test_capture_usable_screen_retries_before_ocr(monkeypatch, tmp_path):
     from agent.tools.perception import PerceptionEngine
 
@@ -134,6 +258,24 @@ def test_capture_usable_screen_retries_before_ocr(monkeypatch, tmp_path):
     assert calls[1].startswith("screen_retry_")
 
 
+def test_capture_usable_screen_honors_single_attempt_override(monkeypatch, tmp_path):
+    from agent.tools.perception import PerceptionEngine
+
+    engine = object.__new__(PerceptionEngine)
+    blank_path = tmp_path / "blank.png"
+    calls = []
+
+    monkeypatch.setattr(
+        engine,
+        "capture_screen",
+        lambda filename=None: calls.append(filename) or blank_path,
+    )
+    monkeypatch.setattr(engine, "screen_quality", lambda _path: {"low_information": True})
+
+    assert engine.capture_usable_screen(max_attempts=1) == blank_path
+    assert calls == [None]
+
+
 def test_prepare_som_image_excludes_browser_toolbar_and_bookmarks(monkeypatch, tmp_path):
     from agent.tools.perception import PerceptionEngine
 
@@ -147,6 +289,23 @@ def test_prepare_som_image_excludes_browser_toolbar_and_bookmarks(monkeypatch, t
     assert crop_top == 140
     with Image.open(cropped_path) as cropped:
         assert cropped.size == (800, 760)
+
+
+def test_prepare_som_image_detects_browser_content_boundary(monkeypatch, tmp_path):
+    from agent.tools.perception import PerceptionEngine
+
+    image_path = tmp_path / "browser.png"
+    image = Image.new("RGB", (800, 900), (65, 80, 88))
+    image.paste((250, 250, 250), (0, 185, 800, 900))
+    image.save(image_path)
+    engine = object.__new__(PerceptionEngine)
+    monkeypatch.delenv("VISION_SOM_CROP_TOP", raising=False)
+
+    cropped_path, crop_top = engine._prepare_som_image(image_path)
+
+    assert crop_top == 185
+    with Image.open(cropped_path) as cropped:
+        assert cropped.size == (800, 715)
 
 
 def test_som_engine_normalizes_paddleocr_results_and_scales_boxes():
@@ -180,8 +339,8 @@ def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
     monkeypatch.delenv("SOM_OCR_MAX_DIM", raising=False)
 
     assert engine._ocr_scale_for_image(1024, 900) == 1.0
-    assert round(engine._ocr_scale_for_image(1976, 1200), 3) == round(1280 / 1976, 3)
-    assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1280 / 3846, 3)
+    assert round(engine._ocr_scale_for_image(1976, 1200), 3) == round(1152 / 1976, 3)
+    assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1152 / 3846, 3)
 
     monkeypatch.setenv("SOM_OCR_MAX_DIM", "1600")
     assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1600 / 3846, 3)
@@ -190,44 +349,17 @@ def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
     assert engine._ocr_scale_for_image(3846, 2094) == 1.0
 
 
-def test_som_engine_recycles_ocr_worker_after_request_budget(monkeypatch):
+def test_som_engine_ensure_ocr_worker_ready_uses_reusable_worker(monkeypatch):
     from agent.tools.som_engine import SomEngine
 
-    class FakeWorker:
-        pid = 1234
-
-        def poll(self):
-            return None
-
     engine = object.__new__(SomEngine)
-    engine._ocr_worker = FakeWorker()
-    engine._ocr_worker_request_count = 5
-    stopped = []
+    worker = object()
+    started = []
+    monkeypatch.setenv("SOM_OCR_WORKER_REUSE", "true")
+    monkeypatch.setattr(engine, "_start_ocr_worker", lambda: started.append(True) or worker)
 
-    monkeypatch.setenv("SOM_OCR_WORKER_MAX_REQUESTS", "5")
-    monkeypatch.setattr(engine, "_stop_ocr_worker", lambda: stopped.append(True))
-
-    assert engine._recycle_ocr_worker_if_needed() is True
-    assert stopped == [True]
-
-
-def test_som_engine_does_not_recycle_before_request_budget(monkeypatch):
-    from agent.tools.som_engine import SomEngine
-
-    class FakeWorker:
-        def poll(self):
-            return None
-
-    engine = object.__new__(SomEngine)
-    engine._ocr_worker = FakeWorker()
-    engine._ocr_worker_request_count = 4
-    stopped = []
-
-    monkeypatch.setenv("SOM_OCR_WORKER_MAX_REQUESTS", "5")
-    monkeypatch.setattr(engine, "_stop_ocr_worker", lambda: stopped.append(True))
-
-    assert engine._recycle_ocr_worker_if_needed() is False
-    assert stopped == []
+    assert engine.ensure_ocr_worker_ready() is worker
+    assert started == [True]
 
 
 def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):

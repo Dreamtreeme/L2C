@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agent.recipe.state_key import normalize_text, site_of
+from agent.recipe.text_utils import normalize_text, site_of
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
 from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox
@@ -204,7 +204,6 @@ def record_action_episode(
             fixed_candidate=action_name in {"scroll", "press_key", "go_back"},
         )
         before = {
-            "state_key": before_snapshot.get("state_key", ""),
             "url": before_snapshot.get("url", ""),
             "screenshot": before_snapshot.get("screenshot", ""),
             "marked_image": before_snapshot.get("marked_image", ""),
@@ -228,7 +227,6 @@ def record_action_episode(
             seq=seq,
             goal=goal,
             site=site_of(before.get("url", "")),
-            page_state_key=before.get("state_key", ""),
             proposal=proposal,
             observation=observation,
             feedback=feedback,

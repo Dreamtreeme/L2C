@@ -151,10 +151,10 @@ def roi_rect_around_bbox(
     size: list[int] | tuple[int, int],
     *,
     margin_scale: float = 1.0,
-    min_width_ratio: float = 0.20,
-    min_height_ratio: float = 0.06,
-    max_width_ratio: float = 0.45,
-    max_height_ratio: float = 0.14,
+    min_width_ratio: float = 0.08,
+    min_height_ratio: float = 0.04,
+    max_width_ratio: float = 0.28,
+    max_height_ratio: float = 0.12,
 ) -> list[float]:
     """타깃 bbox 주변의 안정적인 ROI를 화면 비율 좌표로 만든다."""
     if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:

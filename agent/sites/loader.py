@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 SITES_DIR = Path(__file__).resolve().parent
 REGISTRY_PATH = SITES_DIR / "registry.json"
@@ -56,12 +57,39 @@ def get_site_entry(site: str) -> dict[str, Any]:
     for entry in list_supported_sites(enabled_only=False):
         slug = str(entry.get("slug", "")).lower()
         display_name = str(entry.get("display_name", "")).lower()
+        aliases = {
+            str(alias).strip().lower()
+            for alias in entry.get("aliases", []) or []
+            if str(alias).strip()
+        }
         domains = [str(domain).lower() for domain in entry.get("domains", [])]
-        if needle == slug or needle == display_name or needle in domains:
+        if needle == slug or needle == display_name or needle in aliases or needle in domains:
             return entry
         if any(needle in domain or domain in needle for domain in domains):
             return entry
     raise SiteProfileError(f"Unsupported site: {site}")
+
+
+def get_official_site_url(site: str) -> str:
+    """요청 사이트에 등록된 공식 HTTPS 시작 주소를 반환한다."""
+
+    entry = get_site_entry(site)
+    official_url = str(entry.get("base_url") or "").strip().rstrip("/")
+    parsed = urlsplit(official_url)
+    domains = {
+        str(domain).strip().lower()
+        for domain in entry.get("domains", []) or []
+        if str(domain).strip()
+    }
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.hostname.lower() not in domains
+    ):
+        raise SiteProfileError(
+            f"Invalid official base_url for {entry.get('slug')}: {official_url}"
+        )
+    return official_url
 
 
 def _profile_path(entry: dict[str, Any], key: str) -> Path:
@@ -106,5 +134,6 @@ __all__ = [
     "load_registry",
     "list_supported_sites",
     "get_site_entry",
+    "get_official_site_url",
     "load_site_profile",
 ]

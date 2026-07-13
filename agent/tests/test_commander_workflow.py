@@ -314,17 +314,24 @@ def test_commander_graph_does_not_request_more_limit_after_collection_target(mon
     assert "accepted_sites=1" in result["final_answer"]
 
 
-def test_qa_reasoning_node_can_route_to_commander_graph(monkeypatch):
+def test_qa_reasoning_node_delegates_to_chat_service(monkeypatch):
     from agent.graph.nodes import qa_reasoning_node
 
-    monkeypatch.setenv("COMMANDER_GRAPH_ENABLED", "1")
+    class FakeChatService:
+        def run(self, query):
+            return {
+                "last_action_result": f"chat answer for {query}",
+                "is_finished": True,
+                "step_durations": [{"node": "chat_orchestrator", "duration": 0.01}],
+            }
+
     monkeypatch.setattr(
-        "agent.graph.commander_workflow.run_commander_graph",
-        lambda query: {"final_answer": f"graph answer for {query}"},
+        "agent.application.chat_service.get_chat_service",
+        lambda: FakeChatService(),
     )
 
     result = qa_reasoning_node({"goal": "AI engineer trend"})
 
-    assert result["last_action_result"] == "graph answer for AI engineer trend"
+    assert result["last_action_result"] == "chat answer for AI engineer trend"
     assert result["is_finished"] is True
-    assert result["step_durations"][0]["node"] == "qa_commander_graph"
+    assert result["step_durations"][0]["node"] == "chat_orchestrator"

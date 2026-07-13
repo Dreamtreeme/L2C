@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from agent.prompts.detail_extraction import build_detail_extraction_system_prompt
+
 from shared.schema.jd_schema import JobPosting
 
 
@@ -138,19 +140,10 @@ def _request_openai(
         "input": [
             {
                 "role": "system",
-                "content": (
+                "content": build_detail_extraction_system_prompt(
                     "누적 OCR 본문에서 채용공고 1건을 JobPosting JSON으로 정리하십시오. "
-                    "북마크, 브라우저 메뉴, 보상 배지, 추천인 현금, 로그인 문구 같은 주변 UI 노이즈는 무시하십시오. "
                     "OCR에 없는 사실은 만들지 말고, 알 수 없는 필드는 null 또는 빈 배열로 두십시오. "
-                    "채용 도메인에서 명확한 OCR 혼동은 문맥으로 보정하십시오. 예를 들어 Swift, Xcode, 앱 개발, 모바일 문맥에서 "
-                    "'ios', 'i0S', 'j0s', '10s'처럼 보이는 토큰은 직무명과 기술스택에서 'iOS'로 정규화하십시오. "
-                    "대괄호로 나뉜 직무명 조각은 한 줄 직무명으로 합치고, 직무명에는 브라우저/광고/보상 문구를 넣지 마십시오. "
-                    "회사명은 로고, 영문 브랜드, 회사소개 문장 주변의 반복 토큰을 우선하고, 깨진 한글 OCR만으로 확정하지 마십시오. "
-                    "기술스택은 실제 업무에 쓰는 기술만 넣고, 면접 질문 예시나 CS 개념 목록은 requirements에 요약하십시오. "
-                    "salary, deadline, location, benefits는 서로 섞지 말고 해당 필드에만 넣으십시오. "
-                    "목록 필드는 핵심 항목만 간결하게 유지하십시오. "
-                    "현재 상세 URL은 보존하십시오. JSON 객체 하나만 출력하십시오."
-                    "raw_ocr_text와 content_hash는 출력하지 마십시오."
+                    "현재 상세 URL은 보존하십시오."
                 ),
             },
             {
@@ -158,7 +151,6 @@ def _request_openai(
                 "content": json.dumps(
                     {
                         "current_url": document["url"],
-                        "active_result_card": document.get("active_result_card") or {},
                         "ocr_text": document["ocr_text"],
                     },
                     ensure_ascii=False,

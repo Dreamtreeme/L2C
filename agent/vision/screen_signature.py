@@ -19,9 +19,12 @@ from agent.vision.marker_geometry import (
 )
 
 
+CAPTURE_CONTEXT_VERSION = "browser-capture-v1"
+
+
 def _normalize_text(value: Any) -> str:
     try:
-        from agent.recipe.state_key import normalize_text
+        from agent.recipe.text_utils import normalize_text
 
         return normalize_text(value)
     except Exception:
@@ -132,7 +135,31 @@ def anchor_texts(markers: list[dict[str, Any]], limit: int = 36) -> list[str]:
     return out
 
 
-def compute_roi_signature(image_path: str | Path, crop_rect_ratio: list[float]) -> dict[str, Any]:
+def build_capture_context(size: list[int] | tuple[int, int], content_top: int = 0) -> dict[str, Any]:
+    """레시피 좌표가 만들어진 브라우저 캡처 환경을 기록한다."""
+
+    try:
+        width = max(0, int(size[0]))
+        height = max(0, int(size[1]))
+        top = max(0, int(content_top or 0))
+    except (TypeError, ValueError, IndexError):
+        return {}
+    if width <= 0 or height <= 0:
+        return {}
+    return {
+        "version": CAPTURE_CONTEXT_VERSION,
+        "size": [width, height],
+        "content_top": min(top, height),
+    }
+
+
+def compute_roi_signature(
+    image_path: str | Path,
+    crop_rect_ratio: list[float],
+    *,
+    algorithm: str = "roi-phash-dct64-v1",
+    capture_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """저장된 ROI 비율 좌표로 현재 스크린샷을 잘라 pHash를 계산한다."""
 
     try:
@@ -142,31 +169,70 @@ def compute_roi_signature(image_path: str | Path, crop_rect_ratio: list[float]) 
             if rect == [0, 0, 0, 0]:
                 return {}
             crop = img.crop(tuple(rect))
-            return {
-                "algorithm": "roi-phash-dct64-v1",
+            signature = {
+                "algorithm": algorithm,
                 "phash": perceptual_hash_image(crop),
                 "crop_rect_ratio": [round(float(v), 4) for v in crop_rect_ratio],
                 "source_size": list(size),
                 "crop_size": list(crop.size),
             }
+            context = dict(capture_context or {}) or build_capture_context(size)
+            if context:
+                signature["capture_context"] = context
+            return signature
     except Exception:
         return {}
+
+
+def compute_target_roi_signature_from_image(
+    image: Image.Image,
+    bbox: list[int] | tuple[int, int, int, int],
+    size: list[int] | tuple[int, int],
+    *,
+    capture_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """열린 이미지에서 타깃 중심의 작은 ROI 서명을 계산한다."""
+
+    crop_rect_ratio = roi_rect_around_bbox(bbox, size)
+    if not crop_rect_ratio:
+        return {}
+    rect = ratio_rect_to_pixels(crop_rect_ratio, image.size)
+    if rect == [0, 0, 0, 0]:
+        return {}
+    crop = image.crop(tuple(rect))
+    context = dict(capture_context or {}) or build_capture_context(image.size)
+    signature = {
+        "algorithm": "roi-phash-dct64-v2",
+        "phash": perceptual_hash_image(crop),
+        "crop_rect_ratio": [round(float(v), 4) for v in crop_rect_ratio],
+        "source_size": list(image.size),
+        "crop_size": list(crop.size),
+        "target_center_ratio": center_ratio_from_bbox(bbox, size),
+    }
+    if context:
+        signature["capture_context"] = context
+    return signature
 
 
 def compute_target_roi_signature(
     image_path: str | Path,
     bbox: list[int] | tuple[int, int, int, int],
     size: list[int] | tuple[int, int],
+    *,
+    capture_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """타깃 bbox에서 ROI를 자동 산출하고 해당 영역 pHash를 계산한다."""
 
-    crop_rect_ratio = roi_rect_around_bbox(bbox, size)
-    if not crop_rect_ratio:
+    try:
+        with Image.open(image_path) as image:
+            return compute_target_roi_signature_from_image(
+                image,
+                bbox,
+                size,
+                capture_context=capture_context,
+            )
+    except Exception:
         return {}
-    signature = compute_roi_signature(image_path, crop_rect_ratio)
-    if signature:
-        signature["target_center_ratio"] = center_ratio_from_bbox(bbox, size)
-    return signature
 
 
 def compute_screen_signature(image_path: str | Path, markers: list[dict[str, Any]]) -> dict[str, Any]:

@@ -100,7 +100,43 @@ class ActionTools:
             target = active
         elif windows:
             target = windows[0]
+        if target:
+            self._normalize_browser_window(target)
         return self._bind_browser_window(target)
+
+    def _browser_window_size_enabled(self) -> bool:
+        raw = os.getenv("VISION_BROWSER_WINDOW_SIZE", "1")
+        return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+    def _browser_window_dimensions(self) -> tuple[int, int]:
+        width = self._env_int("VISION_BROWSER_WINDOW_WIDTH", 1976)
+        height = self._env_int("VISION_BROWSER_WINDOW_HEIGHT", 2129)
+        return width, height
+
+    def _normalize_browser_window(self, window: Any) -> bool:
+        """전용 브라우저의 실제 창 크기를 고정해 비전 좌표계를 안정화한다."""
+
+        if not self._browser_window_size_enabled():
+            return False
+        width, height = self._browser_window_dimensions()
+        if width <= 0 or height <= 0:
+            return False
+        try:
+            if bool(getattr(window, "isMaximized", False)):
+                window.restore()
+            window.resizeTo(width, height)
+            self._sleep(self._env_float("VISION_BROWSER_RESIZE_WAIT_SEC", 0.12))
+            logger.info(
+                "Normalized browser window geometry",
+                requested_width=width,
+                requested_height=height,
+                actual_width=int(getattr(window, "width", 0) or 0),
+                actual_height=int(getattr(window, "height", 0) or 0),
+            )
+            return True
+        except Exception as exc:
+            logger.warning("Browser window normalization failed", error=str(exc))
+            return False
 
     def _browser_executable(self) -> Path | None:
         configured = os.getenv("VISION_BROWSER_EXECUTABLE", "").strip().strip('"')
@@ -127,13 +163,26 @@ class ActionTools:
         return None
 
     def _browser_window_cli_args(self) -> list[str]:
-        if os.getenv("VISION_BROWSER_WINDOW_SIZE", "0").strip().lower() in {"0", "false", "no", "off"}:
+        if not self._browser_window_size_enabled():
             return []
-        width = self._env_int("VISION_BROWSER_WINDOW_WIDTH", 1976)
-        height = self._env_int("VISION_BROWSER_WINDOW_HEIGHT", 2129)
+        width, height = self._browser_window_dimensions()
         if width <= 0 or height <= 0:
             return []
         return [f"--window-size={width},{height}"]
+
+    def _reset_browser_zoom(self) -> None:
+        """사이트별로 기억된 브라우저 확대율을 100%로 되돌린다."""
+
+        raw = os.getenv("VISION_BROWSER_RESET_ZOOM", "1")
+        if raw.strip().lower() in {"0", "false", "no", "off"}:
+            return
+        wait_sec = self._env_float("VISION_BROWSER_ZOOM_RESET_WAIT_SEC", 0.08)
+        self._sleep(wait_sec)
+        modifier = "command" if platform.system() == "Darwin" else "ctrl"
+        try:
+            pyautogui.hotkey(modifier, "0")
+        except Exception as exc:
+            logger.warning("Browser zoom reset skipped", error=str(exc))
 
     def _open_url_in_new_window(self, url: str) -> dict[str, Any]:
         before_ids = self._browser_window_ids()
@@ -172,6 +221,25 @@ class ActionTools:
         finally:
             pyautogui.PAUSE = old_pause
         return {"opened": True, "url": url, "reason": "dedicated_browser_navigated"}
+
+    def _open_url_after_window_ready(self, url: str) -> dict[str, Any]:
+        """빈 브라우저 창을 먼저 바인딩한 뒤 주소창으로 목표 URL을 연다."""
+
+        window_result = self._open_url_in_new_window("about:blank")
+        if not window_result.get("bound_window"):
+            logger.warning("Blank browser window was not bound; opening target directly", target_url=url)
+            return self._open_url_in_new_window(url)
+
+        navigation_result = self._navigate_bound_browser(url)
+        self._reset_browser_zoom()
+        if navigation_result.get("reason") == "dedicated_browser_navigated":
+            navigation_result = {
+                **navigation_result,
+                "reason": "new_browser_window_navigated",
+                "window_url": "about:blank",
+            }
+        return navigation_result
+
     def _action_region(self):
         return getattr(self.perception, "last_region", None) or self.perception._get_browser_region()
 
@@ -277,14 +345,33 @@ class ActionTools:
             
         return self._execute("press_key", _press)
 
-    def open_browser(self, url: str, current_url: str = "") -> Dict[str, Any]:
-        """Open the first target in a dedicated browser window, then navigate only that bound window."""
+    def open_browser(
+        self,
+        url: str = "",
+        current_url: str = "",
+        site: str = "",
+    ) -> Dict[str, Any]:
+        """요청 사이트의 공식 주소를 전용 브라우저 창에서 연다."""
+
+        target_url = str(url or "").strip()
+        if site:
+            from agent.sites import get_official_site_url
+
+            target_url = get_official_site_url(site)
+        if not target_url:
+            raise ValueError("url or site is required")
+
         def _open():
             if self._bound_browser_window_exists():
-                return self._navigate_bound_browser(url)
+                return self._navigate_bound_browser(target_url)
 
-            return self._open_url_in_new_window(url)
+            return self._open_url_after_window_ready(target_url)
 
+        logger.info(
+            "Opening browser target",
+            requested_site=site,
+            target_url=target_url,
+        )
         return self._execute("open_browser", _open)
 
     @staticmethod

@@ -1,12 +1,13 @@
 """
-Phase 0: 비전 런의 (상태 -> 타깃) 텍스트 매핑 기록.
+Phase 0: 비전 런의 UI 행동과 타깃 ROI 기록.
 action_node에서 호출되며, 전부 예외 안전 -> 실패해도 실제 실행 흐름에 영향 0.
 """
 
 from __future__ import annotations
 
 from agent.recipe.matcher import marker_ordinal, marker_region
-from agent.recipe.state_key import compute_state_key, normalize_text, site_of, state_anchor_texts, url_template
+from agent.recipe.page_context import normalize_page_role
+from agent.recipe.text_utils import normalize_text, url_template
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox, marker_bbox, marker_center
 from agent.vision.screen_signature import compute_target_roi_signature
@@ -115,12 +116,15 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
         url = state.get("current_url", "") or ""
         goal = state.get("goal", "") or ""
         slot_name = normalize_text(args.get("slot_name"))
+        screen_signature = dict(state.get("screen_signature", {}) or {})
+        observed_page_role = normalize_page_role(state.get("current_page_role"))
+        declared_page_role = normalize_page_role(args.get("page_role"))
         step = {
             "seq": seq,
-            "state_key": compute_state_key(url, markers),
-            "state_anchors": state_anchor_texts(markers),
-            "screen_signature": dict(state.get("screen_signature", {}) or {}),
             "url_template": url_template(url),
+            "page_role": observed_page_role or declared_page_role,
+            "observed_page_role": observed_page_role,
+            "declared_page_role": declared_page_role,
             "action": action_name,
             "target": None,
             "value": None,
@@ -143,14 +147,26 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
                 "region": marker_region(marker, markers),
                 "ordinal": marker_ordinal(marker, markers),
             }
-            screen_size = (step.get("screen_signature") or {}).get("size") or []
+            marker_type = normalize_text(marker.get("type"))
+            if marker_type:
+                target["marker_type"] = marker_type
+            screen_size = screen_signature.get("size") or []
             if isinstance(screen_size, list) and len(screen_size) == 2:
                 bbox = marker_bbox(marker)
                 target["bbox_ratio"] = bbox_to_ratio(bbox, screen_size)
                 target["center_ratio"] = center_ratio_from_bbox(bbox, screen_size)
                 recent_images = state.get("recent_images", []) or []
                 image_path = recent_images[-1] if recent_images else ""
-                roi_signature = compute_target_roi_signature(image_path, bbox, screen_size) if image_path else {}
+                roi_signature = (
+                    compute_target_roi_signature(
+                        image_path,
+                        bbox,
+                        screen_size,
+                        capture_context=dict(screen_signature.get("capture_context", {}) or {}),
+                    )
+                    if image_path
+                    else {}
+                )
                 if roi_signature:
                     step["roi_signature"] = roi_signature
             target_label = normalize_text(args.get("target_label") or args.get("semantic_label"))

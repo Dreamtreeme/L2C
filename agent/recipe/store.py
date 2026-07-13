@@ -1,11 +1,12 @@
 """반사 레시피 저장소(RecipeStore).
 
-채용공고 DB(jobs DB)와 같은 SQLite 파일에 화면 상태 키(state_key) 기준으로
-재생할 행동 단계와 스킬형 메타데이터(skill_metadata)를 저장한다.
+채용공고 DB(jobs DB)와 같은 SQLite 파일에 ROI 검증용 레시피를 저장한다.
+활성 레시피 조회는 화면 상태 해시가 아니라 사이트/작업분류 후보 집합과 ROI 검증으로 한다.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -13,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agent.recipe.page_context import normalize_page_role, page_role_family
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.utils.model_dump import dump_model
 from shared.schema.recipe_schema import RecipeStep, SiteRecipe
@@ -42,6 +44,7 @@ class RecipeStore:
 
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
+            self._drop_legacy_recipe_tables(conn)
             row = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='recipes'"
             ).fetchone()
@@ -50,14 +53,13 @@ class RecipeStore:
                     item["name"]
                     for item in conn.execute("PRAGMA table_info(recipes)").fetchall()
                 ]
-                if "state_key" not in columns:
-                    legacy_name = f"recipes_legacy_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                    conn.execute(f"ALTER TABLE recipes RENAME TO {legacy_name}")
+                if "recipe_key" not in columns:
+                    conn.execute("DROP TABLE recipes")
 
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS recipes (
-                    state_key     TEXT PRIMARY KEY,
+                    recipe_key    TEXT PRIMARY KEY,
                     site          TEXT NOT NULL,
                     goal          TEXT,
                     steps_json    TEXT NOT NULL,
@@ -75,6 +77,39 @@ class RecipeStore:
             if "metadata_json" not in columns:
                 conn.execute("ALTER TABLE recipes ADD COLUMN metadata_json TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_recipes_site ON recipes(site)")
+            conn.execute("DELETE FROM recipes WHERE recipe_key NOT LIKE 'roi2#%'")
+            self._purge_steps_missing_new_required_fields(conn)
+
+    @staticmethod
+    def _drop_legacy_recipe_tables(conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'recipes_legacy_%'"
+        ).fetchall()
+        for row in rows:
+            name = row["name"]
+            if isinstance(name, str) and name.startswith("recipes_legacy_"):
+                conn.execute(f'DROP TABLE "{name}"')
+
+    @staticmethod
+    def _target_step_has_new_required_fields(step: dict[str, Any]) -> bool:
+        action = str(step.get("action") or "")
+        if action not in {"click_marker", "type_in_marker"}:
+            return True
+        return bool(normalize_page_role(step.get("page_role")) and step.get("roi_signature"))
+
+    @classmethod
+    def _purge_steps_missing_new_required_fields(cls, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("SELECT recipe_key, steps_json FROM recipes").fetchall()
+        for row in rows:
+            try:
+                steps = json.loads(row["steps_json"] or "[]")
+            except Exception:
+                steps = []
+            if not isinstance(steps, list) or not all(
+                isinstance(step, dict) and cls._target_step_has_new_required_fields(step)
+                for step in steps
+            ):
+                conn.execute("DELETE FROM recipes WHERE recipe_key=?", (row["recipe_key"],))
 
     @staticmethod
     def _dump_json(payload: Any) -> str:
@@ -95,6 +130,31 @@ class RecipeStore:
     ) -> bool:
         return task_category_matches(task_category, RecipeStore._metadata_task_category(metadata))
 
+    @staticmethod
+    def _recipe_key_for_step(
+        site: str,
+        step: dict[str, Any],
+        metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
+    ) -> str:
+        """변하는 좌표·해시가 아니라 재생 의도로 활성 레시피 키를 만든다."""
+
+        meta = RecipeStore._metadata_dict(metadata)
+        target = step.get("target") if isinstance(step.get("target"), dict) else {}
+        payload = {
+            "key_version": 2,
+            "site": site or "",
+            "task_category": normalize_task_category(meta.get("task_category")),
+            "page_role_family": page_role_family(step.get("page_role")),
+            "url_template": step.get("url_template") or "",
+            "action": step.get("action") or "",
+            "component": step.get("component") or "",
+            "target_role": step.get("target_role") or "",
+            "slot_refs": sorted(str(item) for item in step.get("slot_refs") or []),
+            "target_region": target.get("region") or "",
+        }
+        digest = hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        return f"roi2#{digest}"
+
     def _upsert_recipe_steps(
         self,
         site: str,
@@ -102,34 +162,34 @@ class RecipeStore:
         step_or_steps,
         metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
     ) -> bool:
-        """같은 화면 상태(state_key)의 행동 묶음을 저장하거나 갱신한다."""
+        """같은 ROI 레시피 키의 행동 묶음을 저장하거나 갱신한다."""
 
         steps = list(step_or_steps if isinstance(step_or_steps, list) else [step_or_steps])
         steps = [step for step in steps if isinstance(step, dict)]
         if not steps:
             return False
-        state_key = steps[0].get("state_key")
-        if not state_key:
+        if not all(self._target_step_has_new_required_fields(step) for step in steps):
             return False
+        recipe_key = self._recipe_key_for_step(site, steps[0], metadata=metadata)
 
         now = datetime.now().isoformat(timespec="seconds")
         steps_payload = json.dumps(steps, ensure_ascii=False)
         metadata_payload = self._dump_json(self._metadata_dict(metadata))
         with self._conn() as conn:
-            row = conn.execute("SELECT 1 FROM recipes WHERE state_key=?", (state_key,)).fetchone()
+            row = conn.execute("SELECT 1 FROM recipes WHERE recipe_key=?", (recipe_key,)).fetchone()
             if row:
                 conn.execute(
                     "UPDATE recipes "
                     "SET site=?, goal=?, steps_json=?, metadata_json=?, success_count=success_count+1, updated_at=? "
-                    "WHERE state_key=?",
-                    (site, goal, steps_payload, metadata_payload, now, state_key),
+                    "WHERE recipe_key=?",
+                    (site, goal, steps_payload, metadata_payload, now, recipe_key),
                 )
             else:
                 conn.execute(
                     "INSERT INTO recipes "
-                    "(state_key, site, goal, steps_json, metadata_json, success_count, created_at, updated_at) "
+                    "(recipe_key, site, goal, steps_json, metadata_json, success_count, created_at, updated_at) "
                     "VALUES (?,?,?,?,?,1,?,?)",
-                    (state_key, site, goal, steps_payload, metadata_payload, now, now),
+                    (recipe_key, site, goal, steps_payload, metadata_payload, now, now),
                 )
         return True
 
@@ -140,21 +200,25 @@ class RecipeStore:
         steps: list[dict],
         metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
     ) -> int:
-        """성공 후보의 행동을 상태 키(state_key)별 실행 묶음으로 저장한다."""
+        """성공 후보의 재생 가능한 행동을 ROI 레시피 단위로 저장한다."""
 
         saved = 0
-        groups: list[list[dict]] = []
         for step in steps or []:
-            if not isinstance(step, dict) or not step.get("state_key"):
+            if not isinstance(step, dict):
                 continue
-            if not groups or groups[-1][0].get("state_key") != step.get("state_key"):
-                groups.append([])
-            groups[-1].append(dict(step))
-
-        for group in groups:
-            if self._upsert_recipe_steps(site, goal, group, metadata=metadata):
+            if self._upsert_recipe_steps(site, goal, dict(step), metadata=metadata):
                 saved += 1
         return saved
+
+    def clear_recipes(self, site: str | None = None) -> int:
+        """활성 레시피만 비우고 후보와 실행 증거는 보존한다."""
+
+        with self._conn() as conn:
+            if site:
+                result = conn.execute("DELETE FROM recipes WHERE site=?", (site,))
+            else:
+                result = conn.execute("DELETE FROM recipes")
+            return int(result.rowcount or 0)
 
     def replace_recipe_steps(
         self,
@@ -164,20 +228,21 @@ class RecipeStore:
         replay_steps: list[dict],
         metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
     ) -> int:
-        """한 후보가 소유한 기존 상태 행을 지우고 Critic이 승인한 재생 단계만 교체 저장한다."""
-        state_keys = sorted(
+        """한 후보가 만든 기존 ROI 레시피를 지우고 승인된 재생 단계만 교체 저장한다."""
+        metadata_dict = self._metadata_dict(metadata)
+        recipe_keys = sorted(
             {
-                str(step.get("state_key") or "")
-                for step in source_steps or []
-                if isinstance(step, dict) and step.get("state_key")
+                self._recipe_key_for_step(site, step, metadata=metadata_dict)
+                for step in [*(source_steps or []), *(replay_steps or [])]
+                if isinstance(step, dict) and step.get("roi_signature")
             }
         )
-        if state_keys:
-            placeholders = ",".join("?" for _ in state_keys)
+        if recipe_keys:
+            placeholders = ",".join("?" for _ in recipe_keys)
             with self._conn() as conn:
                 conn.execute(
-                    f"DELETE FROM recipes WHERE site=? AND state_key IN ({placeholders})",
-                    (site, *state_keys),
+                    f"DELETE FROM recipes WHERE site=? AND recipe_key IN ({placeholders})",
+                    (site, *recipe_keys),
                 )
         return self.commit_recipe(site, goal, replay_steps, metadata=metadata)
 
@@ -195,20 +260,20 @@ class RecipeStore:
 
     def get_recipe(
         self,
-        state_key: str,
+        recipe_key: str,
         *,
         site: str | None = None,
         task_category: str | None = None,
     ) -> SiteRecipe | None:
-        """state_key에 해당하는 활성 레시피를 site/task_category 조건으로 조회한다."""
-        conditions = ["state_key=?"]
-        params: list[Any] = [state_key]
+        """recipe_key에 해당하는 활성 레시피를 site/task_category 조건으로 조회한다."""
+        conditions = ["recipe_key=?"]
+        params: list[Any] = [recipe_key]
         if site:
             conditions.append("site=?")
             params.append(site)
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT state_key, site, goal, steps_json, metadata_json, success_count, updated_at "
+                "SELECT recipe_key, site, goal, steps_json, metadata_json, success_count, updated_at "
                 f"FROM recipes WHERE {' AND '.join(conditions)}",
                 params,
             ).fetchone()
@@ -222,7 +287,7 @@ class RecipeStore:
     def get_by_site(self, site: str):
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT state_key, site, goal, steps_json, metadata_json, success_count FROM recipes "
+                "SELECT recipe_key, site, goal, steps_json, metadata_json, success_count FROM recipes "
                 "WHERE site=? ORDER BY success_count DESC",
                 (site,),
             ).fetchall()
@@ -251,5 +316,5 @@ class RecipeStore:
                 skill_metadata=metadata,
                 success_count=item.get("success_count") or 0,
             )
-            candidates.append((item.get("state_key") or "", recipe))
+            candidates.append((item.get("recipe_key") or "", recipe))
         return candidates

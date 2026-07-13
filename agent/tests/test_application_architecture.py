@@ -1,0 +1,531 @@
+import json
+import threading
+
+import pytest
+
+
+def test_run_context_collects_usage_steps_and_events():
+    from agent.application.run_context import (
+        emit_run_event,
+        measure_step,
+        record_external_llm_usage,
+        run_context,
+    )
+    from agent.application.run_contracts import RunPhase
+
+    events = []
+    with run_context(
+        run_id="chat-run-1",
+        query="iOS 개발자 공고",
+        event_sink=events.append,
+    ) as (context, created):
+        assert created is True
+        with measure_step("test_step"):
+            pass
+        record_external_llm_usage(
+            component="detail_extraction",
+            provider="openai",
+            model="test-model",
+            usage={"input_tokens": 10, "output_tokens": 5},
+            duration_sec=0.25,
+        )
+        emit_run_event("test_progress", RunPhase.COLLECTION, "수집 중")
+        snapshot = context.snapshot()
+
+    assert snapshot["run_id"] == "chat-run-1"
+    assert snapshot["llm"]["totals"]["input_tokens"] == 10
+    assert snapshot["llm"]["totals"]["output_tokens"] == 5
+    assert snapshot["llm"]["cost"]["estimated_total"] is None
+    assert snapshot["steps"][0]["component"] == "test_step"
+    assert [event.event for event in events] == ["run_started", "test_progress"]
+
+
+def test_llm_cost_uses_external_exact_model_pricing(tmp_path):
+    from agent.application.llm_cost import estimate_llm_cost
+
+    pricing_path = tmp_path / "pricing.json"
+    pricing_path.write_text(
+        json.dumps(
+            {
+                "models": {
+                    "test-model": {
+                        "input_usd_per_million": 1.0,
+                        "cached_input_usd_per_million": 0.2,
+                        "output_usd_per_million": 4.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = estimate_llm_cost(
+        {
+            "test-model": {
+                "input_tokens": 1_000_000,
+                "output_tokens": 500_000,
+                "input_token_details": {"cache_read": 250_000},
+            }
+        },
+        pricing_path=pricing_path,
+    )
+
+    assert result["estimated_total"] == 2.8
+    assert result["unpriced_models"] == []
+
+
+def test_chat_service_returns_run_contract_and_progress_events():
+    from langchain_core.messages import AIMessage
+
+    from agent.application.chat_service import ChatService
+
+    class FakeLLM:
+        def invoke(self, messages):
+            return AIMessage(content="DB 근거 답변", tool_calls=[])
+
+    events = []
+    result = ChatService(llm_with_tools=FakeLLM()).run(
+        "질문",
+        run_id="chat-contract-1",
+        event_sink=events.append,
+    )
+
+    assert result["run_id"] == "chat-contract-1"
+    assert result["run_status"] == "completed"
+    assert result["last_action_result"] == "DB 근거 답변"
+    assert result["metrics"]["run_id"] == "chat-contract-1"
+    assert result["duration_sec"] >= 0
+    assert events[-1].event == "run_completed"
+
+
+def test_run_registry_tracks_progress_and_completion():
+    from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
+    from agent.application.run_registry import RunRegistry
+
+    registry = RunRegistry(limit=10)
+    registry.start("run-1", "질문")
+    registry.apply_event(
+        RunEvent(
+            run_id="run-1",
+            event="collection_started",
+            phase=RunPhase.COLLECTION,
+            status=RunStatus.RUNNING,
+            message="수집 중",
+        )
+    )
+    registry.complete("run-1", {"last_action_result": "완료"})
+
+    item = registry.get("run-1")
+    assert item is not None
+    assert item["status"] == "completed"
+    assert item["result"]["last_action_result"] == "완료"
+
+
+def test_chat_api_streams_structured_progress_without_character_delay(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from agent.application.run_contracts import RunEvent, RunPhase
+    from agent.web_server import app
+
+    class FakeChatService:
+        def run(self, query, *, run_id=None, event_sink=None):
+            assert query == "테스트 질문"
+            assert run_id
+            event_sink(
+                RunEvent(
+                    run_id=run_id,
+                    event="collection_started",
+                    phase=RunPhase.COLLECTION,
+                    message="수집 중",
+                )
+            )
+            return {
+                "run_id": run_id,
+                "run_status": "completed",
+                "last_action_result": "최종 답변",
+                "metrics": {"duration_sec": 0.01},
+            }
+
+    monkeypatch.setattr(
+        "agent.web_server.get_chat_service",
+        lambda: FakeChatService(),
+    )
+    response = TestClient(app).post("/api/chat", json={"query": "테스트 질문"})
+
+    assert response.status_code == 200
+    assert "[PROCESSING]" in response.text
+    assert "[EVENT]" in response.text
+    assert '"text": "최종 답변"' in response.text
+    assert "data: 최" not in response.text
+
+
+def test_worker_state_factory_returns_independent_mutable_values():
+    from agent.graph.state_factory import create_worker_state
+
+    first = create_worker_state("first", recipe_params={"site": "wanted"})
+    second = create_worker_state("second")
+
+    first["action_history"].append({"action": "click_marker"})
+    first["recipe_params"]["query"] = "ios"
+
+    assert first["goal"] == "first"
+    assert second["goal"] == "second"
+    assert second["action_history"] == []
+    assert second["recipe_params"] == {}
+
+
+def test_action_request_preserves_executor_tool_call_contract():
+    from agent.graph.action_request import ActionRequest, ToolCallRequest
+
+    request = ActionRequest(
+        source="card_queue",
+        summary="next card",
+        tool_calls=[
+            ToolCallRequest(
+                name="click_marker",
+                args={"marker_id": 7, "target_label": "iOS 개발자"},
+                id="queue-1",
+            )
+        ],
+    )
+
+    message = request.to_ai_message()
+
+    assert message.content == "[card_queue] next card"
+    assert message.tool_calls == [
+        {
+            "name": "click_marker",
+            "args": {"marker_id": 7, "target_label": "iOS 개발자"},
+            "id": "queue-1",
+            "type": "tool_call",
+        }
+    ]
+
+
+def test_worker_execution_service_delegates_prepare_and_stream(monkeypatch):
+    from agent.application.worker_execution_service import execute_worker_graph
+
+    calls = []
+    fake_app = object()
+
+    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: fake_app)
+
+    def prepare(initial_state, site_profile):
+        calls.append(("prepare", initial_state["goal"], site_profile["entry"]["slug"]))
+        return {**initial_state, "prepared": True}
+
+    def run(app, prepared_state, recursion_limit):
+        calls.append(("run", app is fake_app, prepared_state["prepared"], recursion_limit))
+        return {**prepared_state, "is_finished": True}, False
+
+    final_state, hit_limit = execute_worker_graph(
+        {"goal": "collect"},
+        {"entry": {"slug": "wanted"}},
+        60,
+        prepare_screen=prepare,
+        run_graph=run,
+    )
+
+    assert calls == [
+        ("prepare", "collect", "wanted"),
+        ("run", True, True, 60),
+    ]
+    assert final_state["is_finished"] is True
+    assert hit_limit is False
+
+
+def test_worker_execution_session_serializes_concurrent_requests():
+    from agent.application.worker_execution_service import worker_execution_session
+
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+
+    def first_worker():
+        with worker_execution_session():
+            first_entered.set()
+            release_first.wait(timeout=2)
+
+    def second_worker():
+        with worker_execution_session():
+            second_entered.set()
+
+    first_thread = threading.Thread(target=first_worker)
+    second_thread = threading.Thread(target=second_worker)
+    first_thread.start()
+    assert first_entered.wait(timeout=2)
+    second_thread.start()
+
+    assert second_entered.wait(timeout=0.1) is False
+    release_first.set()
+    assert second_entered.wait(timeout=2)
+
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+    assert first_thread.is_alive() is False
+    assert second_thread.is_alive() is False
+
+
+def test_worker_startup_overlaps_ocr_and_browser_before_perception(monkeypatch):
+    from agent.application.worker_execution_service import prepare_worker_start_screen
+    from agent.graph import nodes
+
+    ocr_started = threading.Event()
+    browser_opened = threading.Event()
+    order = []
+
+    class FakeSomEngine:
+        def ensure_ocr_worker_ready(self):
+            order.append("ocr_started")
+            ocr_started.set()
+            assert browser_opened.wait(timeout=2)
+            order.append("ocr_ready")
+
+    class FakePerception:
+        som_engine = FakeSomEngine()
+
+    class FakeActionTools:
+        perception = FakePerception()
+
+        def open_browser(self, url="", current_url="", site=""):
+            assert ocr_started.wait(timeout=2)
+            order.append("browser_opened")
+            browser_opened.set()
+            return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
+
+    def fake_perception_node(_state, *, max_capture_attempts=None):
+        assert order[-1] == "ocr_ready"
+        assert max_capture_attempts == 1
+        order.append("perception")
+        return {
+            "current_url": "https://www.wanted.co.kr",
+            "current_url_stale": False,
+            "current_markers": [{"id": 1}],
+            "recent_images": ["screen.png"],
+            "low_information_screen": False,
+        }
+
+    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
+    monkeypatch.setenv("VISION_WORKER_START_OPEN_ATTEMPTS", "1")
+    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
+    monkeypatch.setattr(nodes, "perception_node", fake_perception_node)
+
+    result = prepare_worker_start_screen(
+        {"current_url": "", "action_history": []},
+        {"entry": {"slug": "wanted"}},
+    )
+
+    assert order == ["ocr_started", "browser_opened", "ocr_ready", "perception"]
+    assert result["current_url"] == "https://www.wanted.co.kr"
+
+
+def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
+    from agent.application.worker_execution_service import (
+        OcrWorkerReadinessError,
+        prepare_worker_start_screen,
+    )
+    from agent.graph import nodes
+
+    perception_called = []
+
+    class FakeSomEngine:
+        def ensure_ocr_worker_ready(self):
+            raise RuntimeError("startup failed")
+
+    class FakePerception:
+        som_engine = FakeSomEngine()
+
+    class FakeActionTools:
+        perception = FakePerception()
+
+        def open_browser(self, url="", current_url="", site=""):
+            return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
+
+    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
+    monkeypatch.setenv("VISION_WORKER_START_OPEN_ATTEMPTS", "1")
+    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
+    monkeypatch.setattr(
+        nodes,
+        "perception_node",
+        lambda _state, **_kwargs: perception_called.append(True) or {},
+    )
+
+    with pytest.raises(OcrWorkerReadinessError):
+        prepare_worker_start_screen(
+            {"current_url": "", "action_history": []},
+            {"entry": {"slug": "wanted"}},
+        )
+
+    assert perception_called == []
+
+
+def test_worker_startup_reopens_after_one_blank_observation(monkeypatch):
+    from agent.application.worker_execution_service import prepare_worker_start_screen
+    from agent.graph import nodes
+
+    browser_calls = []
+    capture_limits = []
+
+    class FakeSomEngine:
+        def ensure_ocr_worker_ready(self):
+            return None
+
+    class FakePerception:
+        som_engine = FakeSomEngine()
+
+    class FakeActionTools:
+        perception = FakePerception()
+
+        def open_browser(self, url="", current_url="", site=""):
+            browser_calls.append({"current_url": current_url, "site": site})
+            return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
+
+    def fake_perception_node(_state, *, max_capture_attempts=None):
+        capture_limits.append(max_capture_attempts)
+        if len(capture_limits) == 1:
+            return {
+                "current_url": "https://www.wanted.co.kr",
+                "current_url_stale": True,
+                "low_information_screen": True,
+                "low_information_retry_count": 1,
+            }
+        return {
+            "current_url": "https://www.wanted.co.kr",
+            "current_url_stale": False,
+            "current_markers": [{"id": 1}],
+            "recent_images": ["screen.png"],
+            "low_information_screen": False,
+        }
+
+    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
+    monkeypatch.setenv("VISION_WORKER_START_OPEN_ATTEMPTS", "2")
+    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
+    monkeypatch.setattr(nodes, "perception_node", fake_perception_node)
+
+    result = prepare_worker_start_screen(
+        {"current_url": "", "action_history": []},
+        {"entry": {"slug": "wanted"}},
+    )
+
+    assert len(browser_calls) == 2
+    assert capture_limits == [1, None]
+    assert result["low_information_screen"] is False
+
+
+def test_google_model_clients_are_reused_by_configuration(monkeypatch):
+    from agent.application import model_clients
+    import langchain_google_genai
+
+    created = []
+
+    class FakeClient:
+        def __init__(self, model, temperature):
+            self.model = model
+            self.temperature = temperature
+            created.append((model, temperature))
+
+        def with_structured_output(self, schema):
+            return (self, schema)
+
+    monkeypatch.setattr(langchain_google_genai, "ChatGoogleGenerativeAI", FakeClient)
+    model_clients.clear_model_client_cache()
+    first = model_clients.get_google_chat_model("model-a", temperature=0.1)
+    second = model_clients.get_google_chat_model("model-a", temperature=0.1)
+    structured_first = model_clients.get_structured_google_model("model-a", dict, temperature=0.1)
+    structured_second = model_clients.get_structured_google_model("model-a", dict, temperature=0.1)
+
+    assert first is second
+    assert structured_first is structured_second
+    assert structured_first[0] is first
+    assert created == [("model-a", 0.1)]
+    model_clients.clear_model_client_cache()
+
+
+def test_browser_is_kept_alive_by_default(monkeypatch):
+    from agent.application import worker_execution_service
+    from agent.graph import nodes
+
+    closed = []
+
+    class FakeActionTools:
+        def close_browser(self):
+            closed.append(True)
+            return {"status": "success"}
+
+    monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
+    monkeypatch.setattr(nodes, "_action_tools", FakeActionTools())
+
+    worker_execution_service.close_browser_after_run()
+
+    assert closed == []
+
+
+def test_browser_closes_when_explicitly_enabled(monkeypatch):
+    from agent.application import worker_execution_service
+    from agent.graph import nodes
+
+    closed = []
+
+    class FakeActionTools:
+        def close_browser(self):
+            closed.append(True)
+            return {"status": "success"}
+
+    monkeypatch.setenv("VISION_CLOSE_BROWSER_AFTER_RUN", "1")
+    monkeypatch.setattr(nodes, "_action_tools", FakeActionTools())
+
+    worker_execution_service.close_browser_after_run()
+
+    assert closed == [True]
+
+
+def test_detail_extraction_prompt_prioritizes_page_text_over_ocr_hints():
+    from agent.prompts.detail_extraction import build_detail_extraction_system_prompt
+
+    prompt = build_detail_extraction_system_prompt("채용공고를 정리하십시오.")
+
+    assert "서로 인접한 페이지 텍스트를 가장 우선" in prompt
+    assert "이미지 내부 로고 OCR" in prompt
+    assert "보조 근거로만 사용" in prompt
+    assert "active_result_card" not in prompt
+    assert "회사명은 로고" not in prompt
+
+
+def test_detail_extraction_request_keeps_card_metadata_as_fallback_only(monkeypatch):
+    from agent.application import detail_extraction_service
+
+    captured = {}
+
+    class FakeExtractionLLM:
+        def invoke(self, messages):
+            captured["messages"] = messages
+            return {
+                "company_name": "상세 페이지 회사",
+                "position": "상세 페이지 직무",
+                "url": "https://example.com/jobs/1",
+            }
+
+    monkeypatch.setattr(
+        detail_extraction_service,
+        "get_detail_extraction_llm",
+        lambda: FakeExtractionLLM(),
+    )
+
+    result = detail_extraction_service.extract_job_from_detail_ocr_buffer(
+        {
+            "detail_ocr_buffer": {
+                "url": "https://example.com/jobs/1",
+                "lines": [{"text": "상세 페이지 회사 상세 페이지 직무"}],
+            },
+            "active_result_card": {
+                "company": "잘못 인식한 카드 회사",
+                "title": "잘못 인식한 카드 직무",
+            },
+        },
+        "https://example.com/jobs/1",
+    )
+
+    request_payload = json.loads(captured["messages"][1].content)
+    assert "active_result_card" not in request_payload
+    assert result["company_name"] == "상세 페이지 회사"
+    assert result["position"] == "상세 페이지 직무"

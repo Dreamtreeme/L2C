@@ -32,8 +32,31 @@ def _reflex_enabled() -> bool:
 
 def route_after_perception(state: GraphState) -> str:
     """전환 계약 판정 뒤 재관찰, reflex 재생 또는 reasoning 폴백을 선택한다."""
+    if state.get("low_information_screen"):
+        retry_count = int(state.get("low_information_retry_count", 0) or 0)
+        try:
+            retry_limit = max(1, int(os.getenv("VISION_LOW_INFORMATION_MAX_CYCLES", "3")))
+        except ValueError:
+            retry_limit = 3
+        if retry_count < retry_limit:
+            logger.info(
+                "Low-information screen will be observed again without reasoning.",
+                retry_count=retry_count,
+                retry_limit=retry_limit,
+            )
+            return "perception"
+        logger.info(
+            "Low-information retry limit reached; allowing reasoning recovery.",
+            retry_count=retry_count,
+            retry_limit=retry_limit,
+        )
+        return "reasoning"
+
     if state.get("queue_replay_hit"):
         logger.info("Result card queue hit; executing cached next-card action.")
+        return "action"
+    if state.get("page_policy_hit"):
+        logger.info("Page policy hit; executing deterministic detail action.")
         return "action"
 
     transition_status = state.get("transition_status", "")
@@ -58,6 +81,18 @@ def route_after_reflex(state: GraphState) -> str:
     return "action" if state.get("reflex_hit") else "reasoning"
 
 
+def route_after_start(state: GraphState) -> str:
+    """이미 관찰된 시작 화면이 있으면 첫 판단도 Reflex를 먼저 시도한다."""
+    if state.get("low_information_screen"):
+        return "perception"
+    if not _reflex_enabled():
+        return "reasoning"
+    if state.get("current_markers") and state.get("current_page_role") and state.get("recent_images"):
+        logger.info("Start screen is already observed; trying Reflex before reasoning.")
+        return "reflex"
+    return "reasoning"
+
+
 def build_graph():
     """LangGraph 워크플로우를 구성하고 컴파일된 앱을 반환합니다."""
     
@@ -73,8 +108,16 @@ def build_graph():
     workflow.add_node("action", action_node)
     
     # 3. 엣지 연결 (흐름 정의)
-    # 시작 시 빈 계획 상태로 reasoning 노드로 진입하여 동적 계획 수립 유도
-    workflow.add_edge(START, "reasoning")
+    # 시작 화면을 이미 perception으로 준비한 worker는 첫 행동도 Reflex를 먼저 시도한다.
+    workflow.add_conditional_edges(
+        START,
+        route_after_start,
+        {
+            "perception": "perception",
+            "reflex": "reflex",
+            "reasoning": "reasoning",
+        },
+    )
     
     # perception 완료 후 REFLEX_ENABLED일 때만 캐시 재생을 먼저 시도
     workflow.add_conditional_edges(

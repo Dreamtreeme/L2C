@@ -33,6 +33,7 @@ class PerceptionEngine:
         self.last_region = None
         self._browser_window_id = None
         self._last_url = ""
+        self.last_capture_quality: Dict[str, Any] = {}
         self._analysis_cache: Dict[str, Dict[str, Any]] = {}
         self._analysis_cache_order: list[str] = []
         self._analysis_cache_limit = int(os.getenv("VISION_UI_ANALYSIS_CACHE_LIMIT", "8"))
@@ -150,7 +151,13 @@ class PerceptionEngine:
         if not win:
             return None
         return self._browser_region_from_window(win)
-    def capture_screen(self, filename: Optional[str] = None, initial_wait_sec: Optional[float] = None) -> Path:
+    def capture_screen(
+        self,
+        filename: Optional[str] = None,
+        initial_wait_sec: Optional[float] = None,
+        *,
+        wait_for_stable: bool = True,
+    ) -> Path:
         """
         큰 화면 흔들림이 잦아든 뒤 브라우저 창 영역을 캡처합니다.
         페이지의 실제 로딩 완료 여부는 이후 전환 계약 검사에서 판단합니다.
@@ -170,7 +177,8 @@ class PerceptionEngine:
         # Browser region lookup activates the window and is relatively expensive.
         # Resolve it once and share it with WaitStable and the final capture.
         region = self._get_browser_region()
-        self._wait_stable.wait(region=region)
+        if wait_for_stable:
+            self._wait_stable.wait(region=region)
 
         if not filename:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -221,12 +229,20 @@ class PerceptionEngine:
 
     def screen_quality(self, image_path: Path) -> Dict[str, Any]:
         """브라우저 본문이 단색 빈 화면에 가까운지 저비용 이미지 지표로 검사한다."""
-        content_top = self._env_int("VISION_PAGE_CONTENT_TOP_PX", 140)
         bottom_ignore = self._env_int("VISION_PAGE_CONTENT_BOTTOM_IGNORE_PX", 80)
         sample_width = self._env_int("VISION_PAGE_QUALITY_SAMPLE_WIDTH", 240)
         try:
             with Image.open(image_path) as source:
-                image = source.convert("L")
+                source_rgb = source.convert("RGB")
+                content_top_setting = os.getenv("VISION_PAGE_CONTENT_TOP_PX", "auto").strip().lower()
+                if content_top_setting in {"", "auto"}:
+                    content_top = self._detect_browser_content_top(source_rgb)
+                else:
+                    try:
+                        content_top = max(0, int(content_top_setting))
+                    except ValueError:
+                        content_top = self._detect_browser_content_top(source_rgb)
+                image = source_rgb.convert("L")
                 bottom = max(content_top + 1, image.height - bottom_ignore)
                 content = image.crop((0, min(content_top, image.height - 1), image.width, bottom))
                 if sample_width > 0 and content.width > sample_width:
@@ -236,7 +252,11 @@ class PerceptionEngine:
                         Image.Resampling.BILINEAR,
                     )
                 stats = ImageStat.Stat(content)
-                edge_mean = ImageStat.Stat(content.filter(ImageFilter.FIND_EDGES)).mean[0]
+                edge_image = content.filter(ImageFilter.FIND_EDGES)
+                if edge_image.width > 2 and edge_image.height > 2:
+                    # FIND_EDGES가 단색 이미지 외곽에 만드는 인공 경계는 품질 계산에서 제외한다.
+                    edge_image = edge_image.crop((1, 1, edge_image.width - 1, edge_image.height - 1))
+                edge_mean = ImageStat.Stat(edge_image).mean[0]
                 histogram = content.histogram()
                 pixel_count = max(1, sum(histogram))
                 dominant_ratio = max(histogram) / pixel_count
@@ -245,9 +265,9 @@ class PerceptionEngine:
             logger.debug("Screen quality check skipped", error=str(exc), image_path=str(image_path))
             return {"low_information": False, "reason": "quality_check_error"}
 
-        max_stddev = self._env_float("VISION_PAGE_BLANK_MAX_STDDEV", 12.0)
-        max_edge_mean = self._env_float("VISION_PAGE_BLANK_MAX_EDGE_MEAN", 4.0)
-        min_dominant_ratio = self._env_float("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", 0.9)
+        max_stddev = self._env_float("VISION_PAGE_BLANK_MAX_STDDEV", 6.0)
+        max_edge_mean = self._env_float("VISION_PAGE_BLANK_MAX_EDGE_MEAN", 1.0)
+        min_dominant_ratio = self._env_float("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", 0.98)
         low_information = (
             stddev <= max_stddev
             and edge_mean <= max_edge_mean
@@ -261,9 +281,11 @@ class PerceptionEngine:
             "dominant_ratio": round(dominant_ratio, 4),
         }
 
-    def capture_usable_screen(self) -> Path:
+    def capture_usable_screen(self, max_attempts: Optional[int] = None) -> Path:
         """단색 빈 본문이면 OCR 전에 짧게 재캡처하고 마지막 화면을 반환한다."""
-        max_attempts = max(1, self._env_int("VISION_PAGE_CAPTURE_MAX_ATTEMPTS", 4))
+        if max_attempts is None:
+            max_attempts = self._env_int("VISION_PAGE_CAPTURE_MAX_ATTEMPTS", 4)
+        max_attempts = max(1, int(max_attempts))
         retry_interval = self._env_float("VISION_PAGE_CAPTURE_RETRY_SEC", 0.4)
         last_path: Path | None = None
         for attempt in range(1, max_attempts + 1):
@@ -272,6 +294,7 @@ class PerceptionEngine:
                 filename = f"screen_retry_{int(time.time() * 1000)}_{attempt}.png"
             last_path = self.capture_screen(filename=filename)
             quality = self.screen_quality(last_path)
+            self.last_capture_quality = dict(quality)
             logger.info("Screen quality checked", attempt=attempt, max_attempts=max_attempts, **quality)
             if not quality.get("low_information"):
                 return last_path
@@ -292,6 +315,7 @@ class PerceptionEngine:
             copy_wait = self._env_float("VISION_URL_COPY_WAIT_SEC", 0.015)
             pyautogui.PAUSE = min(old_pause, key_pause)
             try:
+                pyperclip.copy("")
                 pyautogui.hotkey(modifier, "l")
                 pyautogui.hotkey(modifier, "c")
                 if copy_wait > 0:
@@ -339,6 +363,7 @@ class PerceptionEngine:
             "markers": [dict(marker) for marker in analysis.get("markers", [])],
             "original_image": analysis.get("original_image", ""),
             "marked_image": analysis.get("marked_image", ""),
+            "content_top": int(analysis.get("content_top", 0) or 0),
         }
         if key in self._analysis_cache_order:
             self._analysis_cache_order.remove(key)
@@ -348,14 +373,18 @@ class PerceptionEngine:
             self._analysis_cache.pop(old_key, None)
 
     def _prepare_som_image(self, image_path: Path) -> tuple[Path, int]:
-        try:
-            crop_top = int(os.getenv("VISION_SOM_CROP_TOP", "140"))
-        except ValueError:
-            crop_top = 96
-        if crop_top <= 0:
-            return image_path, 0
+        crop_setting = os.getenv("VISION_SOM_CROP_TOP", "auto").strip().lower()
         try:
             with Image.open(image_path) as img:
+                if crop_setting in {"", "auto"}:
+                    crop_top = self._detect_browser_content_top(img)
+                else:
+                    try:
+                        crop_top = max(0, int(crop_setting))
+                    except ValueError:
+                        crop_top = self._detect_browser_content_top(img)
+                if crop_top <= 0:
+                    return image_path, 0
                 if img.height <= crop_top + 400:
                     return image_path, 0
                 cropped_path = image_path.with_name(f"som_{image_path.name}")
@@ -368,6 +397,50 @@ class PerceptionEngine:
         except Exception as e:
             logger.debug("Failed to crop browser chrome for SoM", error=str(e))
             return image_path, 0
+
+    def _detect_browser_content_top(self, image: Image.Image) -> int:
+        """브라우저 chrome과 페이지 사이의 전체 폭 수평 경계를 찾는다."""
+
+        fallback_top = self._env_int("VISION_SOM_CROP_FALLBACK_TOP_PX", 140)
+        min_y = self._env_int("VISION_SOM_CROP_SCAN_MIN_Y", 80)
+        max_y = min(
+            self._env_int("VISION_SOM_CROP_SCAN_MAX_Y", 320),
+            max(0, image.height - 400),
+        )
+        if max_y <= min_y:
+            return fallback_top
+
+        sample_width = max(32, self._env_int("VISION_SOM_CROP_SAMPLE_WIDTH", 256))
+        sample = image.convert("RGB")
+        if sample.width > sample_width:
+            sample = sample.resize((sample_width, sample.height), Image.Resampling.BILINEAR)
+
+        row_means = [
+            ImageStat.Stat(sample.crop((0, y, sample.width, y + 1))).mean
+            for y in range(max_y + 1)
+        ]
+        best_y = fallback_top
+        best_delta = 0.0
+        for y in range(max(1, min_y), max_y + 1):
+            delta = sum(abs(row_means[y][channel] - row_means[y - 1][channel]) for channel in range(3))
+            if delta > best_delta:
+                best_delta = delta
+                best_y = y
+
+        min_delta = self._env_float("VISION_SOM_CROP_MIN_ROW_DELTA", 60.0)
+        if best_delta < min_delta:
+            logger.debug(
+                "Browser content boundary was weak; using crop fallback",
+                best_delta=round(best_delta, 2),
+                fallback_top=fallback_top,
+            )
+            return fallback_top
+        logger.info(
+            "Detected browser content boundary",
+            crop_top=best_y,
+            row_delta=round(best_delta, 2),
+        )
+        return best_y
 
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """
@@ -395,6 +468,8 @@ class PerceptionEngine:
                 "markers": [dict(marker) for marker in cached.get("markers", [])],
                 "original_image": str(image_path),
                 "marked_image": cached.get("marked_image", ""),
+                "content_top": int(cached.get("content_top", 0) or 0),
+                "analysis_mode": str(cached.get("analysis_mode") or "full"),
             }
 
         # 1. 로컬 SoM 엔진 실행 (마킹 이미지 합성 및 좌표 추출)
@@ -403,7 +478,7 @@ class PerceptionEngine:
             marked_filename = f"marked_{image_path.name}"
             marked_path, marker_coords, marker_bboxes, final_elements = self.som_engine.process_image(
                 som_image_path,
-                output_filename=marked_filename
+                output_filename=marked_filename,
             )
             if crop_top:
                 for bbox in marker_bboxes.values():
@@ -466,15 +541,21 @@ Example output format:
             # 4. Gemini Flash 호출 시도 (langchain_google_genai — llm_engine.py와 동일한 클라이언트)
             if api_key:
                 try:
-                    from langchain_google_genai import ChatGoogleGenerativeAI
+                    from agent.application.model_clients import get_google_chat_model
                     from langchain_core.messages import HumanMessage
                     logger.info("Captioning UI elements via Gemini Flash SoM...")
-                    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
+                    llm = get_google_chat_model("gemini-3.5-flash", temperature=0.1)
                     message = HumanMessage(content=[
                         {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
                     ])
-                    response = llm.invoke([message])
+                    from agent.application.run_context import invoke_with_metrics
+
+                    response = invoke_with_metrics(
+                        llm,
+                        [message],
+                        "vision_caption",
+                    )
                     output = response.content
                     if isinstance(output, list):
                         output = "\n".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in output)
@@ -491,16 +572,38 @@ Example output format:
             if not elements:
                 logger.info("Captioning UI elements via local Ollama SoM (Fallback)...")
                 try:
+                    import time
                     import ollama as _ollama
                     from shared.config import OLLAMA_HOST
                     model_name = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
                     client = _ollama.Client(host=OLLAMA_HOST)
+                    started = time.perf_counter()
                     resp = client.generate(
                         model=model_name,
                         prompt=prompt,
                         images=[base64_image],
                         stream=False,
                         options={"num_ctx": 4096, "num_predict": 1024, "temperature": 0.1}
+                    )
+                    from agent.application.run_context import record_external_llm_usage
+
+                    usage_source = (
+                        resp
+                        if isinstance(resp, dict)
+                        else {
+                            "prompt_eval_count": getattr(resp, "prompt_eval_count", 0),
+                            "eval_count": getattr(resp, "eval_count", 0),
+                        }
+                    )
+                    record_external_llm_usage(
+                        component="vision_caption",
+                        provider="ollama",
+                        model=model_name,
+                        usage={
+                            "input_tokens": usage_source.get("prompt_eval_count", 0),
+                            "output_tokens": usage_source.get("eval_count", 0),
+                        },
+                        duration_sec=time.perf_counter() - started,
                     )
                     # ollama 버전에 따라 dict 또는 GenerateResponse 객체로 반환됨
                     result_text = (resp.get("response", "") if isinstance(resp, dict) else getattr(resp, "response", "")) or ""
@@ -559,7 +662,9 @@ Example output format:
         analysis = {
             "markers": markers,
             "original_image": str(image_path),
-            "marked_image": str(marked_path)
+            "marked_image": str(marked_path),
+            "content_top": crop_top,
+            "analysis_mode": "full",
         }
         self._cache_analysis(cache_key, analysis)
         return analysis

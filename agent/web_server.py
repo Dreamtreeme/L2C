@@ -1,22 +1,19 @@
 import json
 import asyncio
-import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pathlib import Path
 
-from shared.config import DB_PATH
 from shared.db.database import Database
-from agent.graph.nodes import qa_reasoning_node
-from agent.graph.state import GraphState
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from agent.application.chat_service import get_chat_service
+from agent.application.run_contracts import RunEvent, new_run_id
+from agent.application.run_registry import get_run_registry
+from agent.utils.logger import logger
 
 app = FastAPI(title="L2C Q&A API Server")
 
@@ -53,7 +50,9 @@ async def redirect_to_index():
 @app.get("/api/jobs/{job_id}")
 async def get_job_detail(job_id: int):
     """지정된 job_id 공고의 상세 정보 및 원본 텍스트를 SQLite에서 조회합니다."""
-    db = Database(DB_PATH)
+    import shared.config as config
+
+    db = Database(config.DB_PATH)
     job = db.get(job_id)
     if not job:
         return {"error": "Job not found"}
@@ -66,6 +65,16 @@ async def get_job_detail(job_id: int):
         "raw_text": job["raw_ocr_text"] or f"회사명: {job['company_name']}\n직무: {job['position']}\n기술스택: {job['tech_stack']}"
     }
 
+
+@app.get("/api/runs/{run_id}")
+async def get_run_status(run_id: str):
+    """최근 로컬 요청의 진행 상태와 실행 요약을 반환합니다."""
+
+    item = get_run_registry().get(run_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return item
+
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
     """
@@ -77,68 +86,63 @@ async def chat_endpoint(req: ChatRequest):
             yield "data: [ERROR] 질문이 비어있습니다.\n\n"
             return
 
-        logger.info(f"Received query for commander: {query!r}")
+        run_id = new_run_id("chat")
+        registry = get_run_registry()
+        registry.start(run_id, query)
+        event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
-        # 1. 수신 즉시 클라이언트에 확인 응답 — realtime_scraping 트리거 시 수 분 공백 방지
-        yield "data: [PROCESSING]\n\n"
+        def event_sink(event: RunEvent) -> None:
+            registry.apply_event(event)
+            loop.call_soon_threadsafe(event_queue.put_nowait, event)
 
-        # 2. 지휘자 에이전트 노드 비동기 실행 (SQLite 조회 및 실시간 스크래핑을 지휘자가 직접 조율)
-        state = GraphState(
-            goal=query,
-            ui_context="",
-            current_url="",
-            current_url_stale=True,
-            current_markers=[],
-            action_history=[],
-            recent_images=[],
-            marked_image="",
-            screen_signature={},
-            error_count=0,
-            is_finished=False,
-            collected_data=[],
-            extracted_jd={},
-            last_action_result=None,
-            plan=[],
-            current_plan_step=0,
-            step_durations=[],
-            last_action_screen_changed=True,
-            recorded_steps=[],
-            feedback_episodes=[],
-            reflex_state_key="",
-            reflex_hit=False,
-            reflex_trace={},
-            reflex_transition_contracts={},
-            recipe_params={},
-            pending_transition={},
-            transition_status="",
-            transition_outcome="",
-            transition_source="",
-            transition_observations=[],
-            result_card_queue=[],
-            result_page_memory={},
-            active_result_card={},
-            queue_replay_hit=False,
-            queue_replay_trace={},
-            pending_human_approval=False,
-            human_approval_request={},
+        logger.info("Received query for commander", query=query, run_id=run_id)
+
+        yield f"data: [PROCESSING] {json.dumps({'run_id': run_id}, ensure_ascii=False)}\n\n"
+
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                get_chat_service().run,
+                query,
+                run_id=run_id,
+                event_sink=event_sink,
+            )
         )
         try:
-            result = await asyncio.to_thread(qa_reasoning_node, state)
-            final_answer = result.get("last_action_result", "")
-        except Exception as e:
-            logger.error(f"Commander execution failed: {e}")
-            yield f"data: [ERROR] 지휘자 에이전트 실행 실패: {str(e)}\n\n"
+            while not task.done() or not event_queue.empty():
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+                payload = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
+                yield f"data: [EVENT] {payload}\n\n"
+
+            result = await task
+        except Exception as exc:
+            registry.fail(run_id, str(exc))
+            logger.exception("Commander execution failed", error=str(exc), run_id=run_id)
+            error_payload = json.dumps(
+                {"run_id": run_id, "message": f"지휘자 에이전트 실행 실패: {exc}"},
+                ensure_ascii=False,
+            )
+            yield f"data: [ERROR] {error_payload}\n\n"
             return
 
-        # 3. 클라이언트 단으로 타이핑 효과 실시간 스트리밍
-        logger.info("Streaming commander's final answer to client...")
-        for char in final_answer:
-            yield f"data: {char}\n\n"
-            await asyncio.sleep(0.01) # 10ms 지연으로 자연스러운 타이핑 UX 제공
-
-        # 3. 보정 완료된 최종 답변 페이로드 전달
-        final_payload = json.dumps({"text": final_answer})
+        registry.complete(run_id, result)
+        final_payload = json.dumps(
+            {
+                "run_id": run_id,
+                "text": str(result.get("last_action_result") or ""),
+                "status": result.get("run_status", "completed"),
+                "metrics": result.get("metrics", {}),
+            },
+            ensure_ascii=False,
+        )
         yield f"data: [FINAL] {final_payload}\n\n"
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

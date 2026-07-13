@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS feedback_episodes (
     source              TEXT,
     site                TEXT,
     goal                TEXT,
-    page_state_key      TEXT,
     action              TEXT,
     feedback_label      TEXT,
     feedback_reason     TEXT,

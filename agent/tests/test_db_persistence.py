@@ -13,9 +13,7 @@ from agent.utils.preprocessor import Preprocessor
 from shared.db.database import Database
 from shared.schema.jd_schema import JobPosting
 
-# 테스트 DB 경로 지정
-TEST_DB_PATH = Path("data/test_jobs.db")
-AGENT_JSON_PATH = Path("data/agent_extracted_multi_jds_decoded.json")
+AGENT_JSON_PATH = Path("data/samples/agent_extracted_multi_jds_decoded.json")
 
 
 def test_preprocessor_accepts_korean_benefits_alias():
@@ -47,13 +45,14 @@ def test_preprocessor_preserves_canonical_llm_fields():
     assert job_posting.experience_text == "3+ years"
 
 
-def test_persistence_pipeline():
+def test_persistence_pipeline(tmp_path):
     print("=== [테스트 시작] 전처리 및 DB 적재 파이프라인 검증 ===")
+    test_db_path = tmp_path / "test_jobs.db"
     
     # 0. 이전 테스트 DB 제거
-    if TEST_DB_PATH.exists():
-        os.remove(TEST_DB_PATH)
-        print(f"이전 테스트 DB 제거 완료: {TEST_DB_PATH}")
+    if test_db_path.exists():
+        os.remove(test_db_path)
+        print(f"이전 테스트 DB 제거 완료: {test_db_path}")
 
     # 1. 원천 비전 수집 JSON 파일 로드
     assert AGENT_JSON_PATH.exists(), f"테스트 데이터 파일 없음: {AGENT_JSON_PATH}"
@@ -65,7 +64,7 @@ def test_persistence_pipeline():
     assert len(jds) > 0, "공고 목록이 비어있습니다."
 
     # 2. Database 객체 초기화 (마이그레이션 자동 수행)
-    db = Database(TEST_DB_PATH)
+    db = Database(test_db_path)
     print("Database 초기화 및 스키마 검증 완료")
 
     # 3. 각 공고 데이터 전처리 및 적재 수행
@@ -143,7 +142,7 @@ def test_persistence_pipeline():
     print("✓ content_hash 중복 충돌 시 정상 UPDATE 및 중복 차단 확인")
 
     # DB의 최종 레코드 수 확인
-    conn = sqlite3.connect(TEST_DB_PATH)
+    conn = sqlite3.connect(test_db_path)
     try:
         conn.row_factory = sqlite3.Row
         cursor = conn.execute("SELECT COUNT(*) as cnt FROM jobs")
@@ -156,8 +155,8 @@ def test_persistence_pipeline():
     print("\n=== [테스트 성공] 모든 전처리 및 DB 영속화 적재 파이프라인의 안전성을 검증 완료했습니다! ===")
 
     # 5. 테스트 DB 정리
-    if TEST_DB_PATH.exists():
-        os.remove(TEST_DB_PATH)
+    if test_db_path.exists():
+        os.remove(test_db_path)
 
 
 if __name__ == "__main__":

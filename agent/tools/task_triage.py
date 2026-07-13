@@ -101,11 +101,14 @@ def triage_user_task(user_query: str) -> TaskTriage:
         return deterministic_task_triage(user_query)
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
-        from langchain_google_genai import ChatGoogleGenerativeAI
+        from agent.application.model_clients import get_structured_google_model
 
         model_name = os.getenv("COMMANDER_TASK_TRIAGE_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
-        llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.0).with_structured_output(TaskTriage)
-        result = llm.invoke(
+        llm = get_structured_google_model(model_name, TaskTriage, temperature=0.0)
+        from agent.application.run_context import invoke_with_metrics
+
+        result = invoke_with_metrics(
+            llm,
             [
                 SystemMessage(
                     content=(
@@ -116,7 +119,8 @@ def triage_user_task(user_query: str) -> TaskTriage:
                     )
                 ),
                 HumanMessage(content=json.dumps({"user_query": user_query}, ensure_ascii=False)),
-            ]
+            ],
+            "task_triage",
         )
         return result if isinstance(result, TaskTriage) else TaskTriage(**result)
     except Exception as exc:  # pragma: no cover - provider failures use conservative fallback

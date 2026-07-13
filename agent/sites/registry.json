@@ -5,6 +5,7 @@
     {
       "slug": "wanted",
       "display_name": "원티드",
+      "aliases": ["wanted", "원티드"],
       "domains": ["wanted.co.kr", "www.wanted.co.kr"],
       "base_url": "https://www.wanted.co.kr",
       "enabled": true,
@@ -17,6 +18,7 @@
     {
       "slug": "jobkorea",
       "display_name": "잡코리아",
+      "aliases": ["jobkorea", "잡코리아"],
       "domains": ["jobkorea.co.kr", "www.jobkorea.co.kr"],
       "base_url": "https://www.jobkorea.co.kr",
       "enabled": true,
@@ -29,6 +31,7 @@
     {
       "slug": "saramin",
       "display_name": "사람인",
+      "aliases": ["saramin", "사람인"],
       "domains": ["saramin.co.kr", "www.saramin.co.kr"],
       "base_url": "https://www.saramin.co.kr",
       "enabled": true,
@@ -41,6 +44,7 @@
     {
       "slug": "worknet",
       "display_name": "워크넷/고용24",
+      "aliases": ["worknet", "work24", "워크넷", "고용24"],
       "domains": ["work.go.kr", "www.work.go.kr", "work24.go.kr", "www.work24.go.kr"],
       "base_url": "https://www.work24.go.kr",
       "enabled": true,
@@ -53,6 +57,7 @@
     {
       "slug": "rocketpunch",
       "display_name": "로켓펀치",
+      "aliases": ["rocketpunch", "로켓펀치"],
       "domains": ["rocketpunch.com", "www.rocketpunch.com"],
       "base_url": "https://www.rocketpunch.com",
       "enabled": true,
