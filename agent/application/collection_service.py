@@ -8,6 +8,8 @@ from typing import Any, Callable
 from agent.application.run_context import emit_run_event, measure_step
 from agent.application.run_contracts import RunPhase
 from agent.utils.logger import logger
+from agent.utils.model_dump import dump_model
+from shared.schema.collection_intent import normalize_collection_intent
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,7 @@ class CollectionRequest:
     search_intent_resolved: bool = False
     review_feedback: str = ""
     review_attempt: int = 0
+    collection_intent: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,16 @@ class CollectionService:
                 "review": {"decision": "reject"},
             }
 
-        target_count = self.operations.normalize_target_count(request.target_count)
+        intent = normalize_collection_intent(
+            request.collection_intent,
+            original_query=keyword,
+            site=request.site or "",
+            search_keyword=keyword,
+            target_count=request.target_count,
+        )
+        intent_payload = dump_model(intent)
+        keyword = intent.search_keyword
+        target_count = self.operations.normalize_target_count(intent.target_count)
         task_category = self.operations.normalize_task_category(request.task_category)
         emit_run_event(
             "collection_started",
@@ -60,6 +72,7 @@ class CollectionService:
                 "site": request.site or "",
                 "target_count": target_count,
                 "task_category": task_category,
+                "count_mode": intent.count_mode.value,
             },
         )
 
@@ -81,6 +94,7 @@ class CollectionService:
                         target_count=target_count,
                         task_category=task_category,
                         search_intent_resolved=request.search_intent_resolved,
+                        collection_intent=intent_payload,
                         review_feedback=pending_feedback,
                         review_attempt=attempt,
                         run_id=worker_run_id,
@@ -133,6 +147,7 @@ class CollectionService:
                     submission_id=submission_id,
                     review=review,
                     persisted_count=persisted_count,
+                    collection_intent=intent_payload,
                 )
         except Exception as exc:
             logger.exception("Vision worker execution failed", error=str(exc))
@@ -156,6 +171,7 @@ class CollectionService:
         submission_id: str,
         review: dict,
         persisted_count: int,
+        collection_intent: dict[str, Any],
     ) -> dict[str, Any]:
         item_count = int(submission.get("collected_count") or 0)
         site_name = worker_result.get("site_name", request.site or "unknown")
@@ -258,6 +274,7 @@ class CollectionService:
             "is_finished": is_finished,
             "needs_human_approval": needs_approval,
             "intermediate_report": intermediate_report,
+            "collection_intent": collection_intent,
         }
 
 

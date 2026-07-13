@@ -5,8 +5,6 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field
-
 from agent.application.job_persistence_service import (
     normalize_job_for_persistence as _normalize_job_for_persistence,
     persist_collected_data as _persist_collected_data,
@@ -23,17 +21,18 @@ from agent.application.worker_execution_service import (
 from agent.recipe.task_category import DEFAULT_SEARCH_TASK_CATEGORY, normalize_task_category
 from agent.runtime.job_collection import job_list_value as _job_list_value
 from agent.utils.model_dump import dump_model
+from shared.schema.collection_intent import (
+    CollectionCountMode,
+    CollectionIntent,
+    normalize_collection_intent,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECURSION_LIMIT = 60
 
 
-class SearchIntent(BaseModel):
-    """Structured extraction of the user's collection request."""
-
-    search_keyword: str = Field(default="", description="The literal job-search phrase to enter on the target site.")
-    target_count: int = Field(default=0, ge=0, le=100, description="Requested number of job postings, or 0 when unspecified.")
+SearchIntent = CollectionIntent
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -108,14 +107,14 @@ def _search_intent_mode() -> str:
 
 
 def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
-    """Ask the intent model for the search phrase and requested item count."""
+    """사용자 요청에서 작업자에게 전달할 전체 수집 조건을 추출한다."""
     original = str(raw_query or "").strip()
     if not original:
-        return dump_model(SearchIntent())
+        return dump_model(CollectionIntent())
 
     mode = _search_intent_mode()
     if mode == "off":
-        intent = dump_model(SearchIntent(search_keyword=original))
+        intent = dump_model(CollectionIntent(original_query=original, search_keyword=original))
         intent["source"] = "disabled"
         intent["error"] = ""
         return intent
@@ -128,14 +127,17 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
         entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
         manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
         model_name = os.getenv("VISION_SEARCH_INTENT_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
-        llm = get_structured_google_model(model_name, SearchIntent, temperature=0.0)
+        llm = get_structured_google_model(model_name, CollectionIntent, temperature=0.0)
         messages = [
             SystemMessage(
                 content=(
                     "Extract a job-search intent for an autonomous vision worker. "
                     "Return only the actual phrase that should be searched on the target job site. "
                     "Remove site names, URLs, filler commands, and analysis/reporting words. "
-                    "If the user asks for a number of postings, set target_count. "
+                    "Preserve date, experience, location, employment type, freshness, and analysis purpose. "
+                    "Use count_mode=explicit only for an explicit number and set target_count. "
+                    "Use count_mode=visible_all for all/every posting or when no count is specified. "
+                    "Use purpose=compare or trend only when requested. "
                     "Do not translate or broaden the keyword."
                 )
             ),
@@ -155,18 +157,21 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
         from agent.application.run_context import invoke_with_metrics
 
         data = dump_model(invoke_with_metrics(llm, messages, "search_intent"))
-        keyword = str(data.get("search_keyword") or "").strip() or original
-        try:
-            target_count = max(0, int(data.get("target_count") or 0))
-        except (TypeError, ValueError):
-            target_count = 0
-        intent = dump_model(SearchIntent(search_keyword=keyword, target_count=target_count))
+        entry_site = str(entry.get("slug") or manual.get("site") or "")
+        intent = dump_model(
+            normalize_collection_intent(
+                data,
+                original_query=original,
+                site=entry_site,
+                search_keyword=original,
+            )
+        )
         intent["source"] = "llm"
         intent["error"] = ""
         return intent
     except Exception as exc:  # pragma: no cover - provider failures are best-effort
         logger.warning("[realtime_scraping] Search intent extraction failed; using raw query: %s", exc)
-        intent = dump_model(SearchIntent(search_keyword=original))
+        intent = dump_model(CollectionIntent(original_query=original, search_keyword=original))
         intent["source"] = "llm_failed"
         intent["error"] = str(exc)[:200]
         return intent
@@ -232,6 +237,7 @@ def _build_site_goal(
     direct_search_url: str = "",
     target_count: int = 0,
     task_context: dict[str, Any] | None = None,
+    collection_intent: dict[str, Any] | None = None,
 ) -> str:
     entry = profile["entry"]
     manual = profile["manual"]
@@ -267,6 +273,12 @@ def _build_site_goal(
             "Find the visible search input, type the user query, and submit from the page."
             f"{' ' + search_entry if search_entry else ''}\n\n"
         )
+    intent = normalize_collection_intent(
+        collection_intent,
+        site=str(entry.get("slug") or ""),
+        search_keyword=search_keyword,
+        target_count=target_count,
+    )
     target_section = ""
     if int(target_count or 0) > 0:
         target_section = (
@@ -274,6 +286,24 @@ def _build_site_goal(
             f"Collect up to {int(target_count)} distinct job postings for this request. "
             "When that many valid detail pages have been collected and submitted, finish instead of opening more cards.\n\n"
         )
+    elif intent.count_mode == CollectionCountMode.VISIBLE_ALL:
+        target_section = (
+            "[Collection target]\n"
+            "Collect every relevant job card visible on the first stable search-result screen. "
+            "Do not invent a fixed item count and do not continue to additional result pages unless the user explicitly requested it.\n\n"
+        )
+    filters = dump_model(intent.filters)
+    active_filters = {key: value for key, value in filters.items() if value}
+    request_section = (
+        "[Structured user request]\n"
+        f"count_mode={intent.count_mode.value}\n"
+        f"filters={json.dumps(active_filters, ensure_ascii=False)}\n"
+        f"freshness_required={str(intent.freshness_required).lower()}\n"
+        f"purpose={intent.purpose.value}\n"
+        f"analysis_goal={intent.analysis_goal}\n"
+        "Apply visible site filters when available. Do not claim that a posting meets a date or filter condition without visible evidence. "
+        "The worker collects supporting postings; the answer agent performs the final comparison or trend analysis.\n\n"
+    )
     task_context_section = _task_context_section(task_context)
 
     return (
@@ -284,6 +314,7 @@ def _build_site_goal(
         f"{navigation_section}"
         f"{direct_search_section}"
         f"{target_section}"
+        f"{request_section}"
         f"{task_context_section}"
         f"[사이트 공통 흐름]\n{common_flow}\n\n"
         f"[안정적인 UI/Reflex 후보]\n{stable_controls}\n\n"
@@ -455,6 +486,7 @@ def run_worker_once(
     review_attempt: int = 0,
     run_id: str | None = None,
     task_context: dict[str, Any] | None = None,
+    collection_intent: dict[str, Any] | None = None,
 ) -> dict:
     """Run one child vision worker attempt and return an unreviewed submission payload."""
     from agent.recipe.reviewer import build_worker_submission, new_worker_run_id
@@ -466,10 +498,24 @@ def run_worker_once(
     run_id = run_id or new_worker_run_id()
     raw_search_keyword = search_keyword
     requested_target_count = _normalize_target_count(target_count)
-    if search_intent_resolved:
+    if collection_intent:
         search_intent = dump_model(
-            SearchIntent(
-                search_keyword=str(search_keyword or "").strip(),
+            normalize_collection_intent(
+                collection_intent,
+                original_query=raw_search_keyword,
+                site=site_slug,
+                search_keyword=search_keyword,
+                target_count=requested_target_count,
+            )
+        )
+        search_intent["source"] = "structured_arguments"
+        search_intent["error"] = ""
+    elif search_intent_resolved:
+        search_intent = dump_model(
+            normalize_collection_intent(
+                original_query=raw_search_keyword,
+                site=site_slug,
+                search_keyword=search_keyword,
                 target_count=requested_target_count,
             )
         )
@@ -489,6 +535,7 @@ def run_worker_once(
             direct_search_url,
             target_count=target_count,
             task_context=task_context,
+            collection_intent=search_intent,
         ),
         review_feedback,
     )
@@ -499,6 +546,8 @@ def run_worker_once(
         "target_count": target_count,
         "site": site_slug,
         "task_category": task_category,
+        "count_mode": search_intent.get("count_mode", CollectionCountMode.UNSPECIFIED.value),
+        "collection_intent": search_intent,
     }
 
     logger.info(
@@ -547,6 +596,7 @@ def run_worker_once(
         "target_count": target_count,
         "task_category": task_category,
         "search_intent": search_intent,
+        "collection_intent": search_intent,
         "task_context": task_context or {},
         "run_status": run_status,
         "hit_recursion_limit": hit_recursion_limit,
@@ -695,6 +745,17 @@ def _run_realtime_scraping(
     search_intent_resolved: bool = False,
     review_feedback: str = None,
     review_attempt: int = 0,
+    count_mode: str = CollectionCountMode.UNSPECIFIED.value,
+    posted_date_expression: str = "",
+    posted_from: str = "",
+    posted_to: str = "",
+    experience: str = "",
+    location: str = "",
+    employment_type: str = "",
+    freshness_required: bool = False,
+    purpose: str = "collect",
+    analysis_goal: str = "",
+    original_query: str = "",
 ) -> str:
     """
     Run the child vision worker, review its structured submission, and persist only accepted data.
@@ -733,6 +794,26 @@ def _run_realtime_scraping(
         report_requires_more_collection=limit_report_requires_more_collection,
         close_browser=_close_browser_after_run,
     )
+    collection_intent = normalize_collection_intent(
+        {
+            "original_query": original_query or query or search_keyword,
+            "site": site or "",
+            "search_keyword": search_keyword,
+            "count_mode": count_mode,
+            "target_count": target_count,
+            "filters": {
+                "posted_date_expression": posted_date_expression,
+                "posted_from": posted_from,
+                "posted_to": posted_to,
+                "experience": experience,
+                "location": location,
+                "employment_type": employment_type,
+            },
+            "freshness_required": freshness_required,
+            "purpose": purpose,
+            "analysis_goal": analysis_goal,
+        }
+    )
     result = CollectionService(operations).collect(
         CollectionRequest(
             search_keyword=search_keyword,
@@ -742,6 +823,7 @@ def _run_realtime_scraping(
             search_intent_resolved=search_intent_resolved,
             review_feedback=review_feedback or "",
             review_attempt=review_attempt,
+            collection_intent=dump_model(collection_intent),
         )
     )
     return json.dumps(result, ensure_ascii=False, indent=2)
@@ -757,8 +839,19 @@ def realtime_scraping(
     task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
     review_feedback: str = None,
     review_attempt: int = 0,
+    count_mode: str = CollectionCountMode.UNSPECIFIED.value,
+    posted_date_expression: str = "",
+    posted_from: str = "",
+    posted_to: str = "",
+    experience: str = "",
+    location: str = "",
+    employment_type: str = "",
+    freshness_required: bool = False,
+    purpose: str = "collect",
+    analysis_goal: str = "",
+    original_query: str = "",
 ) -> str:
-    """단일 로컬 비전 작업자로 공고를 수집하고 승인된 결과만 저장한다."""
+    """구조화된 요청에 따라 비전 작업자로 공고를 수집하고 승인된 결과만 저장한다."""
 
     from agent.application.run_context import emit_run_event, run_context
     from agent.application.run_contracts import RunPhase, RunStatus
@@ -778,6 +871,17 @@ def realtime_scraping(
                 search_intent_resolved=_normalize_target_count(target_count) > 0,
                 review_feedback=review_feedback,
                 review_attempt=review_attempt,
+                count_mode=count_mode,
+                posted_date_expression=posted_date_expression,
+                posted_from=posted_from,
+                posted_to=posted_to,
+                experience=experience,
+                location=location,
+                employment_type=employment_type,
+                freshness_required=freshness_required,
+                purpose=purpose,
+                analysis_goal=analysis_goal,
+                original_query=original_query,
             )
         if not created:
             return result_text

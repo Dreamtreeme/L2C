@@ -328,6 +328,47 @@ def test_realtime_scraping_reuses_structured_search_intent(monkeypatch):
     assert result["search_intent"]["source"] == "structured_arguments"
 
 
+def test_realtime_scraping_passes_full_collection_intent_to_worker_state(monkeypatch):
+    from agent.tools import realtime_scraping as rt
+
+    captured = {}
+
+    def fake_run_graph_with_last_state(app, initial_state, recursion_limit):
+        captured["recipe_params"] = dict(initial_state.get("recipe_params") or {})
+        captured["goal"] = initial_state.get("goal", "")
+        return {**initial_state, "is_finished": True, "extracted_jd": {}}, False
+
+    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: object())
+    monkeypatch.setattr(rt, "_prepare_worker_start_screen", lambda initial_state, profile: initial_state)
+    monkeypatch.setattr(rt, "_run_graph_with_last_state", fake_run_graph_with_last_state)
+    monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
+
+    intent = {
+        "original_query": "지난달 서울 AI 공고 전부 비교해줘",
+        "site": "wanted",
+        "search_keyword": "AI 개발자",
+        "count_mode": "visible_all",
+        "target_count": 0,
+        "filters": {"posted_date_expression": "지난달", "location": "서울"},
+        "freshness_required": True,
+        "purpose": "compare",
+        "analysis_goal": "회사별 요구 기술 비교",
+    }
+    result = rt.run_worker_once(
+        "AI 개발자",
+        site="wanted",
+        search_intent_resolved=True,
+        collection_intent=intent,
+    )
+
+    assert result["collection_intent"]["filters"]["posted_date_expression"] == "지난달"
+    assert captured["recipe_params"]["count_mode"] == "visible_all"
+    assert captured["recipe_params"]["collection_intent"]["purpose"] == "compare"
+    assert "Collect every relevant job card visible" in captured["goal"]
+    assert '"posted_date_expression": "지난달"' in captured["goal"]
+    assert "analysis_goal=회사별 요구 기술 비교" in captured["goal"]
+
+
 def test_realtime_scraping_target_count_falls_back_to_intent(monkeypatch):
     from agent.tools import realtime_scraping as rt
 
