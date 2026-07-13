@@ -301,7 +301,7 @@ def test_chat_api_streams_structured_progress_without_character_delay(monkeypatc
     from agent.web_server import app
 
     class FakeChatService:
-        def run(self, query, *, run_id=None, event_sink=None):
+        def run(self, query, *, run_id=None, event_sink=None, **kwargs):
             assert query == "테스트 질문"
             assert run_id
             event_sink(
@@ -332,7 +332,7 @@ def test_chat_api_streams_structured_progress_without_character_delay(monkeypatc
     assert "data: 최" not in response.text
 
 
-def test_chat_api_resumes_from_clarification_context(monkeypatch):
+def test_chat_api_resumes_from_structured_clarification(monkeypatch):
     from fastapi.testclient import TestClient
 
     from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
@@ -354,19 +354,29 @@ def test_chat_api_resumes_from_clarification_context(monkeypatch):
         "previous-clarification",
         {
             "run_status": "waiting_input",
-            "clarification": {"question": "개발과 기획 중 어느 쪽인가요?"},
+            "investigation_id": "investigation-clarification",
+            "clarification": {
+                "question_id": "job_scope",
+                "question": "개발과 기획 중 어느 쪽인가요?",
+            },
         },
     )
 
     class FakeChatService:
-        def run(self, query, *, run_id=None, event_sink=None):
-            assert "[이전 사용자 요청]\nAI 쪽 채용공고 찾아줘" in query
-            assert "[지휘자의 확인 질문]\n개발과 기획 중 어느 쪽인가요?" in query
-            assert "[사용자의 추가 답변]\n개발" in query
+        def run(self, query, *, run_id=None, event_sink=None, **kwargs):
+            assert query == "개발"
+            assert kwargs["investigation_id"] == "investigation-clarification"
+            assert kwargs["clarification_answer"] == {
+                "question_id": "job_scope",
+                "selected_option_id": "",
+                "value": "",
+                "custom_value": "개발",
+            }
             return {
                 "run_id": run_id,
                 "run_status": "completed",
                 "last_action_result": "개발 공고를 찾았습니다.",
+                "investigation_id": "investigation-clarification",
                 "metrics": {},
             }
 
@@ -400,7 +410,7 @@ def test_chat_api_uses_recent_conversation_context(monkeypatch):
     )
 
     class FakeChatService:
-        def run(self, query, *, run_id=None, event_sink=None):
+        def run(self, query, *, run_id=None, event_sink=None, **kwargs):
             assert "[최근 대화 문맥]" in query
             assert "사용자: iOS 공고 두 개 찾아줘" in query
             assert "도우미: 두 건을 찾았습니다." in query

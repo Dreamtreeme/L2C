@@ -204,6 +204,8 @@
         const chatForm = document.getElementById('chat-form');
         const queryInput = document.getElementById('query-input');
         let pendingClarificationRunId = null;
+        let pendingClarification = null;
+        let pendingInvestigationId = null;
         const conversationId = crypto.randomUUID();
         let activeRunId = null;
         const submitBtn = document.getElementById('submit-btn');
@@ -240,6 +242,48 @@
             const html = DOMPurify.sanitize(marked.parse(replaceCitations(text)));
             container.innerHTML = html + (withCursor ? '<span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-0.5"></span>' : '');
             bindCitationButtons(container);
+        }
+
+        function renderClarification(container, clarification) {
+            const options = Array.isArray(clarification?.options) ? clarification.options : [];
+            const groupName = `clarification-${clarification.question_id}`;
+            const controls = document.createElement('div');
+            controls.className = 'mt-4 border-t border-slate-700 pt-3 space-y-2';
+            const optionRows = options.map((option, index) => `
+                <label class="flex items-start gap-3 px-3 py-2 border border-slate-700 rounded-md cursor-pointer hover:border-orange-500/60">
+                    <input type="radio" name="${escapeHtml(groupName)}" value="${escapeHtml(option.option_id)}" class="mt-1 accent-orange-500" ${index === 0 ? 'checked' : ''}>
+                    <span><strong class="block text-sm text-slate-100">${escapeHtml(option.label)}</strong>${option.description ? `<span class="block text-xs text-slate-400 mt-0.5">${escapeHtml(option.description)}</span>` : ''}</span>
+                </label>
+            `).join('');
+            const customRow = clarification.allow_custom ? `
+                <label class="flex items-center gap-3 px-3 py-2 border border-slate-700 rounded-md cursor-pointer hover:border-orange-500/60">
+                    <input type="radio" name="${escapeHtml(groupName)}" value="__custom__" class="accent-orange-500">
+                    <input type="text" data-custom-answer placeholder="직접 입력" class="flex-1 bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500/60">
+                </label>
+            ` : '';
+            controls.innerHTML = `${optionRows}${customRow}<button type="button" data-submit-choice class="inline-flex items-center gap-2 mt-1 px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-md"><i data-lucide="check" class="w-4 h-4"></i> 선택</button>`;
+            container.appendChild(controls);
+            controls.querySelector('[data-custom-answer]')?.addEventListener('focus', () => {
+                const customRadio = controls.querySelector(`input[name="${groupName}"][value="__custom__"]`);
+                if (customRadio) customRadio.checked = true;
+            });
+            controls.querySelector('[data-submit-choice]').addEventListener('click', () => {
+                const selected = controls.querySelector(`input[name="${groupName}"]:checked`);
+                if (!selected) return;
+                const option = options.find((item) => item.option_id === selected.value);
+                const customValue = controls.querySelector('[data-custom-answer]')?.value.trim() || '';
+                if (selected.value === '__custom__' && !customValue) return;
+                controls.querySelectorAll('input, button').forEach((element) => element.disabled = true);
+                sendChatRequest(
+                    option?.label || customValue,
+                    {
+                        question_id: clarification.question_id,
+                        selected_option_id: option?.option_id || '',
+                        custom_value: selected.value === '__custom__' ? customValue : ''
+                    }
+                );
+            });
+            lucide.createIcons();
         }
 
         function formatBytes(value) {
@@ -354,9 +398,17 @@
         }
 
         // Send streaming prompt query API
-        chatForm.addEventListener('submit', async (e) => {
+        chatForm.addEventListener('submit', (e) => {
             e.preventDefault();
             const query = queryInput.value.trim();
+            if (!query) return;
+            const clarificationAnswer = pendingClarification
+                ? { question_id: pendingClarification.question_id, custom_value: query }
+                : null;
+            sendChatRequest(query, clarificationAnswer);
+        });
+
+        async function sendChatRequest(query, clarificationAnswer = null) {
             if (!query) return;
 
             // Clear Input
@@ -405,7 +457,9 @@
                     body: JSON.stringify({
                         query: query,
                         resume_run_id: pendingClarificationRunId,
-                        conversation_id: conversationId
+                        conversation_id: conversationId,
+                        investigation_id: pendingInvestigationId || '',
+                        clarification_answer: clarificationAnswer
                     })
                 });
 
@@ -439,6 +493,15 @@
                                         pendingClarificationRunId = ['waiting_input', 'cancelled'].includes(finalObj.status)
                                             ? finalObj.run_id
                                             : null;
+                                        pendingClarification = finalObj.status === 'waiting_input'
+                                            ? finalObj.clarification
+                                            : null;
+                                        pendingInvestigationId = finalObj.status === 'waiting_input'
+                                            ? finalObj.investigation_id
+                                            : null;
+                                        if (pendingClarification) {
+                                            renderClarification(agentContainer, pendingClarification);
+                                        }
                                     } catch (err) {
                                         console.error('Final payload parse error:', err);
                                     }
@@ -499,7 +562,7 @@
                 activeRunId = null;
                 queryInput.focus();
             }
-        });
+        }
     </script>
 </body>
 </html>

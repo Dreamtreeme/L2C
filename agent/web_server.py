@@ -15,6 +15,7 @@ from agent.application.chat_service import get_chat_service
 from agent.application.run_contracts import RunEvent, RunStatus, new_run_id
 from agent.application.run_registry import get_run_registry
 from agent.utils.logger import logger
+from shared.schema.investigation_schema import ClarificationAnswer
 
 app = FastAPI(title="L2C Q&A API Server")
 
@@ -58,6 +59,8 @@ class ChatRequest(BaseModel):
     query: str
     resume_run_id: str | None = None
     conversation_id: str = ""
+    investigation_id: str = ""
+    clarification_answer: ClarificationAnswer | None = None
 
 
 def _effective_chat_query(
@@ -72,17 +75,6 @@ def _effective_chat_query(
     if resume_run_id:
         previous = registry.get(resume_run_id)
         previous_result = dict((previous or {}).get("result") or {})
-        clarification = dict(previous_result.get("clarification") or {})
-        if (
-            previous
-            and previous.get("status") == RunStatus.WAITING_INPUT.value
-            and clarification.get("question")
-        ):
-            return (
-                f"[이전 사용자 요청]\n{previous.get('user_query') or previous.get('query', '')}\n\n"
-                f"[지휘자의 확인 질문]\n{clarification['question']}\n\n"
-                f"[사용자의 추가 답변]\n{query}"
-            )
         if previous and previous.get("status") == RunStatus.CANCELLED.value:
             return (
                 f"[취소된 사용자 요청]\n{previous.get('user_query') or previous.get('query', '')}\n\n"
@@ -211,16 +203,34 @@ async def chat_endpoint(req: ChatRequest):
     """
     async def event_generator():
         query = req.query.strip()
-        if not query:
+        if not query and req.clarification_answer is None:
             yield "data: [ERROR] 질문이 비어있습니다.\n\n"
             return
 
         run_id = new_run_id("chat")
         registry = get_run_registry()
-        effective_query = _effective_chat_query(
-            query,
-            resume_run_id=req.resume_run_id,
-            conversation_id=req.conversation_id,
+        investigation_id = str(req.investigation_id or "").strip()
+        clarification_answer = req.clarification_answer
+        previous = registry.get(req.resume_run_id) if req.resume_run_id else None
+        if previous and previous.get("status") == RunStatus.WAITING_INPUT.value:
+            previous_result = dict(previous.get("result") or {})
+            previous_clarification = dict(previous_result.get("clarification") or {})
+            investigation_id = investigation_id or str(
+                previous_result.get("investigation_id") or ""
+            )
+            if clarification_answer is None and previous_clarification.get("question_id"):
+                clarification_answer = ClarificationAnswer(
+                    question_id=str(previous_clarification["question_id"]),
+                    custom_value=query,
+                )
+        effective_query = (
+            query
+            if clarification_answer is not None
+            else _effective_chat_query(
+                query,
+                resume_run_id=req.resume_run_id,
+                conversation_id=req.conversation_id,
+            )
         )
         registry.start(
             run_id,
@@ -245,6 +255,13 @@ async def chat_endpoint(req: ChatRequest):
                 effective_query,
                 run_id=run_id,
                 event_sink=event_sink,
+                conversation_id=req.conversation_id,
+                investigation_id=investigation_id,
+                clarification_answer=(
+                    clarification_answer.model_dump(mode="json")
+                    if clarification_answer is not None
+                    else None
+                ),
             )
         )
         try:
@@ -277,6 +294,7 @@ async def chat_endpoint(req: ChatRequest):
                 "text": str(result.get("last_action_result") or ""),
                 "status": result.get("run_status", "completed"),
                 "clarification": result.get("clarification"),
+                "investigation_id": result.get("investigation_id", investigation_id),
                 "resumed_from_run_id": req.resume_run_id,
                 "resume_mode": "restart_from_request" if req.resume_run_id else "",
                 "conversation_id": req.conversation_id,
