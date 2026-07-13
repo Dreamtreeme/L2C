@@ -95,6 +95,34 @@ def test_sqlite_query_tool(setup_test_db, monkeypatch):
     assert "카카오" in result_time
 
 
+def test_sqlite_query_preserves_posted_date_with_raw_text(setup_test_db, monkeypatch):
+    import agent.tools.sqlite_query as sq_module
+    import shared.config as cfg
+
+    monkeypatch.setattr(sq_module, "DB_PATH", TEST_DB_PATH, raising=False)
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
+    with sqlite3.connect(TEST_DB_PATH) as conn:
+        conn.execute(
+            "UPDATE jobs SET posted_at = ?, posted_at_text = ? WHERE company_name = ?",
+            ("2026-07-12", "2026.07.12 등록", "토스"),
+        )
+
+    from agent.tools.sqlite_query import sqlite_query
+
+    result = sqlite_query.invoke(
+        {
+            "sql_query": (
+                "SELECT id, url, company_name, position, posted_at, posted_at_text, "
+                "raw_ocr_text FROM jobs WHERE company_name = '토스'"
+            )
+        }
+    )
+
+    assert "2026-07-12" in result
+    assert "2026.07.12 등록" in result
+    assert "토스에서 금융을 더 간편하게" in result
+
+
 def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     """비전 자율 수집 그래프 stream을 mock하여 realtime_scraping 도구의 통합 로직을 검증합니다."""
     import shared.config as cfg

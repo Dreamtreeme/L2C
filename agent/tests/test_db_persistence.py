@@ -45,6 +45,70 @@ def test_preprocessor_preserves_canonical_llm_fields():
     assert job_posting.experience_text == "3+ years"
 
 
+def test_preprocessor_preserves_verified_posted_date_and_source_text():
+    job_posting = Preprocessor.process_raw_jd({
+        "company_name": "Acme",
+        "position": "Backend Engineer",
+        "url": "https://example.com/jobs/1",
+        "posted_at": "2026-07-10",
+        "posted_at_text": "2026.07.10 등록",
+    })
+
+    assert job_posting.posted_at == "2026-07-10"
+    assert job_posting.posted_at_text == "2026.07.10 등록"
+
+
+def test_job_posting_rejects_relative_date_from_standard_field():
+    job_posting = JobPosting(posted_at="3일 전", posted_at_text="3일 전")
+
+    assert job_posting.posted_at is None
+    assert job_posting.posted_at_text == "3일 전"
+
+
+def test_database_migrates_posted_date_columns_without_rebuilding_jobs(tmp_path):
+    db_path = tmp_path / "legacy_jobs.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE jobs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "url TEXT NOT NULL UNIQUE, "
+            "company_name TEXT, "
+            "content_hash TEXT, "
+            "created_at TEXT NOT NULL"
+            ")"
+        )
+
+    Database(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
+
+    assert {"posted_at", "posted_at_text"} <= columns
+    assert "idx_jobs_posted_at" in indexes
+
+
+def test_database_upsert_and_recent_list_include_posted_date(tmp_path):
+    db = Database(tmp_path / "jobs.db")
+    row_id = db.upsert(
+        "https://example.com/jobs/posted",
+        {
+            "company_name": "Acme",
+            "position": "Data Engineer",
+            "posted_at": "2026-07-11",
+            "posted_at_text": "2026.07.11 게시",
+            "content_hash": "posted-date-hash",
+        },
+    )
+
+    saved = db.get(row_id)
+    recent = db.list_recent(limit=1)
+
+    assert saved["posted_at"] == "2026-07-11"
+    assert saved["posted_at_text"] == "2026.07.11 게시"
+    assert recent[0]["posted_at"] == "2026-07-11"
+
+
 def test_persistence_pipeline(tmp_path):
     print("=== [테스트 시작] 전처리 및 DB 적재 파이프라인 검증 ===")
     test_db_path = tmp_path / "test_jobs.db"

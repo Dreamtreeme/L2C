@@ -55,6 +55,8 @@ EXTRACTION_PROMPT = """당신은 채용공고 텍스트 정제 전문가입니�
   "education": "학력요건",
   "employment_type": "고용형태",
   "location": "근무지",
+  "posted_at": "게시일(YYYY-MM-DD)",
+  "posted_at_text": "게시일 원문",
   "deadline": "마감일",
   "tech_stack": ["기술스택 리스트"],
   "main_tasks": ["주요업무 리스트"],
@@ -66,5 +68,4 @@ EXTRACTION_PROMPT = """당신은 채용공고 텍스트 정제 전문가입니�
 
 [채용공고 전문]:
 {text}"""
-
 

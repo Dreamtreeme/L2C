@@ -4,6 +4,7 @@ VLM 출력 결과를 검증하고 구조화합니다.
 """
 
 from __future__ import annotations
+from datetime import date
 import re
 from typing import Optional
 from pydantic import BaseModel, Field, field_validator
@@ -20,6 +21,8 @@ class JobPosting(BaseModel):
     education: Optional[str] = Field(None, description="학력 요건")
     employment_type: Optional[str] = Field(None, description="고용 형태")
     location: Optional[str] = Field(None, description="근무 위치")
+    posted_at: Optional[str] = Field(None, description="공고 게시일(YYYY-MM-DD, 화면에서 확인된 경우만)")
+    posted_at_text: Optional[str] = Field(None, description="화면에 표시된 게시일 원문")
     deadline: Optional[str] = Field(None, description="마감일")
     tech_stack: Optional[list[str]] = Field(default_factory=list, description="기술스택 목록")
     main_tasks: Optional[list[str]] = Field(default_factory=list, description="주요 업무")
@@ -49,7 +52,8 @@ class JobPosting(BaseModel):
 
     @field_validator(
         "company_name", "position", "job_category", "experience_level",
-        "education", "employment_type", "location", "deadline", "salary",
+        "education", "employment_type", "location", "posted_at", "posted_at_text",
+        "deadline", "salary",
         mode="before",
     )
     @classmethod
@@ -59,3 +63,16 @@ class JobPosting(BaseModel):
             joined = ", ".join(str(x).strip() for x in v if str(x).strip())
             return joined or None
         return v
+
+    @field_validator("posted_at", mode="before")
+    @classmethod
+    def validate_posted_at(cls, v):
+        """날짜 비교에 안전한 ISO 게시일만 표준 필드에 허용합니다."""
+        if v in (None, ""):
+            return None
+        text = str(v).strip()
+        try:
+            date.fromisoformat(text)
+        except ValueError:
+            return None
+        return text

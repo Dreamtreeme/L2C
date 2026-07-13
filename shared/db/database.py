@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     education       TEXT,
     employment_type TEXT,
     location        TEXT,
+    posted_at       TEXT,
+    posted_at_text  TEXT,
     deadline        TEXT,
     salary          TEXT,
     tech_stack      TEXT,
@@ -100,6 +102,8 @@ class Database:
                 "experience_min": "INTEGER",
                 "experience_max": "INTEGER",
                 "experience_text": "TEXT",
+                "posted_at": "TEXT",
+                "posted_at_text": "TEXT",
             }
             for col, col_type in new_cols.items():
                 if col not in columns:
@@ -122,6 +126,7 @@ class Database:
                     logger.debug(f"recipes.metadata_json 추가 건너뜀: {e}")
 
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_posted_at ON jobs(posted_at)")
             
         logger.debug("schema 확인/생성 및 마이그레이션 완료")
 
@@ -149,6 +154,8 @@ class Database:
             "education": data.get("education"),
             "employment_type": data.get("employment_type"),
             "location": data.get("location"),
+            "posted_at": data.get("posted_at"),
+            "posted_at_text": data.get("posted_at_text"),
             "deadline": data.get("deadline"),
             "salary": data.get("salary"),
             "tech_stack": json.dumps(data.get("tech_stack") or [], ensure_ascii=False),
@@ -218,7 +225,7 @@ class Database:
     def list_recent(self, limit: int = 20) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT id, url, company_name, position, created_at "
+                "SELECT id, url, company_name, position, posted_at, posted_at_text, created_at "
                 "FROM jobs ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()

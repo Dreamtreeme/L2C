@@ -61,6 +61,8 @@ async def get_job_detail(job_id: int):
         "company_name": job["company_name"],
         "position": job["position"],
         "url": job["url"],
+        "posted_at": job.get("posted_at"),
+        "posted_at_text": job.get("posted_at_text"),
         "collected_at": job["created_at"],
         "raw_text": job["raw_ocr_text"] or f"회사명: {job['company_name']}\n직무: {job['position']}\n기술스택: {job['tech_stack']}"
     }

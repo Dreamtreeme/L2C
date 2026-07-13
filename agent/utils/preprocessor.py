@@ -262,6 +262,17 @@ class Preprocessor:
         education = cls.clean_text(raw_data.get("학력") or raw_data.get("education")) or None
         employment_type = cls.clean_text(raw_data.get("고용형태") or raw_data.get("employment_type")) or None
         location = cls.clean_text(raw_data.get("근무지") or raw_data.get("location")) or None
+        posted_at = cls.clean_text(
+            raw_data.get("게시일")
+            or raw_data.get("등록일")
+            or raw_data.get("posted_at")
+            or raw_data.get("published_at")
+        ) or None
+        posted_at_text = cls.clean_text(
+            raw_data.get("게시일원문")
+            or raw_data.get("등록일원문")
+            or raw_data.get("posted_at_text")
+        ) or posted_at
         deadline = cls.clean_text(raw_data.get("마감일") or raw_data.get("deadline")) or None
         salary = cls.clean_text(raw_data.get("연봉") or raw_data.get("salary")) or None
 
@@ -274,6 +285,8 @@ class Preprocessor:
             education=education,
             employment_type=employment_type,
             location=location,
+            posted_at=posted_at,
+            posted_at_text=posted_at_text,
             deadline=deadline,
             salary=salary,
             tech_stack=tech_stack,

@@ -14,6 +14,8 @@ JOB_FIELD_ALIASES: dict[str, list[str]] = {
     "tech_stack": ["tech_stack", "techStack", "skills", "\uae30\uc220\uc2a4\ud0dd", "\uae30\uc220 \uc2a4\ud0dd"],
     "location": ["location", "\uadfc\ubb34\uc9c0", "\uc9c0\uc5ed"],
     "employment_type": ["employment_type", "employmentType", "\uace0\uc6a9\ud615\ud0dc"],
+    "posted_at": ["posted_at", "postedAt", "published_at", "publishedAt", "\uac8c\uc2dc\uc77c", "\ub4f1\ub85d\uc77c", "\uacf5\uace0\ub4f1\ub85d\uc77c"],
+    "posted_at_text": ["posted_at_text", "postedAtText", "\uac8c\uc2dc\uc77c\uc6d0\ubb38", "\ub4f1\ub85d\uc77c\uc6d0\ubb38"],
     "deadline": ["deadline", "\ub9c8\uac10\uc77c", "\uc811\uc218\ub9c8\uac10"],
     "salary": ["salary", "\uc5f0\ubd09", "\uae09\uc5ec"],
 }

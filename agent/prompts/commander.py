@@ -69,6 +69,7 @@ QA_COMMANDER_SYSTEM_PROMPT = (
     "지침:\n"
     "1. 사용자의 질문에 답하기 위해 가장 먼저 'sqlite_query' 도구를 호출하여 데이터베이스에 관련 정보가 있는지 확인하십시오.\n"
     "   - 'sqlite_query' 호출 시 적절한 SQL SELECT 문을 직접 생성하여 조건에 맞는 데이터를 조회하십시오.\n"
+    "   - 사용자가 게시 기간을 조건으로 제시하면 `posted_at`을 조회하십시오. `created_at`은 로컬 수집 시각이고 `deadline`은 지원 마감일이므로 게시일 대신 사용하지 마십시오.\n"
     "   - 예: 특정 회사 채용 정보를 조회하려면 `SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE company_name LIKE '%회사명%'` 형식의 SQL을 작성하십시오.\n"
     "2. 'sqlite_query' 결과 정보가 없거나 부족한 경우(예: '검색 결과가 없습니다' 수신 시), 먼저 'list_collection_sites' 도구를 호출하여 지휘자가 사용할 수 있는 채용 사이트 목록을 확인하십시오.\n"
     "   - 현재 지휘자용 사이트는 classic 어댑터와 동일한 5개입니다: wanted, jobkorea, saramin, worknet, rocketpunch.\n"

@@ -34,6 +34,9 @@ def sqlite_query(sql_query: str) -> str:
     - benefits (TEXT): 혜택 및 복지 (JSON list 형태의 문자열)
     - raw_ocr_text (TEXT): 전체 본문 텍스트
     - source_platform (TEXT): 수집 플랫폼 (Wanted 등)
+    - posted_at (TEXT): 화면에서 확인한 공고 게시일 (YYYY-MM-DD, 미확인 시 NULL)
+    - posted_at_text (TEXT): 화면에 표시된 게시일 원문
+    - deadline (TEXT): 지원 마감일이며 게시일과 다름
     - created_at (TEXT): 수집 시각
     
     쿼리 작성 가이드라인:
@@ -43,7 +46,8 @@ def sqlite_query(sql_query: str) -> str:
     3. 경력 검색 시 experience_min 및 experience_max 컬럼과의 비교를 사용하십시오.
        (예: 신입 또는 2년 경력 검색 시 experience_min <= 2 AND experience_max >= 2)
     4. 대소문자 구분 없이 매칭하려면 LIKE 절을 사용하십시오.
-    5. 결과는 XML 형식으로 자동 직렬화되어 반환됩니다.
+    5. 게시일 조건은 posted_at을 사용하십시오. created_at은 로컬 수집 시각이므로 공고 게시일 조건에 사용하지 마십시오.
+    6. 결과는 XML 형식으로 자동 직렬화되어 반환됩니다.
     """
     from shared.config import DB_PATH
     db_path = Path(DB_PATH)
@@ -85,6 +89,15 @@ def sqlite_query(sql_query: str) -> str:
         url = row_dict.get("url") or ""
         company = row_dict.get("company_name") or ""
         position = row_dict.get("position") or ""
+        metadata_fields = {
+            key: row_dict.get(key)
+            for key in ("posted_at", "posted_at_text", "deadline", "created_at")
+            if key in row_dict and row_dict.get(key) not in (None, "")
+        }
+        metadata_xml = "\n".join(
+            f"    <{key}>{xml_text(value)}</{key}>"
+            for key, value in metadata_fields.items()
+        )
         
         # content 본문 조합
         if "raw_ocr_text" in row_dict and row_dict["raw_ocr_text"]:
@@ -110,6 +123,7 @@ def sqlite_query(sql_query: str) -> str:
             f'  <source_url>{xml_text(url)}</source_url>\n'
             f'  <company>{xml_text(company)}</company>\n'
             f'  <position>{xml_text(position)}</position>\n'
+            f'  <metadata>\n{metadata_xml}\n  </metadata>\n'
             f'  <content>\n{xml_text(content)}\n  </content>\n'
             f'</document>'
         )
