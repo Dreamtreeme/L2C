@@ -16,6 +16,7 @@ class CollectionRequest:
     site: str | None = None
     target_count: int = 0
     task_category: str = ""
+    search_intent_resolved: bool = False
     review_feedback: str = ""
     review_attempt: int = 0
 
@@ -79,6 +80,7 @@ class CollectionService:
                         site=request.site,
                         target_count=target_count,
                         task_category=task_category,
+                        search_intent_resolved=request.search_intent_resolved,
                         review_feedback=pending_feedback,
                         review_attempt=attempt,
                         run_id=worker_run_id,

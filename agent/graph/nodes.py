@@ -51,6 +51,7 @@ from agent.runtime.result_card_queue import (
     result_card_click_matches_queue as _result_card_click_matches_queue,
     result_card_entries_from_args as _result_card_entries_from_args,
 )
+from agent.runtime.result_card_selector import select_result_cards as _select_result_cards
 from agent.runtime.reflex_runtime import reflex_node
 from agent.runtime.site_context import (
     looks_like_job_detail_url as _looks_like_job_detail_url,
@@ -124,6 +125,15 @@ def _get_ui_llm_with_tools():
             finish_task,
         ])
     return _ui_llm_with_tools
+
+
+def prepare_reasoning_models() -> None:
+    """브라우저 준비 중 범용 판단 모델과 카드 선택 모델을 미리 생성한다."""
+
+    _get_ui_llm_with_tools()
+    from agent.runtime.result_card_selector import prepare_result_card_selector_model
+
+    prepare_result_card_selector_model()
 
 
 def perception_node(
@@ -1243,10 +1253,33 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         logger.error("Persistent loop detected. Increasing error count to terminate.")
         error_increment = 1
 
+    selector_response, selector_trace = _select_result_cards(state)
+    if selector_response is not None:
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "Reasoning Node completed",
+            component="reasoning",
+            duration_sec=round(elapsed, 6),
+            reasoning_mode="card_selection",
+        )
+        result = {
+            "last_action_result": selector_response,
+            "result_card_selector_trace": selector_trace,
+            "reflex_hit": False,
+            "reflex_trace": {"hit": False, "source": "card_selector"},
+            "reflex_transition_contracts": {},
+            "step_durations": [
+                {"node": "reasoning", "duration": elapsed, "reasoning_mode": "card_selection"}
+            ],
+        }
+        if error_increment > 0:
+            result["error_count"] = state.get("error_count", 0) + error_increment
+        return result
+
     # 메시지 조립 + LLM 호출
     from agent.application.run_context import invoke_with_metrics
 
-    reasoning_mode = "general"
+    reasoning_mode = "general_after_card_selector" if selector_trace.get("attempted") else "general"
     response = invoke_with_metrics(
         _get_ui_llm_with_tools(),
         _build_reasoning_messages(state, loop_warning),
@@ -1263,6 +1296,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
 
     result = {
         "last_action_result": response,
+        "result_card_selector_trace": selector_trace,
         "reflex_hit": False,
         "reflex_trace": {"hit": False, "source": "reasoning"},
         "reflex_transition_contracts": {},

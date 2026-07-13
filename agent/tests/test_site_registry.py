@@ -52,6 +52,7 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
 
     calls = []
     warmed = []
+    reasoning_warmed = []
 
     class FakeSomEngine:
         def ensure_ocr_worker_ready(self):
@@ -72,6 +73,7 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
 
     monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
     monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
+    monkeypatch.setattr(nodes, "prepare_reasoning_models", lambda: reasoning_warmed.append(True))
     monkeypatch.setattr(
         nodes,
         "perception_node",
@@ -90,6 +92,7 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
 
     assert calls == [{"url": "", "current_url": "", "site": "jobkorea"}]
     assert warmed == [True]
+    assert reasoning_warmed == [True]
     assert result["current_url"] == "https://www.jobkorea.co.kr"
 
 
@@ -290,6 +293,39 @@ def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
     assert captured["recipe_params"]["target_count"] == 2
     assert captured["recipe_params"]["task_category"] == "검색"
     assert "Collect up to 2 distinct job postings" in captured["goal"]
+
+
+def test_realtime_scraping_reuses_structured_search_intent(monkeypatch):
+    from agent.tools import realtime_scraping as rt
+
+    class FakeApp:
+        pass
+
+    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
+    monkeypatch.setattr(
+        rt,
+        "_extract_search_intent",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("구조화된 검색 인자를 다시 해석함")),
+    )
+    monkeypatch.setattr(rt, "_prepare_worker_start_screen", lambda initial_state, profile: initial_state)
+    monkeypatch.setattr(
+        rt,
+        "_run_graph_with_last_state",
+        lambda app, initial_state, recursion_limit: ({**initial_state, "is_finished": True, "extracted_jd": {}}, False),
+    )
+    monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
+
+    result = rt.run_worker_once(
+        "iOS 개발자",
+        site="wanted",
+        target_count=2,
+        task_category="검색",
+        search_intent_resolved=True,
+    )
+
+    assert result["keyword"] == "iOS 개발자"
+    assert result["target_count"] == 2
+    assert result["search_intent"]["source"] == "structured_arguments"
 
 
 def test_realtime_scraping_target_count_falls_back_to_intent(monkeypatch):

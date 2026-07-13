@@ -35,18 +35,33 @@ def _ensure_ocr_ready(action_tools: Any) -> float:
     return time.perf_counter() - started
 
 
+def _ensure_reasoning_models_ready(prepare_models: Callable[[], None]) -> float:
+    started = time.perf_counter()
+    prepare_models()
+    return time.perf_counter() - started
+
+
 def _open_browser_while_ocr_starts(
     action_tools: Any,
     *,
     site_slug: str,
     current_url: str,
+    prepare_reasoning_models: Callable[[], None] | None = None,
 ) -> dict:
-    """OCR 준비와 브라우저 열기를 겹치고 둘이 끝난 뒤 반환한다."""
+    """OCR·판단 모델 준비와 브라우저 열기를 겹치고 모두 끝난 뒤 반환한다."""
 
     started = time.perf_counter()
-    run_context = copy_context()
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr-startup") as executor:
-        ocr_future = executor.submit(run_context.run, _ensure_ocr_ready, action_tools)
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="worker-startup") as executor:
+        ocr_context = copy_context()
+        ocr_future = executor.submit(ocr_context.run, _ensure_ocr_ready, action_tools)
+        reasoning_future = None
+        if callable(prepare_reasoning_models):
+            reasoning_context = copy_context()
+            reasoning_future = executor.submit(
+                reasoning_context.run,
+                _ensure_reasoning_models_ready,
+                prepare_reasoning_models,
+            )
         browser_started = time.perf_counter()
         result = action_tools.open_browser(site=site_slug, current_url=current_url)
         browser_duration = time.perf_counter() - browser_started
@@ -56,12 +71,22 @@ def _open_browser_while_ocr_starts(
             raise
         except Exception as exc:
             raise OcrWorkerReadinessError("OCR worker failed to become ready") from exc
+        reasoning_duration = 0.0
+        if reasoning_future is not None:
+            try:
+                reasoning_duration = reasoning_future.result()
+            except Exception as exc:
+                logger.warning(
+                    "Reasoning model warmup failed; lazy initialization will be used",
+                    error=str(exc),
+                )
 
     logger.info(
-        "OCR worker and browser startup barrier completed",
+        "Worker startup barrier completed",
         site=site_slug,
         browser_duration_sec=round(browser_duration, 6),
         ocr_duration_sec=round(ocr_duration, 6),
+        reasoning_model_duration_sec=round(reasoning_duration, 6),
         total_duration_sec=round(time.perf_counter() - started, 6),
     )
     return result
@@ -125,7 +150,7 @@ def prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dict
         return initial_state
 
     try:
-        from agent.graph.nodes import _get_action_tools, perception_node
+        from agent.graph.nodes import _get_action_tools, perception_node, prepare_reasoning_models
 
         action_tools = _get_action_tools()
         site_slug = str((site_profile.get("entry") or {}).get("slug") or "").strip()
@@ -151,6 +176,7 @@ def prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dict
                     action_tools,
                     site_slug=site_slug,
                     current_url=str(initial_state.get("current_url") or ""),
+                    prepare_reasoning_models=prepare_reasoning_models,
                 )
             else:
                 result = action_tools.open_browser(

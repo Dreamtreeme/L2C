@@ -341,7 +341,7 @@ def test_roi_caption_selects_semantic_icon_candidate(tmp_path, monkeypatch):
         {"size": [200, 200]},
         [
             {"id": 7, "bbox": [150, 20, 170, 40], "type": "icon"},
-            {"id": 9, "bbox": [125, 20, 145, 40], "type": "icon"},
+            {"id": 9, "bbox": [140, 20, 160, 40], "type": "icon"},
         ],
         current_image_path=str(image_path),
     )
@@ -356,6 +356,46 @@ def test_roi_caption_selects_semantic_icon_candidate(tmp_path, monkeypatch):
             "intent": "검색창을 연다",
         },
     }
+
+
+def test_roi_caption_is_skipped_for_single_nearby_icon(tmp_path, monkeypatch):
+    from PIL import Image, ImageDraw
+    from agent.recipe.phash_replay import match_step_by_screen_signature
+    from agent.vision.screen_signature import compute_target_roi_signature
+    import agent.vision.roi_caption as roi_caption
+
+    image_path = tmp_path / "screen.png"
+    image = Image.new("RGB", (200, 200), "white")
+    ImageDraw.Draw(image).rectangle([150, 20, 170, 40], fill="black")
+    image.save(image_path)
+    signature = compute_target_roi_signature(image_path, [150, 20, 170, 40], [200, 200])
+    monkeypatch.setattr(
+        roi_caption,
+        "select_marker_by_roi_caption",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("명확한 단일 후보에 캡션 모델을 호출함")),
+    )
+
+    marker_id, result = match_step_by_screen_signature(
+        {
+            "roi_signature": signature,
+            "target": {
+                "center_ratio": [0.8, 0.15],
+                "marker_type": "icon",
+                "semantic_label": "검색 아이콘",
+            },
+        },
+        {"size": [200, 200]},
+        [
+            {"id": 7, "bbox": [150, 20, 170, 40], "type": "icon"},
+            {"id": 9, "bbox": [125, 20, 145, 40], "type": "icon"},
+        ],
+        current_image_path=str(image_path),
+    )
+
+    assert marker_id == 7
+    assert result["matched"] is True
+    assert result["mode"] == "roi_geometry"
+    assert result["reason"] == "single_nearby_icon"
 
 
 def test_text_utils_normalizes_marker_noise_and_url_template():

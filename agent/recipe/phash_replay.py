@@ -287,6 +287,25 @@ def match_target_by_ratio(target: Any, markers: list[dict[str, Any]], screen_siz
     return scored[0][2].get("id")
 
 
+def _nearby_icon_candidates(
+    target: Any,
+    markers: list[dict[str, Any]],
+    screen_size: list[int],
+    max_distance: float,
+) -> list[dict[str, Any]]:
+    target_center = _target_center_ratio(target)
+    if len(target_center) != 2 or len(screen_size) != 2:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for marker in markers or []:
+        if not isinstance(marker, dict) or _norm_key(marker.get("type")) != "icon":
+            continue
+        current_center = marker_center_ratio(marker, screen_size)
+        if len(current_center) == 2 and _distance(target_center, current_center) <= max_distance:
+            candidates.append(marker)
+    return candidates
+
+
 def match_step_by_screen_signature(
     step: Any,
     current_signature: dict[str, Any],
@@ -314,18 +333,20 @@ def match_step_by_screen_signature(
         "1", "true", "yes", "on",
     }
     if signature_result.get("matched") and target_type == "icon" and roi_caption_enabled:
-        target_center = _target_center_ratio(target)
-        max_distance = float(os.getenv("REFLEX_TARGET_SCAN_MAX_DISTANCE", "0.18"))
-        icon_candidates = []
-        if len(target_center) == 2:
-            for marker in markers or []:
-                current_center = marker_center_ratio(marker, screen_size)
-                if (
-                    _norm_key(marker.get("type")) == "icon"
-                    and len(current_center) == 2
-                    and _distance(target_center, current_center) <= max_distance
-                ):
-                    icon_candidates.append(marker)
+        strict_distance = float(os.getenv("REFLEX_TARGET_CENTER_MAX_DISTANCE", "0.065"))
+        strict_candidates = _nearby_icon_candidates(target, markers, screen_size, strict_distance)
+        if len(strict_candidates) == 1:
+            marker_id = int(strict_candidates[0].get("id") or 0)
+            return marker_id, {
+                **signature_result,
+                "matched": True,
+                "mode": "roi_geometry",
+                "reason": "single_nearby_icon",
+                "candidate_ids": [marker_id],
+            }
+
+        scan_distance = float(os.getenv("REFLEX_TARGET_SCAN_MAX_DISTANCE", "0.18"))
+        icon_candidates = _nearby_icon_candidates(target, markers, screen_size, scan_distance)
         if icon_candidates:
             try:
                 from agent.vision.roi_caption import select_marker_by_roi_caption

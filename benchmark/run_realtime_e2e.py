@@ -37,6 +37,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run realtime_scraping E2E and tee stdout/stderr to a log file.")
     parser.add_argument("--site", default="wanted")
     parser.add_argument("--query", required=True)
+    parser.add_argument("--target-count", type=int, default=0)
     parser.add_argument("--log", required=True)
     parser.add_argument("--summary", default="")
     args = parser.parse_args()
@@ -76,7 +77,11 @@ def main() -> int:
                 start = time.perf_counter()
                 try:
                     result = realtime_scraping.invoke(
-                        {"site": args.site, "query": args.query}
+                        {
+                            "site": args.site,
+                            "query": args.query,
+                            "target_count": max(0, args.target_count),
+                        }
                     )
                     try:
                         parsed_during_run = json.loads(result) if isinstance(result, str) else result
@@ -163,6 +168,7 @@ def main() -> int:
                 "started_at": started_at,
                 "site": args.site,
                 "query": args.query,
+                "target_count": max(0, args.target_count),
                 "execution_time_sec": round(elapsed, 6),
                 "git_commit": commit,
                 "python": platform.python_version(),

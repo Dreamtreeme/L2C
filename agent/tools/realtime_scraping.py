@@ -450,6 +450,7 @@ def run_worker_once(
     site: str | None = None,
     target_count: int = 0,
     task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
+    search_intent_resolved: bool = False,
     review_feedback: str | None = None,
     review_attempt: int = 0,
     run_id: str | None = None,
@@ -464,9 +465,19 @@ def run_worker_once(
     site_name = site_entry.get("display_name") or site_slug
     run_id = run_id or new_worker_run_id()
     raw_search_keyword = search_keyword
-    search_intent = _extract_search_intent(search_keyword, site_profile)
-    search_keyword = str(search_intent.get("search_keyword") or search_keyword or "").strip()
     requested_target_count = _normalize_target_count(target_count)
+    if search_intent_resolved:
+        search_intent = dump_model(
+            SearchIntent(
+                search_keyword=str(search_keyword or "").strip(),
+                target_count=requested_target_count,
+            )
+        )
+        search_intent["source"] = "structured_arguments"
+        search_intent["error"] = ""
+    else:
+        search_intent = _extract_search_intent(search_keyword, site_profile)
+    search_keyword = str(search_intent.get("search_keyword") or search_keyword or "").strip()
     inferred_target_count = _normalize_target_count(search_intent.get("target_count") or 0)
     target_count = requested_target_count or inferred_target_count
     task_category = normalize_task_category(task_category or DEFAULT_SEARCH_TASK_CATEGORY)
@@ -681,6 +692,7 @@ def _run_realtime_scraping(
     query: str = None,
     target_count: int = 0,
     task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
+    search_intent_resolved: bool = False,
     review_feedback: str = None,
     review_attempt: int = 0,
 ) -> str:
@@ -727,6 +739,7 @@ def _run_realtime_scraping(
             site=site,
             target_count=target_count,
             task_category=task_category or DEFAULT_SEARCH_TASK_CATEGORY,
+            search_intent_resolved=search_intent_resolved,
             review_feedback=review_feedback or "",
             review_attempt=review_attempt,
         )
@@ -762,6 +775,7 @@ def realtime_scraping(
                 query=query,
                 target_count=target_count,
                 task_category=task_category,
+                search_intent_resolved=_normalize_target_count(target_count) > 0,
                 review_feedback=review_feedback,
                 review_attempt=review_attempt,
             )
