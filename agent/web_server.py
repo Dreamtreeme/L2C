@@ -2,7 +2,7 @@ import json
 import asyncio
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,7 +44,7 @@ app.add_middleware(
     allow_origins=cors_origins or list(DEFAULT_LOCAL_ORIGINS),
     allow_credentials=True,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-L2C-Operation"],
 )
 
 # 정적 파일 서빙용 디렉토리 생성 보장
@@ -167,6 +167,42 @@ async def cancel_run(run_id: str):
         "cancel_requested": bool(item.get("cancel_requested")),
         "status": item.get("status"),
     }
+
+
+@app.get("/api/operations")
+async def get_operations_summary():
+    """최근 실행 상태와 보존 만료 후보를 반환합니다."""
+    import shared.config as config
+    from agent.application.retention_service import run_retention
+
+    retention = run_retention(
+        db_path=config.DB_PATH,
+        logs_dir=config.LOGS_DIR,
+        screenshot_dir=config.SCREENSHOT_DIR,
+        dry_run=True,
+    )
+    return {
+        "runs": get_run_registry().list_recent(limit=20),
+        "retention": retention,
+    }
+
+
+@app.post("/api/operations/retention")
+async def apply_retention(x_l2c_operation: str = Header(default="")):
+    """현재 보존 정책의 만료 후보를 실제로 정리합니다."""
+    import shared.config as config
+    from agent.application.retention_service import run_retention
+
+    if x_l2c_operation != "apply-retention":
+        raise HTTPException(status_code=403, detail="Retention confirmation header required")
+
+    return run_retention(
+        db_path=config.DB_PATH,
+        logs_dir=config.LOGS_DIR,
+        screenshot_dir=config.SCREENSHOT_DIR,
+        dry_run=False,
+    )
+
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):

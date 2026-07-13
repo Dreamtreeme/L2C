@@ -159,6 +159,11 @@ class RunRegistry:
             item = self._items.get(run_id)
             return dict(item) if item is not None else None
 
+    def list_recent(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            items = list(self._items.values())[-max(1, int(limit)) :]
+            return [dict(item) for item in reversed(items)]
+
 
 _RUN_REGISTRY = RunRegistry()
 

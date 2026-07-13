@@ -8,6 +8,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Marked.js for Markdown Parsing -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
     <!-- Lucide Icons for Modern UI -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
@@ -54,6 +55,9 @@
         </div>
         <div class="flex items-center gap-4 text-xs font-semibold text-slate-400">
             <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span> 로컬 SQLite 연결됨</span>
+            <button id="ops-open-btn" type="button" title="운영 현황" class="p-2 text-slate-400 hover:text-white border border-slate-700 rounded-md transition-colors">
+                <i data-lucide="activity" class="w-4 h-4"></i>
+            </button>
         </div>
     </header>
 
@@ -168,6 +172,29 @@
 
     </main>
 
+    <aside id="ops-panel" class="hidden fixed right-0 top-0 bottom-0 z-40 w-full max-w-xl bg-slate-950 border-l border-slate-800 shadow-2xl overflow-y-auto">
+        <div class="sticky top-0 bg-slate-950 border-b border-slate-800 px-5 py-4 flex items-center justify-between">
+            <h2 class="text-sm font-semibold flex items-center gap-2"><i data-lucide="activity" class="w-4 h-4 text-orange-400"></i> 운영 현황</h2>
+            <button id="ops-close-btn" type="button" title="닫기" class="p-2 text-slate-400 hover:text-white"><i data-lucide="x" class="w-4 h-4"></i></button>
+        </div>
+        <div class="p-5 space-y-6">
+            <section>
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-xs font-semibold text-slate-300">저장 현황</h3>
+                    <button id="retention-apply-btn" type="button" class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-red-600 hover:bg-red-500 text-white rounded-md">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> 만료 항목 정리
+                    </button>
+                </div>
+                <div id="ops-inventory" class="grid grid-cols-2 gap-px bg-slate-800 border border-slate-800"></div>
+                <p id="ops-retention" class="mt-3 text-xs text-slate-400"></p>
+            </section>
+            <section>
+                <h3 class="text-xs font-semibold text-slate-300 mb-3">최근 실행</h3>
+                <div id="ops-runs" class="border border-slate-800 divide-y divide-slate-800"></div>
+            </section>
+        </div>
+    </aside>
+
     <!-- Global JS Logic -->
     <script>
         // Lucide Icons Render
@@ -192,6 +219,81 @@
         const jobCollected = document.getElementById('job-collected');
         const jobUrl = document.getElementById('job-url');
         const jobText = document.getElementById('job-text');
+        const opsPanel = document.getElementById('ops-panel');
+        const opsInventory = document.getElementById('ops-inventory');
+        const opsRetention = document.getElementById('ops-retention');
+        const opsRuns = document.getElementById('ops-runs');
+
+        function escapeHtml(value) {
+            const element = document.createElement('div');
+            element.textContent = String(value || '');
+            return element.innerHTML;
+        }
+
+        function bindCitationButtons(container) {
+            container.querySelectorAll('[data-job-id]').forEach((button) => {
+                button.addEventListener('click', () => showJobDetail(Number(button.dataset.jobId)));
+            });
+        }
+
+        function renderMarkdown(container, text, withCursor = false) {
+            const html = DOMPurify.sanitize(marked.parse(replaceCitations(text)));
+            container.innerHTML = html + (withCursor ? '<span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-0.5"></span>' : '');
+            bindCitationButtons(container);
+        }
+
+        function formatBytes(value) {
+            const bytes = Number(value || 0);
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+            return `${(bytes / 1048576).toFixed(1)} MB`;
+        }
+
+        async function loadOperations() {
+            const response = await fetch('/api/operations');
+            if (!response.ok) throw new Error('운영 현황을 불러오지 못했습니다.');
+            const data = await response.json();
+            const inventory = data.retention.inventory || {};
+            opsInventory.innerHTML = Object.entries(inventory).map(([name, count]) => `
+                <div class="bg-slate-950 px-3 py-3 flex items-center justify-between text-xs">
+                    <span class="text-slate-400">${escapeHtml(name)}</span><strong>${Number(count || 0)}</strong>
+                </div>
+            `).join('');
+            const files = data.retention.files || {};
+            const database = data.retention.database || {};
+            const dbExpired = Object.values(database).reduce((sum, value) => sum + Number(value || 0), 0);
+            opsRetention.textContent = `만료 파일 ${Number(files.log_count || 0) + Number(files.artifact_count || 0)}개 · DB 이력 ${dbExpired}건 · ${formatBytes(files.reclaimable_bytes)}`;
+            opsRuns.innerHTML = (data.runs || []).map((run) => `
+                <div class="px-3 py-3 text-xs flex gap-3 justify-between">
+                    <div class="min-w-0"><p class="text-slate-200 truncate">${escapeHtml(run.user_query || run.query)}</p><p class="text-slate-500 mt-1">${escapeHtml(run.phase || '')}</p></div>
+                    <span class="shrink-0 text-slate-400">${escapeHtml(run.status || '')}</span>
+                </div>
+            `).join('') || '<p class="px-3 py-4 text-xs text-slate-500">실행 기록 없음</p>';
+        }
+
+        document.getElementById('ops-open-btn').addEventListener('click', async () => {
+            opsPanel.classList.remove('hidden');
+            await loadOperations();
+        });
+        document.getElementById('ops-close-btn').addEventListener('click', () => opsPanel.classList.add('hidden'));
+        document.getElementById('retention-apply-btn').addEventListener('click', async () => {
+            const button = document.getElementById('retention-apply-btn');
+            const confirmed = window.confirm('미리보기에 표시된 만료 로그와 이력을 정리할까요?');
+            if (!confirmed) return;
+            button.disabled = true;
+            try {
+                const response = await fetch('/api/operations/retention', {
+                    method: 'POST',
+                    headers: { 'X-L2C-Operation': 'apply-retention' },
+                });
+                if (!response.ok) throw new Error('만료 항목을 정리하지 못했습니다.');
+                await loadOperations();
+            } catch (error) {
+                window.alert(error.message);
+            } finally {
+                button.disabled = false;
+            }
+        });
 
         cancelBtn.addEventListener('click', async () => {
             if (!activeRunId) return;
@@ -206,7 +308,7 @@
         // Citation token replace logic — MUST be run before Markdown Parsing
         function replaceCitations(text) {
             let processed = text.replace(/\[job_id:(\d+)\]/g, (match, id) => {
-                return `<button onclick="showJobDetail(${id})" class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/30 hover:bg-orange-500/25 ml-1 mr-1 transition-all duration-150 cursor-pointer shadow-sm shadow-orange-500/5">#출처:${id}</button>`;
+                return `<button type="button" data-job-id="${id}" class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/30 hover:bg-orange-500/25 ml-1 mr-1 transition-all duration-150 cursor-pointer shadow-sm shadow-orange-500/5">#출처:${id}</button>`;
             });
             // Replace invalid citations with stylized red text
             processed = processed.replace(/\[출처 확인 불가\]/g, '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-red-500/10 text-red-400 border border-red-500/30 leading-none">[출처 확인 불가]</span>');
@@ -270,7 +372,7 @@
             chatMessages.innerHTML += `
                 <div class="flex gap-4 max-w-3xl ml-auto justify-end">
                     <div class="bg-gradient-to-tr from-amber-500 to-orange-600 text-white px-4 py-3 rounded-2xl rounded-tr-none shadow-md text-sm font-medium">
-                        <p class="leading-relaxed">${query}</p>
+                        <p class="leading-relaxed">${escapeHtml(query)}</p>
                     </div>
                 </div>
             `;
@@ -333,8 +435,7 @@
                                     // 최종 텍스트가 도착했을 경우 덮어씌움
                                     try {
                                         const finalObj = JSON.parse(dataContent.slice(7).trim());
-                                        const finalProcessed = replaceCitations(finalObj.text);
-                                        agentContainer.innerHTML = marked.parse(finalProcessed);
+                                        renderMarkdown(agentContainer, finalObj.text);
                                         pendingClarificationRunId = ['waiting_input', 'cancelled'].includes(finalObj.status)
                                             ? finalObj.run_id
                                             : null;
@@ -356,7 +457,7 @@
                                     try {
                                         const eventObj = JSON.parse(dataContent.slice(7).trim());
                                         const statusText = eventObj.message || '처리 중입니다.';
-                                        agentContainer.innerHTML = `<span class="text-slate-400">${statusText}</span><span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-1"></span>`;
+                                        agentContainer.innerHTML = `<span class="text-slate-400">${escapeHtml(statusText)}</span><span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-1"></span>`;
                                     } catch (err) {
                                         console.error('Progress event parse error:', err);
                                     }
@@ -376,9 +477,7 @@
                                 
                                 // 스트리밍 텍스트 점진적 렌더링
                                 rawBuffer += dataContent;
-                                const processed = replaceCitations(rawBuffer);
-                                // marked.parse로 변환하여 마크다운 출력
-                                agentContainer.innerHTML = marked.parse(processed) + '<span class="inline-block w-1.5 h-4 bg-orange-400 animate-pulse ml-0.5"></span>';
+                                renderMarkdown(agentContainer, rawBuffer, true);
                                 chatMessages.scrollTop = chatMessages.scrollHeight;
                             }
                         }

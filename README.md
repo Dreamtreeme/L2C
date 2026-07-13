@@ -343,6 +343,10 @@ python -m benchmark.run_realtime_e2e --site wanted --query "ios 개발자 공고
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 ```
 
+웹 화면 오른쪽 위의 활동 아이콘에서 최근 실행 상태와 저장 현황을 확인할 수 있습니다. 만료 항목 정리는 먼저 삭제 후보와 예상 용량을 미리 계산하고, 사용자가 확인한 경우에만 오래된 로그·미참조 화면 산출물·감사 이력을 삭제합니다. 현재 공고, 활성 레시피, 공고가 참조하는 화면 파일은 정리 대상에서 제외합니다.
+
+기본 보존 기간은 로그 30일, 화면 산출물 14일, 감사 이력 90일, 공고 변경 이력 180일입니다. 공고별 최신 변경 이력은 기간과 관계없이 5개를 남기며, `RETENTION_*` 환경변수로 기준을 조정할 수 있습니다.
+
 E2E 요약은 `run_id`, 실행시간, 단계별 시간, 모델별 토큰, 선택적 비용 추정, 수집 품질을 한 파일에 기록합니다. 모델 단가는 `config/model_pricing.example.json` 형식을 참고해 별도 파일로 관리하고 `LLM_PRICING_FILE`에 지정합니다. 가격표가 없으면 부정확한 비용을 만들지 않고 토큰 원시값만 보존합니다.
 
 Windows Python을 WSL/Git Bash에서 직접 호출해 한글이나 이모지가 깨지는 경우에는 `python -X utf8 -m ...` 형태로 실행하세요.
