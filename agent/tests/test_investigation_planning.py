@@ -15,6 +15,12 @@ from shared.schema.investigation_schema import (
     InvestigationRequest,
     InvestigationStatus,
     EvidenceRequirement,
+    EvidencePlan,
+    InvestigationActionPlan,
+    InvestigationConstraints,
+    InvestigationPlanStep,
+    RequestAnalysis,
+    ToolCapability,
 )
 
 
@@ -186,3 +192,297 @@ def test_evidence_inspection_rejects_rows_without_verified_posted_date(tmp_path)
 
 def test_evidence_inventory_is_exposed_as_commander_tool():
     assert inspect_job_evidence_tool.name == "inspect_job_evidence"
+
+
+class _FakeModel:
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    def invoke(self, messages):
+        self.calls += 1
+        return self.result
+
+
+class _FailingTool:
+    def invoke(self, arguments):
+        raise AssertionError("계획 전에 도구가 실행되었습니다.")
+
+
+def _test_capabilities():
+    return [
+        ToolCapability(
+            tool_name="inspect_job_evidence",
+            purpose="DB 근거 확인",
+        ),
+        ToolCapability(
+            tool_name="realtime_scraping:wanted",
+            purpose="원티드 수집",
+        ),
+    ]
+
+
+def test_workflow_stops_for_choice_before_db_or_collection(tmp_path):
+    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
+
+    analysis_model = _FakeModel(
+        RequestAnalysis(
+            objective="AI 개발자 채용 트렌드 분석",
+            deliverable="최근 기간과 이전 기간 비교",
+            purpose=InvestigationPurpose.TREND,
+            unresolved_fields=["recent_period"],
+            clarification_questions=[
+                ClarificationQuestion(
+                    question_id="recent_period",
+                    field="recent_period",
+                    question="최근의 기준을 선택해 주세요.",
+                    options=[
+                        ClarificationOption(
+                            option_id="three_months",
+                            label="최근 3개월",
+                            value="P3M",
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+    evidence_model = _FakeModel(EvidencePlan())
+    action_model = _FakeModel(InvestigationActionPlan())
+    answer_model = _FakeModel("호출되면 안 됨")
+    workflow = InvestigationWorkflow(
+        db_path=tmp_path / "jobs.db",
+        models=InvestigationModels(
+            analysis_model=analysis_model,
+            evidence_model=evidence_model,
+            action_model=action_model,
+            answer_model=answer_model,
+        ),
+        capabilities=_test_capabilities(),
+        collection_tool=_FailingTool(),
+        query_tool=_FailingTool(),
+    )
+
+    result = workflow.run("최근 AI 개발자 채용 트렌드를 알려줘")
+
+    assert result["run_status"] == "waiting_input"
+    assert result["clarification"]["field"] == "recent_period"
+    assert analysis_model.calls == 1
+    assert evidence_model.calls == 0
+    assert action_model.calls == 0
+    assert answer_model.calls == 0
+
+
+def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
+    from datetime import datetime, timezone
+
+    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
+
+    analysis_model = _FakeModel(
+        RequestAnalysis(
+            objective="AI 개발자 채용 트렌드 분석",
+            deliverable="두 기간 비교",
+            purpose=InvestigationPurpose.TREND,
+            unresolved_fields=["recent_period"],
+            clarification_questions=[
+                ClarificationQuestion(
+                    question_id="recent_period",
+                    field="recent_period",
+                    question="기간을 선택해 주세요.",
+                    options=[
+                        ClarificationOption(
+                            option_id="three_months",
+                            label="최근 3개월",
+                            value="P3M",
+                        )
+                    ],
+                )
+            ],
+        )
+    )
+    evidence_model = _FakeModel(
+        EvidencePlan(
+            requirements=[
+                EvidenceRequirement(
+                    requirement_id="current",
+                    description="최근 3개월 AI 공고",
+                    search_keywords=["AI 개발자"],
+                    posted_from="2026-04-14",
+                    posted_to="2026-07-14",
+                    required_fields=["posted_at"],
+                ),
+                EvidenceRequirement(
+                    requirement_id="previous",
+                    description="이전 3개월 AI 공고",
+                    search_keywords=["AI 개발자"],
+                    posted_from="2026-01-14",
+                    posted_to="2026-04-13",
+                    required_fields=["posted_at"],
+                ),
+            ]
+        )
+    )
+    workflow = InvestigationWorkflow(
+        db_path=tmp_path / "jobs.db",
+        models=InvestigationModels(
+            analysis_model=analysis_model,
+            evidence_model=evidence_model,
+            action_model=_FakeModel(
+                InvestigationActionPlan(cannot_proceed_reason="게시일 근거를 확인할 수 없음")
+            ),
+            answer_model=_FakeModel("게시일 근거가 없어 비교할 수 없습니다."),
+        ),
+        capabilities=_test_capabilities(),
+        collection_tool=_FailingTool(),
+        query_tool=_FailingTool(),
+        now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
+    )
+    first = workflow.run("최근 AI 개발자 채용 트렌드를 알려줘")
+
+    resumed = workflow.run(
+        "",
+        investigation_id=first["investigation"]["investigation_id"],
+        clarification_answer={
+            "question_id": "recent_period",
+            "selected_option_id": "three_months",
+        },
+    )
+
+    assert resumed["run_status"] == "completed"
+    assert resumed["investigation"]["constraints"]["posted_from"] == "2026-04-14"
+    assert resumed["investigation"]["constraints"]["comparison_posted_to"] == "2026-04-13"
+    assert [
+        item["requirement_id"]
+        for item in resumed["investigation"]["evidence_requirements"]
+    ] == ["current", "previous"]
+
+
+def test_workflow_executes_only_registered_collection_plan(tmp_path):
+    from langchain_core.messages import AIMessage
+
+    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
+
+    db_path = tmp_path / "jobs.db"
+    db = Database(db_path)
+
+    class CollectionTool:
+        def __init__(self):
+            self.calls = []
+
+        def invoke(self, arguments):
+            self.calls.append(arguments)
+            db.upsert(
+                "https://example.com/jobs/ai-1",
+                {
+                    "company_name": "예시회사",
+                    "position": "AI 개발자",
+                    "posted_at": "2026-07-01",
+                    "source_platform": "wanted",
+                    "raw_ocr_text": "AI 개발자 모델 운영",
+                },
+            )
+            return '{"persisted_count": 1}'
+
+    class QueryTool:
+        def invoke(self, arguments):
+            return '<document id="1">AI 개발자 공고</document>'
+
+    collection_tool = CollectionTool()
+    workflow = InvestigationWorkflow(
+        db_path=db_path,
+        models=InvestigationModels(
+            analysis_model=_FakeModel(
+                RequestAnalysis(
+                    objective="최근 AI 개발자 공고 조회",
+                    deliverable="공고 목록",
+                    purpose=InvestigationPurpose.COLLECT,
+                    constraints=InvestigationConstraints(
+                        search_keywords=["AI 개발자"],
+                        posted_from="2026-06-01",
+                        posted_to="2026-07-14",
+                    ),
+                )
+            ),
+            evidence_model=_FakeModel(
+                EvidencePlan(
+                    requirements=[
+                        EvidenceRequirement(
+                            requirement_id="recent_ai",
+                            description="최근 AI 개발자 공고",
+                            search_keywords=["AI 개발자"],
+                            posted_from="2026-06-01",
+                            posted_to="2026-07-14",
+                            required_fields=["position", "posted_at"],
+                        )
+                    ]
+                )
+            ),
+            action_model=_FakeModel(
+                InvestigationActionPlan(
+                    steps=[
+                        InvestigationPlanStep(
+                            step_id="collect_recent_ai",
+                            action="최근 AI 공고 수집",
+                            tool_name="realtime_scraping",
+                            arguments={
+                                "query": "AI 개발자",
+                                "site": "wanted",
+                                "posted_from": "2026-06-01",
+                                "posted_to": "2026-07-14",
+                            },
+                            purpose="부족한 최근 공고 확보",
+                        )
+                    ]
+                )
+            ),
+            answer_model=_FakeModel(AIMessage(content="공고를 확인했습니다 [job_id:1]")),
+        ),
+        capabilities=_test_capabilities(),
+        collection_tool=collection_tool,
+        query_tool=QueryTool(),
+    )
+
+    result = workflow.run("최근 AI 개발자 공고 찾아줘")
+
+    assert result["run_status"] == "completed"
+    assert collection_tool.calls == [
+        {
+            "query": "AI 개발자",
+            "site": "wanted",
+            "posted_from": "2026-06-01",
+            "posted_to": "2026-07-14",
+        }
+    ]
+    assert result["valid_ids"] == [1]
+    assert result["final_answer"] == "공고를 확인했습니다 [job_id:1]"
+
+
+def test_chat_service_uses_investigation_workflow_for_production_path():
+    from agent.application.chat_service import ChatService
+
+    class FakeWorkflow:
+        def run(self, query, **kwargs):
+            assert query == "최근 AI 채용 트렌드"
+            assert kwargs["conversation_id"] == "conversation-1"
+            return {
+                "investigation": {"investigation_id": "investigation-1"},
+                "run_status": "waiting_input",
+                "final_answer": "최근의 기준을 선택해 주세요.",
+                "valid_ids": [],
+                "clarification": {
+                    "question_id": "recent_period",
+                    "field": "recent_period",
+                    "question": "최근의 기준을 선택해 주세요.",
+                    "options": [],
+                },
+            }
+
+    result = ChatService(investigation_workflow=FakeWorkflow()).run(
+        "최근 AI 채용 트렌드",
+        run_id="planned-chat",
+        conversation_id="conversation-1",
+    )
+
+    assert result["run_status"] == "waiting_input"
+    assert result["investigation_id"] == "investigation-1"
+    assert result["clarification"]["field"] == "recent_period"

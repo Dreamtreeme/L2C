@@ -157,6 +157,31 @@ class InvestigationRequest(BaseModel):
     final_answer: str = ""
 
 
+class RequestAnalysis(BaseModel):
+    """도구를 사용하기 전에 수행하는 사용자 요청 해석 결과."""
+
+    objective: str = Field(min_length=1)
+    deliverable: str = Field(min_length=1)
+    purpose: InvestigationPurpose = InvestigationPurpose.LOOKUP
+    constraints: InvestigationConstraints = Field(default_factory=InvestigationConstraints)
+    unresolved_fields: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+
+
+class EvidencePlan(BaseModel):
+    """확정된 요청에 답하기 위해 필요한 근거 목록."""
+
+    requirements: list[EvidenceRequirement] = Field(default_factory=list)
+
+
+class InvestigationActionPlan(BaseModel):
+    """DB 근거가 부족할 때 실행할 도구 단계 목록."""
+
+    steps: list[InvestigationPlanStep] = Field(default_factory=list)
+    cannot_proceed_reason: str = ""
+
+
 __all__ = [
     "ClarificationAnswer",
     "ClarificationOption",
@@ -167,5 +192,8 @@ __all__ = [
     "InvestigationPurpose",
     "InvestigationRequest",
     "InvestigationStatus",
+    "InvestigationActionPlan",
+    "EvidencePlan",
+    "RequestAnalysis",
     "ToolCapability",
 ]

@@ -50,8 +50,14 @@ def _message_text(content: Any) -> str:
 class ChatService:
     """DB 우선 조회와 필요 시 수집을 수행하는 로컬 Agent Orchestrator."""
 
-    def __init__(self, llm_with_tools: Any = None, max_turns: int = 14):
+    def __init__(
+        self,
+        llm_with_tools: Any = None,
+        max_turns: int = 14,
+        investigation_workflow: Any = None,
+    ):
         self._llm_with_tools = llm_with_tools
+        self._investigation_workflow = investigation_workflow
         self.max_turns = max_turns
         self._tools = {
             "sqlite_query": sqlite_query,
@@ -70,6 +76,14 @@ class ChatService:
             self._llm_with_tools = llm.bind_tools(list(self._tools.values()))
         return self._llm_with_tools
 
+    def _get_investigation_workflow(self):
+        if self._investigation_workflow is None:
+            import shared.config as config
+            from agent.graph.investigation_workflow import InvestigationWorkflow
+
+            self._investigation_workflow = InvestigationWorkflow(db_path=config.DB_PATH)
+        return self._investigation_workflow
+
     @staticmethod
     def _result(
         answer: str,
@@ -78,6 +92,7 @@ class ChatService:
         started: float,
         status: RunStatus = RunStatus.COMPLETED,
         clarification: dict[str, Any] | None = None,
+        investigation_id: str = "",
     ) -> dict[str, Any]:
         duration = max(0.0, time.perf_counter() - started)
         metrics = context.snapshot()
@@ -94,6 +109,8 @@ class ChatService:
         }
         if clarification:
             result["clarification"] = clarification
+        if investigation_id:
+            result["investigation_id"] = investigation_id
         return result
 
     def run(
@@ -102,6 +119,9 @@ class ChatService:
         *,
         run_id: str | None = None,
         event_sink: RunEventSink | None = None,
+        conversation_id: str = "",
+        investigation_id: str = "",
+        clarification_answer: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """질문을 처리하고 기존 호환 상태 형태로 결과를 반환한다."""
 
@@ -129,6 +149,46 @@ class ChatService:
 
             logger.info("Executing ChatService orchestrator loop")
             emit_run_event("planning_started", RunPhase.PLANNING, "질문을 분석하고 있습니다.")
+            if self._llm_with_tools is None or self._investigation_workflow is not None:
+                try:
+                    workflow_result = self._get_investigation_workflow().run(
+                        query,
+                        conversation_id=conversation_id,
+                        investigation_id=investigation_id,
+                        clarification_answer=clarification_answer,
+                    )
+                    workflow_investigation = dict(workflow_result.get("investigation") or {})
+                    workflow_status = RunStatus(
+                        workflow_result.get("run_status") or RunStatus.COMPLETED.value
+                    )
+                    answer = validate_citations(
+                        str(workflow_result.get("final_answer") or ""),
+                        [int(item) for item in workflow_result.get("valid_ids", [])],
+                    )
+                    return self._result(
+                        answer,
+                        context=context,
+                        started=started,
+                        status=workflow_status,
+                        clarification=workflow_result.get("clarification"),
+                        investigation_id=str(
+                            workflow_investigation.get("investigation_id") or investigation_id
+                        ),
+                    )
+                except RunCancelled:
+                    emit_run_event(
+                        "run_cancelled",
+                        RunPhase.CANCELLED,
+                        "사용자 요청으로 실행을 중단했습니다.",
+                        status=RunStatus.CANCELLED,
+                    )
+                    return self._result(
+                        "실행을 취소했습니다.",
+                        context=context,
+                        started=started,
+                        status=RunStatus.CANCELLED,
+                        investigation_id=investigation_id,
+                    )
             messages = [
                 SystemMessage(content=build_qa_commander_system_prompt()),
                 HumanMessage(content=query),
