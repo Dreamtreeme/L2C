@@ -163,6 +163,19 @@ def test_sqlite_query_empty_result_has_structured_evidence_summary(setup_test_db
     assert result.endswith("</query_result>")
 
 
+def test_sqlite_query_authorizer_blocks_other_tables_and_unsafe_functions(setup_test_db, monkeypatch):
+    import shared.config as cfg
+
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
+    from agent.tools.sqlite_query import sqlite_query
+
+    table_result = sqlite_query.invoke({"sql_query": "SELECT * FROM job_versions"})
+    function_result = sqlite_query.invoke({"sql_query": "SELECT load_extension('x')"})
+
+    assert "검색 오류" in table_result
+    assert "검색 오류" in function_result
+
+
 def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     """비전 자율 수집 그래프 stream을 mock하여 realtime_scraping 도구의 통합 로직을 검증합니다."""
     import shared.config as cfg
@@ -945,6 +958,7 @@ def test_web_server_api_endpoints(setup_test_db, monkeypatch):
     assert res_data["id"] == 1
     assert res_data["company_name"] == "토스"
     assert "position" in res_data
+    assert len(res_data["evidence_hash"]) == 64
 
     versions_response = client.get("/api/jobs/1/versions")
     assert versions_response.status_code == 200
@@ -954,6 +968,25 @@ def test_web_server_api_endpoints(setup_test_db, monkeypatch):
     
     # 2. 미존재 ID 조회 시 에러 응답 검증
     fail_response = client.get("/api/jobs/9999")
-    assert fail_response.status_code == 200
-    assert "error" in fail_response.json()
+    assert fail_response.status_code == 404
+    assert fail_response.json()["detail"] == "Job not found"
     assert client.get("/api/jobs/9999/versions").status_code == 404
+
+
+def test_web_server_rejects_untrusted_hosts_and_cross_origin_requests():
+    from fastapi.testclient import TestClient
+    from agent.web_server import app
+
+    client = TestClient(app)
+    blocked_host = client.get("/api/runs/missing", headers={"Host": "evil.example"})
+    preflight = client.options(
+        "/api/chat",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert blocked_host.status_code == 400
+    assert preflight.status_code == 400
+    assert "access-control-allow-origin" not in preflight.headers

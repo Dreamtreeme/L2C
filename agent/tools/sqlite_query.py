@@ -12,6 +12,58 @@ logger = logging.getLogger(__name__)
 
 MAX_RESULT_ROWS = 20
 MAX_CONTENT_CHARS = 4000
+_SAFE_SQL_FUNCTIONS = {
+    "abs",
+    "avg",
+    "coalesce",
+    "count",
+    "date",
+    "datetime",
+    "ifnull",
+    "instr",
+    "json_array_length",
+    "json_extract",
+    "json_valid",
+    "julianday",
+    "length",
+    "like",
+    "lower",
+    "ltrim",
+    "max",
+    "min",
+    "nullif",
+    "replace",
+    "round",
+    "rtrim",
+    "strftime",
+    "substr",
+    "sum",
+    "trim",
+    "typeof",
+    "unixepoch",
+    "upper",
+}
+
+
+def _read_only_jobs_authorizer(
+    action: int,
+    arg1: str | None,
+    arg2: str | None,
+    database_name: str | None,
+    trigger_name: str | None,
+) -> int:
+    """jobs 조회에 필요한 SQLite 연산만 허용한다."""
+
+    if action == sqlite3.SQLITE_SELECT:
+        return sqlite3.SQLITE_OK
+    if action == sqlite3.SQLITE_READ:
+        return sqlite3.SQLITE_OK if str(arg1 or "").lower() == "jobs" else sqlite3.SQLITE_DENY
+    if action == sqlite3.SQLITE_FUNCTION:
+        function_name = str(arg2 or arg1 or "").lower()
+        return sqlite3.SQLITE_OK if function_name in _SAFE_SQL_FUNCTIONS else sqlite3.SQLITE_DENY
+    if action == getattr(sqlite3, "SQLITE_RECURSIVE", -1):
+        return sqlite3.SQLITE_OK
+    return sqlite3.SQLITE_DENY
 
 
 def _query_result_summary(rows: list[sqlite3.Row], *, has_more: bool) -> dict[str, Any]:
@@ -84,18 +136,22 @@ def sqlite_query(sql_query: str) -> str:
     if not query_clean.startswith("select"):
         return "오류: SELECT 쿼리만 실행할 수 있습니다."
 
+    conn: sqlite3.Connection | None = None
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         # 읽기 전용 모드로 설정하여 LLM이 생성한 쿼리가 데이터를 변경하는 것을 원천 차단합니다.
         conn.execute("PRAGMA query_only = ON")
+        conn.set_authorizer(_read_only_jobs_authorizer)
         cursor = conn.execute(sql_query)
         rows = cursor.fetchmany(MAX_RESULT_ROWS + 1)
-        conn.close()
         logger.info(f"[sqlite_query] SQL executed successfully. Returned {len(rows)} rows.")
     except Exception as e:
         logger.error(f"[sqlite_query] Database query execution failed: {e}")
         return f"검색 오류: DB 쿼리 실행 실패. 에러 메시지: {e}"
+    finally:
+        if conn is not None:
+            conn.close()
 
     truncated_rows = len(rows) > MAX_RESULT_ROWS
     rows = rows[:MAX_RESULT_ROWS]

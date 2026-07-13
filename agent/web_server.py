@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 from pathlib import Path
 
@@ -17,19 +18,33 @@ from agent.utils.logger import logger
 
 app = FastAPI(title="L2C Q&A API Server")
 
+DEFAULT_LOCAL_ORIGINS = (
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+)
 cors_origins = [
     origin.strip()
-    for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", ",".join(DEFAULT_LOCAL_ORIGINS)).split(",")
     if origin.strip()
 ]
+allowed_hosts = [
+    host.strip()
+    for host in os.getenv(
+        "LOCAL_API_ALLOWED_HOSTS",
+        "127.0.0.1,localhost,testserver,[::1]",
+    ).split(",")
+    if host.strip()
+]
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
 # CORS 활성화
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins or ["*"],
-    allow_credentials=("*" not in cors_origins),
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_origins or list(DEFAULT_LOCAL_ORIGINS),
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 # 정적 파일 서빙용 디렉토리 생성 보장
@@ -56,7 +71,7 @@ async def get_job_detail(job_id: int):
     db = Database(config.DB_PATH)
     job = db.get(job_id)
     if not job:
-        return {"error": "Job not found"}
+        raise HTTPException(status_code=404, detail="Job not found")
     return {
         "id": job["id"],
         "company_name": job["company_name"],
@@ -64,6 +79,7 @@ async def get_job_detail(job_id: int):
         "url": job["url"],
         "posted_at": job.get("posted_at"),
         "posted_at_text": job.get("posted_at_text"),
+        "evidence_hash": job.get("evidence_hash"),
         "collected_at": job["created_at"],
         "raw_text": job["raw_ocr_text"] or f"회사명: {job['company_name']}\n직무: {job['position']}\n기술스택: {job['tech_stack']}"
     }
