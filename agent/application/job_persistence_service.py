@@ -74,8 +74,49 @@ def normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dic
         return fallback
 
 
-def persist_collected_data(extracted_jd: dict, keyword: str) -> int:
-    """수집 결과를 전처리한 뒤 채용공고 DB에 UPSERT한다."""
+def _job_validation_issues(job_posting: Any, collection_intent: dict[str, Any]) -> list[str]:
+    """저장에 필요한 사실과 요청 조건을 검증하되 의미 유사도는 추측하지 않는다."""
+
+    issues: list[str] = []
+    for field in ("url", "company_name", "position"):
+        if not str(getattr(job_posting, field, None) or "").strip():
+            issues.append(f"required_field_missing:{field}")
+
+    filters = collection_intent.get("filters") if isinstance(collection_intent, dict) else {}
+    filters = filters if isinstance(filters, dict) else {}
+    posted_from = str(filters.get("posted_from") or "").strip()
+    posted_to = str(filters.get("posted_to") or "").strip()
+    date_required = bool(
+        posted_from
+        or posted_to
+        or filters.get("posted_date_expression")
+        or collection_intent.get("freshness_required")
+    )
+    posted_at = str(getattr(job_posting, "posted_at", None) or "").strip()
+    if date_required and not posted_at:
+        issues.append("requested_evidence_missing:posted_at")
+    if posted_at and posted_from and posted_at < posted_from:
+        issues.append("requested_filter_mismatch:posted_at_before_range")
+    if posted_at and posted_to and posted_at > posted_to:
+        issues.append("requested_filter_mismatch:posted_at_after_range")
+
+    requested_fields = {
+        "experience": "experience_text",
+        "location": "location",
+        "employment_type": "employment_type",
+    }
+    for request_field, job_field in requested_fields.items():
+        if filters.get(request_field) and not str(getattr(job_posting, job_field, None) or "").strip():
+            issues.append(f"requested_evidence_missing:{job_field}")
+    return issues
+
+
+def persist_collected_data_with_report(
+    extracted_jd: dict,
+    keyword: str,
+    collection_intent: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """공고별 검증 결과와 저장 건수를 함께 반환한다."""
 
     from agent.utils.preprocessor import Preprocessor
     from shared.config import DB_PATH
@@ -89,8 +130,10 @@ def persist_collected_data(extracted_jd: dict, keyword: str) -> int:
         job_list = [extracted_jd] if extracted_jd else []
 
     persisted_count = 0
+    rejected_items: list[dict[str, Any]] = []
     for index, job in enumerate(job_list):
         if not isinstance(job, dict) or not job:
+            rejected_items.append({"index": index, "issues": ["invalid_job_payload"]})
             continue
 
         normalized_job = normalize_job_for_persistence(job, keyword=keyword)
@@ -104,11 +147,29 @@ def persist_collected_data(extracted_jd: dict, keyword: str) -> int:
                 company_name,
                 position,
             )
+            rejected_items.append({"index": index, "issues": ["required_field_missing:url"]})
             continue
 
         try:
             normalized_job["url"] = str(url).strip()
             job_posting = Preprocessor.process_raw_jd(normalized_job)
+            issues = _job_validation_issues(job_posting, collection_intent or {})
+            if issues:
+                rejected_items.append(
+                    {
+                        "index": index,
+                        "url": job_posting.url or str(url),
+                        "company_name": job_posting.company_name or "",
+                        "position": job_posting.position or "",
+                        "issues": issues,
+                    }
+                )
+                logger.warning(
+                    "[job_persistence] Rejected job #%s before persistence: %s",
+                    index,
+                    ", ".join(issues),
+                )
+                continue
             db.upsert(url=url, data=dump_model(job_posting))
             persisted_count += 1
             logger.info(
@@ -119,12 +180,41 @@ def persist_collected_data(extracted_jd: dict, keyword: str) -> int:
             )
         except Exception as exc:
             logger.error("[job_persistence] Failed to persist job #%s: %s", index, exc)
+            rejected_items.append(
+                {
+                    "index": index,
+                    "url": str(url),
+                    "issues": [f"persistence_error:{type(exc).__name__}"],
+                }
+            )
 
-    return persisted_count
+    return {
+        "submitted_count": len(job_list),
+        "persisted_count": persisted_count,
+        "rejected_count": len(rejected_items),
+        "rejected_items": rejected_items,
+    }
+
+
+def persist_collected_data(
+    extracted_jd: dict,
+    keyword: str,
+    collection_intent: dict[str, Any] | None = None,
+) -> int:
+    """기존 호출자용 저장 건수 반환 인터페이스."""
+
+    return int(
+        persist_collected_data_with_report(
+            extracted_jd,
+            keyword,
+            collection_intent=collection_intent,
+        )["persisted_count"]
+    )
 
 
 __all__ = [
     "normalization_mode",
     "normalize_job_for_persistence",
     "persist_collected_data",
+    "persist_collected_data_with_report",
 ]

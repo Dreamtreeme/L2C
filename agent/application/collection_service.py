@@ -211,6 +211,24 @@ class CollectionService:
         needs_approval = base_needs_approval and self.operations.report_requires_more_collection(
             intermediate_report
         )
+        validation = dict(worker_result.get("persistence_validation") or {})
+        rejected_count = int(validation.get("rejected_count") or 0)
+        if persisted_count <= 0:
+            completion_status = "rejected"
+        elif (
+            rejected_count > 0
+            or (effective_target_count > 0 and persisted_count < effective_target_count)
+            or hit_recursion_limit
+            or not is_finished
+        ):
+            completion_status = "partial"
+        else:
+            completion_status = "complete"
+        missing_count = (
+            max(0, effective_target_count - persisted_count)
+            if effective_target_count > 0
+            else 0
+        )
 
         if needs_approval:
             message = (
@@ -219,12 +237,8 @@ class CollectionService:
                 f"persisted={persisted_count}; approval required to raise limit to "
                 f"{intermediate_report.get('suggested_recursion_limit')}"
             )
-        elif review.get("decision") == "accept" and persisted_count > 0:
-            completion_type = (
-                "partial collection persisted"
-                if hit_recursion_limit and not is_finished
-                else "vision collection persisted"
-            )
+        elif persisted_count > 0:
+            completion_type = "partial collection persisted" if completion_status == "partial" else "vision collection persisted"
             message = (
                 f"{completion_type}: keyword={effective_keyword!r}, site={site_name}, "
                 f"collected={item_count}, persisted={persisted_count}"
@@ -254,6 +268,7 @@ class CollectionService:
                 "item_count": item_count,
                 "persisted_count": persisted_count,
                 "needs_human_approval": needs_approval,
+                "completion_status": completion_status,
             },
         )
         return {
@@ -275,6 +290,9 @@ class CollectionService:
             "needs_human_approval": needs_approval,
             "intermediate_report": intermediate_report,
             "collection_intent": collection_intent,
+            "completion_status": completion_status,
+            "missing_count": missing_count,
+            "persistence_validation": validation,
         }
 
 

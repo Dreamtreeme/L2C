@@ -169,6 +169,7 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     monkeypatch.delenv("VISION_AGENT_RECURSION_LIMIT", raising=False)
     monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
+    monkeypatch.setenv("VISION_WORKER_REVIEW_MODE", "shape")
     monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "off")
     monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "off")
     monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "0")
@@ -328,6 +329,7 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
     monkeypatch.delenv("VISION_AGENT_RECURSION_LIMIT", raising=False)
     monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
+    monkeypatch.setenv("VISION_WORKER_REVIEW_MODE", "shape")
     monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "off")
     monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "off")
 

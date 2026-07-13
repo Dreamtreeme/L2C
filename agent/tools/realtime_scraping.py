@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 from langchain_core.tools import tool
 from agent.application.job_persistence_service import (
     normalize_job_for_persistence as _normalize_job_for_persistence,
-    persist_collected_data as _persist_collected_data,
+    persist_collected_data_with_report as _persist_collected_data_with_report,
 )
 from agent.application.worker_execution_service import (
     close_browser_after_run as _close_browser_after_run,
@@ -676,9 +676,31 @@ def persist_accepted_worker_result(worker_result: dict, review: dict, source: st
     if review.get("decision") != "accept" or not worker_result.get("extracted_jd"):
         return 0, submission, review, ""
 
-    persisted_count = _persist_collected_data(worker_result.get("extracted_jd") or {}, worker_result.get("keyword", ""))
+    validation = _persist_collected_data_with_report(
+        worker_result.get("extracted_jd") or {},
+        worker_result.get("keyword", ""),
+        collection_intent=worker_result.get("collection_intent") or {},
+    )
+    persisted_count = int(validation.get("persisted_count") or 0)
     submission["persisted_count"] = persisted_count
+    submission["persistence_validation"] = validation
     worker_result["submission"] = submission
+    worker_result["persistence_validation"] = validation
+    if persisted_count <= 0:
+        review = {
+            **review,
+            "decision": "reject",
+            "reasons": list(review.get("reasons") or [])
+            + ["all collected jobs failed pre-persistence validation"],
+            "recipe_candidate": False,
+        }
+    elif int(validation.get("rejected_count") or 0) > 0:
+        review = {
+            **review,
+            "reasons": list(review.get("reasons") or [])
+            + [f"{validation['rejected_count']} collected jobs failed pre-persistence validation"],
+            "recipe_candidate": False,
+        }
     from agent.recipe.submission_store import SubmissionStore
 
     submission_id = SubmissionStore().commit_submission(

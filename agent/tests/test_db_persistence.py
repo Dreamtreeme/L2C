@@ -136,6 +136,40 @@ def test_database_records_only_meaningful_job_versions(tmp_path):
     assert db.get(job_id)["evidence_hash"] == versions[0]["evidence_hash"]
 
 
+def test_pre_persistence_validation_rejects_missing_identity_and_date_mismatch(monkeypatch, tmp_path):
+    import shared.config as cfg
+    from agent.application.job_persistence_service import persist_collected_data_with_report
+
+    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "validated_jobs.db")
+    result = persist_collected_data_with_report(
+        {
+            "jobs": [
+                {
+                    "company_name": "",
+                    "position": "Data Engineer",
+                    "url": "https://example.com/jobs/missing-company",
+                    "posted_at": "2026-06-01",
+                },
+                {
+                    "company_name": "Acme",
+                    "position": "Data Engineer",
+                    "url": "https://example.com/jobs/out-of-range",
+                    "posted_at": "2026-06-01",
+                },
+            ]
+        },
+        "Data Engineer",
+        collection_intent={
+            "filters": {"posted_from": "2026-07-01", "posted_to": "2026-07-31"}
+        },
+    )
+
+    assert result["persisted_count"] == 0
+    assert result["rejected_count"] == 2
+    assert "required_field_missing:company_name" in result["rejected_items"][0]["issues"]
+    assert "requested_filter_mismatch:posted_at_before_range" in result["rejected_items"][1]["issues"]
+
+
 def test_persistence_pipeline(tmp_path):
     print("=== [테스트 시작] 전처리 및 DB 적재 파이프라인 검증 ===")
     test_db_path = tmp_path / "test_jobs.db"

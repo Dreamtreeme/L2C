@@ -108,6 +108,8 @@ class WorkerSubmission(BaseModel):
     feedback_episodes: List[Dict[str, Any]] = Field(default_factory=list)
     transition_observations: List[Dict[str, Any]] = Field(default_factory=list)
     skill_metadata_evidence: Dict[str, Any] = Field(default_factory=dict)
+    collection_intent: Dict[str, Any] = Field(default_factory=dict)
+    semantic_evidence: List[Dict[str, Any]] = Field(default_factory=list)
     extracted_summary: Dict[str, Any] = Field(default_factory=dict)
     worker_notes: str = ""
 

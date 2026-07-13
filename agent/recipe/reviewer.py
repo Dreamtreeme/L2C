@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from agent.recipe.text_utils import site_of
 from agent.recipe.task_category import normalize_task_category
-from agent.utils.job_fields import deterministic_report_item
+from agent.utils.job_fields import JOB_FIELD_ALIASES, deterministic_report_item, first_present, summary_text
 from agent.utils.model_dump import dump_model
 from shared.schema.feedback_schema import CommanderReview, SubmissionIssue, WorkerSubmission
 
@@ -48,6 +48,27 @@ def _job_items(extracted_jd: Any) -> list[dict[str, Any]]:
 
 def _empty_report_summary(jobs: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     return [deterministic_report_item(job) for job in jobs[:limit]]
+
+
+def _semantic_job_evidence(jobs: list[dict[str, Any]], limit: int = 20) -> list[dict[str, Any]]:
+    fields = (
+        "company_name",
+        "position",
+        "url",
+        "location",
+        "employment_type",
+        "posted_at",
+        "deadline",
+        "requirements",
+        "main_tasks",
+    )
+    return [
+        {
+            field: summary_text(first_present(job, JOB_FIELD_ALIASES.get(field, [field])))[:1200]
+            for field in fields
+        }
+        for job in jobs[:limit]
+    ]
 
 
 def _report_summary_mode() -> str:
@@ -184,6 +205,8 @@ def build_worker_submission(
         feedback_episodes=feedback_episodes,
         transition_observations=transition_observations,
         skill_metadata_evidence=skill_metadata_evidence,
+        collection_intent=dict(recipe_params.get("collection_intent") or {}),
+        semantic_evidence=_semantic_job_evidence(jobs),
         extracted_summary=extracted_summary,
         worker_notes="submitted after autonomous/reflex worker run",
     )
@@ -318,7 +341,7 @@ def review_worker_submission(submission: dict[str, Any]) -> dict[str, Any]:
     fallback = shape_review(submission, issues)
     if fallback.get("decision") != "accept":
         return fallback
-    mode = os.getenv("VISION_WORKER_REVIEW_MODE", "shape").strip().lower()
+    mode = os.getenv("VISION_WORKER_REVIEW_MODE", "llm").strip().lower()
     if mode != "llm":
         return fallback
     try:

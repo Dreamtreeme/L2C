@@ -408,6 +408,72 @@ def test_worker_execution_service_delegates_prepare_and_stream(monkeypatch):
     assert hit_limit is False
 
 
+def test_collection_service_forces_partial_status_when_explicit_target_is_unmet():
+    from agent.application.collection_service import (
+        CollectionOperations,
+        CollectionRequest,
+        CollectionService,
+    )
+
+    def run_worker(*args, **kwargs):
+        return {
+            "submission": {
+                "run_id": "worker-partial",
+                "collected_count": 1,
+                "target_count": 2,
+                "task_category": "검색",
+            },
+            "site_name": "Wanted",
+            "site_slug": "wanted",
+            "keyword": "iOS 개발자",
+            "target_count": 2,
+            "is_finished": True,
+            "hit_recursion_limit": False,
+        }
+
+    def persist(worker_result, review):
+        worker_result["persistence_validation"] = {
+            "submitted_count": 1,
+            "persisted_count": 1,
+            "rejected_count": 0,
+            "rejected_items": [],
+        }
+        return 1, worker_result["submission"], review, "submission-partial"
+
+    operations = CollectionOperations(
+        normalize_target_count=lambda value: int(value or 0),
+        normalize_task_category=lambda value: value or "검색",
+        review_retries=lambda: 0,
+        run_worker=run_worker,
+        review_worker=lambda submission: ({"decision": "accept"}, "submission-partial"),
+        persist_result=persist,
+        render_review_feedback=lambda review: "",
+        needs_approval=lambda **kwargs: False,
+        build_intermediate_report=lambda *args, **kwargs: {},
+        report_requires_more_collection=lambda report: False,
+        close_browser=lambda: None,
+    )
+
+    result = CollectionService(operations).collect(
+        CollectionRequest(
+            search_keyword="iOS 개발자",
+            site="wanted",
+            target_count=2,
+            search_intent_resolved=True,
+            collection_intent={
+                "search_keyword": "iOS 개발자",
+                "count_mode": "explicit",
+                "target_count": 2,
+            },
+        )
+    )
+
+    assert result["completion_status"] == "partial"
+    assert result["missing_count"] == 1
+    assert result["persisted_count"] == 1
+    assert "partial collection persisted" in result["message"]
+
+
 def test_worker_execution_session_serializes_concurrent_requests():
     from agent.application.worker_execution_service import worker_execution_session
 

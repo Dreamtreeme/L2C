@@ -2573,6 +2573,54 @@ def test_worker_submission_review_accepts_structured_data(monkeypatch):
     assert submission["transition_observations"][0]["action_seq"] == 0
 
 
+def test_worker_submission_defaults_to_semantic_llm_review(monkeypatch):
+    from agent.recipe import reviewer
+
+    monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
+    monkeypatch.delenv("VISION_WORKER_REVIEW_MODE", raising=False)
+    submission = reviewer.build_worker_submission(
+        {
+            "goal": "collect recent AI engineer jobs",
+            "current_url": "https://www.wanted.co.kr/wd/1",
+            "recipe_params": {
+                "collection_intent": {
+                    "search_keyword": "AI Engineer",
+                    "freshness_required": True,
+                }
+            },
+            "extracted_jd": {
+                "jobs": [
+                    {
+                        "company_name": "Acme",
+                        "position": "AI Engineer",
+                        "url": "https://www.wanted.co.kr/wd/1",
+                        "posted_at": "2026-07-13",
+                        "requirements": ["Python"],
+                    }
+                ]
+            },
+            "recorded_steps": [{"seq": 0, "action": "click_marker"}],
+            "feedback_episodes": [_sample_feedback_episode()],
+        },
+        site="wanted",
+        keyword="AI Engineer",
+        run_status="finished",
+    )
+    seen = {}
+
+    def fake_llm_review(value, issues, fallback):
+        seen["submission"] = value
+        return {"decision": "accept", "reasons": ["semantic match"], "recipe_candidate": False, "confidence": 0.9}
+
+    monkeypatch.setattr(reviewer, "_llm_review", fake_llm_review)
+
+    review = reviewer.review_worker_submission(submission)
+
+    assert review["decision"] == "accept"
+    assert seen["submission"]["collection_intent"]["freshness_required"] is True
+    assert seen["submission"]["semantic_evidence"][0]["posted_at"] == "2026-07-13"
+
+
 def test_worker_submission_report_summary_uses_llm(monkeypatch):
     import agent.recipe.reviewer as reviewer
     from agent.recipe.reviewer import build_worker_submission
@@ -3271,7 +3319,16 @@ def test_realtime_recipe_learning_mode_off_skips_candidate(monkeypatch):
     from agent.tools import realtime_scraping as rs
 
     monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "off")
-    monkeypatch.setattr(rs, "_persist_collected_data", lambda extracted, keyword: 1)
+    monkeypatch.setattr(
+        rs,
+        "_persist_collected_data_with_report",
+        lambda extracted, keyword, collection_intent=None: {
+            "submitted_count": 1,
+            "persisted_count": 1,
+            "rejected_count": 0,
+            "rejected_items": [],
+        },
+    )
     called = []
     monkeypatch.setattr(rs, "_commit_recipe_candidate", lambda *args, **kwargs: called.append(args) or "candidate-1")
     monkeypatch.setattr("agent.recipe.submission_store.SubmissionStore.commit_submission", lambda self, submission, review=None, source="": "worker-run-critic:0")
@@ -3290,7 +3347,16 @@ def test_realtime_recipe_learning_mode_record_saves_candidate_without_critic(mon
     from agent.tools import realtime_scraping as rs
 
     monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "record")
-    monkeypatch.setattr(rs, "_persist_collected_data", lambda extracted, keyword: 1)
+    monkeypatch.setattr(
+        rs,
+        "_persist_collected_data_with_report",
+        lambda extracted, keyword, collection_intent=None: {
+            "submitted_count": 1,
+            "persisted_count": 1,
+            "rejected_count": 0,
+            "rejected_items": [],
+        },
+    )
     seen = {}
     def fake_commit_recipe_candidate(submission, review, source, submission_id, mode):
         seen["mode"] = mode
@@ -3317,7 +3383,16 @@ def test_realtime_recipe_learning_mode_promote_is_record_only(monkeypatch):
     from agent.tools import realtime_scraping as rs
 
     monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "promote")
-    monkeypatch.setattr(rs, "_persist_collected_data", lambda extracted, keyword: 1)
+    monkeypatch.setattr(
+        rs,
+        "_persist_collected_data_with_report",
+        lambda extracted, keyword, collection_intent=None: {
+            "submitted_count": 1,
+            "persisted_count": 1,
+            "rejected_count": 0,
+            "rejected_items": [],
+        },
+    )
     seen = {}
     def fake_commit_recipe_candidate(submission, review, source, submission_id, mode):
         seen["mode"] = mode
