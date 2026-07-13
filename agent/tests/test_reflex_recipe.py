@@ -86,48 +86,6 @@ def test_phash_replay_rejects_step_without_roi_signature():
     assert result["mode"] == "roi_phash"
 
 
-def test_roi_phash_replay_rejects_different_roi_before_text_match(tmp_path):
-    from PIL import Image, ImageDraw
-    from agent.recipe.phash_replay import match_step_by_screen_signature
-    from agent.vision.screen_signature import compute_target_roi_signature
-
-    saved = tmp_path / "saved.png"
-    current = tmp_path / "current.png"
-    image = Image.new("RGB", (200, 200), "white")
-    draw = ImageDraw.Draw(image)
-    draw.rectangle([150, 20, 170, 40], fill="black")
-    image.save(saved)
-    Image.new("RGB", (200, 200), "white").save(current)
-
-    roi_signature = compute_target_roi_signature(saved, [150, 20, 170, 40], [200, 200])
-    current_signature = {
-        "phash": "0000000000000000",
-        "size": [200, 200],
-        "anchors": ["검색", "채용"],
-    }
-    step = {
-        "screen_signature": {
-            "phash": "ffffffffffffffff",
-            "size": [200, 200],
-            "anchors": ["검색", "채용"],
-        },
-        "roi_signature": roi_signature,
-        "target": {"text": "검색", "center_ratio": [0.8, 0.15]},
-    }
-    markers = [{"id": 99, "bbox": [150, 20, 170, 40], "text": "검색"}]
-
-    marker_id, result = match_step_by_screen_signature(
-        step,
-        current_signature,
-        markers,
-        current_image_path=str(current),
-    )
-
-    assert marker_id is None
-    assert result["reason"] == "roi_phash_distance"
-    assert result["mode"] == "roi_phash"
-
-
 def test_record_ui_step_stores_target_roi_signature(tmp_path):
     from PIL import Image, ImageDraw
     from agent.recipe.record import record_ui_step
@@ -278,7 +236,7 @@ def test_roi_phash_replay_rejects_different_capture_size(tmp_path):
     assert result["current_size"] == [300, 200]
 
 
-def test_roi_phash_replay_scans_marker_center_when_target_moves(tmp_path):
+def test_roi_phash_replay_rejects_when_saved_roi_changes(tmp_path):
     from PIL import Image, ImageDraw
     from agent.recipe.phash_replay import match_step_by_screen_signature
     from agent.vision.screen_signature import compute_target_roi_signature
@@ -303,99 +261,48 @@ def test_roi_phash_replay_scans_marker_center_when_target_moves(tmp_path):
         current_image_path=str(current),
     )
 
-    assert marker_id == 9
-    assert result["matched"] is True
-    assert result["reason"] == "roi_marker_scan_matched"
+    assert marker_id is None
+    assert result["matched"] is False
+    assert result["reason"] == "roi_phash_distance"
 
 
-def test_roi_caption_selects_semantic_icon_candidate(tmp_path, monkeypatch):
+def test_roi_phash_replay_uses_closest_marker_without_text_matching(tmp_path):
     from PIL import Image, ImageDraw
     from agent.recipe.phash_replay import match_step_by_screen_signature
     from agent.vision.screen_signature import compute_target_roi_signature
-    import agent.vision.roi_caption as roi_caption
 
     image_path = tmp_path / "screen.png"
     image = Image.new("RGB", (200, 200), "white")
     ImageDraw.Draw(image).rectangle([150, 20, 170, 40], fill="black")
     image.save(image_path)
     signature = compute_target_roi_signature(image_path, [150, 20, 170, 40], [200, 200])
-    seen = {}
-
-    def fake_caption(_path, markers, target):
-        seen["ids"] = [marker["id"] for marker in markers]
-        seen["target"] = target
-        return 9, {"reason": "roi_caption_matched", "caption": "검색 아이콘"}
-
-    monkeypatch.setattr(roi_caption, "select_marker_by_roi_caption", fake_caption)
-    marker_id, result = match_step_by_screen_signature(
-        {
-            "roi_signature": signature,
-            "component": "search_button",
-            "intent": "검색창을 연다",
-            "target": {
-                "center_ratio": [0.8, 0.15],
-                "marker_type": "icon",
-                "semantic_label": "검색 아이콘",
-            },
-        },
-        {"size": [200, 200]},
-        [
-            {"id": 7, "bbox": [150, 20, 170, 40], "type": "icon"},
-            {"id": 9, "bbox": [140, 20, 160, 40], "type": "icon"},
-        ],
-        current_image_path=str(image_path),
-    )
-
-    assert marker_id == 9
-    assert result["mode"] == "roi_caption"
-    assert seen == {
-        "ids": [7, 9],
-        "target": {
-            "label": "검색 아이콘",
-            "component": "search_button",
-            "intent": "검색창을 연다",
-        },
-    }
-
-
-def test_roi_caption_is_skipped_for_single_nearby_icon(tmp_path, monkeypatch):
-    from PIL import Image, ImageDraw
-    from agent.recipe.phash_replay import match_step_by_screen_signature
-    from agent.vision.screen_signature import compute_target_roi_signature
-    import agent.vision.roi_caption as roi_caption
-
-    image_path = tmp_path / "screen.png"
-    image = Image.new("RGB", (200, 200), "white")
-    ImageDraw.Draw(image).rectangle([150, 20, 170, 40], fill="black")
-    image.save(image_path)
-    signature = compute_target_roi_signature(image_path, [150, 20, 170, 40], [200, 200])
-    monkeypatch.setattr(
-        roi_caption,
-        "select_marker_by_roi_caption",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("명확한 단일 후보에 캡션 모델을 호출함")),
-    )
-
     marker_id, result = match_step_by_screen_signature(
         {
             "roi_signature": signature,
             "target": {
                 "center_ratio": [0.8, 0.15],
-                "marker_type": "icon",
-                "semantic_label": "검색 아이콘",
+                "text": "저장 당시 글자",
             },
         },
         {"size": [200, 200]},
         [
-            {"id": 7, "bbox": [150, 20, 170, 40], "type": "icon"},
-            {"id": 9, "bbox": [125, 20, 145, 40], "type": "icon"},
+            {"id": 7, "bbox": [150, 20, 170, 40], "text": "현재는 다른 글자"},
+            {"id": 9, "bbox": [140, 20, 160, 40], "text": "저장 당시 글자"},
         ],
         current_image_path=str(image_path),
     )
 
     assert marker_id == 7
     assert result["matched"] is True
-    assert result["mode"] == "roi_geometry"
-    assert result["reason"] == "single_nearby_icon"
+    assert result["mode"] == "roi_phash"
+
+
+def test_page_role_match_requires_exact_screen_role():
+    from agent.recipe.page_context import page_role_matches
+
+    assert page_role_matches("home", "home") is True
+    assert page_role_matches("search_overlay", "search_overlay") is True
+    assert page_role_matches("search_overlay", "home") is False
 
 
 def test_text_utils_normalizes_marker_noise_and_url_template():
@@ -1597,62 +1504,6 @@ def test_reflex_node_rejects_signed_step_when_roi_missing(monkeypatch):
     assert result["reflex_trace"]["last_reason"] == "roi_signature_missing"
 
 
-def test_reflex_node_does_not_broad_match_legacy_site_recipe(monkeypatch):
-    from agent.graph import nodes
-    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
-
-    class FakeStore:
-        def get_site_recipes(self, site, task_category=None):
-            return [
-                (
-                    "old-scroll",
-                    SiteRecipe(
-                        site=site,
-                        goal="goal",
-                        steps=[
-                            RecipeStep(
-                                seq=0,
-                                action="scroll",
-                                replay_mode="fixed",
-                                param={"direction": "down"},
-                            )
-                        ],
-                    ),
-                ),
-                (
-                    "old-click",
-                    SiteRecipe(
-                        site=site,
-                        goal="goal",
-                        steps=[
-                            RecipeStep(
-                                seq=0,
-                                action="click_marker",
-                                replay_mode="fixed",
-                                target={"text": "검색", "center_ratio": [0.8, 0.1]},
-                            )
-                        ],
-                    ),
-                ),
-            ]
-
-    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
-
-    result = nodes.reflex_node(
-        {
-            "goal": "ios 개발자 공고 2개 찾아줘",
-            "current_url": "https://www.wanted.co.kr",
-            "recipe_params": {"site": "wanted"},
-            "screen_signature": {"size": [1000, 1000]},
-            "current_markers": [{"id": 77, "bbox": [790, 80, 830, 120], "text": "검색"}],
-        }
-    )
-
-    assert result["reflex_hit"] is False
-    assert result["reflex_trace"]["reason"] == "no_candidate_passed"
-    assert result["reflex_trace"]["candidate_count"] == 2
-
-
 def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
     from agent.graph import nodes
@@ -1801,42 +1652,6 @@ def test_reflex_node_skips_recipe_when_task_category_mismatches(monkeypatch):
     assert result["reflex_hit"] is False
     assert result["reflex_trace"]["reason"] == "no_recipe"
     assert result["reflex_trace"]["candidate_count"] == 0
-
-
-def test_reflex_node_rejects_similar_recipe_when_target_does_not_match(monkeypatch):
-    from agent.graph import nodes
-    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
-
-    class FakeStore:
-        def get_site_recipes(self, site, task_category=None):
-            return [
-                (
-                    "recipe-recorded",
-                    SiteRecipe(
-                        site="wanted",
-                        steps=[
-                            RecipeStep(
-                                seq=0,
-                                action="click_marker",
-                                replay_mode="fixed",
-                                target={"text": "상세 정보 더 보기"},
-                            )
-                        ],
-                    ),
-                )
-            ]
-
-    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
-
-    result = nodes.reflex_node(
-        {
-            "goal": "android 개발자 공고 찾아줘",
-            "current_markers": [{"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"}],
-            "recipe_params": {"site": "wanted", "query": "android 개발자"},
-        }
-    )
-
-    assert result["reflex_hit"] is False
 
 
 def test_action_node_commits_accumulated_recorded_steps(monkeypatch):
@@ -2573,7 +2388,7 @@ def test_worker_submission_review_accepts_structured_data(monkeypatch):
     assert submission["transition_observations"][0]["action_seq"] == 0
 
 
-def test_worker_submission_defaults_to_semantic_llm_review(monkeypatch):
+def test_worker_submission_defaults_to_shape_review(monkeypatch):
     from agent.recipe import reviewer
 
     monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
@@ -2606,19 +2421,17 @@ def test_worker_submission_defaults_to_semantic_llm_review(monkeypatch):
         keyword="AI Engineer",
         run_status="finished",
     )
-    seen = {}
+    def fail_llm_review(value, issues, fallback):
+        raise AssertionError("기본 검토 경로에서 LLM을 호출하면 안 됩니다.")
 
-    def fake_llm_review(value, issues, fallback):
-        seen["submission"] = value
-        return {"decision": "accept", "reasons": ["semantic match"], "recipe_candidate": False, "confidence": 0.9}
-
-    monkeypatch.setattr(reviewer, "_llm_review", fake_llm_review)
+    monkeypatch.setattr(reviewer, "_llm_review", fail_llm_review)
 
     review = reviewer.review_worker_submission(submission)
 
     assert review["decision"] == "accept"
-    assert seen["submission"]["collection_intent"]["freshness_required"] is True
-    assert seen["submission"]["semantic_evidence"][0]["posted_at"] == "2026-07-13"
+    assert review["recipe_candidate"] is True
+    assert submission["collection_intent"]["freshness_required"] is True
+    assert submission["semantic_evidence"][0]["posted_at"] == "2026-07-13"
 
 
 def test_worker_submission_report_summary_uses_llm(monkeypatch):

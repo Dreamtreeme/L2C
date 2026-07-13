@@ -199,8 +199,6 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
         reject_reason_priority = {
             "capture_size_mismatch": 100,
             "roi_phash_distance": 90,
-            "roi_marker_scan_distance": 85,
-            "roi_marker_scan_ambiguous": 80,
             "target_ratio_miss": 75,
             "url_scope_mismatch": 65,
             "page_role_mismatch": 40,

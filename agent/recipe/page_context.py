@@ -44,7 +44,7 @@ def page_role_matches(recorded: Any, current: Any) -> bool:
         return False
     if not current_role or current_role == "unknown":
         return False
-    return page_role_family(recorded_role) == page_role_family(current_role)
+    return recorded_role == current_role
 
 
 def infer_page_role_from_url_and_texts(current_url: str, marker_texts: list[Any] | None = None) -> str:

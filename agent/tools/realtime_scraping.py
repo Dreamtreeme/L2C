@@ -292,18 +292,6 @@ def _build_site_goal(
             "Collect every relevant job card visible on the first stable search-result screen. "
             "Do not invent a fixed item count and do not continue to additional result pages unless the user explicitly requested it.\n\n"
         )
-    filters = dump_model(intent.filters)
-    active_filters = {key: value for key, value in filters.items() if value}
-    request_section = (
-        "[Structured user request]\n"
-        f"count_mode={intent.count_mode.value}\n"
-        f"filters={json.dumps(active_filters, ensure_ascii=False)}\n"
-        f"freshness_required={str(intent.freshness_required).lower()}\n"
-        f"purpose={intent.purpose.value}\n"
-        f"analysis_goal={intent.analysis_goal}\n"
-        "Apply visible site filters when available. Do not claim that a posting meets a date or filter condition without visible evidence. "
-        "The worker collects supporting postings; the answer agent performs the final comparison or trend analysis.\n\n"
-    )
     task_context_section = _task_context_section(task_context)
 
     return (
@@ -314,7 +302,6 @@ def _build_site_goal(
         f"{navigation_section}"
         f"{direct_search_section}"
         f"{target_section}"
-        f"{request_section}"
         f"{task_context_section}"
         f"[사이트 공통 흐름]\n{common_flow}\n\n"
         f"[안정적인 UI/Reflex 후보]\n{stable_controls}\n\n"
@@ -367,9 +354,9 @@ def _worker_run_status(hit_recursion_limit: bool, is_finished: bool) -> str:
 
 def _worker_review_retries() -> int:
     try:
-        return max(0, int(os.getenv("VISION_WORKER_REVIEW_RETRIES", "1")))
+        return max(0, int(os.getenv("VISION_WORKER_REVIEW_RETRIES", "0")))
     except ValueError:
-        return 1
+        return 0
 
 
 def needs_human_limit_approval(

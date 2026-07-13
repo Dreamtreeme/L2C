@@ -341,7 +341,7 @@ def review_worker_submission(submission: dict[str, Any]) -> dict[str, Any]:
     fallback = shape_review(submission, issues)
     if fallback.get("decision") != "accept":
         return fallback
-    mode = os.getenv("VISION_WORKER_REVIEW_MODE", "llm").strip().lower()
+    mode = os.getenv("VISION_WORKER_REVIEW_MODE", "shape").strip().lower()
     if mode != "llm":
         return fallback
     try:

@@ -23,6 +23,8 @@ def test_commander_prompt_includes_runtime_date_and_sufficiency_rules():
     assert "timezone=KST" in prompt
     assert "verified_posted_at_count" in prompt
     assert "created_at이 최근이어도 공고 게시일이 확인된 것은 아닙니다" in prompt
+    assert "검색어를 넓히거나 바꾸어 realtime_scraping을 다시 호출하지 마십시오" in prompt
+    assert "실시간 수집을 한 번 수행하십시오" in prompt
 
 
 def test_run_context_collects_usage_steps_and_events():
