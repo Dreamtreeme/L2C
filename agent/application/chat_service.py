@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import Any
@@ -17,6 +18,7 @@ from agent.application.run_context import (
 )
 from agent.application.run_contracts import RunEventSink, RunPhase, RunStatus
 from agent.tools.recipe_learning import review_recipe_candidates
+from agent.tools.request_clarification import request_clarification
 from agent.tools.realtime_scraping import realtime_scraping
 from agent.tools.site_registry import get_collection_site_profile, list_collection_sites
 from agent.tools.sqlite_query import sqlite_query
@@ -55,6 +57,7 @@ class ChatService:
             "get_collection_site_profile": get_collection_site_profile,
             "realtime_scraping": realtime_scraping,
             "review_recipe_candidates": review_recipe_candidates,
+            "request_clarification": request_clarification,
         }
 
     def _get_llm_with_tools(self):
@@ -72,11 +75,12 @@ class ChatService:
         context: Any,
         started: float,
         status: RunStatus = RunStatus.COMPLETED,
+        clarification: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         duration = max(0.0, time.perf_counter() - started)
         metrics = context.snapshot()
         metrics["duration_sec"] = round(duration, 6)
-        return {
+        result = {
             "run_id": context.run_id,
             "run_status": status.value,
             "last_action_result": answer,
@@ -86,6 +90,9 @@ class ChatService:
             "metrics": metrics,
             "llm_usage": metrics.get("llm", {}),
         }
+        if clarification:
+            result["clarification"] = clarification
+        return result
 
     def run(
         self,
@@ -154,7 +161,11 @@ class ChatService:
                         )
                         return self._result(answer, context=context, started=started)
 
-                    for tool_call in response.tool_calls:
+                    ordered_tool_calls = sorted(
+                        response.tool_calls,
+                        key=lambda call: call.get("name") != "request_clarification",
+                    )
+                    for tool_call in ordered_tool_calls:
                         tool_name = tool_call["name"]
                         tool_args = tool_call["args"]
                         tool_id = tool_call["id"]
@@ -163,6 +174,7 @@ class ChatService:
                             "sqlite_query": RunPhase.DATABASE,
                             "realtime_scraping": RunPhase.COLLECTION,
                             "review_recipe_candidates": RunPhase.REVIEW,
+                            "request_clarification": RunPhase.CLARIFICATION,
                         }.get(tool_name, RunPhase.PLANNING)
                         emit_run_event(
                             "tool_started",
@@ -171,6 +183,7 @@ class ChatService:
                                 "sqlite_query": "저장된 공고를 조회하고 있습니다.",
                                 "realtime_scraping": "웹에서 채용공고를 수집하고 있습니다.",
                                 "review_recipe_candidates": "반복 경로 후보를 검토하고 있습니다.",
+                                "request_clarification": "검색 조건을 확인하고 있습니다.",
                             }.get(tool_name, "다음 작업을 준비하고 있습니다."),
                             data={"tool": tool_name},
                         )
@@ -180,6 +193,34 @@ class ChatService:
                             logger.info("Chat orchestrator tool call", tool=tool_name)
                             with measure_step(f"tool:{tool_name}"):
                                 tool_result = tool.invoke(tool_args)
+                            if tool_name == "request_clarification":
+                                try:
+                                    clarification = json.loads(tool_result)
+                                except (TypeError, json.JSONDecodeError):
+                                    clarification = {
+                                        "needs_clarification": True,
+                                        "question": str(tool_result),
+                                        "missing_fields": [],
+                                        "reason": "",
+                                    }
+                                question = str(
+                                    clarification.get("question")
+                                    or "검색 조건을 조금 더 구체적으로 알려주세요."
+                                )
+                                emit_run_event(
+                                    "clarification_required",
+                                    RunPhase.CLARIFICATION,
+                                    question,
+                                    status=RunStatus.WAITING_INPUT,
+                                    data=clarification,
+                                )
+                                return self._result(
+                                    question,
+                                    context=context,
+                                    started=started,
+                                    status=RunStatus.WAITING_INPUT,
+                                    clarification=clarification,
+                                )
                             if tool_name == "sqlite_query":
                                 for document_id in re.findall(
                                     r'<document id="(\d+)">',

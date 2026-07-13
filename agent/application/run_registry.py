@@ -7,7 +7,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
-from agent.application.run_contracts import RunEvent, RunStatus
+from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
 
 
 class RunRegistry:
@@ -52,7 +52,12 @@ class RunRegistry:
             )
 
     def complete(self, run_id: str, result: dict[str, Any]) -> None:
-        self._finish(run_id, RunStatus.COMPLETED, result=result)
+        raw_status = str(result.get("run_status") or RunStatus.COMPLETED.value)
+        try:
+            status = RunStatus(raw_status)
+        except ValueError:
+            status = RunStatus.COMPLETED
+        self._finish(run_id, status, result=result)
 
     def fail(self, run_id: str, error: str) -> None:
         self._finish(run_id, RunStatus.FAILED, error=error)
@@ -75,10 +80,16 @@ class RunRegistry:
                     "created_at": now,
                 },
             )
+            if status == RunStatus.COMPLETED:
+                phase = RunPhase.COMPLETED.value
+            elif status == RunStatus.FAILED:
+                phase = RunPhase.FAILED.value
+            else:
+                phase = str(item.get("phase") or RunPhase.PLANNING.value)
             item.update(
                 {
                     "status": status.value,
-                    "phase": "completed" if status == RunStatus.COMPLETED else "failed",
+                    "phase": phase,
                     "updated_at": now,
                     "result": result or {},
                     "error": error,

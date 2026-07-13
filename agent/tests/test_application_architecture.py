@@ -98,6 +98,82 @@ def test_chat_service_returns_run_contract_and_progress_events():
     assert events[-1].event == "run_completed"
 
 
+def test_chat_service_returns_structured_clarification_without_collection():
+    from langchain_core.messages import AIMessage
+
+    from agent.application.chat_service import ChatService
+
+    class FakeLLM:
+        def invoke(self, messages):
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "request_clarification",
+                        "args": {
+                            "question": "AI 직무 중 개발과 기획 중 어느 쪽을 찾을까요?",
+                            "missing_fields": ["직무 범위"],
+                            "reason": "검색 결과가 크게 달라짐",
+                        },
+                        "id": "clarification-1",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+
+    events = []
+    result = ChatService(llm_with_tools=FakeLLM()).run(
+        "AI 쪽 채용공고 찾아줘",
+        run_id="chat-clarification-1",
+        event_sink=events.append,
+    )
+
+    assert result["run_status"] == "waiting_input"
+    assert result["is_finished"] is False
+    assert result["clarification"]["missing_fields"] == ["직무 범위"]
+    assert result["last_action_result"] == "AI 직무 중 개발과 기획 중 어느 쪽을 찾을까요?"
+    assert events[-1].event == "clarification_required"
+    assert events[-1].status.value == "waiting_input"
+
+
+def test_chat_service_prioritizes_clarification_over_accidental_collection_call():
+    from langchain_core.messages import AIMessage
+
+    from agent.application.chat_service import ChatService
+
+    class FakeLLM:
+        def invoke(self, messages):
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "realtime_scraping",
+                        "args": {"query": "AI"},
+                        "id": "collection-1",
+                        "type": "tool_call",
+                    },
+                    {
+                        "name": "request_clarification",
+                        "args": {"question": "어느 AI 직무를 찾을까요?"},
+                        "id": "clarification-1",
+                        "type": "tool_call",
+                    },
+                ],
+            )
+
+    class FailingCollectionTool:
+        def invoke(self, args):
+            raise AssertionError("확인 질문 전에 수집 도구가 실행됨")
+
+    service = ChatService(llm_with_tools=FakeLLM())
+    service._tools["realtime_scraping"] = FailingCollectionTool()
+
+    result = service.run("AI 공고", run_id="clarification-priority")
+
+    assert result["run_status"] == "waiting_input"
+    assert result["last_action_result"] == "어느 AI 직무를 찾을까요?"
+
+
 def test_run_registry_tracks_progress_and_completion():
     from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
     from agent.application.run_registry import RunRegistry
@@ -119,6 +195,34 @@ def test_run_registry_tracks_progress_and_completion():
     assert item is not None
     assert item["status"] == "completed"
     assert item["result"]["last_action_result"] == "완료"
+
+
+def test_run_registry_preserves_waiting_input_status():
+    from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
+    from agent.application.run_registry import RunRegistry
+
+    registry = RunRegistry(limit=10)
+    registry.start("run-waiting", "모호한 질문")
+    registry.apply_event(
+        RunEvent(
+            run_id="run-waiting",
+            event="clarification_required",
+            phase=RunPhase.CLARIFICATION,
+            status=RunStatus.WAITING_INPUT,
+            message="어느 직무인가요?",
+        )
+    )
+    registry.complete(
+        "run-waiting",
+        {
+            "run_status": "waiting_input",
+            "clarification": {"question": "어느 직무인가요?"},
+        },
+    )
+
+    item = registry.get("run-waiting")
+    assert item["status"] == "waiting_input"
+    assert item["phase"] == "clarification"
 
 
 def test_chat_api_streams_structured_progress_without_character_delay(monkeypatch):
@@ -157,6 +261,55 @@ def test_chat_api_streams_structured_progress_without_character_delay(monkeypatc
     assert "[EVENT]" in response.text
     assert '"text": "최종 답변"' in response.text
     assert "data: 최" not in response.text
+
+
+def test_chat_api_resumes_from_clarification_context(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
+    from agent.application.run_registry import get_run_registry
+    from agent.web_server import app
+
+    registry = get_run_registry()
+    registry.start("previous-clarification", "AI 쪽 채용공고 찾아줘")
+    registry.apply_event(
+        RunEvent(
+            run_id="previous-clarification",
+            event="clarification_required",
+            phase=RunPhase.CLARIFICATION,
+            status=RunStatus.WAITING_INPUT,
+            message="개발과 기획 중 어느 쪽인가요?",
+        )
+    )
+    registry.complete(
+        "previous-clarification",
+        {
+            "run_status": "waiting_input",
+            "clarification": {"question": "개발과 기획 중 어느 쪽인가요?"},
+        },
+    )
+
+    class FakeChatService:
+        def run(self, query, *, run_id=None, event_sink=None):
+            assert "[이전 사용자 요청]\nAI 쪽 채용공고 찾아줘" in query
+            assert "[지휘자의 확인 질문]\n개발과 기획 중 어느 쪽인가요?" in query
+            assert "[사용자의 추가 답변]\n개발" in query
+            return {
+                "run_id": run_id,
+                "run_status": "completed",
+                "last_action_result": "개발 공고를 찾았습니다.",
+                "metrics": {},
+            }
+
+    monkeypatch.setattr("agent.web_server.get_chat_service", lambda: FakeChatService())
+    response = TestClient(app).post(
+        "/api/chat",
+        json={"query": "개발", "resume_run_id": "previous-clarification"},
+    )
+
+    assert response.status_code == 200
+    assert "개발 공고를 찾았습니다." in response.text
+    assert '"resumed_from_run_id": "previous-clarification"' in response.text
 
 
 def test_worker_state_factory_returns_independent_mutable_values():

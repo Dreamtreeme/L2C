@@ -168,6 +168,7 @@
         const chatMessages = document.getElementById('chat-messages');
         const chatForm = document.getElementById('chat-form');
         const queryInput = document.getElementById('query-input');
+        let pendingClarificationRunId = null;
         const submitBtn = document.getElementById('submit-btn');
 
         const sidebarPanel = document.getElementById('sidebar-panel');
@@ -275,7 +276,10 @@
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: query })
+                    body: JSON.stringify({
+                        query: query,
+                        resume_run_id: pendingClarificationRunId
+                    })
                 });
 
                 if (!response.ok) {
@@ -306,6 +310,9 @@
                                         const finalObj = JSON.parse(dataContent.slice(7).trim());
                                         const finalProcessed = replaceCitations(finalObj.text);
                                         agentContainer.innerHTML = marked.parse(finalProcessed);
+                                        pendingClarificationRunId = finalObj.status === 'waiting_input'
+                                            ? finalObj.run_id
+                                            : null;
                                     } catch (err) {
                                         console.error('Final payload parse error:', err);
                                     }

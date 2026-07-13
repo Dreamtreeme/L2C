@@ -11,7 +11,7 @@ from pathlib import Path
 
 from shared.db.database import Database
 from agent.application.chat_service import get_chat_service
-from agent.application.run_contracts import RunEvent, new_run_id
+from agent.application.run_contracts import RunEvent, RunStatus, new_run_id
 from agent.application.run_registry import get_run_registry
 from agent.utils.logger import logger
 
@@ -41,6 +41,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 class ChatRequest(BaseModel):
     query: str
+    resume_run_id: str | None = None
 
 @app.get("/")
 async def redirect_to_index():
@@ -90,7 +91,22 @@ async def chat_endpoint(req: ChatRequest):
 
         run_id = new_run_id("chat")
         registry = get_run_registry()
-        registry.start(run_id, query)
+        effective_query = query
+        if req.resume_run_id:
+            previous = registry.get(req.resume_run_id)
+            previous_result = dict((previous or {}).get("result") or {})
+            clarification = dict(previous_result.get("clarification") or {})
+            if (
+                previous
+                and previous.get("status") == RunStatus.WAITING_INPUT.value
+                and clarification.get("question")
+            ):
+                effective_query = (
+                    f"[이전 사용자 요청]\n{previous.get('query', '')}\n\n"
+                    f"[지휘자의 확인 질문]\n{clarification['question']}\n\n"
+                    f"[사용자의 추가 답변]\n{query}"
+                )
+        registry.start(run_id, effective_query)
         event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
         loop = asyncio.get_running_loop()
 
@@ -98,14 +114,14 @@ async def chat_endpoint(req: ChatRequest):
             registry.apply_event(event)
             loop.call_soon_threadsafe(event_queue.put_nowait, event)
 
-        logger.info("Received query for commander", query=query, run_id=run_id)
+        logger.info("Received query for commander", query=effective_query, run_id=run_id)
 
         yield f"data: [PROCESSING] {json.dumps({'run_id': run_id}, ensure_ascii=False)}\n\n"
 
         task = asyncio.create_task(
             asyncio.to_thread(
                 get_chat_service().run,
-                query,
+                effective_query,
                 run_id=run_id,
                 event_sink=event_sink,
             )
@@ -136,6 +152,8 @@ async def chat_endpoint(req: ChatRequest):
                 "run_id": run_id,
                 "text": str(result.get("last_action_result") or ""),
                 "status": result.get("run_status", "completed"),
+                "clarification": result.get("clarification"),
+                "resumed_from_run_id": req.resume_run_id,
                 "metrics": result.get("metrics", {}),
             },
             ensure_ascii=False,

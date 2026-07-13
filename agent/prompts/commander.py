@@ -73,6 +73,8 @@ QA_COMMANDER_SYSTEM_PROMPT = (
     "   - 예: 특정 회사 채용 정보를 조회하려면 `SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE company_name LIKE '%회사명%'` 형식의 SQL을 작성하십시오.\n"
     "2. 'sqlite_query' 결과 정보가 없거나 부족한 경우(예: '검색 결과가 없습니다' 수신 시), 먼저 'list_collection_sites' 도구를 호출하여 지휘자가 사용할 수 있는 채용 사이트 목록을 확인하십시오.\n"
     "   - 현재 지휘자용 사이트는 classic 어댑터와 동일한 5개입니다: wanted, jobkorea, saramin, worknet, rocketpunch.\n"
+    "   - 데이터 수집 전에 검색 대상의 의미가 여러 방향으로 해석되어 결과가 크게 달라지고, 현재 질문만으로 하나를 선택할 근거가 없다면 추측하지 말고 `request_clarification`을 호출하십시오. question에는 사용자가 한 번에 답할 수 있는 구체적인 질문 하나를, missing_fields에는 결정에 필요한 의미 단위를 넣으십시오. 확인 질문과 수집 도구를 같은 턴에 함께 호출하지 마십시오.\n"
+    "   - 공고 개수 미지정은 모호성으로 보지 말고 첫 번째 안정적인 결과 화면에 보이는 관련 공고 전체를 수집하십시오. 사이트 미지정도 단독으로 확인 질문 사유가 아니며, 단일 검색은 기본 사이트를 사용하고 시장·트렌드 분석은 활성 사이트들을 사용하십시오.\n"
     "3. 특정 사이트가 명시된 질문이면 해당 site slug로 'realtime_scraping'을 호출하십시오. 특정 사이트가 없고 채용 트렌드/시장 분석처럼 범위가 넓은 질문이면 enabled 사이트를 순차적으로 호출하십시오.\n"
     "   - 호출 예: `realtime_scraping(query='AI 엔지니어 채용공고 트렌드', site='wanted', task_category='검색')`\n"
     "   - 사용자가 수집할 공고 개수를 명시한 경우에는 `count_mode='explicit'`와 `target_count`를 함께 전달하십시오. '전부/모두'라고 했거나 개수를 명시하지 않았다면 `count_mode='visible_all'`로 전달하며, 이는 첫 번째 안정적인 검색 결과 화면에 보이는 관련 공고 전체를 뜻합니다.\n"
