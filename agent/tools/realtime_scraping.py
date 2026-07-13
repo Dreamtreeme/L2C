@@ -293,6 +293,27 @@ def _build_site_goal(
             "Do not invent a fixed item count and do not continue to additional result pages unless the user explicitly requested it.\n\n"
         )
     task_context_section = _task_context_section(task_context)
+    filter_values = {
+        "posted_date_expression": intent.filters.posted_date_expression,
+        "posted_from": intent.filters.posted_from,
+        "posted_to": intent.filters.posted_to,
+        "experience": intent.filters.experience,
+        "location": intent.filters.location,
+        "employment_type": intent.filters.employment_type,
+    }
+    confirmed_filters = {
+        key: value for key, value in filter_values.items() if str(value or "").strip()
+    }
+    confirmed_request_section = (
+        "[Confirmed collection constraints]\n"
+        f"filters={json.dumps(confirmed_filters, ensure_ascii=False)}\n"
+        f"freshness_required={str(bool(intent.freshness_required)).lower()}\n"
+        f"purpose={intent.purpose.value}\n"
+        f"analysis_goal={intent.analysis_goal}\n"
+        "Apply a visible site filter when the current UI supports it. "
+        "Otherwise verify the condition from visible job evidence. "
+        "Do not infer a date, location, experience, or employment condition that is not visible.\n\n"
+    )
 
     return (
         f"{site_name}({base_url})에서 '{search_keyword}' 채용공고를 검색하고 수집하세요. "
@@ -302,6 +323,7 @@ def _build_site_goal(
         f"{navigation_section}"
         f"{direct_search_section}"
         f"{target_section}"
+        f"{confirmed_request_section}"
         f"{task_context_section}"
         f"[사이트 공통 흐름]\n{common_flow}\n\n"
         f"[안정적인 UI/Reflex 후보]\n{stable_controls}\n\n"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from agent.application.investigation_store import InvestigationStore
 from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
@@ -16,11 +18,13 @@ from shared.schema.investigation_schema import (
     InvestigationStatus,
     EvidenceRequirement,
     EvidencePlan,
+    EvidenceValidation,
     InvestigationActionPlan,
     InvestigationConstraints,
     InvestigationPlanStep,
     RequestAnalysis,
     ToolCapability,
+    RequirementEvidenceDecision,
 )
 
 
@@ -371,7 +375,7 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
 
         def invoke(self, arguments):
             self.calls.append(arguments)
-            db.upsert(
+            job_id = db.upsert(
                 "https://example.com/jobs/ai-1",
                 {
                     "company_name": "예시회사",
@@ -381,7 +385,15 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
                     "raw_ocr_text": "AI 개발자 모델 운영",
                 },
             )
-            return '{"persisted_count": 1}'
+            return json.dumps(
+                {
+                    "persisted_count": 1,
+                    "persistence_validation": {
+                        "persisted_items": [{"job_id": job_id, "operation": "created"}]
+                    },
+                },
+                ensure_ascii=False,
+            )
 
     class QueryTool:
         def invoke(self, arguments):
@@ -445,16 +457,16 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
     result = workflow.run("최근 AI 개발자 공고 찾아줘")
 
     assert result["run_status"] == "completed"
-    assert collection_tool.calls == [
-        {
-            "query": "AI 개발자",
-            "site": "wanted",
-            "posted_from": "2026-06-01",
-            "posted_to": "2026-07-14",
-        }
-    ]
+    assert len(collection_tool.calls) == 1
+    assert collection_tool.calls[0]["query"] == "AI 개발자"
+    assert collection_tool.calls[0]["site"] == "wanted"
+    assert collection_tool.calls[0]["posted_from"] == "2026-06-01"
+    assert collection_tool.calls[0]["posted_to"] == "2026-07-14"
+    assert collection_tool.calls[0]["original_query"] == "최근 AI 개발자 공고 찾아줘"
+    assert collection_tool.calls[0]["freshness_required"] is True
     assert result["valid_ids"] == [1]
     assert result["final_answer"] == "공고를 확인했습니다 [job_id:1]"
+    assert result["investigation"]["collection_document_ids"] == [1]
 
 
 def test_chat_service_uses_investigation_workflow_for_production_path():
@@ -486,3 +498,122 @@ def test_chat_service_uses_investigation_workflow_for_production_path():
     assert result["run_status"] == "waiting_input"
     assert result["investigation_id"] == "investigation-1"
     assert result["clarification"]["field"] == "recent_period"
+
+
+def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
+    from agent.graph.investigation_workflow import _normalized_collection_steps
+
+    investigation = InvestigationRequest(
+        investigation_id="plan-normalization",
+        original_query="최근 3개월 서울 AI 개발자 트렌드",
+        objective="최근과 이전 기간의 요구 기술 비교",
+        purpose=InvestigationPurpose.TREND,
+        constraints=InvestigationConstraints(
+            search_keywords=["AI 개발자"],
+            sites=["wanted"],
+            count_mode="visible_all",
+            location="서울",
+        ),
+        evidence_requirements=[
+            EvidenceRequirement(
+                requirement_id="current",
+                description="최근 기간",
+                search_keywords=["AI 개발자"],
+                posted_from="2026-04-14",
+                posted_to="2026-07-14",
+            )
+        ],
+    )
+    plan = InvestigationActionPlan(
+        steps=[
+            InvestigationPlanStep(
+                step_id="collect-current",
+                action="최근 공고 수집",
+                tool_name="realtime_scraping",
+                arguments={"site": "wanted"},
+                expected_evidence=["current"],
+            )
+        ]
+    )
+
+    steps = _normalized_collection_steps(
+        plan,
+        investigation,
+        [
+            {
+                "tool_name": "realtime_scraping:wanted",
+                "purpose": "원티드 수집",
+            }
+        ],
+    )
+
+    assert len(steps) == 1
+    assert steps[0].arguments == {
+        "query": "AI 개발자",
+        "site": "wanted",
+        "original_query": "최근 3개월 서울 AI 개발자 트렌드",
+        "count_mode": "visible_all",
+        "target_count": 0,
+        "posted_from": "2026-04-14",
+        "posted_to": "2026-07-14",
+        "experience": "",
+        "location": "서울",
+        "employment_type": "",
+        "freshness_required": True,
+        "purpose": "trend",
+        "analysis_goal": "최근과 이전 기간의 요구 기술 비교",
+        "task_category": "검색",
+    }
+
+
+def test_semantic_evidence_validation_keeps_only_matching_candidate():
+    from agent.graph.investigation_workflow import _apply_evidence_validation
+
+    investigation = InvestigationRequest(
+        investigation_id="semantic-validation",
+        original_query="서울 AI 개발자 공고",
+        constraints=InvestigationConstraints(location="서울"),
+        evidence_requirements=[
+            EvidenceRequirement(
+                requirement_id="seoul_ai",
+                description="서울 AI 개발자 공고",
+                minimum_count=1,
+            )
+        ],
+    )
+    report = {
+        "total_db_rows": 2,
+        "requirements": [
+            {
+                "requirement_id": "seoul_ai",
+                "description": "서울 AI 개발자 공고",
+                "matching_count": 2,
+                "verified_posted_at_count": 0,
+                "field_coverage": {},
+                "document_ids": [1, 2],
+                "candidates": [
+                    {"document_id": 1, "position": "AI 개발자", "location": "서울"},
+                    {"document_id": 2, "position": "영업 담당자", "location": "부산"},
+                ],
+                "sufficient": True,
+                "missing": [],
+            }
+        ],
+    }
+
+    validated = _apply_evidence_validation(
+        report,
+        investigation,
+        EvidenceValidation(
+            decisions=[
+                RequirementEvidenceDecision(
+                    requirement_id="seoul_ai",
+                    matching_document_ids=[1, 999],
+                )
+            ]
+        ),
+    )
+
+    assert validated["sufficient"] is True
+    assert validated["document_ids"] == [1]
+    assert validated["requirements"][0]["document_ids"] == [1]

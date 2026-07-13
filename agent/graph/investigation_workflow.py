@@ -21,6 +21,7 @@ from agent.prompts.investigation import (
     action_plan_prompt,
     answer_prompt,
     evidence_plan_prompt,
+    evidence_validation_prompt,
     request_analysis_prompt,
 )
 from agent.tools.realtime_scraping import realtime_scraping
@@ -28,10 +29,12 @@ from agent.tools.sqlite_query import sqlite_query
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     EvidencePlan,
+    EvidenceValidation,
     InvestigationActionPlan,
     InvestigationRequest,
     InvestigationStatus,
     RequestAnalysis,
+    InvestigationPlanStep,
 )
 
 
@@ -57,11 +60,13 @@ class InvestigationModels:
         analysis_model: Any = None,
         evidence_model: Any = None,
         action_model: Any = None,
+        validation_model: Any = None,
         answer_model: Any = None,
     ):
         self.analysis_model = analysis_model
         self.evidence_model = evidence_model
         self.action_model = action_model
+        self.validation_model = validation_model
         self.answer_model = answer_model
 
     def analysis(self) -> Any:
@@ -91,6 +96,15 @@ class InvestigationModels:
             )
         return self.action_model
 
+    def validation(self) -> Any:
+        if self.validation_model is None:
+            from agent.application.model_clients import get_structured_google_model
+
+            self.validation_model = get_structured_google_model(
+                "gemini-3.5-flash", EvidenceValidation, temperature=0.0
+            )
+        return self.validation_model
+
     def answer(self) -> Any:
         if self.answer_model is None:
             from agent.application.model_clients import get_google_chat_model
@@ -118,6 +132,172 @@ def _message_text(value: Any) -> str:
             for item in content
         )
     return str(content or "")
+
+
+def _normalized_collection_steps(
+    plan: InvestigationActionPlan,
+    investigation: InvestigationRequest,
+    capability_catalog: list[dict[str, Any]],
+) -> list[InvestigationPlanStep]:
+    """LLM이 선택한 단계에 이미 확정된 요청 조건을 빠짐없이 전달한다."""
+
+    allowed_sites = {
+        str(item.get("tool_name") or "").split(":", 1)[1]
+        for item in capability_catalog
+        if str(item.get("tool_name") or "").startswith("realtime_scraping:")
+    }
+    requirements = {
+        item.requirement_id: item for item in investigation.evidence_requirements
+    }
+    normalized: list[InvestigationPlanStep] = []
+    signatures: set[str] = set()
+    for step in plan.steps:
+        if step.tool_name != "realtime_scraping":
+            continue
+        arguments = dict(step.arguments)
+        site = str(arguments.get("site") or "").strip()
+        if not site and len(investigation.constraints.sites) == 1:
+            site = investigation.constraints.sites[0]
+        if not site or site not in allowed_sites:
+            continue
+
+        requirement = next(
+            (
+                requirements[requirement_id]
+                for requirement_id in step.expected_evidence
+                if requirement_id in requirements
+            ),
+            None,
+        )
+        search_keywords = (
+            requirement.search_keywords
+            if requirement and requirement.search_keywords
+            else investigation.constraints.search_keywords
+        )
+        query = str(arguments.get("query") or (search_keywords[0] if search_keywords else "")).strip()
+        if not query:
+            continue
+        posted_from = str(
+            arguments.get("posted_from")
+            or (requirement.posted_from if requirement else "")
+            or investigation.constraints.posted_from
+        )
+        posted_to = str(
+            arguments.get("posted_to")
+            or (requirement.posted_to if requirement else "")
+            or investigation.constraints.posted_to
+        )
+        arguments.update(
+            {
+                "query": query,
+                "site": site,
+                "original_query": investigation.original_query,
+                "count_mode": investigation.constraints.count_mode,
+                "target_count": investigation.constraints.target_count,
+                "posted_from": posted_from,
+                "posted_to": posted_to,
+                "experience": investigation.constraints.experience,
+                "location": investigation.constraints.location,
+                "employment_type": investigation.constraints.employment_type,
+                "freshness_required": bool(
+                    arguments.get("freshness_required")
+                    or posted_from
+                    or posted_to
+                ),
+                "purpose": investigation.purpose.value,
+                "analysis_goal": investigation.objective,
+                "task_category": "검색",
+            }
+        )
+        signature = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+        if signature in signatures:
+            continue
+        signatures.add(signature)
+        normalized.append(step.model_copy(update={"arguments": arguments}))
+        if len(normalized) >= 4:
+            break
+    return normalized
+
+
+def _needs_semantic_evidence_validation(investigation: InvestigationRequest) -> bool:
+    constraints = investigation.constraints
+    return bool(
+        constraints.location
+        or constraints.experience
+        or constraints.employment_type
+        or len(investigation.evidence_requirements) > 1
+        or investigation.purpose.value in {"compare", "trend"}
+    )
+
+
+def _apply_evidence_validation(
+    report: dict[str, Any],
+    investigation: InvestigationRequest,
+    validation: EvidenceValidation,
+) -> dict[str, Any]:
+    """모델 판단을 후보 집합 안에서만 허용하고 충분성을 다시 계산한다."""
+
+    requirements = {
+        item.requirement_id: item for item in investigation.evidence_requirements
+    }
+    decisions = {
+        item.requirement_id: set(item.matching_document_ids)
+        for item in validation.decisions
+    }
+    all_document_ids: set[int] = set()
+    reports: list[dict[str, Any]] = []
+    for item in report.get("requirements", []):
+        requirement = requirements.get(str(item.get("requirement_id") or ""))
+        if requirement is None:
+            continue
+        candidates = {
+            int(candidate["document_id"]): candidate
+            for candidate in item.get("candidates", [])
+        }
+        accepted_ids = sorted(decisions.get(requirement.requirement_id, set()) & candidates.keys())
+        accepted = [candidates[document_id] for document_id in accepted_ids]
+        all_document_ids.update(accepted_ids)
+        missing: list[str] = []
+        if len(accepted) < requirement.minimum_count:
+            missing.append(f"의미 조건을 만족하는 표본 {requirement.minimum_count - len(accepted)}건 부족")
+        field_coverage = {
+            field: sum(
+                1
+                for candidate in accepted
+                if candidate.get("field_presence", {}).get(field)
+            )
+            for field in requirement.required_fields
+        }
+        for field in requirement.required_fields:
+            if field_coverage.get(field, 0) < requirement.minimum_count:
+                missing.append(f"{field} 근거 부족")
+        verified_dates = sum(1 for candidate in accepted if candidate.get("posted_at"))
+        if (requirement.posted_from or requirement.posted_to) and verified_dates < requirement.minimum_count:
+            missing.append("검증된 게시일 근거 부족")
+        reports.append(
+            {
+                **item,
+                "matching_count": len(accepted),
+                "verified_posted_at_count": verified_dates,
+                "field_coverage": field_coverage,
+                "document_ids": accepted_ids,
+                "sufficient": not missing,
+                "missing": list(dict.fromkeys(missing)),
+            }
+        )
+    missing_evidence = [
+        f"{item['description']}: {reason}"
+        for item in reports
+        for reason in item["missing"]
+    ]
+    return {
+        **report,
+        "requirements": reports,
+        "sufficient": bool(reports) and all(item["sufficient"] for item in reports),
+        "document_ids": sorted(all_document_ids),
+        "missing_evidence": missing_evidence,
+        "semantic_validation": "llm",
+    }
 
 
 class InvestigationWorkflow:
@@ -265,6 +445,29 @@ class InvestigationWorkflow:
             investigation.evidence_requirements,
             investigation.constraints,
         )
+        if _needs_semantic_evidence_validation(investigation) and any(
+            item.get("candidates") for item in report.get("requirements", [])
+        ):
+            validation = _model_payload(
+                invoke_with_metrics(
+                    self.models.validation(),
+                    [
+                        SystemMessage(content=evidence_validation_prompt()),
+                        HumanMessage(
+                            content=json.dumps(
+                                {
+                                    "request": investigation.model_dump(mode="json"),
+                                    "candidate_groups": report.get("requirements", []),
+                                },
+                                ensure_ascii=False,
+                            )
+                        ),
+                    ],
+                    "investigation_evidence_validation",
+                ),
+                EvidenceValidation,
+            )
+            report = _apply_evidence_validation(report, investigation, validation)
         updated = investigation.model_copy(
             update={
                 "evidence_snapshot": report,
@@ -323,7 +526,11 @@ class InvestigationWorkflow:
             ),
             InvestigationActionPlan,
         )
-        allowed_steps = [step for step in plan.steps if step.tool_name == "realtime_scraping"][:4]
+        allowed_steps = _normalized_collection_steps(
+            plan,
+            investigation,
+            state["capability_catalog"],
+        )
         updated = investigation.model_copy(
             update={
                 "plan": allowed_steps,
@@ -359,6 +566,16 @@ class InvestigationWorkflow:
         except json.JSONDecodeError:
             parsed_result = {"raw_result": str(raw_result)}
         executed = [*investigation.executed_step_ids, step.step_id]
+        persistence_validation = (
+            parsed_result.get("persistence_validation", {})
+            if isinstance(parsed_result, dict)
+            else {}
+        )
+        observed_ids = {
+            int(item["job_id"])
+            for item in persistence_validation.get("persisted_items", [])
+            if isinstance(item, dict) and item.get("job_id") is not None
+        }
         steps = [
             item.model_copy(update={"status": "completed"}) if item.step_id == step.step_id else item
             for item in investigation.plan
@@ -366,6 +583,9 @@ class InvestigationWorkflow:
         updated = investigation.model_copy(
             update={
                 "executed_step_ids": executed,
+                "collection_document_ids": sorted(
+                    set(investigation.collection_document_ids) | observed_ids
+                ),
                 "plan": steps,
                 "status": InvestigationStatus.VALIDATING,
             }

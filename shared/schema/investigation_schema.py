@@ -154,6 +154,7 @@ class InvestigationRequest(BaseModel):
     plan: list[InvestigationPlanStep] = Field(default_factory=list)
     executed_step_ids: list[str] = Field(default_factory=list)
     evidence_document_ids: list[int] = Field(default_factory=list)
+    collection_document_ids: list[int] = Field(default_factory=list)
     final_answer: str = ""
 
 
@@ -182,6 +183,20 @@ class InvestigationActionPlan(BaseModel):
     cannot_proceed_reason: str = ""
 
 
+class RequirementEvidenceDecision(BaseModel):
+    """한 근거 집단에 실제로 포함되는 DB 문서 판단."""
+
+    requirement_id: str = Field(min_length=1)
+    matching_document_ids: list[int] = Field(default_factory=list)
+    reason: str = ""
+
+
+class EvidenceValidation(BaseModel):
+    """의미 조건을 고려한 근거 집단 검증 결과."""
+
+    decisions: list[RequirementEvidenceDecision] = Field(default_factory=list)
+
+
 __all__ = [
     "ClarificationAnswer",
     "ClarificationOption",
@@ -195,5 +210,7 @@ __all__ = [
     "InvestigationActionPlan",
     "EvidencePlan",
     "RequestAnalysis",
+    "EvidenceValidation",
+    "RequirementEvidenceDecision",
     "ToolCapability",
 ]

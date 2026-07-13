@@ -328,7 +328,7 @@ def test_realtime_scraping_reuses_structured_search_intent(monkeypatch):
     assert result["search_intent"]["source"] == "structured_arguments"
 
 
-def test_realtime_scraping_keeps_collection_intent_out_of_worker_prompt(monkeypatch):
+def test_realtime_scraping_passes_confirmed_collection_constraints_to_worker(monkeypatch):
     from agent.tools import realtime_scraping as rt
 
     captured = {}
@@ -365,8 +365,11 @@ def test_realtime_scraping_keeps_collection_intent_out_of_worker_prompt(monkeypa
     assert captured["recipe_params"]["count_mode"] == "visible_all"
     assert captured["recipe_params"]["collection_intent"]["purpose"] == "compare"
     assert "Collect every relevant job card visible" in captured["goal"]
-    assert "Structured user request" not in captured["goal"]
-    assert "analysis_goal=회사별 요구 기술 비교" not in captured["goal"]
+    assert "[Confirmed collection constraints]" in captured["goal"]
+    assert '"posted_date_expression": "지난달"' in captured["goal"]
+    assert '"location": "서울"' in captured["goal"]
+    assert "purpose=compare" in captured["goal"]
+    assert "analysis_goal=회사별 요구 기술 비교" in captured["goal"]
 
 
 def test_worker_review_retries_are_disabled_by_default(monkeypatch):

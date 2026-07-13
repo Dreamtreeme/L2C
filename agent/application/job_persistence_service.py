@@ -130,6 +130,9 @@ def persist_collected_data_with_report(
         job_list = [extracted_jd] if extracted_jd else []
 
     persisted_count = 0
+    created_count = 0
+    updated_count = 0
+    persisted_items: list[dict[str, Any]] = []
     rejected_items: list[dict[str, Any]] = []
     for index, job in enumerate(job_list):
         if not isinstance(job, dict) or not job:
@@ -170,8 +173,22 @@ def persist_collected_data_with_report(
                     ", ".join(issues),
                 )
                 continue
-            db.upsert(url=url, data=dump_model(job_posting))
+            existed = db.exists(str(url))
+            job_id = db.upsert(url=url, data=dump_model(job_posting))
             persisted_count += 1
+            if existed:
+                updated_count += 1
+            else:
+                created_count += 1
+            persisted_items.append(
+                {
+                    "job_id": int(job_id),
+                    "url": job_posting.url or str(url),
+                    "company_name": job_posting.company_name or "",
+                    "position": job_posting.position or "",
+                    "operation": "updated" if existed else "created",
+                }
+            )
             logger.info(
                 "[job_persistence] Upserted job #%s: %s - %s",
                 index,
@@ -191,6 +208,9 @@ def persist_collected_data_with_report(
     return {
         "submitted_count": len(job_list),
         "persisted_count": persisted_count,
+        "created_count": created_count,
+        "updated_count": updated_count,
+        "persisted_items": persisted_items,
         "rejected_count": len(rejected_items),
         "rejected_items": rejected_items,
     }

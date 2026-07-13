@@ -170,6 +170,32 @@ def test_pre_persistence_validation_rejects_missing_identity_and_date_mismatch(m
     assert "requested_filter_mismatch:posted_at_before_range" in result["rejected_items"][1]["issues"]
 
 
+def test_persistence_report_distinguishes_created_and_updated_jobs(monkeypatch, tmp_path):
+    from agent.application.job_persistence_service import persist_collected_data_with_report
+
+    monkeypatch.setattr("shared.config.DB_PATH", tmp_path / "jobs.db")
+    payload = {
+        "공고목록": [
+            {
+                "url": "https://example.com/jobs/scope-1",
+                "company_name": "범위회사",
+                "position": "백엔드 개발자",
+            }
+        ]
+    }
+
+    created = persist_collected_data_with_report(payload, "백엔드 개발자")
+    updated = persist_collected_data_with_report(payload, "백엔드 개발자")
+
+    assert created["created_count"] == 1
+    assert created["updated_count"] == 0
+    assert created["persisted_items"][0]["operation"] == "created"
+    assert updated["created_count"] == 0
+    assert updated["updated_count"] == 1
+    assert updated["persisted_items"][0]["operation"] == "updated"
+    assert created["persisted_items"][0]["job_id"] == updated["persisted_items"][0]["job_id"]
+
+
 def test_persistence_pipeline(tmp_path):
     print("=== [테스트 시작] 전처리 및 DB 적재 파이프라인 검증 ===")
     test_db_path = tmp_path / "test_jobs.db"

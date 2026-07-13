@@ -124,6 +124,25 @@ def inspect_job_evidence(
                 "field_coverage": field_coverage,
                 "site_counts": dict(Counter(str(row["source_platform"] or "unknown") for row in matched)),
                 "document_ids": [int(row["id"]) for row in matched],
+                "candidates": [
+                    {
+                        "document_id": int(row["id"]),
+                        "company_name": str(row["company_name"] or ""),
+                        "position": str(row["position"] or ""),
+                        "job_category": str(row["job_category"] or ""),
+                        "experience": str(row["experience_text"] or ""),
+                        "employment_type": str(row["employment_type"] or ""),
+                        "location": str(row["location"] or ""),
+                        "posted_at": str(row["posted_at"] or ""),
+                        "source_platform": str(row["source_platform"] or ""),
+                        "field_presence": {
+                            field: bool(str(row[field] or "").strip())
+                            for field in requirement.required_fields
+                            if field in EVIDENCE_FIELDS
+                        },
+                    }
+                    for row in matched
+                ],
                 "sufficient": not missing,
                 "missing": missing,
             }
