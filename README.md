@@ -76,9 +76,10 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 [Chat UI → FastAPI]
     ↓
 [ChatService — 사용자 진입점의 단일 지휘자]
-  ├─ SQLite 조회로 기존 DB 근거 확인
-  ├─ 부족할 때만 사이트 프로필 선택 후 realtime_scraping 호출
-  └─ 최종 답변 생성 및 job_id 인용 검증
+  요청 이해 → 중요한 모호성 확인 → 객관식 사용자 질문
+  → 답변에 필요한 근거 정의 → SQLite 충분성 검사
+  → 부족한 근거의 수집 행동계획 → 계획된 도구만 실행
+  → 의미 조건·게시일 검증 → 최종 답변 및 job_id 인용 검증
     ↓
 [CollectionService — 수집 실행 생명주기]
   Worker 실행 → 제출물 검토 → 승인 데이터 저장
@@ -95,6 +96,8 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     ↓
 [제출물 검토 → 승인 데이터 SQLite 저장 → ChatService 답변]
 ```
+
+지휘자는 `agent/graph/investigation_workflow.py`의 LangGraph로 실행됩니다. 확인 질문이 남아 있으면 DB와 브라우저 도구를 호출하지 않고 `waiting_input`으로 중단하며, 사용자의 선택은 SQLite 조사 상태에 반영되어 다음 질문 또는 근거 검사 단계부터 재개됩니다. 사이트·날짜·개수·분석 목적은 실행 전에 확정된 행동계획에서만 수집 worker로 전달됩니다.
 
 Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. 사용자 지휘, 작업자 실행, 상세 정제, DB 적재는 `agent/application/` 서비스가 담당합니다.
 

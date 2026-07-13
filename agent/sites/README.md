@@ -17,7 +17,7 @@ Files per site:
 - `prompt.md`: short child-agent instruction block for that site.
 - `tools.json`: allowed tool policy and Reflex boundaries.
 
-`ChatService` is the canonical user-facing orchestrator. It asks these registry tools which site profile to use and invokes `realtime_scraping` only when DB evidence is insufficient. `agent.graph.commander_workflow` remains an explicitly invoked multi-site batch experiment; it is not selected by an environment-variable branch in the normal chat path.
+`ChatService` is the canonical user-facing orchestrator. `agent.graph.investigation_workflow` resolves material ambiguity, defines evidence requirements, checks DB coverage, and invokes `realtime_scraping` only through a validated action plan.
 
 ## 공식 시작 주소
 

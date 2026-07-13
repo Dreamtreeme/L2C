@@ -9,7 +9,11 @@ flowchart TD
     U[사용자] --> UI[Chat UI]
     UI --> API[FastAPI]
     API --> CS[ChatService]
-    CS --> DBQ[SQLite 조회]
+    CS --> PLAN[Investigation LangGraph]
+    PLAN --> CLARIFY{중요한 조건이 확정됐는가?}
+    CLARIFY -->|아니오| INPUT[객관식 확인 질문 및 중단]
+    INPUT --> UI
+    CLARIFY -->|예| DBQ[SQLite 근거 충분성 검사]
     DBQ -->|근거가 충분함| ANSWER[답변 및 인용 검증]
     DBQ -->|추가 수집 필요| TOOL[realtime_scraping 도구]
     TOOL --> LOCK[단일 Worker 실행 세션]
@@ -22,7 +26,7 @@ flowchart TD
     ANSWER --> U
 ```
 
-`ChatService`가 사용자 진입점의 유일한 지휘자입니다. DB를 먼저 조회하고, 현재 데이터로 답할 수 없을 때만 사이트 프로필을 선택해 수집 도구를 호출합니다. CLI는 같은 서비스를 직접 호출하는 개발·복구용 어댑터일 뿐 별도 운영 경로가 아닙니다. `agent.graph.commander_workflow`는 명시적으로 실행하는 다중 사이트 배치 실험이며 사용자 요청을 환경변수로 우회시키는 기본 경로가 아닙니다.
+`ChatService`가 사용자 진입점의 유일한 지휘자이며 `agent.graph.investigation_workflow`를 실행합니다. 지휘자는 요청 이해, 확인 질문, 필요 근거 정의, DB 충분성 검사, 수집 계획, 결과 검증, 답변 순서로 진행합니다. CLI는 같은 서비스를 직접 호출하는 개발·복구용 어댑터일 뿐 별도 운영 경로가 아닙니다.
 
 ## 백엔드 요청 생명주기
 
@@ -32,7 +36,7 @@ flowchart TD
 4. UI는 문자 단위 가짜 스트리밍 대신 진행 이벤트와 최종 응답을 구분해 표시합니다.
 5. `GET /api/runs/{run_id}`로 최근 실행 상태와 최종 계측값을 다시 조회할 수 있습니다.
 
-실행 레지스트리는 단일 사용자 로컬 앱을 위한 메모리 저장소입니다. 프로세스 재시작 후 복구가 필요한 장기 작업 큐가 아니며, 영속 데이터는 SQLite 공고·제출물·레시피 테이블만 담당합니다.
+실행 레지스트리는 단일 사용자 로컬 앱을 위한 메모리 저장소입니다. 실행 진행 이벤트는 프로세스 재시작 후 복구하지 않지만, 확인 질문과 확정 조건을 포함한 조사 상태는 SQLite `investigation_sessions`에 저장합니다.
 
 ## Vision Worker
 
@@ -67,11 +71,12 @@ flowchart TD
 |---|---|---|
 | 진입점 | `agent/main.py`, `agent/web_server.py` | CLI·HTTP 입력과 응답 |
 | 실행 계약 | `agent/application/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
-| 애플리케이션 | `agent/application/chat_service.py` | DB 우선 도구 호출과 최종 답변 |
+| 애플리케이션 | `agent/application/chat_service.py`, `investigation_store.py`, `evidence_service.py` | 조사 실행 진입, 확인 상태 저장, DB 근거 충분성 검사 |
 | 수집 조율 | `agent/application/collection_service.py` | 작업자 실행, 검토 재시도, 승인 데이터 저장 순서 |
 | 작업자 실행 | `agent/application/worker_execution_service.py` | 단일 작업자 직렬화, 그래프 실행, 브라우저 정리 |
 | 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 공고 정규화·UPSERT, 상세 OCR 최종 구조화 |
-| 그래프 | `agent/graph/workflow.py`, `state.py`, `state_factory.py` | LangGraph 연결과 WorkerState 계약 |
+| 지휘자 그래프 | `agent/graph/investigation_workflow.py` | 요청 이해, 확인 질문, 근거 계획, 도구 실행, 결과 검증 |
+| 작업자 그래프 | `agent/graph/workflow.py`, `state.py`, `state_factory.py` | Vision LangGraph 연결과 WorkerState 계약 |
 | 노드 | `agent/graph/nodes.py` | perception, reasoning, action 실행 |
 | 런타임 정책 | `agent/runtime/` | 전환 검증, 상세 버퍼, 카드 큐, Reflex 재생 |
 | 화면·입력 | `agent/tools/perception.py`, `som_engine.py`, `actions.py` | 화면/OCR/마커 생성과 물리 입력 |

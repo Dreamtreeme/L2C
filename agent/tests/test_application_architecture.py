@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
-def test_commander_prompt_includes_runtime_date_and_sufficiency_rules():
-    from agent.prompts.commander import build_qa_commander_system_prompt
+def test_investigation_prompts_include_runtime_date_and_evidence_rules():
+    from agent.prompts.investigation import evidence_plan_prompt, request_analysis_prompt
 
     now = datetime(
         2026,
@@ -16,15 +16,15 @@ def test_commander_prompt_includes_runtime_date_and_sufficiency_rules():
         30,
         tzinfo=timezone(timedelta(hours=9), name="KST"),
     )
-    prompt = build_qa_commander_system_prompt(now)
+    analysis_prompt = request_analysis_prompt(now)
+    evidence_prompt = evidence_plan_prompt(now)
 
-    assert "date=2026-07-13" in prompt
-    assert "datetime=2026-07-13T09:30:00+09:00" in prompt
-    assert "timezone=KST" in prompt
-    assert "verified_posted_at_count" in prompt
-    assert "created_at이 최근이어도 공고 게시일이 확인된 것은 아닙니다" in prompt
-    assert "검색어를 넓히거나 바꾸어 realtime_scraping을 다시 호출하지 마십시오" in prompt
-    assert "실시간 수집을 한 번 수행하십시오" in prompt
+    assert "2026-07-13" in analysis_prompt
+    assert "'최근', '요즘', '많이'" in analysis_prompt
+    assert "도구도 호출하지 마십시오" in analysis_prompt
+    assert "posted_at" in evidence_prompt
+    assert "created_at은 로컬 수집 시각" in evidence_prompt
+    assert "트렌드는 현재 기간과 동일 길이의 이전 비교 기간" in evidence_prompt
 
 
 def test_run_context_collects_usage_steps_and_events():
@@ -98,16 +98,27 @@ def test_llm_cost_uses_external_exact_model_pricing(tmp_path):
 
 
 def test_chat_service_returns_run_contract_and_progress_events():
-    from langchain_core.messages import AIMessage
-
     from agent.application.chat_service import ChatService
+    from agent.application.run_context import emit_run_event
+    from agent.application.run_contracts import RunPhase, RunStatus
 
-    class FakeLLM:
-        def invoke(self, messages):
-            return AIMessage(content="DB 근거 답변", tool_calls=[])
+    class FakeWorkflow:
+        def run(self, query, **kwargs):
+            emit_run_event(
+                "run_completed",
+                RunPhase.COMPLETED,
+                "답변을 완료했습니다.",
+                status=RunStatus.COMPLETED,
+            )
+            return {
+                "investigation": {"investigation_id": "investigation-contract"},
+                "run_status": "completed",
+                "final_answer": "DB 근거 답변",
+                "valid_ids": [],
+            }
 
     events = []
-    result = ChatService(llm_with_tools=FakeLLM()).run(
+    result = ChatService(investigation_workflow=FakeWorkflow()).run(
         "질문",
         run_id="chat-contract-1",
         event_sink=events.append,
@@ -122,30 +133,36 @@ def test_chat_service_returns_run_contract_and_progress_events():
 
 
 def test_chat_service_returns_structured_clarification_without_collection():
-    from langchain_core.messages import AIMessage
-
     from agent.application.chat_service import ChatService
+    from agent.application.run_context import emit_run_event
+    from agent.application.run_contracts import RunPhase, RunStatus
 
-    class FakeLLM:
-        def invoke(self, messages):
-            return AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "request_clarification",
-                        "args": {
-                            "question": "AI 직무 중 개발과 기획 중 어느 쪽을 찾을까요?",
-                            "missing_fields": ["직무 범위"],
-                            "reason": "검색 결과가 크게 달라짐",
-                        },
-                        "id": "clarification-1",
-                        "type": "tool_call",
-                    }
-                ],
+    class FakeWorkflow:
+        def run(self, query, **kwargs):
+            clarification = {
+                "question_id": "job_scope",
+                "field": "job_scope",
+                "question": "AI 직무 중 개발과 기획 중 어느 쪽을 찾을까요?",
+                "missing_fields": ["직무 범위"],
+                "options": [],
+            }
+            emit_run_event(
+                "clarification_required",
+                RunPhase.CLARIFICATION,
+                clarification["question"],
+                status=RunStatus.WAITING_INPUT,
+                data=clarification,
             )
+            return {
+                "investigation": {"investigation_id": "investigation-clarification"},
+                "run_status": "waiting_input",
+                "final_answer": clarification["question"],
+                "valid_ids": [],
+                "clarification": clarification,
+            }
 
     events = []
-    result = ChatService(llm_with_tools=FakeLLM()).run(
+    result = ChatService(investigation_workflow=FakeWorkflow()).run(
         "AI 쪽 채용공고 찾아줘",
         run_id="chat-clarification-1",
         event_sink=events.append,
@@ -157,44 +174,6 @@ def test_chat_service_returns_structured_clarification_without_collection():
     assert result["last_action_result"] == "AI 직무 중 개발과 기획 중 어느 쪽을 찾을까요?"
     assert events[-1].event == "clarification_required"
     assert events[-1].status.value == "waiting_input"
-
-
-def test_chat_service_prioritizes_clarification_over_accidental_collection_call():
-    from langchain_core.messages import AIMessage
-
-    from agent.application.chat_service import ChatService
-
-    class FakeLLM:
-        def invoke(self, messages):
-            return AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "realtime_scraping",
-                        "args": {"query": "AI"},
-                        "id": "collection-1",
-                        "type": "tool_call",
-                    },
-                    {
-                        "name": "request_clarification",
-                        "args": {"question": "어느 AI 직무를 찾을까요?"},
-                        "id": "clarification-1",
-                        "type": "tool_call",
-                    },
-                ],
-            )
-
-    class FailingCollectionTool:
-        def invoke(self, args):
-            raise AssertionError("확인 질문 전에 수집 도구가 실행됨")
-
-    service = ChatService(llm_with_tools=FakeLLM())
-    service._tools["realtime_scraping"] = FailingCollectionTool()
-
-    result = service.run("AI 공고", run_id="clarification-priority")
-
-    assert result["run_status"] == "waiting_input"
-    assert result["last_action_result"] == "어느 AI 직무를 찾을까요?"
 
 
 def test_run_registry_tracks_progress_and_completion():
@@ -276,15 +255,15 @@ def test_chat_service_stops_before_llm_when_cancel_is_requested():
     from agent.application.chat_service import ChatService
     from agent.application.run_registry import get_run_registry
 
-    class FailingLLM:
-        def invoke(self, messages):
-            raise AssertionError("취소된 실행이 LLM을 호출함")
+    class FailingWorkflow:
+        def run(self, query, **kwargs):
+            raise AssertionError("취소된 실행이 조사 그래프를 호출함")
 
     registry = get_run_registry()
     registry.start("cancel-before-llm", "취소할 질문")
     registry.request_cancel("cancel-before-llm")
 
-    result = ChatService(llm_with_tools=FailingLLM()).run(
+    result = ChatService(investigation_workflow=FailingWorkflow()).run(
         "취소할 질문",
         run_id="cancel-before-llm",
     )
