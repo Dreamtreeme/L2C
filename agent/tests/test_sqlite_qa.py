@@ -121,6 +121,46 @@ def test_sqlite_query_preserves_posted_date_with_raw_text(setup_test_db, monkeyp
     assert "2026-07-12" in result
     assert "2026.07.12 등록" in result
     assert "토스에서 금융을 더 간편하게" in result
+    assert 'returned_count="1"' in result
+    assert 'verified_posted_at_count="1"' in result
+    assert 'oldest_posted_at="2026-07-12"' in result
+    assert 'newest_posted_at="2026-07-12"' in result
+
+
+def test_sqlite_query_reports_missing_posted_date_evidence(setup_test_db, monkeypatch):
+    import shared.config as cfg
+
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
+    from agent.tools.sqlite_query import sqlite_query
+
+    result = sqlite_query.invoke(
+        {
+            "sql_query": (
+                "SELECT id, url, company_name, position, raw_ocr_text "
+                "FROM jobs WHERE company_name = '카카오'"
+            )
+        }
+    )
+
+    assert 'returned_count="1"' in result
+    assert 'verified_posted_at_count="0"' in result
+    assert 'oldest_posted_at=""' in result
+
+
+def test_sqlite_query_empty_result_has_structured_evidence_summary(setup_test_db, monkeypatch):
+    import shared.config as cfg
+
+    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
+    from agent.tools.sqlite_query import sqlite_query
+
+    result = sqlite_query.invoke(
+        {"sql_query": "SELECT id, posted_at FROM jobs WHERE company_name = '없는회사'"}
+    )
+
+    assert result.startswith('<query_result returned_count="0"')
+    assert 'verified_posted_at_count="0"' in result
+    assert "검색 결과가 없습니다" in result
+    assert result.endswith("</query_result>")
 
 
 def test_realtime_scraping_tool(setup_test_db, monkeypatch):

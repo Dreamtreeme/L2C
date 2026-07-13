@@ -1,7 +1,28 @@
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 
 import pytest
+
+
+def test_commander_prompt_includes_runtime_date_and_sufficiency_rules():
+    from agent.prompts.commander import build_qa_commander_system_prompt
+
+    now = datetime(
+        2026,
+        7,
+        13,
+        9,
+        30,
+        tzinfo=timezone(timedelta(hours=9), name="KST"),
+    )
+    prompt = build_qa_commander_system_prompt(now)
+
+    assert "date=2026-07-13" in prompt
+    assert "datetime=2026-07-13T09:30:00+09:00" in prompt
+    assert "timezone=KST" in prompt
+    assert "verified_posted_at_count" in prompt
+    assert "created_at이 최근이어도 공고 게시일이 확인된 것은 아닙니다" in prompt
 
 
 def test_run_context_collects_usage_steps_and_events():

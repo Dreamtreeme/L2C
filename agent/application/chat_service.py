@@ -9,7 +9,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-from agent.prompts.commander import QA_COMMANDER_SYSTEM_PROMPT
+from agent.prompts.commander import build_qa_commander_system_prompt
 from agent.application.run_context import (
     emit_run_event,
     invoke_with_metrics,
@@ -128,7 +128,7 @@ class ChatService:
             logger.info("Executing ChatService orchestrator loop")
             emit_run_event("planning_started", RunPhase.PLANNING, "질문을 분석하고 있습니다.")
             messages = [
-                SystemMessage(content=QA_COMMANDER_SYSTEM_PROMPT),
+                SystemMessage(content=build_qa_commander_system_prompt()),
                 HumanMessage(content=query),
             ]
             valid_ids: list[int] = []

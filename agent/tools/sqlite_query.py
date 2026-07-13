@@ -13,6 +13,32 @@ logger = logging.getLogger(__name__)
 MAX_RESULT_ROWS = 20
 MAX_CONTENT_CHARS = 4000
 
+
+def _query_result_summary(rows: list[sqlite3.Row], *, has_more: bool) -> dict[str, Any]:
+    """지휘자가 DB 증거의 개수와 게시일 범위를 빠르게 판단하도록 요약한다."""
+
+    row_dicts = [dict(row) for row in rows]
+    posted_dates = sorted(
+        str(row.get("posted_at"))
+        for row in row_dicts
+        if row.get("posted_at")
+    )
+    return {
+        "returned_count": len(row_dicts),
+        "has_more": has_more,
+        "verified_posted_at_count": len(posted_dates),
+        "oldest_posted_at": posted_dates[0] if posted_dates else "",
+        "newest_posted_at": posted_dates[-1] if posted_dates else "",
+    }
+
+
+def _query_result_opening_tag(summary: dict[str, Any]) -> str:
+    attributes = " ".join(
+        f'{key}="{escape(str(value).lower() if isinstance(value, bool) else str(value), quote=True)}"'
+        for key, value in summary.items()
+    )
+    return f"<query_result {attributes}>"
+
 @tool
 def sqlite_query(sql_query: str) -> str:
     """
@@ -71,11 +97,16 @@ def sqlite_query(sql_query: str) -> str:
         logger.error(f"[sqlite_query] Database query execution failed: {e}")
         return f"검색 오류: DB 쿼리 실행 실패. 에러 메시지: {e}"
 
-    if not rows:
-        return "검색 결과가 없습니다. 조건에 일치하는 채용 공고가 데이터베이스에 존재하지 않습니다."
-
     truncated_rows = len(rows) > MAX_RESULT_ROWS
     rows = rows[:MAX_RESULT_ROWS]
+    summary = _query_result_summary(rows, has_more=truncated_rows)
+    opening_tag = _query_result_opening_tag(summary)
+    if not rows:
+        return (
+            f"{opening_tag}\n"
+            "검색 결과가 없습니다. 조건에 일치하는 채용 공고가 데이터베이스에 존재하지 않습니다.\n"
+            "</query_result>"
+        )
 
     def xml_text(value: Any) -> str:
         return escape("" if value is None else str(value), quote=True)
@@ -134,4 +165,4 @@ def sqlite_query(sql_query: str) -> str:
             f"<notice>결과가 {MAX_RESULT_ROWS}건을 초과하여 상위 {MAX_RESULT_ROWS}건만 반환했습니다.</notice>"
         )
 
-    return "\n\n".join(context_parts)
+    return f"{opening_tag}\n" + "\n\n".join(context_parts) + "\n</query_result>"
