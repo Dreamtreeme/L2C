@@ -943,8 +943,15 @@ def test_web_server_api_endpoints(setup_test_db, monkeypatch):
     assert res_data["id"] == 1
     assert res_data["company_name"] == "토스"
     assert "position" in res_data
+
+    versions_response = client.get("/api/jobs/1/versions")
+    assert versions_response.status_code == 200
+    versions = versions_response.json()["versions"]
+    assert versions[0]["version_number"] == 1
+    assert len(versions[0]["evidence_hash"]) == 64
     
     # 2. 미존재 ID 조회 시 에러 응답 검증
     fail_response = client.get("/api/jobs/9999")
     assert fail_response.status_code == 200
     assert "error" in fail_response.json()
+    assert client.get("/api/jobs/9999/versions").status_code == 404

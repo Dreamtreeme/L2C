@@ -663,6 +663,7 @@ def test_detail_extraction_prompt_prioritizes_page_text_over_ocr_hints():
     assert "보조 근거로만 사용" in prompt
     assert "active_result_card" not in prompt
     assert "회사명은 로고" not in prompt
+    assert "evidence_hash는 출력하지 마십시오" in prompt
 
 
 def test_detail_extraction_request_keeps_card_metadata_as_fallback_only(monkeypatch):

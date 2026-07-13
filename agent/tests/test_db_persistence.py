@@ -109,6 +109,33 @@ def test_database_upsert_and_recent_list_include_posted_date(tmp_path):
     assert recent[0]["posted_at"] == "2026-07-11"
 
 
+def test_database_records_only_meaningful_job_versions(tmp_path):
+    db = Database(tmp_path / "versioned_jobs.db")
+    url = "https://example.com/jobs/versioned"
+    first = {
+        "company_name": "Acme",
+        "position": "Data Engineer",
+        "requirements": ["Python"],
+        "benefits": ["장비 지원"],
+        "raw_ocr_text": "첫 번째 공고 원문",
+        "content_hash": "stable-semantic-hash",
+        "source_platform": "Example",
+    }
+
+    job_id = db.upsert(url, first)
+    db.upsert(url, dict(first))
+
+    changed = {**first, "benefits": ["장비 지원", "재택근무"], "raw_ocr_text": "변경된 공고 원문"}
+    db.upsert(url, changed)
+    versions = db.list_versions(job_id)
+
+    assert [item["version_number"] for item in versions] == [2, 1]
+    assert versions[0]["evidence_hash"] != versions[1]["evidence_hash"]
+    assert {"benefits", "raw_ocr_text"} <= set(versions[0]["changed_fields"])
+    assert versions[0]["content"]["benefits"] == ["장비 지원", "재택근무"]
+    assert db.get(job_id)["evidence_hash"] == versions[0]["evidence_hash"]
+
+
 def test_persistence_pipeline(tmp_path):
     print("=== [테스트 시작] 전처리 및 DB 적재 파이프라인 검증 ===")
     test_db_path = tmp_path / "test_jobs.db"

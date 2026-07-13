@@ -20,7 +20,7 @@ def build_detail_extraction_system_prompt(base_instruction: str) -> str:
         "'3일 전'처럼 기준 날짜 없이는 확정할 수 없는 상대 표현은 posted_at_text에만 넣으십시오. "
         "게시일이 없으면 마감일이나 현재 날짜로 추정하지 말고 두 필드를 비워 두십시오. "
         "목록 필드는 핵심 항목만 간결하게 유지하십시오. "
-        "raw_ocr_text와 content_hash는 출력하지 마십시오. JSON 객체 하나만 출력하십시오."
+        "raw_ocr_text, content_hash, evidence_hash는 출력하지 마십시오. JSON 객체 하나만 출력하십시오."
     )
 
 

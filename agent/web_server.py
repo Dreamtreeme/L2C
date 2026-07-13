@@ -69,6 +69,17 @@ async def get_job_detail(job_id: int):
     }
 
 
+@app.get("/api/jobs/{job_id}/versions")
+async def get_job_versions(job_id: int):
+    """공고 내용이 바뀐 시점별 출처 스냅샷을 반환합니다."""
+    import shared.config as config
+
+    db = Database(config.DB_PATH)
+    if not db.get(job_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"job_id": job_id, "versions": db.list_versions(job_id)}
+
+
 @app.get("/api/runs/{run_id}")
 async def get_run_status(run_id: str):
     """최근 로컬 요청의 진행 상태와 실행 요약을 반환합니다."""

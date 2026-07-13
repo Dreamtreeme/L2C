@@ -45,7 +45,7 @@ def normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dic
                     "Normalize one raw job posting collected by a vision worker into the JobPosting schema. "
                     "Read field names in any language, including Korean. Preserve the original job URL. "
                     "Use empty strings or empty lists for unknown fields; do not invent missing facts. "
-                    "Do not compute content_hash."
+                    "Do not compute content_hash or evidence_hash."
                 )
             ),
             HumanMessage(

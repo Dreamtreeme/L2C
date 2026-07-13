@@ -276,6 +276,9 @@ class Preprocessor:
         deadline = cls.clean_text(raw_data.get("마감일") or raw_data.get("deadline")) or None
         salary = cls.clean_text(raw_data.get("연봉") or raw_data.get("salary")) or None
 
+        from shared.integrity import source_evidence_hash
+
+        evidence_hash = source_evidence_hash(url, raw_data)
         return JobPosting(
             company_name=company_name,
             position=position,
@@ -297,6 +300,7 @@ class Preprocessor:
             source_platform=source_platform,
             raw_ocr_text=raw_ocr_text,
             content_hash=content_hash,
+            evidence_hash=evidence_hash,
             experience_min=exp_min,
             experience_max=exp_max,
             experience_text=exp_text,
