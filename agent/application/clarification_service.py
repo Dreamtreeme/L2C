@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import re
 from datetime import date, timedelta
 
 from shared.schema.investigation_schema import (
@@ -24,16 +25,36 @@ def _subtract_months(value: date, months: int) -> date:
 
 def _resolve_period(value: str, today: date) -> tuple[date, date]:
     normalized = str(value or "").strip().upper()
-    if normalized == "P30D":
-        return today - timedelta(days=30), today
-    if normalized == "P3M":
-        return _subtract_months(today, 3), today
-    if normalized == "P6M":
-        return _subtract_months(today, 6), today
+    days_match = re.fullmatch(r"P(\d+)D", normalized)
+    if days_match:
+        return today - timedelta(days=int(days_match.group(1))), today
+    months_match = re.fullmatch(r"P(\d+)M", normalized)
+    if months_match:
+        return _subtract_months(today, int(months_match.group(1))), today
     if "/" in normalized:
         start_text, end_text = normalized.split("/", 1)
         return date.fromisoformat(start_text), date.fromisoformat(end_text)
     raise ValueError(f"지원하지 않는 기간 값입니다: {value}")
+
+
+def _is_period_value(value: str) -> bool:
+    normalized = str(value or "").strip().upper()
+    return bool(
+        re.fullmatch(r"P\d+[DM]", normalized)
+        or re.fullmatch(r"\d{4}-\d{2}-\d{2}/\d{4}-\d{2}-\d{2}", normalized)
+    )
+
+
+def _resolve_comparison_period(value: str) -> tuple[date, date, date, date]:
+    normalized = str(value or "").strip()
+    match = re.fullmatch(
+        r"current=(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2});"
+        r"comparison=(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})",
+        normalized,
+    )
+    if match is None:
+        raise ValueError("비교 기간 선택값에 현재 기간과 비교 기간이 필요합니다.")
+    return tuple(date.fromisoformat(item) for item in match.groups())
 
 
 def _selected_value(
@@ -81,20 +102,33 @@ def apply_clarification_answer(
     answers.append(resolved_answer)
 
     constraints = investigation.constraints.model_copy(deep=True)
-    if question.field == "recent_period":
+    if question.field == "recent_period" or (
+        question.field in {"posted_from", "posted_to"}
+        and _is_period_value(selected_value)
+    ):
         period_start, period_end = _resolve_period(selected_value, today or date.today())
         constraints.posted_from = period_start.isoformat()
         constraints.posted_to = period_end.isoformat()
         if investigation.purpose == InvestigationPurpose.TREND:
             comparison_end = period_start - timedelta(days=1)
-            if selected_value.upper() == "P3M":
-                comparison_start = _subtract_months(period_start, 3)
-            elif selected_value.upper() == "P6M":
-                comparison_start = _subtract_months(period_start, 6)
+            months_match = re.fullmatch(r"P(\d+)M", selected_value.upper())
+            if months_match:
+                comparison_start = _subtract_months(
+                    period_start,
+                    int(months_match.group(1)),
+                )
             else:
                 comparison_start = comparison_end - (period_end - period_start)
             constraints.comparison_posted_from = comparison_start.isoformat()
             constraints.comparison_posted_to = comparison_end.isoformat()
+    elif question.field == "comparison_period":
+        current_start, current_end, comparison_start, comparison_end = (
+            _resolve_comparison_period(selected_value)
+        )
+        constraints.posted_from = current_start.isoformat()
+        constraints.posted_to = current_end.isoformat()
+        constraints.comparison_posted_from = comparison_start.isoformat()
+        constraints.comparison_posted_to = comparison_end.isoformat()
     elif question.field == "site_scope":
         constraints.sites = [] if selected_value == "all_enabled" else [selected_value]
     elif question.field == "target_count":
@@ -104,11 +138,29 @@ def apply_clarification_answer(
         else:
             constraints.count_mode = "explicit"
             constraints.target_count = int(selected_value)
+    elif question.field in {"search_keywords", "analysis_dimensions", "sites"}:
+        setattr(constraints, question.field, [selected_value])
     elif hasattr(constraints, question.field):
         setattr(constraints, question.field, selected_value)
 
+    resolved_fields = {question.field}
+    if question.field in {"recent_period", "posted_from", "posted_to"}:
+        resolved_fields.update({"recent_period", "posted_from", "posted_to"})
+    elif question.field == "comparison_period":
+        resolved_fields.update(
+            {
+                "posted_from",
+                "posted_to",
+                "comparison_posted_from",
+                "comparison_posted_to",
+            }
+        )
+    elif question.field == "site_scope":
+        resolved_fields.add("sites")
+    elif question.field in {"trend_metric", "analysis_dimensions"}:
+        resolved_fields.update({"trend_metric", "analysis_dimensions"})
     unresolved_fields = [
-        item for item in investigation.unresolved_fields if item != question.field
+        item for item in investigation.unresolved_fields if item not in resolved_fields
     ]
     status = (
         InvestigationStatus.AWAITING_CLARIFICATION

@@ -91,6 +91,22 @@ class InvestigationConstraints(BaseModel):
     employment_type: str = ""
     analysis_dimensions: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def normalize_count_mode(self) -> "InvestigationConstraints":
+        mode = str(self.count_mode or "").strip().lower()
+        aliases = {
+            "all": "visible_all",
+            "every": "visible_all",
+            "limit": "explicit" if self.target_count > 0 else "unspecified",
+        }
+        mode = aliases.get(mode, mode)
+        if mode not in {"unspecified", "explicit", "visible_all"}:
+            mode = "explicit" if self.target_count > 0 else "unspecified"
+        if self.target_count > 0:
+            mode = "explicit"
+        self.count_mode = mode
+        return self
+
 
 class EvidenceRequirement(BaseModel):
     """최종 답변을 뒷받침하기 위해 필요한 자료."""
@@ -168,6 +184,32 @@ class RequestAnalysis(BaseModel):
     unresolved_fields: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unresolved_questions(self) -> "RequestAnalysis":
+        aliases = {
+            "recent_period": {"recent_period", "posted_from", "posted_to"},
+            "posted_from": {"recent_period", "comparison_period", "posted_from"},
+            "posted_to": {"recent_period", "comparison_period", "posted_to"},
+            "comparison_posted_from": {"comparison_period", "comparison_posted_from"},
+            "comparison_posted_to": {"comparison_period", "comparison_posted_to"},
+            "trend_metric": {"trend_metric", "analysis_dimensions"},
+            "analysis_dimensions": {"trend_metric", "analysis_dimensions"},
+            "site_scope": {"site_scope", "sites"},
+            "sites": {"site_scope", "sites"},
+        }
+        question_fields = {item.field for item in self.clarification_questions}
+        missing_questions = [
+            field
+            for field in self.unresolved_fields
+            if not (question_fields & aliases.get(field, {field}))
+        ]
+        if missing_questions:
+            raise ValueError(
+                "미확정 조건에는 대응하는 확인 질문이 필요합니다: "
+                + ", ".join(missing_questions)
+            )
+        return self
 
 
 class EvidencePlan(BaseModel):

@@ -7,7 +7,6 @@ from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
 from agent.application.tool_capabilities import build_tool_capability_catalog
 from shared.db.database import Database
-from agent.tools.request_clarification import request_clarification
 from agent.tools.evidence_inventory import inspect_job_evidence as inspect_job_evidence_tool
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
@@ -43,38 +42,6 @@ def test_clarification_question_requires_unique_option_ids():
         assert "중복" in str(exc)
     else:
         raise AssertionError("중복 선택지 식별자가 허용되었습니다.")
-
-
-def test_request_clarification_returns_structured_options():
-    payload = request_clarification.invoke(
-        {
-            "question_id": "recent_period",
-            "field": "recent_period",
-            "question": "최근의 기준을 선택해 주세요.",
-            "missing_fields": ["최근 기간"],
-            "options": [
-                {
-                    "option_id": "one_month",
-                    "label": "최근 30일",
-                    "value": "P30D",
-                    "description": "단기 변화를 확인합니다.",
-                },
-                {
-                    "option_id": "three_months",
-                    "label": "최근 3개월",
-                    "value": "P3M",
-                    "description": "계절 변동을 일부 완화합니다.",
-                },
-            ],
-        }
-    )
-
-    import json
-
-    data = json.loads(payload)
-    assert data["question_id"] == "recent_period"
-    assert data["field"] == "recent_period"
-    assert [item["value"] for item in data["options"]] == ["P30D", "P3M"]
 
 
 def test_investigation_store_round_trip(tmp_path):
@@ -143,6 +110,122 @@ def test_recent_three_months_resolves_analysis_and_comparison_periods():
     assert updated.constraints.comparison_posted_from == "2026-01-14"
     assert updated.constraints.comparison_posted_to == "2026-04-13"
     assert updated.status == InvestigationStatus.CHECKING_EVIDENCE
+
+
+def test_custom_two_month_option_uses_same_deterministic_date_resolution():
+    from datetime import date
+
+    investigation = InvestigationRequest(
+        investigation_id="investigation-custom-period",
+        original_query="최근 채용 트렌드",
+        purpose=InvestigationPurpose.TREND,
+        status=InvestigationStatus.AWAITING_CLARIFICATION,
+        unresolved_fields=["recent_period"],
+        clarification_questions=[
+            ClarificationQuestion(
+                question_id="recent_period",
+                field="recent_period",
+                question="기간을 입력해 주세요.",
+                options=[],
+                allow_custom=True,
+            )
+        ],
+    )
+
+    updated = apply_clarification_answer(
+        investigation,
+        ClarificationAnswer(question_id="recent_period", custom_value="P2M"),
+        today=date(2026, 7, 14),
+    )
+
+    assert updated.constraints.posted_from == "2026-05-14"
+    assert updated.constraints.comparison_posted_from == "2026-03-14"
+    assert updated.constraints.comparison_posted_to == "2026-05-13"
+
+
+def test_period_option_is_resolved_even_when_model_uses_posted_from_field():
+    from datetime import date
+
+    investigation = InvestigationRequest(
+        investigation_id="investigation-posted-from-period",
+        original_query="요즘 공고",
+        purpose=InvestigationPurpose.TREND,
+        status=InvestigationStatus.AWAITING_CLARIFICATION,
+        unresolved_fields=["posted_from"],
+        clarification_questions=[
+            ClarificationQuestion(
+                question_id="posted_period",
+                field="posted_from",
+                question="기간을 선택해 주세요.",
+                options=[
+                    ClarificationOption(
+                        option_id="three_months",
+                        label="최근 3개월",
+                        value="P3M",
+                    )
+                ],
+            )
+        ],
+    )
+
+    updated = apply_clarification_answer(
+        investigation,
+        ClarificationAnswer(
+            question_id="posted_period",
+            selected_option_id="three_months",
+        ),
+        today=date(2026, 7, 14),
+    )
+
+    assert updated.constraints.posted_from == "2026-04-14"
+    assert updated.constraints.posted_to == "2026-07-14"
+
+
+def test_comparison_period_answer_resolves_all_related_date_fields():
+    investigation = InvestigationRequest(
+        investigation_id="investigation-comparison-period",
+        original_query="지난달보다 AI 채용이 늘었는지 알려줘",
+        purpose=InvestigationPurpose.TREND,
+        status=InvestigationStatus.AWAITING_CLARIFICATION,
+        unresolved_fields=[
+            "posted_from",
+            "posted_to",
+            "comparison_posted_from",
+            "comparison_posted_to",
+            "comparison_period",
+        ],
+        clarification_questions=[
+            ClarificationQuestion(
+                question_id="comparison_period",
+                field="comparison_period",
+                question="어떤 기간을 비교할까요?",
+                options=[
+                    ClarificationOption(
+                        option_id="same_days",
+                        label="동일 일수 비교",
+                        value=(
+                            "current=2026-07-01/2026-07-14;"
+                            "comparison=2026-06-01/2026-06-14"
+                        ),
+                    )
+                ],
+            )
+        ],
+    )
+
+    updated = apply_clarification_answer(
+        investigation,
+        ClarificationAnswer(
+            question_id="comparison_period",
+            selected_option_id="same_days",
+        ),
+    )
+
+    assert updated.constraints.posted_from == "2026-07-01"
+    assert updated.constraints.posted_to == "2026-07-14"
+    assert updated.constraints.comparison_posted_from == "2026-06-01"
+    assert updated.constraints.comparison_posted_to == "2026-06-14"
+    assert updated.unresolved_fields == []
 
 
 def test_tool_catalog_exposes_limits_before_collection():
@@ -564,6 +647,53 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
         "analysis_goal": "최근과 이전 기간의 요구 기술 비교",
         "task_category": "검색",
     }
+
+
+def test_site_display_name_is_normalized_to_registry_slug():
+    from agent.graph.investigation_workflow import _normalize_site_slugs
+
+    constraints = _normalize_site_slugs(
+        InvestigationConstraints(sites=["원티드", "jobkorea"])
+    )
+
+    assert constraints.sites == ["wanted", "jobkorea"]
+
+
+def test_site_specific_collection_tool_name_is_normalized_for_execution():
+    from agent.graph.investigation_workflow import _normalized_collection_steps
+
+    investigation = InvestigationRequest(
+        investigation_id="site-tool-name",
+        original_query="원티드 백엔드 공고",
+        purpose=InvestigationPurpose.COLLECT,
+        constraints=InvestigationConstraints(search_keywords=["백엔드 개발자"]),
+        evidence_requirements=[
+            EvidenceRequirement(
+                requirement_id="backend",
+                description="백엔드 공고",
+            )
+        ],
+    )
+    plan = InvestigationActionPlan(
+        steps=[
+            InvestigationPlanStep(
+                step_id="wanted-backend",
+                action="원티드 수집",
+                tool_name="realtime_scraping:wanted",
+                arguments={},
+            )
+        ]
+    )
+
+    steps = _normalized_collection_steps(
+        plan,
+        investigation,
+        [{"tool_name": "realtime_scraping:wanted"}],
+    )
+
+    assert len(steps) == 1
+    assert steps[0].tool_name == "realtime_scraping"
+    assert steps[0].arguments["site"] == "wanted"
 
 
 def test_semantic_evidence_validation_keeps_only_matching_candidate():

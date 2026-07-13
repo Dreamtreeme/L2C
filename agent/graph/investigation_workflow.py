@@ -134,6 +134,35 @@ def _message_text(value: Any) -> str:
     return str(content or "")
 
 
+def _normalize_site_slugs(constraints):
+    """모델이 표시명을 반환해도 사이트 레지스트리 slug로 정규화한다."""
+
+    if not constraints.sites:
+        return constraints
+    try:
+        from agent.sites import list_supported_sites
+
+        aliases: dict[str, str] = {}
+        for entry in list_supported_sites(enabled_only=False):
+            slug = str(entry.get("slug") or "").strip()
+            values = [
+                slug,
+                str(entry.get("display_name") or ""),
+                *(str(item) for item in entry.get("domains", [])),
+            ]
+            for value in values:
+                if value.strip():
+                    aliases[value.strip().casefold()] = slug
+        normalized = [
+            aliases.get(str(value).strip().casefold(), str(value).strip())
+            for value in constraints.sites
+            if str(value).strip()
+        ]
+        return constraints.model_copy(update={"sites": list(dict.fromkeys(normalized))})
+    except Exception:
+        return constraints
+
+
 def _normalized_collection_steps(
     plan: InvestigationActionPlan,
     investigation: InvestigationRequest,
@@ -151,11 +180,16 @@ def _normalized_collection_steps(
     }
     normalized: list[InvestigationPlanStep] = []
     signatures: set[str] = set()
+    maximum_steps = len(allowed_sites) * max(1, len(requirements))
     for step in plan.steps:
-        if step.tool_name != "realtime_scraping":
+        tool_name = str(step.tool_name or "")
+        if tool_name != "realtime_scraping" and not tool_name.startswith(
+            "realtime_scraping:"
+        ):
             continue
         arguments = dict(step.arguments)
-        site = str(arguments.get("site") or "").strip()
+        site_from_tool = tool_name.split(":", 1)[1] if ":" in tool_name else ""
+        site = str(arguments.get("site") or site_from_tool).strip()
         if not site and len(investigation.constraints.sites) == 1:
             site = investigation.constraints.sites[0]
         if not site or site not in allowed_sites:
@@ -213,8 +247,12 @@ def _normalized_collection_steps(
         if signature in signatures:
             continue
         signatures.add(signature)
-        normalized.append(step.model_copy(update={"arguments": arguments}))
-        if len(normalized) >= 4:
+        normalized.append(
+            step.model_copy(
+                update={"tool_name": "realtime_scraping", "arguments": arguments}
+            )
+        )
+        if len(normalized) >= maximum_steps:
             break
     return normalized
 
@@ -356,7 +394,7 @@ class InvestigationWorkflow:
                 "objective": analysis.objective,
                 "deliverable": analysis.deliverable,
                 "purpose": analysis.purpose,
-                "constraints": analysis.constraints,
+                "constraints": _normalize_site_slugs(analysis.constraints),
                 "unresolved_fields": unresolved,
                 "assumptions": analysis.assumptions,
                 "clarification_questions": questions,
