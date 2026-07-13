@@ -98,12 +98,25 @@ class EvidenceRequirement(BaseModel):
     requirement_id: str = Field(min_length=1)
     description: str = Field(min_length=1)
     cohort: str = ""
+    search_keywords: list[str] = Field(default_factory=list)
     posted_from: str = ""
     posted_to: str = ""
     required_fields: list[str] = Field(default_factory=list)
     minimum_count: int = Field(default=1, ge=0, le=1000)
     required_sites: list[str] = Field(default_factory=list)
     reason: str = ""
+
+
+class ToolCapability(BaseModel):
+    """지휘자가 계획 전에 확인하는 도구 능력과 제약."""
+
+    tool_name: str = Field(min_length=1)
+    purpose: str = Field(min_length=1)
+    supported_operations: list[str] = Field(default_factory=list)
+    supported_filters: dict[str, str] = Field(default_factory=dict)
+    verifiable_fields: dict[str, str] = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+    expected_latency: str = ""
 
 
 class InvestigationPlanStep(BaseModel):
@@ -154,4 +167,5 @@ __all__ = [
     "InvestigationPurpose",
     "InvestigationRequest",
     "InvestigationStatus",
+    "ToolCapability",
 ]
