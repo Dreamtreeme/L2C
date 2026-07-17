@@ -6,8 +6,6 @@ import pytest
 from pathlib import Path
 
 from shared.db.database import Database
-from agent.graph.nodes import qa_reasoning_node
-from agent.graph.state import GraphState
 
 TEST_DB_PATH = Path("data/test_qa_jobs.db")
 
@@ -74,108 +72,6 @@ def setup_test_db(tmp_path_factory):
         os.remove(TEST_DB_PATH)
 
 
-def test_sqlite_query_tool(setup_test_db, monkeypatch):
-    # shared.config.DB_PATH 를 패치해도 sqlite_query 내부에서
-    # `from shared.config import DB_PATH` 로 이미 바인딩된 로컬 변수는 영향받지 않습니다.
-    # 실제로 쿼리가 참조하는 모듈 내 변수를 직접 패치해야 합니다.
-    import agent.tools.sqlite_query as sq_module
-    monkeypatch.setattr(sq_module, "DB_PATH", TEST_DB_PATH, raising=False)
-    import shared.config as cfg
-    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
-    from agent.tools.sqlite_query import sqlite_query
-    
-    # 1. 회사명 필터를 이용한 DB 조회 테스트
-    result = sqlite_query.invoke({"sql_query": "SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE company_name = '토스'"})
-    assert "<document id=" in result
-    assert "토스" in result
-    
-    # 2. 직무명 필터를 이용한 DB 조회 테스트
-    result_time = sqlite_query.invoke({"sql_query": "SELECT id, url, company_name, position, raw_ocr_text FROM jobs WHERE position LIKE '%Android%'"})
-    assert "<document id=" in result_time
-    assert "카카오" in result_time
-
-
-def test_sqlite_query_preserves_posted_date_with_raw_text(setup_test_db, monkeypatch):
-    import agent.tools.sqlite_query as sq_module
-    import shared.config as cfg
-
-    monkeypatch.setattr(sq_module, "DB_PATH", TEST_DB_PATH, raising=False)
-    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
-    with sqlite3.connect(TEST_DB_PATH) as conn:
-        conn.execute(
-            "UPDATE jobs SET posted_at = ?, posted_at_text = ? WHERE company_name = ?",
-            ("2026-07-12", "2026.07.12 등록", "토스"),
-        )
-
-    from agent.tools.sqlite_query import sqlite_query
-
-    result = sqlite_query.invoke(
-        {
-            "sql_query": (
-                "SELECT id, url, company_name, position, posted_at, posted_at_text, "
-                "raw_ocr_text FROM jobs WHERE company_name = '토스'"
-            )
-        }
-    )
-
-    assert "2026-07-12" in result
-    assert "2026.07.12 등록" in result
-    assert "토스에서 금융을 더 간편하게" in result
-    assert 'returned_count="1"' in result
-    assert 'verified_posted_at_count="1"' in result
-    assert 'oldest_posted_at="2026-07-12"' in result
-    assert 'newest_posted_at="2026-07-12"' in result
-
-
-def test_sqlite_query_reports_missing_posted_date_evidence(setup_test_db, monkeypatch):
-    import shared.config as cfg
-
-    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
-    from agent.tools.sqlite_query import sqlite_query
-
-    result = sqlite_query.invoke(
-        {
-            "sql_query": (
-                "SELECT id, url, company_name, position, raw_ocr_text "
-                "FROM jobs WHERE company_name = '카카오'"
-            )
-        }
-    )
-
-    assert 'returned_count="1"' in result
-    assert 'verified_posted_at_count="0"' in result
-    assert 'oldest_posted_at=""' in result
-
-
-def test_sqlite_query_empty_result_has_structured_evidence_summary(setup_test_db, monkeypatch):
-    import shared.config as cfg
-
-    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
-    from agent.tools.sqlite_query import sqlite_query
-
-    result = sqlite_query.invoke(
-        {"sql_query": "SELECT id, posted_at FROM jobs WHERE company_name = '없는회사'"}
-    )
-
-    assert result.startswith('<query_result returned_count="0"')
-    assert 'verified_posted_at_count="0"' in result
-    assert "검색 결과가 없습니다" in result
-    assert result.endswith("</query_result>")
-
-
-def test_sqlite_query_authorizer_blocks_other_tables_and_unsafe_functions(setup_test_db, monkeypatch):
-    import shared.config as cfg
-
-    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
-    from agent.tools.sqlite_query import sqlite_query
-
-    table_result = sqlite_query.invoke({"sql_query": "SELECT * FROM job_versions"})
-    function_result = sqlite_query.invoke({"sql_query": "SELECT load_extension('x')"})
-
-    assert "검색 오류" in table_result
-    assert "검색 오류" in function_result
-
-
 def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     """비전 자율 수집 그래프 stream을 mock하여 realtime_scraping 도구의 통합 로직을 검증합니다."""
     import shared.config as cfg
@@ -239,7 +135,7 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     assert row[0] == "테스트컴퍼니"
 
 
-def test_realtime_scraping_keeps_browser_after_run_by_default(setup_test_db, monkeypatch):
+def test_realtime_scraping_closes_browser_after_run_by_default(setup_test_db, monkeypatch):
     import agent.graph.nodes as nodes
 
     monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
@@ -266,7 +162,7 @@ def test_realtime_scraping_keeps_browser_after_run_by_default(setup_test_db, mon
     result = realtime_scraping.invoke({"company": "cleanup-test"})
 
     assert "cleanup-test" in result
-    assert closed == []
+    assert closed == ["close_browser"]
 
 
 def test_persistence_job_normalization_uses_llm(monkeypatch):
@@ -883,63 +779,6 @@ def test_go_back_releases_address_bar_focus_and_uses_browserback(monkeypatch):
 
     assert result["status"] == "success"
     assert calls == ["region", ("release_focus", 0.02), ("press", "browserback")]
-
-
-@pytest.mark.external
-@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
-def test_qa_reasoning_node_e2e(setup_test_db, monkeypatch):
-    import shared.config as cfg
-    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
-    
-    # realtime_scraping 도구 모킹하여 실제 브라우저 자동화 실행 방지
-    from langchain_core.tools import tool
-    @tool("realtime_scraping")
-    def mock_realtime_scraping(company: str = None, tech_stack: str = None, site: str = None, query: str = None) -> str:
-        """실시간 채용 공고를 수집하는 모킹 도구입니다."""
-        return f"실시간 수집 완료: '{query or company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
-    monkeypatch.setattr("agent.application.chat_service.realtime_scraping", mock_realtime_scraping)
-    monkeypatch.setattr("agent.application.chat_service._chat_service", None)
-    
-    # 1. 팩트 기반 질문 테스트
-    state = GraphState(goal="토스 iOS 개발자의 자격요건과 복지 혜택을 알려줘")
-    result = qa_reasoning_node(state)
-    answer = result.get("last_action_result", "")
-    
-    print("\n--- Commander SQLite Answer ---")
-    print(answer)
-    print("----------------------------")
-    
-    assert result.get("is_finished") is True
-    assert len(answer) > 0
-    # 인용 칩이 올바르게 생성되었거나 거절 문구가 생성되었는지 확인
-    assert "[job_id:" in answer or "찾을 수 없습니다" in answer or "확인되지 않음" in answer
-
-
-@pytest.mark.external
-@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="GEMINI_API_KEY not configured in env")
-def test_hallucination_rejection(setup_test_db, monkeypatch):
-    import shared.config as cfg
-    monkeypatch.setattr(cfg, "DB_PATH", TEST_DB_PATH)
-    
-    # realtime_scraping 도구 모킹하여 실제 브라우저 자동화 실행 방지
-    from langchain_core.tools import tool
-    @tool("realtime_scraping")
-    def mock_realtime_scraping(company: str = None, tech_stack: str = None, site: str = None, query: str = None) -> str:
-        """실시간 채용 공고를 수집하는 모킹 도구입니다."""
-        return f"실시간 수집 완료: '{query or company or tech_stack}'에 매칭되는 채용 정보를 찾지 못했습니다."
-    monkeypatch.setattr("agent.application.chat_service.realtime_scraping", mock_realtime_scraping)
-    monkeypatch.setattr("agent.application.chat_service._chat_service", None)
-    
-    # 2. 환각 거절 질문 테스트
-    state = GraphState(goal="스페이스X의 화성 탐사선 개발자 공고 우대사항을 알려줘")
-    result = qa_reasoning_node(state)
-    answer = result.get("last_action_result", "")
-    
-    print("\n--- Commander Rejection Answer ---")
-    print(answer)
-    print("----------------------------------")
-    
-    assert "찾을 수 없습니다" in answer or "확인되지 않음" in answer
 
 
 def test_web_server_api_endpoints(setup_test_db, monkeypatch):

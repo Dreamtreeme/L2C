@@ -101,20 +101,22 @@ def test_site_registry_profile_files_exist():
     from agent.sites.loader import SITES_DIR
 
     for entry in list_supported_sites(enabled_only=False):
-        for key in ("manual_path", "prompt_path", "tools_path"):
+        for key in ("manual_path", "skill_path", "tools_path"):
             path = SITES_DIR / entry[key]
             assert path.exists(), f"missing {key} for {entry['slug']}: {path}"
 
 
-def test_load_site_profile_returns_manual_prompt_and_tools():
+def test_load_site_profile_returns_manual_skill_and_tools():
     from agent.sites import load_site_profile
 
     profile = load_site_profile("wanted.co.kr")
 
     assert profile["entry"]["slug"] == "wanted"
     assert profile["manual"]["site"] == "wanted"
-    assert "원티드" in profile["prompt"]
+    assert "원티드" in profile["skill"]
     assert "click_marker" in profile["tools"]["allowed_tools"]
+    assert "finish_detail_reading" in profile["tools"]["allowed_tools"]
+    assert "set_result_card_queue" in profile["tools"]["allowed_tools"]
     assert profile["manual"]["reflex_policy"]["reason_after_hit"] is True
 
 
@@ -174,7 +176,7 @@ def test_commander_site_tools_expose_classic_sites():
     assert all(site["classic_adapter"] == site["slug"] for site in sites)
 
 
-def test_commander_site_profile_tool_returns_manual_prompt_and_tools():
+def test_commander_site_profile_tool_returns_manual_skill_and_tools():
     import json
     from agent.tools.site_registry import get_collection_site_profile
 
@@ -185,7 +187,27 @@ def test_commander_site_profile_tool_returns_manual_prompt_and_tools():
     assert data["site"]["classic_adapter"] == "jobkorea"
     assert data["manual"]["site"] == "jobkorea"
     assert "click_marker" in data["tools"]["allowed_tools"]
-    assert "JobKorea" in data["prompt"]
+    assert "잡코리아" in data["skill"]
+
+
+def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
+    from agent.sites import load_site_profile
+    from agent.tools.realtime_scraping import _build_site_goal
+
+    goal = _build_site_goal(
+        "AI 엔지니어",
+        load_site_profile("wanted"),
+        collection_intent={
+            "site": "wanted",
+            "search_keyword": "AI 엔지니어",
+            "count_mode": "visible_all",
+        },
+    )
+
+    assert "[선택된 사이트 스킬]" in goal
+    assert "원티드 채용공고 수집" in goal
+    assert "[사이트 공통 흐름]" not in goal
+    assert "[허용 도구]" not in goal
 
 def test_realtime_scraping_extracts_user_search_intent_with_llm(monkeypatch):
     from agent.sites import load_site_profile

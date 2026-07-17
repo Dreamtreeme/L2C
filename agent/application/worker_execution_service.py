@@ -278,7 +278,7 @@ def execute_worker_graph(
 def close_browser_after_run() -> None:
     """설정에 따라 작업 종료 후 브라우저 창만 닫고 OCR 작업자는 유지한다."""
 
-    if os.getenv("VISION_CLOSE_BROWSER_AFTER_RUN", "0").strip().lower() in {
+    if os.getenv("VISION_CLOSE_BROWSER_AFTER_RUN", "1").strip().lower() in {
         "0",
         "false",
         "no",

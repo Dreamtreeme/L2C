@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from shared.schema.agent_contract import EVIDENCE_FIELDS
 from shared.schema.investigation_schema import ToolCapability
 
 
@@ -24,11 +25,11 @@ def _site_capability(profile: dict[str, Any]) -> ToolCapability:
             "employment_type": str(declared.get("employment_type_filter") or "unknown"),
         },
         verifiable_fields={
+            **{field: "best_effort" for field in EVIDENCE_FIELDS},
             "company_name": "required",
             "position": "required",
             "url": "required",
             "posted_at": str(declared.get("posted_at_evidence") or "best_effort"),
-            "job_body": "best_effort",
         },
         limitations=[
             "첫 번째 안정적인 검색 결과 화면에 보이는 공고를 기준으로 수집합니다.",
@@ -58,15 +59,6 @@ def build_tool_capability_catalog() -> list[ToolCapability]:
                 "source_platform": "supported",
             },
             limitations=["created_at은 공고 게시일 근거로 사용할 수 없습니다."],
-            expected_latency="1초 이내",
-        ),
-        ToolCapability(
-            tool_name="sqlite_query",
-            purpose="충분성이 확인된 공고의 상세 내용 조회와 집계",
-            supported_operations=["select", "aggregate"],
-            supported_filters={"stored_fields": "supported"},
-            verifiable_fields={"job_id": "citation_source"},
-            limitations=["DB에 없는 사실은 확인할 수 없습니다."],
             expected_latency="1초 이내",
         ),
     ]

@@ -21,6 +21,7 @@ class CollectionCountMode(str, Enum):
 class CollectionPurpose(str, Enum):
     """수집한 공고를 사용하는 목적."""
 
+    LOOKUP = "lookup"
     COLLECT = "collect"
     COMPARE = "compare"
     TREND = "trend"

@@ -60,7 +60,7 @@ def _input_slots(feedback_episodes: list[dict[str, Any]], keyword: str, target_c
                     "name": name,
                     "description": normalize_text(candidate.get("reason")),
                     "observed_value": candidate.get("value"),
-                    "required": name in {"query", "keyword", "target_count"},
+                    "required": True,
                     "source": "parameter_candidates",
                 }
             )

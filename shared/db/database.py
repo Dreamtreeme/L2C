@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from shared.db.reflex_schema import REFLEX_MEMORY_SCHEMA
+from shared.db.search_taxonomy_schema import SEARCH_TAXONOMY_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,9 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 CREATE INDEX IF NOT EXISTS idx_recipes_site ON recipes(site);
 
-{REFLEX_MEMORY_SCHEMA}"""
+{REFLEX_MEMORY_SCHEMA}
+{SEARCH_TAXONOMY_SCHEMA}
+"""
 
 
 class Database:
@@ -100,6 +103,7 @@ class Database:
     def _conn(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             yield conn
             conn.commit()
@@ -144,6 +148,32 @@ class Database:
                     conn.execute("ALTER TABLE recipes ADD COLUMN metadata_json TEXT")
                 except sqlite3.OperationalError as e:
                     logger.debug(f"recipes.metadata_json 추가 건너뜀: {e}")
+
+            link_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(job_concept_links)").fetchall()
+            }
+            if "requirement_type" not in link_columns:
+                conn.execute(
+                    "ALTER TABLE job_concept_links "
+                    "ADD COLUMN requirement_type TEXT NOT NULL DEFAULT 'mentioned'"
+                )
+            if "minimum_months" not in link_columns:
+                conn.execute(
+                    "ALTER TABLE job_concept_links ADD COLUMN minimum_months INTEGER"
+                )
+
+            candidate_columns = {
+                row["name"]
+                for row in conn.execute(
+                    "PRAGMA table_info(search_term_candidates)"
+                ).fetchall()
+            }
+            for column in ("reviewed_at", "review_note", "accepted_concept_key"):
+                if column not in candidate_columns:
+                    conn.execute(
+                        f"ALTER TABLE search_term_candidates ADD COLUMN {column} TEXT"
+                    )
 
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_posted_at ON jobs(posted_at)")
@@ -190,9 +220,9 @@ class Database:
             "raw_ocr_text": data.get("raw_ocr_text"),
             "content_hash": data.get("content_hash"),
             "evidence_hash": evidence_hash,
-            "experience_min": data.get("experience_min", 0),
-            "experience_max": data.get("experience_max", 99),
-            "experience_text": data.get("experience_text", "경력 무관"),
+            "experience_min": data.get("experience_min"),
+            "experience_max": data.get("experience_max"),
+            "experience_text": data.get("experience_text"),
             "raw_json": json.dumps(data, ensure_ascii=False),
             "screenshot_path": screenshot_path,
             "ocr_text_path": ocr_text_path,

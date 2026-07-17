@@ -134,7 +134,15 @@ class OpenAIDetailExtractionLLM:
 
         schema = JobPosting.model_json_schema()
         properties = dict(schema.get("properties") or {})
-        for noisy_field in ("raw_ocr_text", "content_hash", "evidence_hash"):
+        for noisy_field in (
+            "url",
+            "source_platform",
+            "raw_ocr_text",
+            "content_hash",
+            "evidence_hash",
+            "experience_min",
+            "experience_max",
+        ):
             properties.pop(noisy_field, None)
         schema["properties"] = properties
         if isinstance(schema.get("required"), list):

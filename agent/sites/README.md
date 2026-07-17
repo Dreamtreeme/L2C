@@ -14,10 +14,10 @@ The intended flow is:
 Files per site:
 
 - `manual.json`: structured site strategy and known stable/variable UI concepts.
-- `prompt.md`: short child-agent instruction block for that site.
+- `SKILL.md`: 선택된 사이트 작업자에게만 주입하는 짧은 판단 지침.
 - `tools.json`: allowed tool policy and Reflex boundaries.
 
-`ChatService` is the canonical user-facing orchestrator. `agent.graph.investigation_workflow` resolves material ambiguity, defines evidence requirements, checks DB coverage, and invokes `realtime_scraping` only through a validated action plan.
+`ChatService` is the canonical user-facing orchestrator. `agent.graph.investigation_workflow` resolves material ambiguity, defines evidence requirements, checks DB coverage, and invokes `realtime_scraping` only through a validated action plan. 사이트 선택은 코드가 확정하며 LLM이 스킬 파일을 찾기 위한 별도 호출은 하지 않습니다.
 
 ## 공식 시작 주소
 

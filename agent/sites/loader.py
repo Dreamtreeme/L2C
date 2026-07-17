@@ -105,15 +105,15 @@ def _profile_path(entry: dict[str, Any], key: str) -> Path:
 
 
 def load_site_profile(site: str) -> dict[str, Any]:
-    """Load registry entry, structured manual, prompt text, and tool policy."""
+    """사이트 레지스트리, 실행 정책, 선택형 스킬 지침을 불러온다."""
     entry = get_site_entry(site)
     manual = _read_json(_profile_path(entry, "manual_path"))
     tools = _read_json(_profile_path(entry, "tools_path"))
-    prompt_path = _profile_path(entry, "prompt_path")
+    skill_path = _profile_path(entry, "skill_path")
     try:
-        prompt = prompt_path.read_text(encoding="utf-8")
+        skill = skill_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise SiteProfileError(f"Site prompt file not found: {prompt_path}") from exc
+        raise SiteProfileError(f"Site skill file not found: {skill_path}") from exc
 
     manual_site = str(manual.get("site", ""))
     if manual_site and manual_site != entry.get("slug"):
@@ -124,7 +124,7 @@ def load_site_profile(site: str) -> dict[str, Any]:
     return {
         "entry": entry,
         "manual": manual,
-        "prompt": prompt,
+        "skill": skill,
         "tools": tools,
     }
 

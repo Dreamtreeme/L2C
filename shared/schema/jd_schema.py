@@ -34,9 +34,9 @@ class JobPosting(BaseModel):
     raw_ocr_text: Optional[str] = Field(None, description="전처리 전 원천 OCR/SoM 텍스트 전체 백업")
     content_hash: Optional[str] = Field(None, description="회사명+직무명+자격요건 해시값 (SHA256)")
     evidence_hash: Optional[str] = Field(None, description="URL과 수집 원문의 무결성 해시(SHA256)")
-    experience_min: Optional[int] = Field(0, description="최소 경력 년수")
-    experience_max: Optional[int] = Field(99, description="최대 경력 년수")
-    experience_text: Optional[str] = Field("경력 무관", description="경력 정보 원문")
+    experience_min: Optional[int] = Field(None, description="최소 경력 년수")
+    experience_max: Optional[int] = Field(None, description="최대 경력 년수")
+    experience_text: Optional[str] = Field(None, description="경력 정보 원문")
 
     # LLM이 list/string 타입을 혼동하는 케이스를 스키마 레벨에서 흡수합니다.
     # classic(llm_engine) + vision(preprocessor) 두 파이프라인 공통 적용.

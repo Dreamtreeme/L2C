@@ -8,6 +8,8 @@
     "go_back",
     "update_plan_progress",
     "update_extracted_info",
+    "finish_detail_reading",
+    "set_result_card_queue",
     "finish_task",
     "close_browser"
   ],

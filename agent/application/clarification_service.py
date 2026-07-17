@@ -73,6 +73,21 @@ def _selected_value(
     raise ValueError("질문의 선택지와 일치하는 답변을 찾을 수 없습니다.")
 
 
+def _selected_option(
+    question: ClarificationQuestion,
+    answer: ClarificationAnswer,
+):
+    return next(
+        (
+            option
+            for option in question.options
+            if option.option_id == answer.selected_option_id
+            or (answer.value.strip() and option.value == answer.value.strip())
+        ),
+        None,
+    )
+
+
 def apply_clarification_answer(
     investigation: InvestigationRequest,
     answer: ClarificationAnswer,
@@ -138,40 +153,75 @@ def apply_clarification_answer(
         else:
             constraints.count_mode = "explicit"
             constraints.target_count = int(selected_value)
-    elif question.field in {"search_keywords", "analysis_dimensions", "sites"}:
+    elif question.field == "occupation_domain_concept_keys":
+        option = _selected_option(question, answer)
+        if answer.custom_value.strip():
+            constraints.occupation_domain_query = ""
+            constraints.occupation_domain_concept_keys = []
+            constraints.occupation_query = selected_value
+            constraints.collection_search_term = selected_value
+            constraints.occupation_concept_keys = []
+            constraints.occupation_scope_required = False
+            constraints.occupation_scope_mode = "unspecified"
+            constraints.occupation_resolution = "unresolved"
+        else:
+            constraints.occupation_domain_concept_keys = [selected_value]
+            if option is not None and option.collection_search_term:
+                constraints.occupation_domain_query = option.collection_search_term
+    elif question.field == "occupation_concept_keys":
+        option = _selected_option(question, answer)
+        if answer.custom_value.strip():
+            constraints.occupation_query = selected_value
+            constraints.collection_search_term = selected_value
+            constraints.occupation_concept_keys = []
+            constraints.occupation_scope_mode = "unspecified"
+            constraints.occupation_resolution = "unresolved"
+        else:
+            constraints.occupation_concept_keys = [selected_value]
+            selected_all = answer.selected_option_id == "all-descendants"
+            constraints.occupation_scope_mode = "all" if selected_all else "selected"
+            constraints.occupation_resolution = (
+                "reviewed_alias"
+                if question.facet_type == "semantic_occupation"
+                else "user_selected"
+            )
+            if (
+                question.facet_type != "semantic_occupation"
+                and not selected_all
+                and option is not None
+                and option.collection_search_term
+            ):
+                constraints.collection_search_term = option.collection_search_term
+                constraints.occupation_query = option.collection_search_term
+    elif question.field == "occupation_query":
+        constraints.occupation_query = selected_value
+        constraints.collection_search_term = selected_value
+        constraints.occupation_concept_keys = []
+        constraints.occupation_scope_required = False
+        constraints.occupation_scope_mode = "unspecified"
+        constraints.occupation_resolution = "unresolved"
+    elif question.field in {"skill_queries", "analysis_dimensions", "sites"}:
         setattr(constraints, question.field, [selected_value])
+        if question.field == "skill_queries":
+            constraints.skill_concept_keys = []
     elif hasattr(constraints, question.field):
         setattr(constraints, question.field, selected_value)
 
-    resolved_fields = {question.field}
-    if question.field in {"recent_period", "posted_from", "posted_to"}:
-        resolved_fields.update({"recent_period", "posted_from", "posted_to"})
-    elif question.field == "comparison_period":
-        resolved_fields.update(
-            {
-                "posted_from",
-                "posted_to",
-                "comparison_posted_from",
-                "comparison_posted_to",
-            }
-        )
-    elif question.field == "site_scope":
-        resolved_fields.add("sites")
-    elif question.field in {"trend_metric", "analysis_dimensions"}:
-        resolved_fields.update({"trend_metric", "analysis_dimensions"})
-    unresolved_fields = [
-        item for item in investigation.unresolved_fields if item not in resolved_fields
+    remaining_questions = [
+        item
+        for item in investigation.clarification_questions
+        if item.question_id != question.question_id
     ]
     status = (
         InvestigationStatus.AWAITING_CLARIFICATION
-        if unresolved_fields
+        if remaining_questions
         else InvestigationStatus.CHECKING_EVIDENCE
     )
     return investigation.model_copy(
         update={
             "constraints": constraints,
             "clarification_answers": answers,
-            "unresolved_fields": unresolved_fields,
+            "clarification_questions": remaining_questions,
             "status": status,
         }
     )

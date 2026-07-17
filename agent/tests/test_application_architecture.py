@@ -6,7 +6,11 @@ import pytest
 
 
 def test_investigation_prompts_include_runtime_date_and_evidence_rules():
-    from agent.prompts.investigation import evidence_plan_prompt, request_analysis_prompt
+    from agent.prompts.investigation import (
+        answer_prompt,
+        evidence_plan_prompt,
+        request_analysis_prompt,
+    )
 
     now = datetime(
         2026,
@@ -18,13 +22,24 @@ def test_investigation_prompts_include_runtime_date_and_evidence_rules():
     )
     analysis_prompt = request_analysis_prompt(now)
     evidence_prompt = evidence_plan_prompt(now)
+    final_prompt = answer_prompt()
 
     assert "2026-07-13" in analysis_prompt
-    assert "'최근', '요즘', '많이'" in analysis_prompt
+    assert "상대 기간만을 이유로 사용자에게 질문하지 마십시오" in analysis_prompt
+    assert "구체적인 날짜 범위를 constraints에 설정" in analysis_prompt
+    assert "assumptions에 근거를 남기십시오" in analysis_prompt
+    assert "목표 자체를 정할 수 없거나" in analysis_prompt
+    assert "evidence_policy=model_knowledge" in analysis_prompt
+    assert "evidence_policy=web_required" in analysis_prompt
     assert "도구도 호출하지 마십시오" in analysis_prompt
     assert "posted_at" in evidence_prompt
+    assert "job_body 필드가 아니라" in evidence_prompt
+    assert "raw_ocr_text" in final_prompt
+    assert "job_body 같은 제공되지 않은 필드" in final_prompt
     assert "created_at은 로컬 수집 시각" in evidence_prompt
     assert "트렌드는 현재 기간과 동일 길이의 이전 비교 기간" in evidence_prompt
+    assert "사용자가 요청하지 않은 배경, 심화 항목" in final_prompt
+    assert "별도의 조사 범위, 가정, 한계 문단을 만들지 마십시오" in final_prompt
 
 
 def test_run_context_collects_usage_steps_and_events():
@@ -309,6 +324,48 @@ def test_chat_api_streams_structured_progress_without_character_delay(monkeypatc
     assert "[EVENT]" in response.text
     assert '"text": "최종 답변"' in response.text
     assert "data: 최" not in response.text
+
+
+def test_backend_contract_endpoint_exposes_generated_json_schemas():
+    from fastapi.testclient import TestClient
+
+    from agent.web_server import app
+
+    response = TestClient(app).get("/api/contracts")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["version"] == 3
+    assert payload["transport"]["media_type"] == "text/event-stream"
+    assert "chat_request" in payload["schemas"]
+    assert "taxonomy_resolution" in payload["schemas"]
+    properties = payload["schemas"]["collection_tool_arguments"]["properties"]
+    assert "query" in properties
+    assert "site" in properties
+
+
+def test_taxonomy_stats_exposes_occupation_domains(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import shared.config as config
+    from agent.web_server import app
+
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
+    response = TestClient(app).get("/api/taxonomy/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "occupation_cardinality" not in payload
+    assert payload["occupation_domains"]["field"] == "occupation_domain_concept_keys"
+    assert len(payload["occupation_domains"]["options"]) == 6
+
+
+def test_chat_openapi_declares_event_stream_response():
+    from agent.web_server import app
+
+    response_content = app.openapi()["paths"]["/api/chat"]["post"]["responses"]["200"]["content"]
+
+    assert "text/event-stream" in response_content
 
 
 def test_chat_api_resumes_from_structured_clarification(monkeypatch):
@@ -597,6 +654,174 @@ def test_collection_service_forces_partial_status_when_explicit_target_is_unmet(
     assert "partial collection persisted" in result["message"]
 
 
+def test_collection_service_completes_when_visible_result_scope_is_exhausted():
+    from agent.application.collection_service import (
+        CollectionOperations,
+        CollectionRequest,
+        CollectionService,
+    )
+
+    def run_worker(*args, **kwargs):
+        return {
+            "submission": {
+                "run_id": "worker-exhausted",
+                "collected_count": 1,
+                "target_count": 10,
+                "task_category": "검색",
+                "extracted_summary": {
+                    "result_availability": {
+                        "available_result_count": 1,
+                        "count_evidence": "포지션 1",
+                        "count_confidence": 0.97,
+                    }
+                },
+            },
+            "site_name": "Wanted",
+            "site_slug": "wanted",
+            "keyword": "QA 자동화 엔지니어",
+            "target_count": 10,
+            "is_finished": False,
+            "hit_recursion_limit": True,
+        }
+
+    def persist(worker_result, review):
+        validation = {
+            "submitted_count": 1,
+            "persisted_count": 1,
+            "persisted_items": [{"job_id": 7, "url": "https://example.com/7"}],
+            "rejected_count": 0,
+            "rejected_items": [],
+        }
+        worker_result["persistence_validation"] = validation
+        return 1, worker_result["submission"], review, "submission-exhausted"
+
+    operations = CollectionOperations(
+        normalize_target_count=lambda value: int(value or 0),
+        normalize_task_category=lambda value: value or "검색",
+        review_retries=lambda: 1,
+        run_worker=run_worker,
+        review_worker=lambda submission: (
+            {
+                "decision": "revise",
+                "accept_collected_data": True,
+                "continue_collection": True,
+            },
+            "submission-exhausted",
+        ),
+        persist_result=persist,
+        render_review_feedback=lambda review: "계속 수집",
+        needs_approval=lambda **kwargs: True,
+        build_intermediate_report=lambda *args, **kwargs: {"target_count": 10, "persisted_count": 1},
+        report_requires_more_collection=lambda report: True,
+        close_browser=lambda: None,
+    )
+
+    result = CollectionService(operations).collect(
+        CollectionRequest(
+            search_keyword="QA 자동화 엔지니어",
+            site="wanted",
+            target_count=10,
+            collection_intent={
+                "search_keyword": "QA 자동화 엔지니어",
+                "count_mode": "explicit",
+                "target_count": 10,
+            },
+        )
+    )
+
+    assert result["completion_status"] == "complete"
+    assert result["search_scope_exhausted"] is True
+    assert result["missing_count"] == 9
+    assert result["needs_human_approval"] is False
+    assert result["persisted_count"] == 1
+
+
+def test_collection_service_persists_valid_partial_data_before_retry():
+    from agent.application.collection_service import (
+        CollectionOperations,
+        CollectionRequest,
+        CollectionService,
+    )
+
+    requested_counts = []
+    reviews = iter(
+        [
+            {
+                "decision": "revise",
+                "accept_collected_data": True,
+                "continue_collection": True,
+            },
+            {
+                "decision": "accept",
+                "accept_collected_data": True,
+                "continue_collection": False,
+            },
+        ]
+    )
+
+    def run_worker(*args, **kwargs):
+        requested_counts.append(kwargs["target_count"])
+        attempt = len(requested_counts)
+        return {
+            "submission": {
+                "run_id": "worker-retry",
+                "review_attempt": attempt - 1,
+                "collected_count": 1,
+                "target_count": kwargs["target_count"],
+            },
+            "site_name": "Wanted",
+            "site_slug": "wanted",
+            "keyword": "백엔드",
+            "target_count": kwargs["target_count"],
+            "is_finished": attempt == 2,
+            "hit_recursion_limit": attempt == 1,
+            "attempt": attempt,
+        }
+
+    def persist(worker_result, review):
+        job_id = int(worker_result["attempt"])
+        validation = {
+            "submitted_count": 1,
+            "persisted_count": 1,
+            "persisted_items": [{"job_id": job_id, "url": f"https://example.com/{job_id}"}],
+            "rejected_count": 0,
+            "rejected_items": [],
+        }
+        worker_result["persistence_validation"] = validation
+        return 1, worker_result["submission"], review, f"submission-{job_id}"
+
+    operations = CollectionOperations(
+        normalize_target_count=lambda value: int(value or 0),
+        normalize_task_category=lambda value: value or "검색",
+        review_retries=lambda: 1,
+        run_worker=run_worker,
+        review_worker=lambda submission: (next(reviews), "submission"),
+        persist_result=persist,
+        render_review_feedback=lambda review: "남은 공고 수집",
+        needs_approval=lambda **kwargs: False,
+        build_intermediate_report=lambda *args, **kwargs: {},
+        report_requires_more_collection=lambda report: False,
+        close_browser=lambda: None,
+    )
+
+    result = CollectionService(operations).collect(
+        CollectionRequest(
+            search_keyword="백엔드",
+            target_count=3,
+            collection_intent={
+                "search_keyword": "백엔드",
+                "count_mode": "explicit",
+                "target_count": 3,
+            },
+        )
+    )
+
+    assert requested_counts == [3, 2]
+    assert result["persisted_count"] == 2
+    assert result["missing_count"] == 1
+    assert len(result["persistence_validation"]["persisted_items"]) == 2
+
+
 def test_worker_execution_session_serializes_concurrent_requests():
     from agent.application.worker_execution_service import worker_execution_session
 
@@ -804,7 +1029,7 @@ def test_google_model_clients_are_reused_by_configuration(monkeypatch):
     model_clients.clear_model_client_cache()
 
 
-def test_browser_is_kept_alive_by_default(monkeypatch):
+def test_browser_closes_by_default(monkeypatch):
     from agent.application import worker_execution_service
     from agent.graph import nodes
 
@@ -820,10 +1045,10 @@ def test_browser_is_kept_alive_by_default(monkeypatch):
 
     worker_execution_service.close_browser_after_run()
 
-    assert closed == []
+    assert closed == [True]
 
 
-def test_browser_closes_when_explicitly_enabled(monkeypatch):
+def test_browser_stays_open_when_explicitly_disabled(monkeypatch):
     from agent.application import worker_execution_service
     from agent.graph import nodes
 
@@ -834,12 +1059,12 @@ def test_browser_closes_when_explicitly_enabled(monkeypatch):
             closed.append(True)
             return {"status": "success"}
 
-    monkeypatch.setenv("VISION_CLOSE_BROWSER_AFTER_RUN", "1")
+    monkeypatch.setenv("VISION_CLOSE_BROWSER_AFTER_RUN", "0")
     monkeypatch.setattr(nodes, "_action_tools", FakeActionTools())
 
     worker_execution_service.close_browser_after_run()
 
-    assert closed == [True]
+    assert closed == []
 
 
 def test_detail_extraction_prompt_prioritizes_page_text_over_ocr_hints():

@@ -749,6 +749,103 @@ def test_action_node_records_policy_go_back_step(monkeypatch):
     assert recorded_actions == ["go_back"]
 
 
+def test_action_node_finishes_after_last_visible_result_card(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_state(action_name, _args, _jd, plan, plan_step, **_kwargs):
+        return (
+            {"action": action_name, "status": "success", "_detail_ocr_buffer": {}},
+            {"공고목록": [{"position": "데이터 엔지니어"}]},
+            plan,
+            plan_step,
+        )
+
+    monkeypatch.setattr(nodes, "_dispatch_state", fake_dispatch_state)
+
+    result = nodes.action_node(
+        {
+            "current_url": "https://www.wanted.co.kr/wd/1",
+            "current_url_stale": False,
+            "current_markers": [],
+            "recipe_params": {"target_count": 0, "count_mode": "visible_all"},
+            "result_card_queue": [{"queue_id": "card-1", "status": "active"}],
+            "active_result_card": {"queue_id": "card-1"},
+            "extracted_jd": {},
+            "detail_ocr_buffer": {},
+            "action_history": [],
+            "collected_data": [],
+            "error_count": 0,
+            "current_plan_step": 0,
+            "plan": [],
+            "is_finished": False,
+            "last_action_result": AIMessage(
+                content="[page_policy] detail finish",
+                tool_calls=[
+                    {
+                        "name": "finish_detail_reading",
+                        "args": {"page_role": "job_detail", "detail_complete": True},
+                        "id": "detail-finish",
+                    }
+                ],
+            ),
+        }
+    )
+
+    assert result["is_finished"] is True
+    assert [action["action"] for action in result["action_history"]] == ["finish_detail_reading"]
+    assert result["result_card_queue"][0]["status"] == "done"
+
+
+def test_action_node_finishes_visible_all_enum_after_last_card(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+    from shared.schema.collection_intent import CollectionCountMode
+
+    def fake_dispatch_state(action_name, _args, _jd, plan, plan_step, **_kwargs):
+        return (
+            {"action": action_name, "status": "success", "_detail_ocr_buffer": {}},
+            {"공고목록": [{"position": "데이터 엔지니어"}]},
+            plan,
+            plan_step,
+        )
+
+    monkeypatch.setattr(nodes, "_dispatch_state", fake_dispatch_state)
+
+    result = nodes.action_node(
+        {
+            "current_url": "https://www.wanted.co.kr/wd/1",
+            "current_markers": [],
+            "recipe_params": {
+                "target_count": 0,
+                "count_mode": CollectionCountMode.VISIBLE_ALL,
+            },
+            "result_card_queue": [{"queue_id": "card-1", "status": "active"}],
+            "active_result_card": {"queue_id": "card-1"},
+            "extracted_jd": {},
+            "detail_ocr_buffer": {},
+            "action_history": [],
+            "collected_data": [],
+            "error_count": 0,
+            "current_plan_step": 0,
+            "plan": [],
+            "is_finished": False,
+            "last_action_result": AIMessage(
+                content="[page_policy] detail finish",
+                tool_calls=[
+                    {
+                        "name": "finish_detail_reading",
+                        "args": {"page_role": "job_detail", "detail_complete": True},
+                        "id": "detail-finish",
+                    }
+                ],
+            ),
+        }
+    )
+
+    assert result["is_finished"] is True
+
+
 def test_action_node_allows_same_text_when_marker_id_changes_without_state_key_guard(monkeypatch):
     from langchain_core.messages import AIMessage
     from agent.graph import nodes

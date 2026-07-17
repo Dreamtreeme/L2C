@@ -45,6 +45,31 @@ def test_preprocessor_preserves_canonical_llm_fields():
     assert job_posting.experience_text == "3+ years"
 
 
+def test_preprocessor_does_not_treat_skill_experience_as_total_experience():
+    job_posting = Preprocessor.process_raw_jd({
+        "company_name": "Acme",
+        "position": "AI Engineer",
+        "url": "https://example.com/jobs/skill-years",
+        "requirements": ["Python 개발 경험 2년 이상"],
+    })
+
+    assert job_posting.experience_min is None
+    assert job_posting.experience_max is None
+    assert job_posting.experience_text == ""
+
+
+def test_preprocessor_does_not_invent_years_for_junior_label():
+    job_posting = Preprocessor.process_raw_jd({
+        "company_name": "Acme",
+        "position": "Junior Backend Engineer",
+        "url": "https://example.com/jobs/junior",
+    })
+
+    assert job_posting.experience_min is None
+    assert job_posting.experience_max is None
+    assert job_posting.experience_text == ""
+
+
 def test_preprocessor_preserves_verified_posted_date_and_source_text():
     job_posting = Preprocessor.process_raw_jd({
         "company_name": "Acme",

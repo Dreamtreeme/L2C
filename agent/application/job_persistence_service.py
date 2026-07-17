@@ -119,10 +119,12 @@ def persist_collected_data_with_report(
     """공고별 검증 결과와 저장 건수를 함께 반환한다."""
 
     from agent.utils.preprocessor import Preprocessor
+    from agent.application.search_taxonomy_service import SearchTaxonomyService
     from shared.config import DB_PATH
     from shared.db.database import Database
 
     db = Database(DB_PATH)
+    taxonomy_service = SearchTaxonomyService(DB_PATH)
     jobs = job_list_value(extracted_jd)
     if jobs is not None:
         job_list = jobs if isinstance(jobs, list) else [jobs]
@@ -175,6 +177,14 @@ def persist_collected_data_with_report(
                 continue
             existed = db.exists(str(url))
             job_id = db.upsert(url=url, data=dump_model(job_posting))
+            try:
+                taxonomy_service.link_job(int(job_id))
+            except Exception as exc:
+                logger.warning(
+                    "[job_persistence] Search taxonomy linking failed for job #%s: %s",
+                    job_id,
+                    exc,
+                )
             persisted_count += 1
             if existed:
                 updated_count += 1

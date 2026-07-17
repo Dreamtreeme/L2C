@@ -1,0 +1,949 @@
+{
+  "version": "2.0.0",
+  "source": {
+    "source_key": "l2c_ko_core",
+    "name": "L2C 검토 검색 사전",
+    "version": "2.0.0",
+    "source_url": "data/samples/search_taxonomy_ko.json",
+    "license": "L2C 내부 검토 데이터"
+  },
+  "concepts": [
+    {
+      "concept_key": "l2c:domain:occupation",
+      "concept_type": "domain",
+      "preferred_label_ko": "직무 영역",
+      "preferred_label_en": "Occupation domains",
+      "definition": "회사의 산업이 아니라 실제 수행하는 업무 기능을 기준으로 직무를 나누는 최상위 분류"
+    },
+    {
+      "concept_key": "l2c:domain:management_office_finance",
+      "concept_type": "domain",
+      "preferred_label_ko": "경영·사무·금융",
+      "preferred_label_en": "Management, Office and Finance",
+      "aliases": ["경영 사무 금융", "경영·사무", "경영지원", "사무직"],
+      "broader": "l2c:domain:occupation"
+    },
+    {
+      "concept_key": "l2c:domain:it_data",
+      "concept_type": "domain",
+      "preferred_label_ko": "IT·데이터",
+      "preferred_label_en": "IT and Data",
+      "aliases": ["IT", "IT 데이터", "정보기술", "데이터 직군"],
+      "broader": "l2c:domain:occupation"
+    },
+    {
+      "concept_key": "l2c:domain:research_engineering",
+      "concept_type": "domain",
+      "preferred_label_ko": "연구·공학",
+      "preferred_label_en": "Research and Engineering",
+      "aliases": ["연구 공학", "연구직", "공학 직군", "R&D"],
+      "broader": "l2c:domain:occupation"
+    },
+    {
+      "concept_key": "l2c:domain:production_manufacturing_maintenance",
+      "concept_type": "domain",
+      "preferred_label_ko": "생산·제조·정비",
+      "preferred_label_en": "Production, Manufacturing and Maintenance",
+      "aliases": ["생산 제조 정비", "생산직", "제조 직군", "정비 직군"],
+      "broader": "l2c:domain:occupation"
+    },
+    {
+      "concept_key": "l2c:domain:sales_service_logistics",
+      "concept_type": "domain",
+      "preferred_label_ko": "영업·서비스·물류",
+      "preferred_label_en": "Sales, Service and Logistics",
+      "aliases": ["영업 서비스 물류", "영업직", "서비스 직군", "물류 직군"],
+      "broader": "l2c:domain:occupation"
+    },
+    {
+      "concept_key": "l2c:domain:healthcare_education_public",
+      "concept_type": "domain",
+      "preferred_label_ko": "의료·교육·공공",
+      "preferred_label_en": "Healthcare, Education and Public Service",
+      "aliases": ["의료 교육 공공", "의료 직군", "교육 직군", "공공 직군"],
+      "broader": "l2c:domain:occupation"
+    },
+    {
+      "concept_key": "l2c:occupation:management",
+      "concept_type": "occupation",
+      "preferred_label_ko": "경영·관리",
+      "preferred_label_en": "Management Occupations",
+      "definition": "조직의 전략, 운영, 자원과 사업을 계획하고 관리하는 직무군",
+      "aliases": ["경영 관리 직무", "관리자 직군"],
+      "broader": "l2c:domain:management_office_finance",
+      "soc_major_groups": ["11"]
+    },
+    {
+      "concept_key": "l2c:occupation:business_financial",
+      "concept_type": "occupation",
+      "preferred_label_ko": "사업·금융",
+      "preferred_label_en": "Business and Financial Operations Occupations",
+      "definition": "사업 운영, 재무, 회계, 인사와 전문 분석을 수행하는 직무군",
+      "aliases": ["사업 금융 직무", "재무 회계 직군"],
+      "broader": "l2c:domain:management_office_finance",
+      "soc_major_groups": ["13"]
+    },
+    {
+      "concept_key": "l2c:occupation:creative_media",
+      "concept_type": "occupation",
+      "preferred_label_ko": "기획·디자인·미디어",
+      "preferred_label_en": "Arts, Design, Entertainment, Sports and Media Occupations",
+      "definition": "콘텐츠를 기획, 디자인, 제작하거나 미디어로 전달하는 직무군",
+      "aliases": ["기획 디자인 미디어", "디자인 미디어 직군"],
+      "broader": "l2c:domain:management_office_finance",
+      "soc_major_groups": ["27"]
+    },
+    {
+      "concept_key": "l2c:occupation:office_administration",
+      "concept_type": "occupation",
+      "preferred_label_ko": "사무·행정지원",
+      "preferred_label_en": "Office and Administrative Support Occupations",
+      "definition": "문서, 일정, 고객 기록과 조직 행정을 지원하는 직무군",
+      "aliases": ["사무 행정지원", "사무 행정 직군"],
+      "broader": "l2c:domain:management_office_finance",
+      "soc_major_groups": ["43"]
+    },
+    {
+      "concept_key": "l2c:occupation:architecture_engineering",
+      "concept_type": "occupation",
+      "preferred_label_ko": "건축·공학",
+      "preferred_label_en": "Architecture and Engineering Occupations",
+      "definition": "건축물, 기계, 전기, 전자와 산업 시스템을 설계하고 검증하는 직무군",
+      "aliases": ["건축 공학 직무", "엔지니어링 직군"],
+      "broader": "l2c:domain:research_engineering",
+      "soc_major_groups": ["17"]
+    },
+    {
+      "concept_key": "l2c:occupation:science_research",
+      "concept_type": "occupation",
+      "preferred_label_ko": "자연·사회과학 연구",
+      "preferred_label_en": "Life, Physical and Social Science Occupations",
+      "definition": "생명, 물리, 환경과 사회 현상을 연구하고 분석하는 직무군",
+      "aliases": ["자연 사회과학 연구", "과학 연구직"],
+      "broader": "l2c:domain:research_engineering",
+      "soc_major_groups": ["19"]
+    },
+    {
+      "concept_key": "l2c:occupation:farming_forestry",
+      "concept_type": "occupation",
+      "preferred_label_ko": "농림·수산",
+      "preferred_label_en": "Farming, Fishing and Forestry Occupations",
+      "definition": "농업, 임업, 어업 생산과 현장 운영을 수행하는 직무군",
+      "aliases": ["농림 수산 직무", "농업 임업 어업 직군"],
+      "broader": "l2c:domain:production_manufacturing_maintenance",
+      "soc_major_groups": ["45"]
+    },
+    {
+      "concept_key": "l2c:occupation:construction_extraction",
+      "concept_type": "occupation",
+      "preferred_label_ko": "건설·채굴",
+      "preferred_label_en": "Construction and Extraction Occupations",
+      "definition": "건축과 토목 현장을 시공하거나 자원을 채굴하는 직무군",
+      "aliases": ["건설 채굴 직무", "건설 현장 직군"],
+      "broader": "l2c:domain:production_manufacturing_maintenance",
+      "soc_major_groups": ["47"]
+    },
+    {
+      "concept_key": "l2c:occupation:installation_maintenance_repair",
+      "concept_type": "occupation",
+      "preferred_label_ko": "설치·정비·수리",
+      "preferred_label_en": "Installation, Maintenance and Repair Occupations",
+      "definition": "설비와 장비를 설치, 점검, 정비하고 수리하는 직무군",
+      "aliases": ["설치 정비 수리", "설비 정비 직군"],
+      "broader": "l2c:domain:production_manufacturing_maintenance",
+      "soc_major_groups": ["49"]
+    },
+    {
+      "concept_key": "l2c:occupation:production",
+      "concept_type": "occupation",
+      "preferred_label_ko": "생산·제조",
+      "preferred_label_en": "Production Occupations",
+      "definition": "제품과 부품을 가공, 조립, 검사하고 생산 설비를 운용하는 직무군",
+      "aliases": ["생산 제조 직무", "제조 생산직"],
+      "broader": "l2c:domain:production_manufacturing_maintenance",
+      "soc_major_groups": ["51"]
+    },
+    {
+      "concept_key": "l2c:occupation:food_service",
+      "concept_type": "occupation",
+      "preferred_label_ko": "조리·식음료 서비스",
+      "preferred_label_en": "Food Preparation and Serving Related Occupations",
+      "definition": "음식을 준비, 조리하고 고객에게 제공하는 직무군",
+      "aliases": ["조리 식음료 서비스", "외식 서비스 직군"],
+      "broader": "l2c:domain:sales_service_logistics",
+      "soc_major_groups": ["35"]
+    },
+    {
+      "concept_key": "l2c:occupation:building_grounds_service",
+      "concept_type": "occupation",
+      "preferred_label_ko": "시설·환경 서비스",
+      "preferred_label_en": "Building and Grounds Cleaning and Maintenance Occupations",
+      "definition": "건물과 외부 공간을 청소, 관리하고 환경을 유지하는 직무군",
+      "aliases": ["시설 환경 서비스", "시설 미화 직군"],
+      "broader": "l2c:domain:sales_service_logistics",
+      "soc_major_groups": ["37"]
+    },
+    {
+      "concept_key": "l2c:occupation:personal_care_service",
+      "concept_type": "occupation",
+      "preferred_label_ko": "개인생활 서비스",
+      "preferred_label_en": "Personal Care and Service Occupations",
+      "definition": "미용, 돌봄, 여가 등 개인 대상 서비스를 제공하는 직무군",
+      "aliases": ["개인 생활 서비스", "생활 서비스 직군"],
+      "broader": "l2c:domain:sales_service_logistics",
+      "soc_major_groups": ["39"]
+    },
+    {
+      "concept_key": "l2c:occupation:sales",
+      "concept_type": "occupation",
+      "preferred_label_ko": "영업·판매",
+      "preferred_label_en": "Sales and Related Occupations",
+      "definition": "상품과 서비스를 제안, 판매하고 고객 관계를 관리하는 직무군",
+      "aliases": ["영업 판매 직무", "세일즈 직군"],
+      "broader": "l2c:domain:sales_service_logistics",
+      "soc_major_groups": ["41"]
+    },
+    {
+      "concept_key": "l2c:occupation:transportation_logistics",
+      "concept_type": "occupation",
+      "preferred_label_ko": "운송·물류",
+      "preferred_label_en": "Transportation and Material Moving Occupations",
+      "definition": "사람과 물품을 운송하고 보관, 하역, 이동하는 직무군",
+      "aliases": ["운송 물류 직무", "물류 운송 직군"],
+      "broader": "l2c:domain:sales_service_logistics",
+      "soc_major_groups": ["53"]
+    },
+    {
+      "concept_key": "l2c:occupation:community_social_service",
+      "concept_type": "occupation",
+      "preferred_label_ko": "사회복지·상담",
+      "preferred_label_en": "Community and Social Service Occupations",
+      "definition": "개인과 지역사회의 복지, 상담과 사회 서비스를 담당하는 직무군",
+      "aliases": ["사회복지 상담 직무", "사회 서비스 직군"],
+      "broader": "l2c:domain:healthcare_education_public",
+      "soc_major_groups": ["21"]
+    },
+    {
+      "concept_key": "l2c:occupation:legal",
+      "concept_type": "occupation",
+      "preferred_label_ko": "법률·법무",
+      "preferred_label_en": "Legal Occupations",
+      "definition": "법률 판단, 자문, 소송과 법무 지원을 수행하는 직무군",
+      "aliases": ["법률 법무 직무", "법무 직군"],
+      "broader": "l2c:domain:healthcare_education_public",
+      "soc_major_groups": ["23"]
+    },
+    {
+      "concept_key": "l2c:occupation:education_library",
+      "concept_type": "occupation",
+      "preferred_label_ko": "교육·도서관",
+      "preferred_label_en": "Educational Instruction and Library Occupations",
+      "definition": "학습을 설계하고 가르치거나 교육·도서 정보를 지원하는 직무군",
+      "aliases": ["교육 도서관 직무", "교육 교직 직군"],
+      "broader": "l2c:domain:healthcare_education_public",
+      "soc_major_groups": ["25"]
+    },
+    {
+      "concept_key": "l2c:occupation:healthcare_practitioner",
+      "concept_type": "occupation",
+      "preferred_label_ko": "의료 전문직",
+      "preferred_label_en": "Healthcare Practitioners and Technical Occupations",
+      "definition": "환자를 진단, 치료하고 전문 의료 기술을 제공하는 직무군",
+      "aliases": ["의료 전문 직무", "보건 의료 전문가"],
+      "broader": "l2c:domain:healthcare_education_public",
+      "soc_major_groups": ["29"]
+    },
+    {
+      "concept_key": "l2c:occupation:healthcare_support",
+      "concept_type": "occupation",
+      "preferred_label_ko": "보건의료 지원",
+      "preferred_label_en": "Healthcare Support Occupations",
+      "definition": "의료 서비스와 환자 돌봄을 현장에서 지원하는 직무군",
+      "aliases": ["보건 의료 지원", "의료 지원 직군"],
+      "broader": "l2c:domain:healthcare_education_public",
+      "soc_major_groups": ["31"]
+    },
+    {
+      "concept_key": "l2c:occupation:protective_service",
+      "concept_type": "occupation",
+      "preferred_label_ko": "안전·보호 서비스",
+      "preferred_label_en": "Protective Service Occupations",
+      "definition": "사람, 재산과 공공 안전을 보호하는 직무군",
+      "aliases": ["안전 보호 서비스", "보안 안전 직군"],
+      "broader": "l2c:domain:healthcare_education_public",
+      "soc_major_groups": ["33"]
+    },
+    {
+      "concept_key": "l2c:occupation:military",
+      "concept_type": "occupation",
+      "preferred_label_ko": "군사 직무",
+      "preferred_label_en": "Military Specific Occupations",
+      "definition": "군 조직에서 전투, 지휘, 기술과 작전 임무를 수행하는 직무군",
+      "aliases": ["군사 직군", "군 직무"],
+      "broader": "l2c:domain:healthcare_education_public",
+      "soc_major_groups": ["55"]
+    },
+    {
+      "concept_key": "l2c:occupation:technology",
+      "concept_type": "occupation",
+      "preferred_label_ko": "기술 직군",
+      "preferred_label_en": "Technology occupations",
+      "definition": "컴퓨터, 소프트웨어, 데이터와 정보 시스템을 설계·개발·운영하는 직무군",
+      "aliases": ["기술 직군", "개발 직군", "IT 직군", "IT 개발자", "개발자"],
+      "broader": "l2c:domain:it_data",
+      "soc_major_groups": ["15"]
+    },
+    {
+      "concept_key": "l2c:occupation:software_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "소프트웨어 엔지니어",
+      "preferred_label_en": "Software Engineer",
+      "aliases": ["소프트웨어 엔지니어", "소프트웨어 개발자", "Software Engineer"],
+      "broader": "l2c:occupation:technology",
+      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1252.00"}]
+    },
+    {
+      "concept_key": "l2c:occupation:backend_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "백엔드 엔지니어",
+      "preferred_label_en": "Backend Engineer",
+      "aliases": ["백엔드 엔지니어", "백엔드 개발자", "백엔드 개발", "백엔드", "Backend Engineer", "Backend Developer", "BackEnd 개발자", "서버 개발자"],
+      "broader": "l2c:occupation:software_engineer",
+      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1252.00"}]
+    },
+    {
+      "concept_key": "l2c:occupation:frontend_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "프론트엔드 엔지니어",
+      "preferred_label_en": "Frontend Engineer",
+      "aliases": ["프론트엔드 엔지니어", "프론트엔드 개발자", "프론트엔드 개발", "Frontend Engineer", "Frontend Developer", "Frontend 개발", "프론트엔드"],
+      "broader": "l2c:occupation:software_engineer",
+      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1252.00"}]
+    },
+    {
+      "concept_key": "l2c:occupation:mobile_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "모바일 앱 개발자",
+      "preferred_label_en": "Mobile Application Developer",
+      "aliases": ["모바일 앱 개발자", "모바일 앱 개발", "모바일 개발자", "모바일 개발", "모바일 엔지니어", "Mobile Engineer", "Mobile Developer", "Software Engineer Mobile"],
+      "broader": "l2c:occupation:software_engineer",
+      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1252.00"}]
+    },
+    {
+      "concept_key": "l2c:occupation:ios_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "iOS 개발자",
+      "preferred_label_en": "iOS Developer",
+      "aliases": ["iOS", "iOS 개발자", "iOS 개발", "iOS 앱 개발자", "iOS 앱개발자", "iOS 엔지니어", "iOS Developer", "Software Engineer iOS"],
+      "broader": "l2c:occupation:mobile_engineer"
+    },
+    {
+      "concept_key": "l2c:occupation:android_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "Android 개발자",
+      "preferred_label_en": "Android Developer",
+      "aliases": ["Android 개발자", "Android App 개발자", "안드로이드 개발자", "안드로이드 시니어 개발자", "Android Developer"],
+      "broader": "l2c:occupation:mobile_engineer"
+    },
+    {
+      "concept_key": "l2c:occupation:cross_platform_mobile",
+      "concept_type": "occupation",
+      "preferred_label_ko": "크로스플랫폼 모바일 개발자",
+      "preferred_label_en": "Cross-platform Mobile Developer",
+      "aliases": ["크로스플랫폼 모바일 개발자", "Flutter 개발자", "React Native 모바일 앱 개발자", "React Native 모바일 개발자"],
+      "broader": "l2c:occupation:mobile_engineer"
+    },
+    {
+      "concept_key": "l2c:occupation:data_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "데이터 엔지니어",
+      "preferred_label_en": "Data Engineer",
+      "aliases": ["데이터 엔지니어", "데이터 엔지니어링", "Data Engineer", "Data Engineering"],
+      "broader": "l2c:occupation:technology"
+    },
+    {
+      "concept_key": "l2c:occupation:qa_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "QA 엔지니어",
+      "preferred_label_en": "Software QA Engineer",
+      "aliases": ["QA 엔지니어", "QA Engineer", "QA", "QA자동화 엔지니어", "QA 자동화", "QA/테스트", "QA / 테스트", "테스트/QA", "테스트 자동화 / QA", "품질보증 QA", "테스트 자동화 엔지니어"],
+      "broader": "l2c:occupation:technology",
+      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1253.00"}]
+    },
+    {
+      "concept_key": "l2c:occupation:system_architect",
+      "concept_type": "occupation",
+      "preferred_label_ko": "시스템 아키텍트",
+      "preferred_label_en": "Systems Architect",
+      "aliases": ["시스템 아키텍트", "Systems Architect", "Solution Architect", "솔루션 아키텍트"],
+      "broader": "l2c:occupation:technology"
+    },
+    {
+      "concept_key": "l2c:occupation:ai_ml_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "AI·머신러닝 엔지니어",
+      "preferred_label_en": "AI and Machine Learning Engineer",
+      "aliases": ["AI 개발자", "AI 엔지니어", "AI/ML", "ML / AI", "AI/머신러닝", "인공지능/머신러닝", "인공지능 엔지니어", "AI Engineer", "AI", "머신러닝"],
+      "broader": "l2c:occupation:technology"
+    },
+    {
+      "concept_key": "l2c:occupation:machine_learning_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "머신러닝 엔지니어",
+      "preferred_label_en": "Machine Learning Engineer",
+      "aliases": ["머신러닝 엔지니어", "ML Engineer", "Machine Learning Engineer", "ML 엔지니어"],
+      "broader": "l2c:occupation:ai_ml_engineer"
+    },
+    {
+      "concept_key": "l2c:occupation:ai_agent_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "AI 에이전트 엔지니어",
+      "preferred_label_en": "AI Agent Engineer",
+      "aliases": ["AI 에이전트", "AI 에이전트 엔지니어", "AI 에이전트 개발자", "AI Agent", "AI Agent Engineer", "Agent Framework Engineer", "AI Agent Backend Engineer"],
+      "broader": "l2c:occupation:ai_ml_engineer"
+    },
+    {
+      "concept_key": "l2c:occupation:llm_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "LLM 엔지니어",
+      "preferred_label_en": "LLM Engineer",
+      "aliases": ["LLM 엔지니어", "LLM Engineer", "생성형 AI 엔지니어", "Generative AI Engineer", "GenAI Engineer"],
+      "broader": "l2c:occupation:ai_ml_engineer"
+    },
+    {
+      "concept_key": "l2c:occupation:computer_vision_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "컴퓨터 비전 엔지니어",
+      "preferred_label_en": "Computer Vision Engineer",
+      "aliases": ["컴퓨터 비전 엔지니어", "컴퓨터비전 엔지니어", "Vision AI 개발자", "Vision AI 엔지니어", "Computer Vision Engineer", "AI/컴퓨터비전", "비전 AI"],
+      "broader": "l2c:occupation:ai_ml_engineer"
+    },
+    {
+      "concept_key": "l2c:occupation:robotics_ai_engineer",
+      "concept_type": "occupation",
+      "preferred_label_ko": "로보틱스 AI 엔지니어",
+      "preferred_label_en": "Robotics AI Engineer",
+      "aliases": ["로보틱스 AI 엔지니어", "로봇 AI 엔지니어", "Physical AI 엔지니어", "Robotics AI Engineer", "로봇/AI"],
+      "broader": "l2c:occupation:ai_ml_engineer",
+      "external_mappings": [{"source_key": "onet_30_3", "external_id": "17-2199.08"}]
+    },
+    {
+      "concept_key": "l2c:skill:llm",
+      "concept_type": "skill",
+      "preferred_label_ko": "대규모 언어 모델",
+      "preferred_label_en": "Large Language Model",
+      "aliases": ["LLM", "대규모 언어 모델", "Large Language Model", "LLM API"]
+    },
+    {
+      "concept_key": "l2c:skill:generative_ai",
+      "concept_type": "skill",
+      "preferred_label_ko": "생성형 AI",
+      "preferred_label_en": "Generative AI",
+      "aliases": ["생성형 AI", "Generative AI", "GenAI"]
+    },
+    {
+      "concept_key": "l2c:skill:rag",
+      "concept_type": "skill",
+      "preferred_label_ko": "검색 증강 생성",
+      "preferred_label_en": "Retrieval-Augmented Generation",
+      "aliases": ["RAG", "검색 증강 생성", "Retrieval-Augmented Generation"]
+    },
+    {
+      "concept_key": "l2c:skill:mcp",
+      "concept_type": "skill",
+      "preferred_label_ko": "모델 맥락 프로토콜",
+      "preferred_label_en": "Model Context Protocol",
+      "aliases": ["MCP", "모델 맥락 프로토콜", "Model Context Protocol"]
+    },
+    {
+      "concept_key": "l2c:skill:langgraph",
+      "concept_type": "skill",
+      "preferred_label_ko": "LangGraph",
+      "preferred_label_en": "LangGraph",
+      "aliases": ["LangGraph"]
+    },
+    {
+      "concept_key": "l2c:skill:langchain",
+      "concept_type": "skill",
+      "preferred_label_ko": "LangChain",
+      "preferred_label_en": "LangChain",
+      "aliases": ["LangChain"]
+    },
+    {
+      "concept_key": "l2c:skill:mlops",
+      "concept_type": "skill",
+      "preferred_label_ko": "MLOps",
+      "preferred_label_en": "MLOps",
+      "aliases": ["MLOps", "Machine Learning Operations"]
+    },
+    {
+      "concept_key": "l2c:skill:vlm",
+      "concept_type": "skill",
+      "preferred_label_ko": "비전 언어 모델",
+      "preferred_label_en": "Vision-Language Model",
+      "aliases": ["VLM", "비전 언어 모델", "Vision-Language Model"]
+    },
+    {
+      "concept_key": "l2c:skill:vla",
+      "concept_type": "skill",
+      "preferred_label_ko": "비전 언어 행동 모델",
+      "preferred_label_en": "Vision-Language-Action Model",
+      "aliases": ["VLA", "비전 언어 행동 모델", "Vision-Language-Action Model"]
+    },
+    {
+      "concept_key": "l2c:skill:ai_agent",
+      "concept_type": "skill",
+      "preferred_label_ko": "AI 에이전트",
+      "preferred_label_en": "AI Agent",
+      "aliases": ["AI Agent", "AI 에이전트", "에이전트 프레임워크", "Agent Framework", "Agentic AI"]
+    },
+    {
+      "concept_key": "l2c:skill:vector_database",
+      "concept_type": "skill",
+      "preferred_label_ko": "벡터 데이터베이스",
+      "preferred_label_en": "Vector Database",
+      "aliases": ["Vector DB", "Vector Database", "벡터 DB", "벡터 데이터베이스"]
+    },
+    {
+      "concept_key": "l2c:skill:python",
+      "concept_type": "skill",
+      "preferred_label_ko": "Python",
+      "preferred_label_en": "Python",
+      "aliases": ["Python", "파이썬"]
+    },
+    {
+      "concept_key": "l2c:skill:java",
+      "concept_type": "skill",
+      "preferred_label_ko": "Java",
+      "preferred_label_en": "Java",
+      "aliases": ["Java", "자바"]
+    },
+    {
+      "concept_key": "l2c:skill:kotlin",
+      "concept_type": "skill",
+      "preferred_label_ko": "Kotlin",
+      "preferred_label_en": "Kotlin",
+      "aliases": ["Kotlin", "코틀린"]
+    },
+    {
+      "concept_key": "l2c:skill:swift",
+      "concept_type": "skill",
+      "preferred_label_ko": "Swift",
+      "preferred_label_en": "Swift",
+      "aliases": ["Swift", "스위프트"]
+    },
+    {
+      "concept_key": "l2c:skill:javascript",
+      "concept_type": "skill",
+      "preferred_label_ko": "JavaScript",
+      "preferred_label_en": "JavaScript",
+      "aliases": ["JavaScript", "Javascript", "JS", "자바스크립트"]
+    },
+    {
+      "concept_key": "l2c:skill:typescript",
+      "concept_type": "skill",
+      "preferred_label_ko": "TypeScript",
+      "preferred_label_en": "TypeScript",
+      "aliases": ["TypeScript", "Typescript", "TS", "타입스크립트"]
+    },
+    {
+      "concept_key": "l2c:skill:sql",
+      "concept_type": "skill",
+      "preferred_label_ko": "SQL",
+      "preferred_label_en": "SQL",
+      "aliases": ["SQL"]
+    },
+    {
+      "concept_key": "l2c:skill:ios",
+      "concept_type": "skill",
+      "preferred_label_ko": "iOS",
+      "preferred_label_en": "iOS",
+      "aliases": ["iOS"]
+    },
+    {
+      "concept_key": "l2c:skill:android",
+      "concept_type": "skill",
+      "preferred_label_ko": "Android",
+      "preferred_label_en": "Android",
+      "aliases": ["Android", "안드로이드"]
+    },
+    {
+      "concept_key": "l2c:skill:linux",
+      "concept_type": "skill",
+      "preferred_label_ko": "Linux",
+      "preferred_label_en": "Linux",
+      "aliases": ["Linux", "리눅스"]
+    },
+    {
+      "concept_key": "l2c:skill:aws",
+      "concept_type": "skill",
+      "preferred_label_ko": "AWS",
+      "preferred_label_en": "Amazon Web Services",
+      "aliases": ["AWS", "Amazon Web Services"]
+    },
+    {
+      "concept_key": "l2c:skill:gcp",
+      "concept_type": "skill",
+      "preferred_label_ko": "GCP",
+      "preferred_label_en": "Google Cloud Platform",
+      "aliases": ["GCP", "Google Cloud", "Google Cloud Platform"]
+    },
+    {
+      "concept_key": "l2c:skill:azure",
+      "concept_type": "skill",
+      "preferred_label_ko": "Microsoft Azure",
+      "preferred_label_en": "Microsoft Azure",
+      "aliases": ["Azure", "Microsoft Azure"]
+    },
+    {
+      "concept_key": "l2c:skill:docker",
+      "concept_type": "skill",
+      "preferred_label_ko": "Docker",
+      "preferred_label_en": "Docker",
+      "aliases": ["Docker", "도커"]
+    },
+    {
+      "concept_key": "l2c:skill:kubernetes",
+      "concept_type": "skill",
+      "preferred_label_ko": "Kubernetes",
+      "preferred_label_en": "Kubernetes",
+      "aliases": ["Kubernetes", "K8s", "쿠버네티스"]
+    },
+    {
+      "concept_key": "l2c:skill:kafka",
+      "concept_type": "skill",
+      "preferred_label_ko": "Apache Kafka",
+      "preferred_label_en": "Apache Kafka",
+      "aliases": ["Kafka", "Apache Kafka"]
+    },
+    {
+      "concept_key": "l2c:skill:airflow",
+      "concept_type": "skill",
+      "preferred_label_ko": "Apache Airflow",
+      "preferred_label_en": "Apache Airflow",
+      "aliases": ["Airflow", "Apache Airflow"]
+    },
+    {
+      "concept_key": "l2c:skill:fastapi",
+      "concept_type": "skill",
+      "preferred_label_ko": "FastAPI",
+      "preferred_label_en": "FastAPI",
+      "aliases": ["FastAPI", "Fast API"]
+    },
+    {
+      "concept_key": "l2c:skill:spring",
+      "concept_type": "skill",
+      "preferred_label_ko": "Spring",
+      "preferred_label_en": "Spring Framework",
+      "aliases": ["Spring", "Spring Framework", "Spring Boot"]
+    },
+    {
+      "concept_key": "l2c:skill:django",
+      "concept_type": "skill",
+      "preferred_label_ko": "Django",
+      "preferred_label_en": "Django",
+      "aliases": ["Django", "장고"]
+    },
+    {
+      "concept_key": "l2c:skill:react",
+      "concept_type": "skill",
+      "preferred_label_ko": "React",
+      "preferred_label_en": "React",
+      "aliases": ["React", "React.js", "ReactJS"]
+    },
+    {
+      "concept_key": "l2c:skill:nodejs",
+      "concept_type": "skill",
+      "preferred_label_ko": "Node.js",
+      "preferred_label_en": "Node.js",
+      "aliases": ["Node.js", "NodeJS", "Node JS"]
+    },
+    {
+      "concept_key": "l2c:skill:postgresql",
+      "concept_type": "skill",
+      "preferred_label_ko": "PostgreSQL",
+      "preferred_label_en": "PostgreSQL",
+      "aliases": ["PostgreSQL", "Postgres"]
+    },
+    {
+      "concept_key": "l2c:skill:mysql",
+      "concept_type": "skill",
+      "preferred_label_ko": "MySQL",
+      "preferred_label_en": "MySQL",
+      "aliases": ["MySQL"]
+    },
+    {
+      "concept_key": "l2c:skill:redis",
+      "concept_type": "skill",
+      "preferred_label_ko": "Redis",
+      "preferred_label_en": "Redis",
+      "aliases": ["Redis"]
+    },
+    {
+      "concept_key": "l2c:skill:firebase",
+      "concept_type": "skill",
+      "preferred_label_ko": "Firebase",
+      "preferred_label_en": "Firebase",
+      "aliases": ["Firebase"]
+    },
+    {
+      "concept_key": "l2c:skill:rest_api",
+      "concept_type": "skill",
+      "preferred_label_ko": "REST API",
+      "preferred_label_en": "REST API",
+      "aliases": ["REST API", "RESTful API", "RESTful"]
+    },
+    {
+      "concept_key": "l2c:skill:pytorch",
+      "concept_type": "skill",
+      "preferred_label_ko": "PyTorch",
+      "preferred_label_en": "PyTorch",
+      "aliases": ["PyTorch", "파이토치"]
+    },
+    {
+      "concept_key": "l2c:skill:tensorflow",
+      "concept_type": "skill",
+      "preferred_label_ko": "TensorFlow",
+      "preferred_label_en": "TensorFlow",
+      "aliases": ["TensorFlow", "Tensor Flow", "텐서플로"]
+    },
+    {
+      "concept_key": "l2c:skill:playwright",
+      "concept_type": "skill",
+      "preferred_label_ko": "Playwright",
+      "preferred_label_en": "Playwright",
+      "aliases": ["Playwright"]
+    },
+    {
+      "concept_key": "l2c:skill:cypress",
+      "concept_type": "skill",
+      "preferred_label_ko": "Cypress",
+      "preferred_label_en": "Cypress",
+      "aliases": ["Cypress"]
+    },
+    {
+      "concept_key": "l2c:skill:selenium",
+      "concept_type": "skill",
+      "preferred_label_ko": "Selenium",
+      "preferred_label_en": "Selenium",
+      "aliases": ["Selenium"]
+    },
+    {
+      "concept_key": "l2c:skill:jira",
+      "concept_type": "skill",
+      "preferred_label_ko": "Jira",
+      "preferred_label_en": "Jira",
+      "aliases": ["Jira"]
+    },
+    {
+      "concept_key": "l2c:skill:github_actions",
+      "concept_type": "skill",
+      "preferred_label_ko": "GitHub Actions",
+      "preferred_label_en": "GitHub Actions",
+      "aliases": ["GitHub Actions", "Github Action"]
+    },
+    {
+      "concept_key": "l2c:skill:openai_api",
+      "concept_type": "skill",
+      "preferred_label_ko": "OpenAI API",
+      "preferred_label_en": "OpenAI API",
+      "aliases": ["OpenAI API", "OpenAI"]
+    },
+    {
+      "concept_key": "l2c:skill:claude",
+      "concept_type": "skill",
+      "preferred_label_ko": "Claude",
+      "preferred_label_en": "Anthropic Claude",
+      "aliases": ["Claude", "Claude API", "Anthropic Claude"]
+    },
+    {
+      "concept_key": "l2c:skill:gemini",
+      "concept_type": "skill",
+      "preferred_label_ko": "Gemini",
+      "preferred_label_en": "Google Gemini",
+      "aliases": ["Gemini", "Gemini API", "Google Gemini"]
+    },
+    {
+      "concept_key": "l2c:skill:ollama",
+      "concept_type": "skill",
+      "preferred_label_ko": "Ollama",
+      "preferred_label_en": "Ollama",
+      "aliases": ["Ollama"]
+    },
+    {
+      "concept_key": "l2c:skill:hugging_face",
+      "concept_type": "skill",
+      "preferred_label_ko": "Hugging Face",
+      "preferred_label_en": "Hugging Face",
+      "aliases": ["Hugging Face", "HuggingFace"]
+    },
+    {
+      "concept_key": "l2c:skill:vllm",
+      "concept_type": "skill",
+      "preferred_label_ko": "vLLM",
+      "preferred_label_en": "vLLM",
+      "aliases": ["vLLM"]
+    },
+    {
+      "concept_key": "l2c:skill:lora",
+      "concept_type": "skill",
+      "preferred_label_ko": "LoRA",
+      "preferred_label_en": "Low-Rank Adaptation",
+      "aliases": ["LoRA", "Low-Rank Adaptation"]
+    },
+    {
+      "concept_key": "l2c:skill:fine_tuning",
+      "concept_type": "skill",
+      "preferred_label_ko": "파인튜닝",
+      "preferred_label_en": "Fine-tuning",
+      "aliases": ["파인튜닝", "Fine-tuning", "Fine Tuning"]
+    },
+    {
+      "concept_key": "l2c:skill:embedding",
+      "concept_type": "skill",
+      "preferred_label_ko": "임베딩",
+      "preferred_label_en": "Embedding",
+      "aliases": ["임베딩", "Embedding", "Embeddings"]
+    },
+    {
+      "concept_key": "l2c:skill:prompt_engineering",
+      "concept_type": "skill",
+      "preferred_label_ko": "프롬프트 엔지니어링",
+      "preferred_label_en": "Prompt Engineering",
+      "aliases": ["프롬프트 엔지니어링", "Prompt Engineering"]
+    },
+    {
+      "concept_key": "l2c:skill:tool_calling",
+      "concept_type": "skill",
+      "preferred_label_ko": "도구 호출",
+      "preferred_label_en": "Tool Calling",
+      "aliases": ["도구 호출", "Tool Calling", "Function Calling"]
+    },
+    {
+      "concept_key": "l2c:skill:multimodal_ai",
+      "concept_type": "skill",
+      "preferred_label_ko": "멀티모달 AI",
+      "preferred_label_en": "Multimodal AI",
+      "aliases": ["멀티모달 AI", "Multimodal AI", "Multimodal"]
+    },
+    {
+      "concept_key": "l2c:skill:swift_concurrency",
+      "concept_type": "skill",
+      "preferred_label_ko": "Swift Concurrency",
+      "preferred_label_en": "Swift Concurrency",
+      "aliases": ["Swift Concurrency", "async/await"]
+    },
+    {
+      "concept_key": "l2c:skill:tuist",
+      "concept_type": "skill",
+      "preferred_label_ko": "Tuist",
+      "preferred_label_en": "Tuist",
+      "aliases": ["Tuist"]
+    },
+    {
+      "concept_key": "l2c:skill:swiftui",
+      "concept_type": "skill",
+      "preferred_label_ko": "SwiftUI",
+      "preferred_label_en": "SwiftUI",
+      "aliases": ["SwiftUI", "Swift UI"]
+    },
+    {
+      "concept_key": "l2c:skill:rxswift",
+      "concept_type": "skill",
+      "preferred_label_ko": "RxSwift",
+      "preferred_label_en": "RxSwift",
+      "aliases": ["RxSwift", "Rx Swift"]
+    },
+    {
+      "concept_key": "l2c:skill:objective_c",
+      "concept_type": "skill",
+      "preferred_label_ko": "Objective-C",
+      "preferred_label_en": "Objective-C",
+      "aliases": ["Objective-C", "Objective C", "ObjC"]
+    },
+    {
+      "concept_key": "l2c:skill:cicd",
+      "concept_type": "skill",
+      "preferred_label_ko": "CI/CD",
+      "preferred_label_en": "CI/CD",
+      "aliases": ["CI/CD", "CI CD", "CICD"]
+    },
+    {
+      "concept_key": "l2c:skill:reactorkit",
+      "concept_type": "skill",
+      "preferred_label_ko": "ReactorKit",
+      "preferred_label_en": "ReactorKit",
+      "aliases": ["ReactorKit", "Reactor Kit"]
+    },
+    {
+      "concept_key": "l2c:skill:fastlane",
+      "concept_type": "skill",
+      "preferred_label_ko": "Fastlane",
+      "preferred_label_en": "Fastlane",
+      "aliases": ["Fastlane", "Fast Lane"]
+    },
+    {
+      "concept_key": "l2c:skill:xcode_cloud",
+      "concept_type": "skill",
+      "preferred_label_ko": "Xcode Cloud",
+      "preferred_label_en": "Xcode Cloud",
+      "aliases": ["Xcode Cloud", "XcodeCloud"]
+    },
+    {
+      "concept_key": "l2c:skill:tca",
+      "concept_type": "skill",
+      "preferred_label_ko": "The Composable Architecture",
+      "preferred_label_en": "The Composable Architecture",
+      "aliases": ["TCA", "The Composable Architecture"]
+    },
+    {
+      "concept_key": "l2c:skill:uikit",
+      "concept_type": "skill",
+      "preferred_label_ko": "UIKit",
+      "preferred_label_en": "UIKit",
+      "aliases": ["UIKit", "UI Kit"]
+    },
+    {
+      "concept_key": "l2c:skill:combine",
+      "concept_type": "skill",
+      "preferred_label_ko": "Combine",
+      "preferred_label_en": "Combine",
+      "aliases": ["Combine"]
+    },
+    {
+      "concept_key": "l2c:skill:cocoapods",
+      "concept_type": "skill",
+      "preferred_label_ko": "CocoaPods",
+      "preferred_label_en": "CocoaPods",
+      "aliases": ["CocoaPods", "Cocoa Pods"]
+    },
+    {
+      "concept_key": "l2c:skill:carthage",
+      "concept_type": "skill",
+      "preferred_label_ko": "Carthage",
+      "preferred_label_en": "Carthage",
+      "aliases": ["Carthage"]
+    },
+    {
+      "concept_key": "l2c:skill:github",
+      "concept_type": "skill",
+      "preferred_label_ko": "GitHub",
+      "preferred_label_en": "GitHub",
+      "aliases": ["GitHub", "Git Hub"]
+    },
+    {
+      "concept_key": "l2c:skill:flutter",
+      "concept_type": "skill",
+      "preferred_label_ko": "Flutter",
+      "preferred_label_en": "Flutter",
+      "aliases": ["Flutter"]
+    },
+    {
+      "concept_key": "l2c:skill:react_native",
+      "concept_type": "skill",
+      "preferred_label_ko": "React Native",
+      "preferred_label_en": "React Native",
+      "aliases": ["React Native", "ReactNative"]
+    }
+  ]
+}

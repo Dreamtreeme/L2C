@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from collections import Counter
 from datetime import datetime
 from typing import Any
 
@@ -174,6 +175,7 @@ def build_worker_submission(
         "summary_error": report_error,
         "current_url": current_url,
         "action_count": len(final_state.get("action_history", []) or []),
+        "result_availability": dict(final_state.get("result_availability", {}) or {}),
     }
     from agent.recipe.skill_metadata import build_skill_metadata_evidence
 
@@ -271,6 +273,8 @@ def shape_review(submission: dict[str, Any], issues: list[dict[str, Any]] | None
                 "Return collected job data with required fields, keep the OCR state/action evidence, "
                 "and avoid claiming success without extracted jobs. Issues: " + "; ".join(reasons)
             ),
+            accept_collected_data=False,
+            continue_collection=True,
             recipe_candidate=False,
             confidence=0.78,
         )
@@ -281,10 +285,106 @@ def shape_review(submission: dict[str, Any], issues: list[dict[str, Any]] | None
         decision="accept",
         reasons=warnings or ["submission shape is valid"],
         feedback_to_worker="",
+        accept_collected_data=True,
+        continue_collection=False,
         recipe_candidate=bool(submission.get("recorded_steps")) and int(submission.get("collected_count") or 0) > 0,
         confidence=0.62 if warnings else 0.72,
     )
     return dump_model(review)
+
+
+def build_worker_review_payload(
+    submission: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """실시간 승인에 필요한 결과만 남기고 학습용 실행 원본은 제외한다."""
+
+    summary = submission.get("extracted_summary")
+    summary = summary if isinstance(summary, dict) else {}
+    intent = submission.get("collection_intent")
+    intent = intent if isinstance(intent, dict) else {}
+    feedback = [
+        item
+        for item in (submission.get("feedback_episodes") or [])
+        if isinstance(item, dict)
+    ]
+    transitions = [
+        item
+        for item in (submission.get("transition_observations") or [])
+        if isinstance(item, dict)
+    ]
+    steps = [
+        item
+        for item in (submission.get("recorded_steps") or [])
+        if isinstance(item, dict)
+    ]
+    feedback_counts = Counter(
+        str((item.get("feedback") or {}).get("label") or "unknown")
+        for item in feedback
+        if isinstance(item.get("feedback"), dict)
+    )
+    action_counts = Counter(str(item.get("action") or "unknown") for item in steps)
+    failure_feedback = []
+    for item in feedback:
+        result = item.get("feedback") if isinstance(item.get("feedback"), dict) else {}
+        if result.get("label") not in {"wrong_target", "no_effect", "loop_risk", "error"}:
+            continue
+        proposal = item.get("proposal") if isinstance(item.get("proposal"), dict) else {}
+        failure_feedback.append(
+            {
+                "seq": item.get("seq"),
+                "action": proposal.get("action") or "",
+                "label": result.get("label") or "",
+                "reason": str(result.get("reason") or "")[:500],
+            }
+        )
+    transition_failures = []
+    for item in transitions:
+        status = str(item.get("status") or "").lower()
+        if status in {"", "success", "passed", "complete", "completed"}:
+            continue
+        transition_failures.append(
+            {
+                "action_seq": item.get("action_seq"),
+                "action": item.get("action") or "",
+                "status": status,
+                "reason": str(item.get("reason") or "")[:500],
+            }
+        )
+    user_request = str(intent.get("original_query") or "").strip()
+    return {
+        "request": {
+            "user_request": user_request or str(submission.get("goal") or "")[:1200],
+            "site": submission.get("site") or "",
+            "keyword": submission.get("keyword") or "",
+            "task_category": submission.get("task_category") or "",
+            "target_count": int(submission.get("target_count") or 0),
+            "collection_intent": intent,
+        },
+        "execution": {
+            "run_status": submission.get("run_status") or "",
+            "is_finished": bool(submission.get("is_finished", False)),
+            "hit_recursion_limit": bool(submission.get("hit_recursion_limit", False)),
+            "collected_count": int(submission.get("collected_count") or 0),
+            "persisted_count": int(submission.get("persisted_count") or 0),
+            "result_availability": dict(summary.get("result_availability") or {}),
+            "action_count": int(summary.get("action_count") or len(steps)),
+            "action_counts": dict(action_counts),
+            "feedback_counts": dict(feedback_counts),
+            "failure_feedback": failure_feedback[:12],
+            "transition_failures": transition_failures[:12],
+        },
+        "jobs": list(submission.get("semantic_evidence") or [])[:20],
+        "job_summary": list(summary.get("jobs") or [])[:20],
+        "shape_issues": issues,
+        "review_rules": [
+            "수집된 공고의 관련성과 저장 가능 여부를 실행 완료 여부와 별도로 판단한다.",
+            "관련 있는 유효 공고가 있으면 목표 개수 미달이어도 accept_collected_data=true로 둔다.",
+            "같은 검색 범위에서 추가 행동이 꼭 필요할 때만 continue_collection=true로 둔다.",
+            "화면에 확인된 전체 결과를 모두 처리했다면 목표 개수 미달만으로 재실행하지 않는다.",
+            "레시피 승격은 후처리 Critic이 판단하므로 여기서는 후보 여부만 표시한다.",
+        ],
+    }
 
 
 def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallback: dict[str, Any]) -> dict[str, Any]:
@@ -293,21 +393,15 @@ def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallba
 
     model_name = os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash")
     llm = get_structured_google_model(model_name, CommanderReview, temperature=0.0)
-    compact = {
-        "submission": submission,
-        "shape_issues": issues,
-        "review_rules": [
-            "Accept only if the submitted jobs and UI evidence plausibly satisfy the user goal.",
-            "Revise when the worker clicked/collected the wrong target, omitted required data, or needs another run.",
-            "Reject only when the site/run cannot satisfy the goal after available feedback.",
-            "Do not activate a Reflex recipe; only mark whether it is a candidate for later replay testing.",
-        ],
-    }
+    compact = build_worker_review_payload(submission, issues)
     messages = [
         SystemMessage(
             content=(
                 "You are the commander reviewing a child vision worker submission. "
-                "Return only the structured CommanderReview schema."
+                "Return only the structured CommanderReview schema. Decide data acceptance separately from "
+                "whether another collection attempt is needed. Set accept_collected_data=true for relevant, "
+                "persistable jobs even when the requested count was not reached. Set continue_collection=true "
+                "only when another attempt in the same search scope is necessary."
             )
         ),
         HumanMessage(content=json.dumps(compact, ensure_ascii=False, indent=2)),
@@ -326,7 +420,8 @@ def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallba
                 HumanMessage(
                     content=(
                         "Your previous review was not valid CommanderReview JSON/schema output. "
-                        "Retry with fields: decision, reasons, feedback_to_worker, recipe_candidate, confidence."
+                        "Retry with fields: decision, reasons, feedback_to_worker, accept_collected_data, "
+                        "continue_collection, recipe_candidate, confidence."
                     )
                 )
             )
@@ -360,3 +455,14 @@ def render_review_feedback(review: dict[str, Any]) -> str:
         "Commander review rejected the previous worker submission. "
         "Use this feedback on the next attempt: " + feedback
     )
+
+
+__all__ = [
+    "build_worker_review_payload",
+    "build_worker_submission",
+    "new_worker_run_id",
+    "render_review_feedback",
+    "review_worker_submission",
+    "shape_review",
+    "validate_submission_shape",
+]

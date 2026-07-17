@@ -51,6 +51,18 @@ def test_collection_intent_preserves_date_filters_and_analysis_goal():
     assert intent.analysis_goal == "회사별 요구 기술 비교"
 
 
+def test_collection_intent_accepts_lookup_as_collection_reason():
+    intent = normalize_collection_intent(
+        {
+            "site": "wanted",
+            "search_keyword": "iOS 개발자",
+            "purpose": "lookup",
+        }
+    )
+
+    assert intent.purpose == CollectionPurpose.LOOKUP
+
+
 def test_realtime_scraping_tool_exposes_structured_request_fields():
     from agent.tools.realtime_scraping import realtime_scraping
 

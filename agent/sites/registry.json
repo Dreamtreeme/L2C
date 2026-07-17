@@ -12,7 +12,7 @@
       "runner": "vision_react",
       "classic_adapter": "wanted",
       "manual_path": "wanted/manual.json",
-      "prompt_path": "wanted/prompt.md",
+      "skill_path": "wanted/SKILL.md",
       "tools_path": "wanted/tools.json"
     },
     {
@@ -25,7 +25,7 @@
       "runner": "vision_react",
       "classic_adapter": "jobkorea",
       "manual_path": "jobkorea/manual.json",
-      "prompt_path": "jobkorea/prompt.md",
+      "skill_path": "jobkorea/SKILL.md",
       "tools_path": "jobkorea/tools.json"
     },
     {
@@ -38,7 +38,7 @@
       "runner": "vision_react",
       "classic_adapter": "saramin",
       "manual_path": "saramin/manual.json",
-      "prompt_path": "saramin/prompt.md",
+      "skill_path": "saramin/SKILL.md",
       "tools_path": "saramin/tools.json"
     },
     {
@@ -51,7 +51,7 @@
       "runner": "vision_react",
       "classic_adapter": "worknet",
       "manual_path": "worknet/manual.json",
-      "prompt_path": "worknet/prompt.md",
+      "skill_path": "worknet/SKILL.md",
       "tools_path": "worknet/tools.json"
     },
     {
@@ -64,7 +64,7 @@
       "runner": "vision_react",
       "classic_adapter": "rocketpunch",
       "manual_path": "rocketpunch/manual.json",
-      "prompt_path": "rocketpunch/prompt.md",
+      "skill_path": "rocketpunch/SKILL.md",
       "tools_path": "rocketpunch/tools.json"
     }
   ]

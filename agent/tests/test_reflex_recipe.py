@@ -815,6 +815,270 @@ def test_card_queue_marks_active_and_done():
     assert active == {}
 
 
+def test_existing_job_url_trace_checks_current_run_and_database(tmp_path, monkeypatch):
+    import sqlite3
+
+    from agent.runtime.duplicate_job_policy import existing_job_url_trace
+
+    monkeypatch.setenv("VISION_SKIP_EXISTING_JOB_DETAILS", "1")
+    db_path = tmp_path / "jobs.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, url TEXT NOT NULL)")
+        connection.execute("INSERT INTO jobs(url) VALUES (?)", ("https://www.wanted.co.kr/wd/2",))
+
+    current_run = existing_job_url_trace(
+        "https://www.wanted.co.kr/wd/1",
+        {"공고목록": [{"url": "https://www.wanted.co.kr/wd/1"}]},
+        db_path=db_path,
+    )
+    database = existing_job_url_trace(
+        "https://www.wanted.co.kr/wd/2/",
+        {},
+        db_path=db_path,
+    )
+    missing = existing_job_url_trace(
+        "https://www.wanted.co.kr/wd/3",
+        {},
+        db_path=db_path,
+    )
+
+    assert current_run["source"] == "current_run"
+    assert database["source"] == "database"
+    assert missing["matched"] is False
+
+
+def test_perception_skips_existing_active_job_before_ocr(monkeypatch, tmp_path):
+    from PIL import Image
+
+    from agent.graph import nodes
+
+    screenshot = tmp_path / "detail.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+
+    class FakePerception:
+        last_capture_quality = {}
+
+        def capture_screen(self):
+            return screenshot
+
+        def get_current_url(self):
+            return "https://www.wanted.co.kr/wd/123"
+
+        def analyze_ui(self, _path):
+            raise AssertionError("중복 상세에서는 전체 OCR을 실행하면 안 됩니다.")
+
+    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(
+        nodes,
+        "_existing_job_url_trace",
+        lambda _url, _extracted: {"matched": True, "source": "database", "job_id": 7},
+    )
+    monkeypatch.setattr(
+        nodes,
+        "_raw_screen_phash_signature",
+        lambda _path: {"phash": "a" * 16, "size": [800, 600]},
+    )
+    monkeypatch.setattr(nodes, "_transition_has_visual_change", lambda *_args: (True, 0.5))
+
+    result = nodes.perception_node(
+        {
+            "current_url": "https://www.wanted.co.kr/search?query=ai",
+            "current_url_stale": True,
+            "pending_transition": {"action": "click_marker", "source": "card_queue"},
+            "active_result_card": {"queue_id": "card-1", "title": "AI 엔지니어"},
+            "result_card_queue": [
+                {"queue_id": "card-1", "status": "active", "title": "AI 엔지니어"},
+                {"queue_id": "card-2", "status": "pending", "title": "ML 엔지니어"},
+            ],
+            "extracted_jd": {},
+        }
+    )
+
+    assert result["page_policy_hit"] is True
+    assert result["page_policy_trace"]["policy"] == "skip_existing_job_detail"
+    assert result["step_durations"][0]["ocr_skipped"] is True
+    assert result["result_card_queue"][0]["status"] == "skipped"
+    assert result["result_card_queue"][0]["job_id"] == 7
+    assert result["active_result_card"] == {}
+    assert result["last_action_result"].tool_calls[0]["name"] == "go_back"
+
+
+def test_perception_finishes_when_last_visible_card_is_existing(monkeypatch, tmp_path):
+    from PIL import Image
+
+    from agent.graph import nodes
+
+    screenshot = tmp_path / "last-duplicate.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+
+    class FakePerception:
+        last_capture_quality = {}
+
+        def capture_screen(self):
+            return screenshot
+
+        def get_current_url(self):
+            return "https://www.wanted.co.kr/wd/123"
+
+        def analyze_ui(self, _path):
+            raise AssertionError("마지막 중복 상세에서는 전체 OCR을 실행하면 안 됩니다.")
+
+    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(
+        nodes,
+        "_existing_job_url_trace",
+        lambda _url, _extracted: {"matched": True, "source": "database", "job_id": 7},
+    )
+    monkeypatch.setattr(
+        nodes,
+        "_raw_screen_phash_signature",
+        lambda _path: {"phash": "a" * 16, "size": [800, 600]},
+    )
+    monkeypatch.setattr(nodes, "_transition_has_visual_change", lambda *_args: (True, 0.5))
+
+    result = nodes.perception_node(
+        {
+            "current_url": "https://www.wanted.co.kr/search?query=ai",
+            "current_url_stale": True,
+            "pending_transition": {"action": "click_marker", "source": "card_queue"},
+            "active_result_card": {"queue_id": "card-1", "title": "AI 엔지니어"},
+            "result_card_queue": [
+                {"queue_id": "card-1", "status": "active", "title": "AI 엔지니어"},
+            ],
+            "recipe_params": {"target_count": 0, "count_mode": "visible_all"},
+            "extracted_jd": {},
+        }
+    )
+
+    assert result["page_policy_trace"]["policy"] == "finish_existing_job_queue"
+    assert result["result_card_queue"][0]["status"] == "skipped"
+    assert result["last_action_result"].tool_calls[0]["name"] == "finish_task"
+    assert result["last_action_result"].tool_calls[0]["args"]["result"]
+
+
+def test_perception_replays_next_card_after_go_back_without_ocr(monkeypatch, tmp_path):
+    from PIL import Image
+
+    from agent.graph import nodes
+
+    screenshot = tmp_path / "returned-list.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+
+    class FakePerception:
+        last_capture_quality = {}
+
+        def capture_screen(self):
+            return screenshot
+
+        def get_current_url(self):
+            return "https://www.wanted.co.kr/search?query=ai"
+
+        def analyze_ui(self, _path):
+            raise AssertionError("pHash가 일치한 목록 복귀에서는 전체 OCR을 실행하면 안 됩니다.")
+
+    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(
+        nodes,
+        "_raw_screen_phash_signature",
+        lambda _path: {"phash": "0" * 16, "size": [800, 600]},
+    )
+    monkeypatch.setattr(nodes, "_transition_has_visual_change", lambda *_args: (True, 0.5))
+
+    result = nodes.perception_node(
+        {
+            "current_url": "https://www.wanted.co.kr/wd/1",
+            "current_url_stale": True,
+            "pending_transition": {
+                "action": "go_back",
+                "source": "page_policy",
+                "before_url": "https://www.wanted.co.kr/wd/1",
+                "before_phash": "f" * 16,
+            },
+            "active_result_card": {},
+            "result_card_queue": [
+                {
+                    "queue_id": "card-2",
+                    "status": "pending",
+                    "title": "두 번째 AI 엔지니어",
+                    "bbox_ratio": [0.2, 0.3, 0.5, 0.4],
+                    "center_ratio": [0.35, 0.35],
+                },
+            ],
+            "result_page_memory": {
+                "marked_image": "cached-marked.png",
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "anchors": ["두 번째 AI 엔지니어"],
+                    "size": [800, 600],
+                },
+            },
+            "detail_ocr_buffer": {},
+        }
+    )
+
+    assert result["queue_replay_hit"] is True
+    assert result["step_durations"][0]["ocr_skipped"] is True
+    assert result["step_durations"][0]["reason"] == "queue_return_phash_match"
+    assert result["last_action_result"].tool_calls[0]["args"]["queue_id"] == "card-2"
+    assert result["current_markers"][0]["bbox"] == [160, 180, 400, 240]
+
+
+def test_result_card_selector_can_refill_exhausted_queue():
+    from agent.runtime.result_card_selector import should_select_result_cards
+
+    state = {
+        "current_page_role": "search",
+        "recipe_params": {"target_count": 2},
+        "extracted_jd": {},
+        "result_card_queue": [
+            {"queue_id": "card-1", "status": "skipped", "title": "이미 본 공고"},
+        ],
+        "active_result_card": {},
+        "current_markers": [{"id": 1, "text": "새 공고"}],
+        "marked_image": "marked.png",
+    }
+
+    assert should_select_result_cards(state) is True
+
+
+def test_result_card_selector_refills_when_target_sized_queue_is_all_duplicates():
+    from agent.runtime.result_card_selector import should_select_result_cards
+
+    state = {
+        "current_page_role": "search",
+        "recipe_params": {"target_count": 2},
+        "extracted_jd": {},
+        "result_card_queue": [
+            {"queue_id": "card-1", "status": "skipped", "title": "첫 번째 중복 공고"},
+            {"queue_id": "card-2", "status": "skipped", "title": "두 번째 중복 공고"},
+        ],
+        "active_result_card": {},
+        "current_markers": [{"id": 1, "text": "새 공고"}],
+        "marked_image": "marked.png",
+    }
+
+    assert should_select_result_cards(state) is True
+
+
+def test_result_card_selector_does_not_refill_completed_visible_queue():
+    from agent.runtime.result_card_selector import should_select_result_cards
+
+    state = {
+        "current_page_role": "search",
+        "recipe_params": {"target_count": 0, "count_mode": "visible_all"},
+        "extracted_jd": {},
+        "result_card_queue": [
+            {"queue_id": "card-1", "status": "skipped", "title": "이미 본 공고"},
+            {"queue_id": "card-2", "status": "done", "title": "새로 수집한 공고"},
+        ],
+        "active_result_card": {},
+        "current_markers": [{"id": 1, "text": "화면 아래 공고"}],
+        "marked_image": "marked.png",
+    }
+
+    assert should_select_result_cards(state) is False
+
+
 def test_card_queue_marks_active_when_card_click_uses_title_label():
     from agent.graph import nodes
 
@@ -2379,6 +2643,8 @@ def test_worker_submission_review_accepts_structured_data(monkeypatch):
     review = review_worker_submission(submission)
 
     assert review["decision"] == "accept"
+    assert review["accept_collected_data"] is True
+    assert review["continue_collection"] is False
     assert review["recipe_candidate"] is True
     assert submission["task_category"] == ""
     assert submission["skill_metadata_evidence"]["site"] == "wanted"
@@ -2386,6 +2652,68 @@ def test_worker_submission_review_accepts_structured_data(monkeypatch):
     assert submission["skill_metadata_evidence"]["actions"] == ["click_marker"]
     assert submission["skill_metadata_evidence"]["step_intents"][0]["expected_after"] == "job detail page is visible"
     assert submission["transition_observations"][0]["action_seq"] == 0
+
+
+def test_worker_review_payload_excludes_repeated_screen_trace():
+    import json
+
+    from agent.recipe.reviewer import build_worker_review_payload
+
+    repeated_goal = "긴 작업 목표 " * 500
+    submission = {
+        "goal": repeated_goal,
+        "site": "wanted",
+        "keyword": "AI 에이전트",
+        "target_count": 2,
+        "run_status": "finished",
+        "is_finished": True,
+        "collected_count": 1,
+        "collection_intent": {
+            "original_query": "AI 에이전트 공고를 찾아줘",
+            "search_keyword": "AI 에이전트",
+        },
+        "semantic_evidence": [
+            {
+                "company_name": "예시회사",
+                "position": "AI Agent Engineer",
+                "url": "https://example.com/jobs/1",
+            }
+        ],
+        "extracted_summary": {
+            "jobs": [{"company": "예시회사", "position": "AI Agent Engineer"}],
+            "result_availability": {
+                "available_result_count": 1,
+                "count_evidence": "포지션 1",
+                "count_confidence": 0.95,
+            },
+        },
+        "recorded_steps": [{"seq": 1, "action": "click_marker", "roi_signature": "ROI_SECRET"}],
+        "feedback_episodes": [
+            {
+                "seq": index,
+                "goal": repeated_goal,
+                "proposal": {"action": "click_marker"},
+                "observation": {
+                    "before": {"marker_texts": ["OCR_SECRET"] * 100},
+                    "after": {},
+                    "result": {},
+                },
+                "feedback": {"label": "success", "reason": "완료"},
+            }
+            for index in range(20)
+        ],
+        "transition_observations": [
+            {"action_seq": 1, "status": "success", "marker_texts": ["OCR_SECRET"] * 100}
+        ],
+    }
+
+    payload = build_worker_review_payload(submission, [])
+    encoded = json.dumps(payload, ensure_ascii=False)
+
+    assert "OCR_SECRET" not in encoded
+    assert "ROI_SECRET" not in encoded
+    assert repeated_goal not in encoded
+    assert len(encoded) < 10000
 
 
 def test_worker_submission_defaults_to_shape_review(monkeypatch):
@@ -3128,6 +3456,49 @@ def _sample_worker_result_for_learning_mode():
     }
 
 
+def test_realtime_persists_review_accepted_partial_data_without_recipe(monkeypatch):
+    from agent.tools import realtime_scraping as rs
+
+    monkeypatch.setenv("VISION_RECIPE_LEARNING_MODE", "record")
+    monkeypatch.setattr(
+        rs,
+        "_persist_collected_data_with_report",
+        lambda extracted, keyword, collection_intent=None: {
+            "submitted_count": 1,
+            "persisted_count": 1,
+            "created_count": 1,
+            "updated_count": 0,
+            "persisted_items": [{"job_id": 1, "url": "https://example.com/jobs/1"}],
+            "rejected_count": 0,
+            "rejected_items": [],
+        },
+    )
+    candidates = []
+    monkeypatch.setattr(
+        rs,
+        "_commit_recipe_candidate",
+        lambda *args, **kwargs: candidates.append(args) or "candidate-1",
+    )
+    monkeypatch.setattr(
+        "agent.recipe.submission_store.SubmissionStore.commit_submission",
+        lambda self, submission, review=None, source="": "worker-partial:0",
+    )
+
+    persisted_count, _submission, review, _submission_id = rs.persist_accepted_worker_result(
+        _sample_worker_result_for_learning_mode(),
+        {
+            "decision": "revise",
+            "accept_collected_data": True,
+            "continue_collection": True,
+            "recipe_candidate": False,
+        },
+    )
+
+    assert persisted_count == 1
+    assert review["decision"] == "revise"
+    assert candidates == []
+
+
 def test_realtime_recipe_learning_mode_off_skips_candidate(monkeypatch):
     from agent.tools import realtime_scraping as rs
 
@@ -3355,3 +3726,48 @@ def test_review_recipe_candidates_tool_returns_batch_json(monkeypatch):
     assert seen == {"limit": 2, "mode": "promote", "status": "accepted"}
     assert payload["mode"] == "promote"
     assert payload["requested_limit"] == 2
+def test_parameterized_reflex_input_requires_runtime_slot_value():
+    from agent.runtime.reflex_runtime import reflex_action_args
+
+    step = {
+        "action": "type_in_marker",
+        "replay_mode": "parameterized",
+        "param": {"slot_name": "result_filter_query", "text": "iOS"},
+        "value": "iOS",
+    }
+
+    assert reflex_action_args(step, 12, params={"query": "데이터 엔지니어"}) is None
+    assert reflex_action_args(
+        step,
+        12,
+        params={"result_filter_query": "데이터 엔지니어"},
+    )["text"] == "데이터 엔지니어"
+
+
+def test_skill_metadata_marks_parameter_candidate_as_required():
+    from agent.recipe.skill_metadata import build_skill_metadata_evidence
+
+    evidence = build_skill_metadata_evidence(
+        goal="필터로 검색",
+        site="wanted",
+        keyword="iOS",
+        target_count=2,
+        recorded_steps=[],
+        feedback_episodes=[
+            {
+                "proposal": {
+                    "parameter_candidates": [
+                        {
+                            "slot_candidate": "result_filter_query",
+                            "value": "iOS",
+                            "reason": "현재 요청의 필터 검색어",
+                        }
+                    ]
+                }
+            }
+        ],
+        extracted_summary={},
+    )
+
+    slot = next(item for item in evidence["inputs"] if item["name"] == "result_filter_query")
+    assert slot["required"] is True

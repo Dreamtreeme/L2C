@@ -7,6 +7,7 @@ from benchmark.investigation_scenarios import INVESTIGATION_SCENARIOS
 from shared.schema.investigation_schema import (
     ClarificationOption,
     ClarificationQuestion,
+    EvidencePolicy,
     EvidencePlan,
     EvidenceRequirement,
     InvestigationConstraints,
@@ -27,77 +28,44 @@ def test_twelve_regression_scenarios_are_unique_and_cover_service_boundaries():
     assert sum(item.requires_verified_posted_at for item in INVESTIGATION_SCENARIOS) >= 4
 
 
-def test_request_analysis_rejects_unresolved_field_without_question():
-    with pytest.raises(ValueError, match="대응하는 확인 질문"):
-        RequestAnalysis(
-            objective="최근 채용 트렌드",
-            deliverable="트렌드 요약",
-            purpose=InvestigationPurpose.TREND,
-            unresolved_fields=["recent_period"],
-        )
-
-
-def test_request_analysis_accepts_relative_period_question_alias():
+def test_request_analysis_does_not_require_question_for_assumed_period():
     analysis = RequestAnalysis(
         objective="최근 공고 분석",
         deliverable="기술 요약",
         purpose=InvestigationPurpose.TREND,
-        unresolved_fields=["posted_from"],
-        clarification_questions=[
-            ClarificationQuestion(
-                question_id="recent_period",
-                field="recent_period",
-                question="기간을 선택해 주세요.",
-                options=[
-                    ClarificationOption(
-                        option_id="three_months",
-                        label="최근 3개월",
-                        value="P3M",
-                    )
-                ],
-            )
-        ],
+        constraints=InvestigationConstraints(
+            posted_from="2026-04-14",
+            posted_to="2026-07-14",
+            comparison_posted_from="2026-01-14",
+            comparison_posted_to="2026-04-13",
+        ),
+        assumptions=["요즘을 최근 3개월로 해석했다."],
     )
 
-    assert analysis.unresolved_fields == ["posted_from"]
+    assert analysis.clarification_questions == []
+    assert analysis.constraints.posted_from == "2026-04-14"
 
 
-def test_unspecified_count_mode_alias_does_not_create_arbitrary_limit():
-    constraints = InvestigationConstraints(count_mode="limit", target_count=0)
+def test_investigation_constraints_reject_unknown_count_mode():
+    with pytest.raises(ValueError):
+        InvestigationConstraints(count_mode="limit", target_count=0)
 
-    assert constraints.count_mode == "unspecified"
+
+def test_occupation_expression_clears_missing_scope_flag():
+    constraints = InvestigationConstraints(
+        occupation_scope_required=True,
+        occupation_query="개발자",
+    )
+
+    assert constraints.occupation_scope_required is False
 
 
-def test_ambiguous_trend_quality_requires_questions_before_evidence():
+def test_ambiguous_trend_quality_assumes_period_and_only_asks_for_goal():
     scenario = INVESTIGATION_SCENARIOS[0]
     questions = [
         ClarificationQuestion(
-            question_id="recent_period",
-            field="recent_period",
-            question="최근 기간을 선택해 주세요.",
-            options=[
-                ClarificationOption(
-                    option_id="three_months",
-                    label="최근 3개월",
-                    value="P3M",
-                )
-            ],
-        ),
-        ClarificationQuestion(
-            question_id="job_scope",
-            field="search_keywords",
-            question="어떤 개발자 직군을 볼까요?",
-            options=[
-                ClarificationOption(
-                    option_id="all_developers",
-                    label="개발자 전체",
-                    value="개발자",
-                )
-            ],
-        ),
-        ClarificationQuestion(
             question_id="trend_metric",
-            field="trend_metric",
+            field="analysis_dimensions",
             question="어떤 변화를 볼까요?",
             options=[
                 ClarificationOption(
@@ -112,18 +80,77 @@ def test_ambiguous_trend_quality_requires_questions_before_evidence():
         objective="개발자 채용 트렌드 확인",
         deliverable="기간별 변화 요약",
         purpose=InvestigationPurpose.TREND,
-        constraints=InvestigationConstraints(count_mode="visible_all"),
-        unresolved_fields=[
-            "recent_period",
-            "search_keywords",
-            "trend_metric",
-        ],
+        evidence_policy=EvidencePolicy.WEB_REQUIRED,
+        constraints=InvestigationConstraints(
+            occupation_query="개발자",
+            collection_search_term="개발자",
+            count_mode="visible_all",
+            posted_from="2026-04-14",
+            posted_to="2026-07-14",
+            comparison_posted_from="2026-01-14",
+            comparison_posted_to="2026-04-13",
+        ),
+        assumptions=["요즘을 최근 3개월로 해석했다."],
         clarification_questions=questions,
     )
 
     result = evaluate_investigation_analysis(scenario, analysis)
 
     assert result["passed"] is True
+
+
+def test_monthly_growth_quality_uses_model_assumption_without_period_question():
+    scenario = next(
+        item for item in INVESTIGATION_SCENARIOS if item.scenario_id == "ai_monthly_growth"
+    )
+    analysis = RequestAnalysis(
+        objective="AI 개발자 채용 공고 수 변화 확인",
+        deliverable="동일 길이 기간의 공고 수 비교",
+        purpose=InvestigationPurpose.TREND,
+        evidence_policy=EvidencePolicy.WEB_REQUIRED,
+        constraints=InvestigationConstraints(
+            occupation_query="AI 개발자",
+            collection_search_term="AI 개발자",
+            sites=["wanted"],
+            posted_from="2026-07-01",
+            posted_to="2026-07-14",
+            comparison_posted_from="2026-06-01",
+            comparison_posted_to="2026-06-14",
+            count_mode="visible_all",
+            analysis_dimensions=["공고 수"],
+        ),
+        assumptions=["진행 중인 이번 달과 지난달의 같은 일수 구간을 비교한다."],
+    )
+    evidence_plan = EvidencePlan(
+        requirements=[
+            EvidenceRequirement(
+                requirement_id="current",
+                description="이번 달 AI 개발자 공고",
+                occupation_query="AI 개발자",
+                collection_search_term="AI 개발자",
+                posted_from="2026-07-01",
+                posted_to="2026-07-14",
+                required_fields=["posted_at", "position"],
+            ),
+            EvidenceRequirement(
+                requirement_id="comparison",
+                description="지난달 같은 기간 AI 개발자 공고",
+                occupation_query="AI 개발자",
+                collection_search_term="AI 개발자",
+                posted_from="2026-06-01",
+                posted_to="2026-06-14",
+                required_fields=["posted_at", "position"],
+            ),
+        ]
+    )
+
+    result = evaluate_investigation_analysis(scenario, analysis, evidence_plan)
+    incomplete_result = evaluate_investigation_analysis(scenario, analysis)
+
+    assert analysis.clarification_questions == []
+    assert result["passed"] is True
+    assert incomplete_result["checks"]["evidence_plan"] is False
+    assert incomplete_result["passed"] is False
 
 
 @pytest.mark.parametrize(

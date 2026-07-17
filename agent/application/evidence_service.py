@@ -8,24 +8,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from shared.schema.agent_contract import EVIDENCE_FIELDS, EvidenceDocument
 from shared.schema.investigation_schema import EvidenceRequirement, InvestigationConstraints
-
-
-EVIDENCE_FIELDS = (
-    "company_name",
-    "position",
-    "job_category",
-    "experience_text",
-    "employment_type",
-    "location",
-    "posted_at",
-    "tech_stack",
-    "main_tasks",
-    "requirements",
-    "preferred",
-    "benefits",
-    "raw_ocr_text",
-)
 
 
 def _parse_date(value: Any) -> date | None:
@@ -38,31 +22,50 @@ def _parse_date(value: Any) -> date | None:
         return None
 
 
-def _matches_keyword(row: sqlite3.Row, keywords: list[str]) -> bool:
-    normalized = [item.casefold().strip() for item in keywords if item.strip()]
-    if not normalized:
+def _matches_exact_text_groups(
+    row: sqlite3.Row,
+    text_groups: list[list[str]],
+) -> bool:
+    normalized_groups = [
+        [str(item).casefold().strip() for item in group if str(item).strip()]
+        for group in text_groups
+        if isinstance(group, list)
+    ]
+    normalized_groups = [group for group in normalized_groups if group]
+    if not normalized_groups:
         return True
     haystack = " ".join(
         str(row[field] or "")
         for field in ("position", "job_category", "raw_ocr_text")
     ).casefold()
-    return any(keyword in haystack for keyword in normalized)
+    return all(
+        any(term in haystack for term in group)
+        for group in normalized_groups
+    )
 
 
 def _rows_for_requirement(
     rows: list[sqlite3.Row],
     requirement: EvidenceRequirement,
     constraints: InvestigationConstraints,
+    allowed_job_ids: set[int] | None = None,
 ) -> list[sqlite3.Row]:
-    keywords = requirement.search_keywords or constraints.search_keywords
-    sites = set(requirement.required_sites or constraints.sites)
+    exact_text_groups = requirement.exact_text_groups or constraints.exact_text_groups
+    sites = {
+        str(site).strip().casefold()
+        for site in (requirement.required_sites or constraints.sites)
+        if str(site).strip()
+    }
     start = _parse_date(requirement.posted_from)
     end = _parse_date(requirement.posted_to)
     matched: list[sqlite3.Row] = []
     for row in rows:
-        if sites and str(row["source_platform"] or "") not in sites:
+        if allowed_job_ids is not None and int(row["id"]) not in allowed_job_ids:
             continue
-        if not _matches_keyword(row, keywords):
+        source_platform = str(row["source_platform"] or "").strip().casefold()
+        if sites and source_platform not in sites:
+            continue
+        if exact_text_groups and not _matches_exact_text_groups(row, exact_text_groups):
             continue
         posted_at = _parse_date(row["posted_at"])
         if start and (posted_at is None or posted_at < start):
@@ -88,10 +91,58 @@ def inspect_job_evidence(
     finally:
         conn.close()
 
+    from agent.application.search_taxonomy_service import SearchTaxonomyService
+
+    taxonomy = SearchTaxonomyService(db_path)
+
     reports: list[dict[str, Any]] = []
     all_document_ids: set[int] = set()
+    taxonomy_constraints = constraints.model_copy(
+        update={"location": "", "experience": "", "employment_type": ""}
+    )
     for requirement in requirements:
-        matched = _rows_for_requirement(rows, requirement, constraints)
+        candidate_sets: list[set[int]] = []
+        resolved_occupation_keys = (
+            requirement.occupation_concept_keys
+            or constraints.occupation_concept_keys
+        )
+        domain_keys = (
+            requirement.occupation_domain_concept_keys
+            or constraints.occupation_domain_concept_keys
+        )
+        occupation_filter_keys = (
+            resolved_occupation_keys
+            or requirement.occupation_domain_concept_keys
+            or constraints.occupation_domain_concept_keys
+        )
+        if occupation_filter_keys:
+            candidate_sets.append(
+                taxonomy.matching_occupation_job_ids(
+                    occupation_filter_keys,
+                    taxonomy_constraints,
+                )
+            )
+        skill_keys = requirement.skill_concept_keys or constraints.skill_concept_keys
+        if skill_keys:
+            candidate_sets.append(
+                taxonomy.matching_skill_job_ids(
+                    skill_keys,
+                    taxonomy_constraints,
+                    match_mode=requirement.skill_match_mode,
+                    requirement_type=requirement.skill_requirement_type,
+                )
+            )
+        allowed_job_ids = (
+            set.intersection(*candidate_sets)
+            if candidate_sets
+            else None
+        )
+        matched = _rows_for_requirement(
+            rows,
+            requirement,
+            constraints,
+            allowed_job_ids,
+        )
         all_document_ids.update(int(row["id"]) for row in matched)
         field_coverage = {
             field: sum(1 for row in matched if str(row[field] or "").strip())
@@ -117,6 +168,23 @@ def inspect_job_evidence(
             {
                 "requirement_id": requirement.requirement_id,
                 "description": requirement.description,
+                "occupation_domain_query": requirement.occupation_domain_query,
+                "occupation_domain_concept_keys": list(domain_keys),
+                "occupation_query": requirement.occupation_query,
+                "occupation_concept_keys": list(resolved_occupation_keys),
+                "skill_queries": list(requirement.skill_queries),
+                "skill_concept_keys": list(skill_keys),
+                "semantic_review_required": bool(
+                    (requirement.occupation_query and not resolved_occupation_keys)
+                    or (
+                        requirement.occupation_domain_query
+                        and not domain_keys
+                    )
+                    or (requirement.skill_queries and not skill_keys)
+                    or constraints.location
+                    or constraints.experience
+                    or constraints.employment_type
+                ),
                 "matching_count": len(matched),
                 "verified_posted_at_count": len(posted_dates),
                 "oldest_posted_at": min(posted_dates).isoformat() if posted_dates else "",
@@ -135,6 +203,9 @@ def inspect_job_evidence(
                         "location": str(row["location"] or ""),
                         "posted_at": str(row["posted_at"] or ""),
                         "source_platform": str(row["source_platform"] or ""),
+                        "tech_stack": str(row["tech_stack"] or ""),
+                        "requirements": str(row["requirements"] or ""),
+                        "preferred": str(row["preferred"] or ""),
                         "field_presence": {
                             field: bool(str(row[field] or "").strip())
                             for field in requirement.required_fields
@@ -160,4 +231,52 @@ def inspect_job_evidence(
     }
 
 
-__all__ = ["inspect_job_evidence"]
+def load_job_evidence_documents(
+    db_path: str | Path,
+    document_ids: list[int],
+) -> list[EvidenceDocument]:
+    """검증된 ID의 공고를 답변용 구조화 문서로 조회한다."""
+
+    ids = sorted({int(document_id) for document_id in document_ids if int(document_id) > 0})
+    if not ids:
+        return []
+    selected_fields = (
+        "id",
+        "url",
+        "company_name",
+        "position",
+        "job_category",
+        "experience_text",
+        "employment_type",
+        "location",
+        "posted_at",
+        "posted_at_text",
+        "tech_stack",
+        "main_tasks",
+        "requirements",
+        "preferred",
+        "benefits",
+        "raw_ocr_text",
+    )
+    placeholders = ",".join("?" for _ in ids)
+    conn = sqlite3.connect(Path(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            f"SELECT {', '.join(selected_fields)} FROM jobs WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        EvidenceDocument.model_validate(
+            {
+                key: int(row[key]) if key == "id" else str(row[key] or "")
+                for key in selected_fields
+            }
+        )
+        for row in rows
+    ]
+
+
+__all__ = ["EVIDENCE_FIELDS", "inspect_job_evidence", "load_job_evidence_documents"]

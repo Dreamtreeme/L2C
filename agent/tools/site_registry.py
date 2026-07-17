@@ -49,7 +49,7 @@ def get_collection_site_profile(site: str) -> str:
     """
     특정 채용 사이트의 지휘자용 프로필을 조회합니다.
     site는 slug, 표시명, 도메인 중 하나를 사용할 수 있습니다.
-    반환값에는 사이트 기본 정보, manual.json, tools.json, prompt.md가 포함됩니다.
+    반환값에는 사이트 기본 정보, manual.json, tools.json, SKILL.md가 포함됩니다.
     """
     try:
         from agent.sites import load_site_profile
@@ -59,7 +59,7 @@ def get_collection_site_profile(site: str) -> str:
             "site": _site_entry_payload(profile["entry"]),
             "manual": profile["manual"],
             "tools": profile["tools"],
-            "prompt": profile["prompt"],
+            "skill": profile["skill"],
         }
         return json.dumps(payload, ensure_ascii=False, indent=2)
     except Exception as e:

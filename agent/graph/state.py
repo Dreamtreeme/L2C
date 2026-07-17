@@ -109,6 +109,9 @@ class GraphState(TypedDict, total=False):
     queue_replay_trace: Dict[str, Any]
     result_card_selector_trace: Dict[str, Any]
 
+    # [Result Availability] 화면에서 모델이 판독한 검색 결과 총개수와 근거
+    result_availability: Dict[str, Any]
+
     # [Page Policy] 상세 페이지처럼 구조가 안정적인 반복 읽기 흐름에서 LLM 판단을 우회한 액션
     page_policy_hit: bool
     page_policy_trace: Dict[str, Any]

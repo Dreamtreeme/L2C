@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TypedDict
@@ -12,8 +14,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from agent.application.clarification_service import apply_clarification_answer
-from agent.application.evidence_service import inspect_job_evidence
+from agent.application.evidence_service import inspect_job_evidence, load_job_evidence_documents
 from agent.application.investigation_store import InvestigationStore
+from agent.application.search_taxonomy_review_service import SearchTaxonomyReviewService
+from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.run_context import emit_run_event, invoke_with_metrics, raise_if_cancelled
 from agent.application.run_contracts import RunPhase, RunStatus
 from agent.application.tool_capabilities import build_tool_capability_catalog
@@ -23,18 +27,23 @@ from agent.prompts.investigation import (
     evidence_plan_prompt,
     evidence_validation_prompt,
     request_analysis_prompt,
+    taxonomy_resolution_prompt,
 )
 from agent.tools.realtime_scraping import realtime_scraping
-from agent.tools.sqlite_query import sqlite_query
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
+    ClarificationOption,
+    ClarificationQuestion,
+    EvidencePolicy,
     EvidencePlan,
     EvidenceValidation,
     InvestigationActionPlan,
+    InvestigationConstraints,
     InvestigationRequest,
     InvestigationStatus,
     RequestAnalysis,
     InvestigationPlanStep,
+    TaxonomyResolution,
 )
 
 
@@ -43,7 +52,7 @@ class InvestigationGraphState(TypedDict, total=False):
     capability_catalog: list[dict[str, Any]]
     db_report: dict[str, Any]
     collection_results: list[dict[str, Any]]
-    documents: str
+    documents: list[dict[str, Any]]
     valid_ids: list[int]
     clarification: dict[str, Any]
     final_answer: str
@@ -58,12 +67,14 @@ class InvestigationModels:
         self,
         *,
         analysis_model: Any = None,
+        taxonomy_model: Any = None,
         evidence_model: Any = None,
         action_model: Any = None,
         validation_model: Any = None,
         answer_model: Any = None,
     ):
         self.analysis_model = analysis_model
+        self.taxonomy_model = taxonomy_model
         self.evidence_model = evidence_model
         self.action_model = action_model
         self.validation_model = validation_model
@@ -86,6 +97,15 @@ class InvestigationModels:
                 "gemini-3.5-flash", EvidencePlan, temperature=0.0
             )
         return self.evidence_model
+
+    def taxonomy(self) -> Any:
+        if self.taxonomy_model is None:
+            from agent.application.model_clients import get_structured_google_model
+
+            self.taxonomy_model = get_structured_google_model(
+                "gemini-3.5-flash", TaxonomyResolution, temperature=0.0
+            )
+        return self.taxonomy_model
 
     def action(self) -> Any:
         if self.action_model is None:
@@ -163,6 +183,184 @@ def _normalize_site_slugs(constraints):
         return constraints
 
 
+def _capabilities_for_investigation(
+    catalog: list[dict[str, Any]],
+    investigation: InvestigationRequest,
+) -> list[dict[str, Any]]:
+    """확정된 사이트가 있으면 해당 수집 능력만 LLM에 공개한다."""
+
+    sites = {
+        str(site).strip()
+        for site in investigation.constraints.sites
+        if str(site).strip()
+    }
+    if not sites:
+        return catalog
+    return [
+        item
+        for item in catalog
+        if not str(item.get("tool_name") or "").startswith("realtime_scraping:")
+        or str(item.get("tool_name") or "").split(":", 1)[1] in sites
+    ]
+
+
+def _request_prompt_context(investigation: InvestigationRequest) -> dict[str, Any]:
+    """LLM 단계에 전달할 요청 계약만 남기고 누적 실행 상태는 제외한다."""
+
+    return {
+        "investigation_id": investigation.investigation_id,
+        "original_query": investigation.original_query,
+        "objective": investigation.objective,
+        "deliverable": investigation.deliverable,
+        "purpose": investigation.purpose.value,
+        "evidence_policy": investigation.evidence_policy.value,
+        "constraints": investigation.constraints.model_dump(mode="json"),
+        "assumptions": list(investigation.assumptions),
+        "evidence_requirements": [
+            item.model_dump(mode="json")
+            for item in investigation.evidence_requirements
+        ],
+        "missing_evidence": list(investigation.missing_evidence),
+        "evidence_document_ids": list(investigation.evidence_document_ids),
+        "collection_document_ids": list(investigation.collection_document_ids),
+    }
+
+
+def _compact_db_report(report: dict[str, Any]) -> dict[str, Any]:
+    """후보 판정이 끝난 뒤 계획과 답변에 필요한 근거 요약만 반환한다."""
+
+    requirements = []
+    for item in report.get("requirements", []) or []:
+        if not isinstance(item, dict):
+            continue
+        requirements.append(
+            {
+                key: value
+                for key, value in item.items()
+                if key != "candidates"
+            }
+        )
+    return {
+        "total_db_rows": int(report.get("total_db_rows") or 0),
+        "requirements": requirements,
+        "sufficient": bool(report.get("sufficient", False)),
+        "document_ids": list(report.get("document_ids") or []),
+        "missing_evidence": list(report.get("missing_evidence") or []),
+    }
+
+
+def _evidence_validation_payload(
+    report: dict[str, Any],
+    investigation: InvestigationRequest,
+) -> list[dict[str, Any]]:
+    """직무 판정에 필요한 후보 메타데이터만 모델에 전달한다."""
+
+    requirements = {
+        item.requirement_id: item for item in investigation.evidence_requirements
+    }
+    candidate_fields = (
+        "document_id",
+        "position",
+        "job_category",
+        "experience",
+        "employment_type",
+        "location",
+        "posted_at",
+        "source_platform",
+        "tech_stack",
+        "requirements",
+        "preferred",
+        "field_presence",
+    )
+    groups = []
+    for item in report.get("requirements", []) or []:
+        if not isinstance(item, dict):
+            continue
+        requirement = requirements.get(str(item.get("requirement_id") or ""))
+        if requirement is None or not item.get("semantic_review_required"):
+            continue
+        groups.append(
+            {
+                "requirement_id": requirement.requirement_id,
+                "description": requirement.description,
+                "occupation_query": requirement.occupation_query,
+                "skill_queries": list(requirement.skill_queries),
+                "exact_text_groups": list(requirement.exact_text_groups),
+                "minimum_count": requirement.minimum_count,
+                "required_fields": list(requirement.required_fields),
+                "required_sites": list(requirement.required_sites),
+                "posted_from": requirement.posted_from,
+                "posted_to": requirement.posted_to,
+                "candidates": [
+                    {
+                        key: candidate.get(key)
+                        for key in candidate_fields
+                        if key in candidate
+                    }
+                    for candidate in item.get("candidates", [])
+                    if isinstance(candidate, dict)
+                ],
+            }
+        )
+    return groups
+
+
+def _compact_collection_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """답변에 영향을 주는 수집 결과와 저장 문서만 남긴다."""
+
+    compact = []
+    keys = (
+        "message",
+        "site",
+        "site_name",
+        "keyword",
+        "target_count",
+        "item_count",
+        "persisted_count",
+        "completion_status",
+        "search_scope_exhausted",
+        "missing_count",
+        "observed_job_ids",
+    )
+    for result in results or []:
+        if not isinstance(result, dict):
+            continue
+        item = {key: result.get(key) for key in keys if key in result}
+        validation = result.get("persistence_validation")
+        if isinstance(validation, dict):
+            item["persistence_validation"] = {
+                "created_count": int(validation.get("created_count") or 0),
+                "updated_count": int(validation.get("updated_count") or 0),
+                "rejected_count": int(validation.get("rejected_count") or 0),
+                "persisted_items": [
+                    {
+                        key: persisted.get(key)
+                        for key in ("job_id", "company_name", "position", "operation")
+                        if key in persisted
+                    }
+                    for persisted in (validation.get("persisted_items") or [])
+                    if isinstance(persisted, dict)
+                ],
+            }
+        compact.append(item)
+    return compact
+
+
+def _answer_evidence_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """구조화 상세 필드가 완전한 문서는 중복 OCR 원문을 답변 입력에서 제외한다."""
+
+    detail_fields = ("tech_stack", "main_tasks", "requirements", "preferred", "benefits")
+    projected = []
+    for document in documents or []:
+        if not isinstance(document, dict):
+            continue
+        item = dict(document)
+        if all(str(item.get(field) or "").strip() for field in detail_fields):
+            item.pop("raw_ocr_text", None)
+        projected.append(item)
+    return projected
+
+
 def _normalized_collection_steps(
     plan: InvestigationActionPlan,
     investigation: InvestigationRequest,
@@ -187,7 +385,7 @@ def _normalized_collection_steps(
             "realtime_scraping:"
         ):
             continue
-        arguments = dict(step.arguments)
+        arguments = step.arguments.model_dump(mode="json")
         site_from_tool = tool_name.split(":", 1)[1] if ":" in tool_name else ""
         site = str(arguments.get("site") or site_from_tool).strip()
         if not site and len(investigation.constraints.sites) == 1:
@@ -203,12 +401,13 @@ def _normalized_collection_steps(
             ),
             None,
         )
-        search_keywords = (
-            requirement.search_keywords
-            if requirement and requirement.search_keywords
-            else investigation.constraints.search_keywords
-        )
-        query = str(arguments.get("query") or (search_keywords[0] if search_keywords else "")).strip()
+        query = str(
+            arguments.get("query")
+            or (requirement.collection_search_term if requirement else "")
+            or (requirement.occupation_query if requirement else "")
+            or investigation.constraints.collection_search_term
+            or investigation.constraints.occupation_query
+        ).strip()
         if not query:
             continue
         posted_from = str(
@@ -247,9 +446,14 @@ def _normalized_collection_steps(
         if signature in signatures:
             continue
         signatures.add(signature)
+        from shared.schema.agent_contract import CollectionToolArguments
+
         normalized.append(
             step.model_copy(
-                update={"tool_name": "realtime_scraping", "arguments": arguments}
+                update={
+                    "tool_name": "realtime_scraping",
+                    "arguments": CollectionToolArguments.model_validate(arguments),
+                }
             )
         )
         if len(normalized) >= maximum_steps:
@@ -257,14 +461,40 @@ def _normalized_collection_steps(
     return normalized
 
 
-def _needs_semantic_evidence_validation(investigation: InvestigationRequest) -> bool:
-    constraints = investigation.constraints
-    return bool(
-        constraints.location
-        or constraints.experience
-        or constraints.employment_type
-        or len(investigation.evidence_requirements) > 1
-        or investigation.purpose.value in {"compare", "trend"}
+def _normalized_evidence_requirements(
+    plan: EvidencePlan,
+    investigation: InvestigationRequest,
+    taxonomy_service: SearchTaxonomyService,
+) -> list:
+    """근거 필드를 DB 계약에 맞추고 화면 전체 수집의 표본 수를 정규화한다."""
+
+    normalized = []
+    single_requirement = len(plan.requirements) == 1
+    for requirement in plan.requirements:
+        updates = {
+            "required_fields": list(dict.fromkeys(requirement.required_fields))
+        }
+        if investigation.constraints.count_mode == "visible_all":
+            updates["minimum_count"] = 1
+        elif (
+            single_requirement
+            and investigation.constraints.count_mode == "explicit"
+        ):
+            updates["minimum_count"] = investigation.constraints.target_count
+        normalized.append(
+            taxonomy_service.enrich_requirement(
+                requirement.model_copy(update=updates),
+                investigation.constraints,
+            )
+        )
+    return normalized
+
+
+def _needs_semantic_evidence_validation(report: dict[str, Any]) -> bool:
+    return any(
+        item.get("semantic_review_required") and item.get("candidates")
+        for item in report.get("requirements", [])
+        if isinstance(item, dict)
     )
 
 
@@ -279,10 +509,11 @@ def _apply_evidence_validation(
         item.requirement_id: item for item in investigation.evidence_requirements
     }
     decisions = {
-        item.requirement_id: set(item.matching_document_ids)
+        item.requirement_id: item
         for item in validation.decisions
     }
-    all_document_ids: set[int] = set()
+    all_document_ids: list[int] = []
+    seen_document_ids: set[int] = set()
     reports: list[dict[str, Any]] = []
     for item in report.get("requirements", []):
         requirement = requirements.get(str(item.get("requirement_id") or ""))
@@ -292,16 +523,43 @@ def _apply_evidence_validation(
             int(candidate["document_id"]): candidate
             for candidate in item.get("candidates", [])
         }
-        accepted_ids = sorted(decisions.get(requirement.requirement_id, set()) & candidates.keys())
-        accepted = [candidates[document_id] for document_id in accepted_ids]
-        all_document_ids.update(accepted_ids)
+        decision = decisions.get(requirement.requirement_id)
+
+        def valid_ids(values: list[int]) -> list[int]:
+            return list(
+                dict.fromkeys(
+                    int(document_id)
+                    for document_id in values
+                    if int(document_id) in candidates
+                )
+            )
+
+        if item.get("semantic_review_required"):
+            matching_ids = valid_ids(
+                decision.matching_document_ids if decision is not None else []
+            )
+        else:
+            matching_ids = valid_ids(
+                [candidate["document_id"] for candidate in item.get("candidates", [])]
+            )
+        selected_ids = matching_ids
+        if (
+            len(investigation.evidence_requirements) == 1
+            and investigation.constraints.count_mode == "explicit"
+        ):
+            selected_ids = matching_ids[: investigation.constraints.target_count]
+        selected = [candidates[document_id] for document_id in selected_ids]
+        for document_id in selected_ids:
+            if document_id not in seen_document_ids:
+                seen_document_ids.add(document_id)
+                all_document_ids.append(document_id)
         missing: list[str] = []
-        if len(accepted) < requirement.minimum_count:
-            missing.append(f"의미 조건을 만족하는 표본 {requirement.minimum_count - len(accepted)}건 부족")
+        if len(selected) < requirement.minimum_count:
+            missing.append(f"의미 조건을 만족하는 표본 {requirement.minimum_count - len(selected)}건 부족")
         field_coverage = {
             field: sum(
                 1
-                for candidate in accepted
+                for candidate in selected
                 if candidate.get("field_presence", {}).get(field)
             )
             for field in requirement.required_fields
@@ -309,16 +567,30 @@ def _apply_evidence_validation(
         for field in requirement.required_fields:
             if field_coverage.get(field, 0) < requirement.minimum_count:
                 missing.append(f"{field} 근거 부족")
-        verified_dates = sum(1 for candidate in accepted if candidate.get("posted_at"))
+        posted_dates = sorted(
+            str(candidate.get("posted_at") or "")[:10]
+            for candidate in selected
+            if str(candidate.get("posted_at") or "").strip()
+        )
+        verified_dates = len(posted_dates)
         if (requirement.posted_from or requirement.posted_to) and verified_dates < requirement.minimum_count:
             missing.append("검증된 게시일 근거 부족")
         reports.append(
             {
                 **item,
-                "matching_count": len(accepted),
+                "matching_count": len(selected),
                 "verified_posted_at_count": verified_dates,
+                "oldest_posted_at": posted_dates[0] if posted_dates else "",
+                "newest_posted_at": posted_dates[-1] if posted_dates else "",
                 "field_coverage": field_coverage,
-                "document_ids": accepted_ids,
+                "document_ids": selected_ids,
+                "site_counts": dict(
+                    Counter(
+                        str(candidate.get("source_platform") or "unknown")
+                        for candidate in selected
+                    )
+                ),
+                "candidates": selected,
                 "sufficient": not missing,
                 "missing": list(dict.fromkeys(missing)),
             }
@@ -332,9 +604,8 @@ def _apply_evidence_validation(
         **report,
         "requirements": reports,
         "sufficient": bool(reports) and all(item["sufficient"] for item in reports),
-        "document_ids": sorted(all_document_ids),
+        "document_ids": all_document_ids,
         "missing_evidence": missing_evidence,
-        "semantic_validation": "llm",
     }
 
 
@@ -349,7 +620,8 @@ class InvestigationWorkflow:
         models: InvestigationModels | None = None,
         capabilities: list[Any] | None = None,
         collection_tool: Any = None,
-        query_tool: Any = None,
+        taxonomy_service: SearchTaxonomyService | None = None,
+        taxonomy_review_service: SearchTaxonomyReviewService | None = None,
         now: Callable[[], datetime] | None = None,
     ):
         self.db_path = Path(db_path)
@@ -360,13 +632,205 @@ class InvestigationWorkflow:
         self.models = models or InvestigationModels()
         self.capabilities = capabilities or build_tool_capability_catalog()
         self.collection_tool = collection_tool or realtime_scraping
-        self.query_tool = query_tool or sqlite_query
+        self.taxonomy_service = taxonomy_service or SearchTaxonomyService(self.db_path)
+        self.taxonomy_review_service = (
+            taxonomy_review_service or SearchTaxonomyReviewService(self.db_path)
+        )
         self.now = now or (lambda: datetime.now().astimezone())
         self.graph = self._build_graph()
 
     def _save(self, investigation: InvestigationRequest) -> dict[str, Any]:
         self.store.save(investigation)
         return investigation.model_dump(mode="json")
+
+    @staticmethod
+    def _non_taxonomy_questions(
+        questions: list[ClarificationQuestion],
+    ) -> list[ClarificationQuestion]:
+        taxonomy_facets = {
+            "occupation_domain",
+            "occupation_family",
+            "occupation",
+            "semantic_occupation",
+        }
+        return [
+            question
+            for question in questions
+            if question.facet_type not in taxonomy_facets
+        ]
+
+    def _semantic_occupation_question(
+        self,
+        constraints: InvestigationConstraints,
+    ) -> tuple[InvestigationConstraints, ClarificationQuestion | None]:
+        if not (
+            constraints.occupation_domain_concept_keys
+            and constraints.occupation_query
+            and not constraints.occupation_concept_keys
+            and constraints.occupation_resolution == "unresolved"
+        ):
+            return constraints, None
+        candidates = self.taxonomy_service.occupation_resolution_candidates(
+            constraints.occupation_domain_concept_keys
+        )
+        if not candidates:
+            updated = constraints.model_copy(
+                update={"occupation_resolution": "semantic_no_match"}
+            )
+            return updated, None
+        resolution = _model_payload(
+            invoke_with_metrics(
+                self.models.taxonomy(),
+                [
+                    SystemMessage(content=taxonomy_resolution_prompt()),
+                    HumanMessage(
+                        content=json.dumps(
+                            {
+                                "occupation_query": constraints.occupation_query,
+                                "occupation_domain_concept_keys": list(
+                                    constraints.occupation_domain_concept_keys
+                                ),
+                                "candidates": candidates,
+                            },
+                            ensure_ascii=False,
+                        )
+                    ),
+                ],
+                "investigation_taxonomy_resolution",
+            ),
+            TaxonomyResolution,
+        )
+        by_key = {str(item["concept_key"]): item for item in candidates}
+        selected_key = str(resolution.selected_concept_key or "")
+        ordered_keys = [
+            selected_key,
+            *(str(key) for key in resolution.alternative_concept_keys),
+        ]
+        valid_keys = list(
+            dict.fromkeys(key for key in ordered_keys if key in by_key)
+        )[:4]
+        if resolution.decision == "no_match" or selected_key not in by_key:
+            self.taxonomy_service.record_occupation_candidate(
+                constraints.occupation_query,
+                metadata={
+                    "occupation_domain_concept_keys": list(
+                        constraints.occupation_domain_concept_keys
+                    ),
+                    "candidate_count": len(candidates),
+                    "resolution_reason": resolution.reason,
+                },
+            )
+            updated = constraints.model_copy(
+                update={"occupation_resolution": "semantic_no_match"}
+            )
+            return updated, None
+
+        options: list[ClarificationOption] = []
+        for concept_key in valid_keys:
+            item = by_key[concept_key]
+            matching_count = len(
+                self.taxonomy_service.matching_occupation_job_ids(
+                    [concept_key],
+                    constraints,
+                )
+            )
+            options.append(
+                ClarificationOption(
+                    option_id=(
+                        "concept-"
+                        + hashlib.sha1(concept_key.encode("utf-8")).hexdigest()[:10]
+                    ),
+                    label=str(item["label"]),
+                    value=concept_key,
+                    collection_search_term=str(item["label"]),
+                    matching_count=matching_count,
+                    concept_count=self.taxonomy_service.occupation_descendant_count(
+                        concept_key
+                    ),
+                    description=str(item["definition"] or ""),
+                )
+            )
+        fingerprint = hashlib.sha1(
+            (
+                constraints.occupation_query
+                + "|"
+                + "|".join(sorted(constraints.occupation_domain_concept_keys))
+            ).encode("utf-8")
+        ).hexdigest()[:12]
+        return constraints, ClarificationQuestion(
+            question_id=f"semantic_occupation:{fingerprint}",
+            field="occupation_concept_keys",
+            question=f"'{constraints.occupation_query}'의 의미를 어떤 직무로 확정할까요?",
+            options=options,
+            allow_custom=True,
+            reason=(
+                resolution.reason
+                or "선택한 업무 영역의 사전 후보 중 의미가 가까운 직무를 확인합니다."
+            ),
+            candidate_count=len(
+                self.taxonomy_service.matching_occupation_job_ids(
+                    constraints.occupation_domain_concept_keys,
+                    constraints,
+                )
+            ),
+            concept_count=len(candidates),
+            facet_type="semantic_occupation",
+        )
+
+    def _prepare_taxonomy_questions(
+        self,
+        constraints: InvestigationConstraints,
+        questions: list[ClarificationQuestion],
+        *,
+        answered_question_ids: list[str] | tuple[str, ...] = (),
+    ) -> tuple[InvestigationConstraints, list[ClarificationQuestion]]:
+        pending = self._non_taxonomy_questions(questions)
+        if pending:
+            return constraints, pending
+        constraints, semantic_question = self._semantic_occupation_question(
+            constraints
+        )
+        if semantic_question is not None:
+            return constraints, [semantic_question]
+        next_question = self.taxonomy_service.build_next_scope_question(
+            constraints,
+            answered_question_ids=answered_question_ids,
+        )
+        return constraints, [next_question] if next_question is not None else []
+
+    def _accept_confirmed_semantic_alias(
+        self,
+        investigation: InvestigationRequest,
+        answer: ClarificationAnswer,
+    ) -> None:
+        if answer.custom_value.strip():
+            return
+        question = next(
+            (
+                item
+                for item in investigation.clarification_questions
+                if item.question_id == answer.question_id
+            ),
+            None,
+        )
+        if question is None or question.facet_type != "semantic_occupation":
+            return
+        selected = next(
+            (
+                option
+                for option in question.options
+                if option.option_id == answer.selected_option_id
+                or (answer.value and option.value == answer.value)
+            ),
+            None,
+        )
+        if selected is None or not investigation.constraints.occupation_query:
+            return
+        self.taxonomy_review_service.add_reviewed_alias(
+            selected.value,
+            investigation.constraints.occupation_query,
+            note="직무 의미 확인 질문에서 사용자가 선택",
+        )
 
     def _understand(self, state: InvestigationGraphState) -> dict[str, Any]:
         raise_if_cancelled()
@@ -385,22 +849,33 @@ class InvestigationWorkflow:
             ),
             RequestAnalysis,
         )
-        questions = analysis.clarification_questions
-        unresolved = list(dict.fromkeys(analysis.unresolved_fields))
-        if questions:
-            unresolved = list(dict.fromkeys([*unresolved, *(item.field for item in questions)]))
+        constraints = self.taxonomy_service.enrich_constraints(
+            _normalize_site_slugs(analysis.constraints)
+        )
+        questions = [
+            question
+            for question in analysis.clarification_questions
+            if not (
+                question.field == "occupation_query"
+                and constraints.occupation_concept_keys
+            )
+        ]
+        constraints, questions = self._prepare_taxonomy_questions(
+            constraints,
+            questions,
+        )
         updated = existing.model_copy(
             update={
                 "objective": analysis.objective,
                 "deliverable": analysis.deliverable,
                 "purpose": analysis.purpose,
-                "constraints": _normalize_site_slugs(analysis.constraints),
-                "unresolved_fields": unresolved,
+                "evidence_policy": analysis.evidence_policy,
+                "constraints": constraints,
                 "assumptions": analysis.assumptions,
                 "clarification_questions": questions,
                 "status": (
                     InvestigationStatus.AWAITING_CLARIFICATION
-                    if unresolved
+                    if questions
                     else InvestigationStatus.CHECKING_EVIDENCE
                 ),
             }
@@ -410,24 +885,23 @@ class InvestigationWorkflow:
     @staticmethod
     def _route_after_understand(state: InvestigationGraphState) -> str:
         investigation = InvestigationRequest.model_validate(state["investigation"])
-        return "clarify" if investigation.unresolved_fields else "define_evidence"
+        if investigation.clarification_questions:
+            return "clarify"
+        if investigation.evidence_policy == EvidencePolicy.MODEL_KNOWLEDGE:
+            return "answer"
+        return "define_evidence"
 
     def _clarify(self, state: InvestigationGraphState) -> dict[str, Any]:
         investigation = InvestigationRequest.model_validate(state["investigation"])
-        question = next(
-            (
-                item
-                for item in investigation.clarification_questions
-                if item.field in investigation.unresolved_fields
-            ),
-            None,
-        )
+        question = next(iter(investigation.clarification_questions), None)
         if question is None:
-            raise ValueError("미확정 조건에 대응하는 확인 질문이 없습니다.")
+            raise ValueError("사용자에게 확인할 질문이 없습니다.")
         payload = {
             "needs_clarification": True,
             **question.model_dump(mode="json"),
-            "missing_fields": list(investigation.unresolved_fields),
+            "missing_fields": [
+                item.field for item in investigation.clarification_questions
+            ],
             "investigation_id": investigation.investigation_id,
         }
         emit_run_event(
@@ -455,8 +929,10 @@ class InvestigationWorkflow:
                     HumanMessage(
                         content=json.dumps(
                             {
-                                "request": investigation.model_dump(mode="json"),
-                                "tool_capabilities": state["capability_catalog"],
+                                "request": _request_prompt_context(investigation),
+                                "tool_capabilities": _capabilities_for_investigation(
+                                    state["capability_catalog"], investigation
+                                ),
                             },
                             ensure_ascii=False,
                         )
@@ -468,7 +944,11 @@ class InvestigationWorkflow:
         )
         updated = investigation.model_copy(
             update={
-                "evidence_requirements": plan.requirements,
+                "evidence_requirements": _normalized_evidence_requirements(
+                    plan,
+                    investigation,
+                    self.taxonomy_service,
+                ),
                 "status": InvestigationStatus.CHECKING_EVIDENCE,
             }
         )
@@ -483,9 +963,7 @@ class InvestigationWorkflow:
             investigation.evidence_requirements,
             investigation.constraints,
         )
-        if _needs_semantic_evidence_validation(investigation) and any(
-            item.get("candidates") for item in report.get("requirements", [])
-        ):
+        if _needs_semantic_evidence_validation(report):
             validation = _model_payload(
                 invoke_with_metrics(
                     self.models.validation(),
@@ -494,8 +972,11 @@ class InvestigationWorkflow:
                         HumanMessage(
                             content=json.dumps(
                                 {
-                                    "request": investigation.model_dump(mode="json"),
-                                    "candidate_groups": report.get("requirements", []),
+                                    "request": _request_prompt_context(investigation),
+                                    "candidate_groups": _evidence_validation_payload(
+                                        report,
+                                        investigation,
+                                    ),
                                 },
                                 ensure_ascii=False,
                             )
@@ -506,11 +987,13 @@ class InvestigationWorkflow:
                 EvidenceValidation,
             )
             report = _apply_evidence_validation(report, investigation, validation)
+        evidence_document_ids = list(report.get("document_ids", []))
+        report["document_ids"] = evidence_document_ids
         updated = investigation.model_copy(
             update={
                 "evidence_snapshot": report,
                 "missing_evidence": report.get("missing_evidence", []),
-                "evidence_document_ids": report.get("document_ids", []),
+                "evidence_document_ids": evidence_document_ids,
                 "status": (
                     InvestigationStatus.ANSWERING
                     if report.get("sufficient")
@@ -521,12 +1004,19 @@ class InvestigationWorkflow:
         return {
             "investigation": self._save(updated),
             "db_report": report,
-            "valid_ids": report.get("document_ids", []),
+            "valid_ids": evidence_document_ids,
         }
 
     @staticmethod
     def _route_after_evidence(state: InvestigationGraphState) -> str:
         investigation = InvestigationRequest.model_validate(state["investigation"])
+        if investigation.evidence_policy == EvidencePolicy.DATABASE_ONLY:
+            return "load_documents"
+        if (
+            investigation.evidence_policy == EvidencePolicy.WEB_REQUIRED
+            and not investigation.executed_step_ids
+        ):
+            return "plan_actions"
         if state.get("db_report", {}).get("sufficient"):
             return "load_documents"
         pending = [
@@ -552,9 +1042,13 @@ class InvestigationWorkflow:
                     HumanMessage(
                         content=json.dumps(
                             {
-                                "request": investigation.model_dump(mode="json"),
-                                "db_report": state.get("db_report", {}),
-                                "tool_capabilities": state["capability_catalog"],
+                                "request": _request_prompt_context(investigation),
+                                "db_report": _compact_db_report(
+                                    state.get("db_report", {})
+                                ),
+                                "tool_capabilities": _capabilities_for_investigation(
+                                    state["capability_catalog"], investigation
+                                ),
                             },
                             ensure_ascii=False,
                         )
@@ -598,7 +1092,9 @@ class InvestigationWorkflow:
             if item.step_id not in investigation.executed_step_ids
         )
         emit_run_event("collection_started", RunPhase.COLLECTION, step.purpose or "계획한 채용공고 수집을 실행하고 있습니다.")
-        raw_result = self.collection_tool.invoke(step.arguments)
+        raw_result = self.collection_tool.invoke(
+            step.arguments.model_dump(mode="json")
+        )
         try:
             parsed_result = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
         except json.JSONDecodeError:
@@ -614,6 +1110,15 @@ class InvestigationWorkflow:
             for item in persistence_validation.get("persisted_items", [])
             if isinstance(item, dict) and item.get("job_id") is not None
         }
+        observed_ids.update(
+            int(job_id)
+            for job_id in (
+                parsed_result.get("observed_job_ids", [])
+                if isinstance(parsed_result, dict)
+                else []
+            )
+            if str(job_id).isdigit() and int(job_id) > 0
+        )
         steps = [
             item.model_copy(update={"status": "completed"}) if item.step_id == step.step_id else item
             for item in investigation.plan
@@ -637,16 +1142,11 @@ class InvestigationWorkflow:
         investigation = InvestigationRequest.model_validate(state["investigation"])
         ids = sorted(set(investigation.evidence_document_ids))
         if not ids:
-            return {"documents": "", "valid_ids": []}
-        selected = ",".join(str(item) for item in ids)
-        query = (
-            "SELECT id, url, company_name, position, job_category, experience_text, "
-            "employment_type, location, posted_at, posted_at_text, tech_stack, main_tasks, "
-            f"requirements, preferred, benefits, raw_ocr_text FROM jobs WHERE id IN ({selected})"
-        )
+            return {"documents": [], "valid_ids": []}
+        documents = load_job_evidence_documents(self.db_path, ids)
         return {
-            "documents": self.query_tool.invoke({"query": query}),
-            "valid_ids": ids,
+            "documents": [document.model_dump(mode="json") for document in documents],
+            "valid_ids": [document.id for document in documents],
         }
 
     def _answer(self, state: InvestigationGraphState) -> dict[str, Any]:
@@ -660,11 +1160,17 @@ class InvestigationWorkflow:
                 HumanMessage(
                     content=json.dumps(
                         {
-                            "request": investigation.model_dump(mode="json"),
-                            "db_report": state.get("db_report", {}),
-                            "collection_results": state.get("collection_results", []),
+                            "request": _request_prompt_context(investigation),
+                            "db_report": _compact_db_report(
+                                state.get("db_report", {})
+                            ),
+                            "collection_results": _compact_collection_results(
+                                state.get("collection_results", [])
+                            ),
                             "cannot_proceed_reason": state.get("cannot_proceed_reason", ""),
-                            "documents": state.get("documents", ""),
+                            "documents": _answer_evidence_documents(
+                                state.get("documents", [])
+                            ),
                         },
                         ensure_ascii=False,
                     )
@@ -701,7 +1207,11 @@ class InvestigationWorkflow:
         workflow.add_conditional_edges(
             "understand",
             self._route_after_understand,
-            {"clarify": "clarify", "define_evidence": "define_evidence"},
+            {
+                "clarify": "clarify",
+                "answer": "answer",
+                "define_evidence": "define_evidence",
+            },
         )
         workflow.add_edge("clarify", END)
         workflow.add_edge("define_evidence", "inspect_evidence")
@@ -737,10 +1247,39 @@ class InvestigationWorkflow:
             if investigation is None:
                 raise ValueError("재개할 조사 상태를 찾을 수 없습니다.")
             if clarification_answer is not None:
+                resolved_clarification_answer = ClarificationAnswer.model_validate(
+                    clarification_answer
+                )
+                self._accept_confirmed_semantic_alias(
+                    investigation,
+                    resolved_clarification_answer,
+                )
                 investigation = apply_clarification_answer(
                     investigation,
-                    ClarificationAnswer.model_validate(clarification_answer),
+                    resolved_clarification_answer,
                     today=self.now().date(),
+                )
+                constraints = self.taxonomy_service.enrich_constraints(
+                    investigation.constraints
+                )
+                answered_question_ids = [
+                    item.question_id for item in investigation.clarification_answers
+                ]
+                constraints, remaining_questions = self._prepare_taxonomy_questions(
+                    constraints,
+                    investigation.clarification_questions,
+                    answered_question_ids=answered_question_ids,
+                )
+                investigation = investigation.model_copy(
+                    update={
+                        "constraints": constraints,
+                        "clarification_questions": remaining_questions,
+                        "status": (
+                            InvestigationStatus.AWAITING_CLARIFICATION
+                            if remaining_questions
+                            else InvestigationStatus.CHECKING_EVIDENCE
+                        ),
+                    }
                 )
                 self.store.save(investigation)
         else:

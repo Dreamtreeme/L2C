@@ -49,6 +49,7 @@ def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
         "active_result_card": {},
         "queue_replay_hit": False,
         "queue_replay_trace": {},
+        "result_availability": {},
         "page_policy_hit": False,
         "page_policy_trace": {},
         "detail_ocr_buffer": {},

@@ -5,18 +5,33 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.application.model_clients import get_structured_google_model
+from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.prompts.investigation import evidence_plan_prompt, request_analysis_prompt
 from benchmark.investigation_quality_eval import evaluate_investigation_analysis
 from benchmark.investigation_scenarios import INVESTIGATION_SCENARIOS
 from shared.schema.investigation_schema import EvidencePlan, RequestAnalysis
 
 
-def run_benchmark(*, model_name: str, now: datetime, scenario_id: str = "") -> dict:
+def run_benchmark(
+    *,
+    model_name: str,
+    now: datetime,
+    scenario_id: str = "",
+    db_path: str | Path = ROOT / "data" / "jobs.db",
+    max_concurrency: int = 3,
+) -> dict:
     analysis_model = get_structured_google_model(
         model_name,
         RequestAnalysis,
@@ -27,13 +42,19 @@ def run_benchmark(*, model_name: str, now: datetime, scenario_id: str = "") -> d
         EvidencePlan,
         temperature=0.0,
     )
+    taxonomy = SearchTaxonomyService(db_path)
+    selected_ids = {
+        value.strip()
+        for value in scenario_id.split(",")
+        if value.strip()
+    }
     selected = [
         scenario
         for scenario in INVESTIGATION_SCENARIOS
-        if not scenario_id or scenario.scenario_id == scenario_id
+        if not selected_ids or scenario.scenario_id in selected_ids
     ]
-    results = []
-    for scenario in selected:
+
+    def evaluate_scenario(scenario):
         try:
             analysis = analysis_model.invoke(
                 [
@@ -41,8 +62,23 @@ def run_benchmark(*, model_name: str, now: datetime, scenario_id: str = "") -> d
                     HumanMessage(content=scenario.query),
                 ]
             )
+            constraints = taxonomy.enrich_constraints(analysis.constraints)
+            questions = [
+                question
+                for question in analysis.clarification_questions
+                if not (
+                    question.field == "occupation_query"
+                    and constraints.occupation_concept_keys
+                )
+            ]
+            analysis = analysis.model_copy(
+                update={
+                    "constraints": constraints,
+                    "clarification_questions": questions,
+                }
+            )
             evidence_plan = None
-            if not analysis.unresolved_fields:
+            if not analysis.clarification_questions:
                 evidence_plan = evidence_model.invoke(
                     [
                         SystemMessage(content=evidence_plan_prompt(now)),
@@ -59,28 +95,27 @@ def run_benchmark(*, model_name: str, now: datetime, scenario_id: str = "") -> d
                 analysis,
                 evidence_plan,
             )
-            results.append(
-                {
-                    **evaluation,
-                    "query": scenario.query,
-                    "analysis": analysis.model_dump(mode="json"),
-                    "evidence_plan": (
-                        evidence_plan.model_dump(mode="json") if evidence_plan else None
-                    ),
-                }
-            )
+            return {
+                **evaluation,
+                "query": scenario.query,
+                "analysis": analysis.model_dump(mode="json"),
+                "evidence_plan": (
+                    evidence_plan.model_dump(mode="json") if evidence_plan else None
+                ),
+            }
         except Exception as exc:
-            results.append(
-                {
-                    "scenario_id": scenario.scenario_id,
-                    "passed": False,
-                    "checks": {"execution": False},
-                    "query": scenario.query,
-                    "analysis": {},
-                    "evidence_plan": None,
-                    "error": str(exc),
-                }
-            )
+            return {
+                "scenario_id": scenario.scenario_id,
+                "passed": False,
+                "checks": {"execution": False},
+                "query": scenario.query,
+                "analysis": {},
+                "evidence_plan": None,
+                "error": str(exc),
+            }
+
+    with ThreadPoolExecutor(max_workers=max(1, max_concurrency)) as executor:
+        results = list(executor.map(evaluate_scenario, selected))
     return {
         "model": model_name,
         "date": now.date().isoformat(),
@@ -99,6 +134,9 @@ def main() -> int:
     parser.add_argument("--date", default=datetime.now().date().isoformat())
     parser.add_argument("--scenario", default="")
     parser.add_argument("--summary", action="store_true")
+    parser.add_argument("--failures-only", action="store_true")
+    parser.add_argument("--db", type=Path, default=ROOT / "data" / "jobs.db")
+    parser.add_argument("--max-concurrency", type=int, default=3)
     args = parser.parse_args()
     import shared.config  # noqa: F401 - 로컬 환경변수 로드를 보장한다.
 
@@ -106,9 +144,14 @@ def main() -> int:
         model_name=args.model,
         now=datetime.fromisoformat(args.date),
         scenario_id=args.scenario,
+        db_path=args.db,
+        max_concurrency=args.max_concurrency,
     )
     output = result
     if args.summary:
+        displayed_results = result["results"]
+        if args.failures_only:
+            displayed_results = [item for item in displayed_results if not item["passed"]]
         output = {
             "model": result["model"],
             "date": result["date"],
@@ -120,10 +163,20 @@ def main() -> int:
                     "passed": item["passed"],
                     "checks": item["checks"],
                     "purpose": item["analysis"].get("purpose", ""),
-                    "unresolved_fields": item["analysis"].get("unresolved_fields", []),
+                    "evidence_policy": item["analysis"].get("evidence_policy", ""),
+                    "occupation_query": item["analysis"].get("constraints", {}).get(
+                        "occupation_query", ""
+                    ),
+                    "collection_search_term": item["analysis"].get(
+                        "constraints", {}
+                    ).get("collection_search_term", ""),
+                    "clarification_fields": [
+                        question.get("field", "")
+                        for question in item["analysis"].get("clarification_questions", [])
+                    ],
                     "error": item.get("error", ""),
                 }
-                for item in result["results"]
+                for item in displayed_results
             ],
         }
     print(json.dumps(output, ensure_ascii=False, indent=2))

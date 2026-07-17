@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from agent.application.detail_extraction_service import (
     extract_job_from_detail_ocr_buffer as _extract_job_from_detail_ocr_buffer,
 )
+from agent.graph.action_request import build_action_message
 from agent.graph.state import GraphState
 from agent.graph.tool_schema import (
     click_marker,
@@ -39,8 +40,10 @@ from agent.runtime.detail_runtime import (
     marker_prompt_rank as _marker_prompt_rank,
     update_detail_ocr_buffer as _update_detail_ocr_buffer,
 )
+from agent.runtime.duplicate_job_policy import existing_job_url_trace as _existing_job_url_trace
 from agent.runtime.job_collection import JOB_LIST_KEYS, job_list_value as _job_list_value
 from agent.runtime.result_card_queue import (
+    completed_result_card_count as _completed_result_card_count,
     complete_active_result_card as _complete_active_result_card,
     mark_result_card_active as _mark_result_card_active,
     marker_by_id as _marker_by_id,
@@ -48,8 +51,10 @@ from agent.runtime.result_card_queue import (
     pending_result_cards as _pending_result_cards,
     queue_card_label as _queue_card_label,
     queue_replay_after_return as _queue_replay_after_return,
+    result_card_queue_scope_complete as _result_card_queue_scope_complete,
     result_card_click_matches_queue as _result_card_click_matches_queue,
     result_card_entries_from_args as _result_card_entries_from_args,
+    skip_active_result_card as _skip_active_result_card,
 )
 from agent.runtime.result_card_selector import select_result_cards as _select_result_cards
 from agent.runtime.reflex_runtime import reflex_node
@@ -73,7 +78,25 @@ from agent.vision.marker_geometry import (
 
 _perception = None
 _action_tools = None
-_ui_llm_with_tools = None
+_ui_llm_with_tools: dict[tuple[str, ...], Any] = {}
+
+_ACTION_TOOL_SCHEMAS = {
+    schema.__name__: schema
+    for schema in (
+        click_marker,
+        type_in_marker,
+        scroll,
+        press_key,
+        open_browser,
+        close_browser,
+        update_extracted_info,
+        finish_detail_reading,
+        go_back,
+        update_plan_progress,
+        set_result_card_queue,
+        finish_task,
+    )
+}
 
 def _get_perception():
     """비전 엔진은 실제 브라우저 제어 경로에서만 초기화합니다."""
@@ -103,28 +126,36 @@ def _check_current_reasoning_screen(state: GraphState) -> dict[str, Any]:
     return _check_reasoning_screen_stale(state, _get_perception())
 
 
-def _get_ui_llm_with_tools():
-    """브라우저 자동화용 LLM은 import 시점이 아니라 호출 시점에 준비합니다."""
+def _get_ui_llm_with_tools(allowed_tool_names: tuple[str, ...] | None = None):
+    """선택된 사이트가 허용한 도구만 바인딩한 모델을 재사용한다."""
     global _ui_llm_with_tools
-    if _ui_llm_with_tools is None:
+    names = tuple(
+        name
+        for name in (allowed_tool_names or tuple(_ACTION_TOOL_SCHEMAS))
+        if name in _ACTION_TOOL_SCHEMAS
+    )
+    if not names:
+        names = tuple(_ACTION_TOOL_SCHEMAS)
+    if names not in _ui_llm_with_tools:
         from agent.application.model_clients import get_google_chat_model
 
         llm = get_google_chat_model("gemini-3.5-flash", temperature=0.1)
-        _ui_llm_with_tools = llm.bind_tools([
-            click_marker,
-            type_in_marker,
-            scroll,
-            press_key,
-            open_browser,
-            close_browser,
-            update_extracted_info,
-            finish_detail_reading,
-            go_back,
-            update_plan_progress,
-            set_result_card_queue,
-            finish_task,
-        ])
-    return _ui_llm_with_tools
+        _ui_llm_with_tools[names] = llm.bind_tools(
+            [_ACTION_TOOL_SCHEMAS[name] for name in names]
+        )
+    return _ui_llm_with_tools[names]
+
+
+def _allowed_tool_names_for_state(state: GraphState) -> tuple[str, ...]:
+    """현재 사이트 프로필의 허용 도구 목록을 반환한다."""
+
+    from agent.runtime.site_context import site_profile_for_url
+
+    profile = site_profile_for_url(str(state.get("current_url") or ""))
+    tools = profile.get("tools", {}) if isinstance(profile, dict) else {}
+    configured = tools.get("allowed_tools", []) if isinstance(tools, dict) else []
+    names = tuple(str(name) for name in configured if str(name) in _ACTION_TOOL_SCHEMAS)
+    return names or tuple(_ACTION_TOOL_SCHEMAS)
 
 
 def prepare_reasoning_models() -> None:
@@ -152,7 +183,18 @@ def perception_node(
     # 화면 캡처
     capture_usable = getattr(perception, "capture_usable_screen", None)
     if callable(capture_usable):
-        image_path = capture_usable(max_attempts=max_capture_attempts)
+        pending_action = str((state.get("pending_transition") or {}).get("action") or "")
+        if pending_action == "type_in_marker":
+            try:
+                input_wait_sec = max(0.0, float(os.getenv("VISION_INPUT_CAPTURE_INITIAL_WAIT_SEC", "0.7")))
+            except ValueError:
+                input_wait_sec = 0.7
+            image_path = capture_usable(
+                max_attempts=max_capture_attempts,
+                initial_wait_sec=input_wait_sec,
+            )
+        else:
+            image_path = capture_usable(max_attempts=max_capture_attempts)
     else:
         image_path = perception.capture_screen()
 
@@ -224,6 +266,98 @@ def perception_node(
             pending_transition,
             image_path,
         )
+        active_result_card = dict(state.get("active_result_card", {}) or {})
+        duplicate_trace = (
+            _existing_job_url_trace(current_url, state.get("extracted_jd", {}))
+            if active_result_card and _looks_like_job_detail_url(current_url)
+            else {"matched": False, "reason": "not_active_job_detail"}
+        )
+        if duplicate_trace.get("matched"):
+            skipped_queue_id = str(active_result_card.get("queue_id") or "")
+            result_card_queue, active_result_card = _skip_active_result_card(
+                [
+                    dict(item)
+                    for item in (state.get("result_card_queue", []) or [])
+                    if isinstance(item, dict)
+                ],
+                active_result_card,
+                reason="existing_detail_url",
+                url=current_url,
+                job_id=duplicate_trace.get("job_id"),
+            )
+            queue_complete = _result_card_queue_scope_complete(
+                result_card_queue,
+                count_mode=_count_mode_from_state(state),
+                target_count=_target_count_from_state(state),
+            )
+            duplicate_message = build_action_message(
+                "duplicate_job_policy",
+                "skip detail OCR for an already collected job",
+                [
+                    {
+                        "name": "finish_task" if queue_complete else "go_back",
+                        "args": (
+                            {
+                                "result": "현재 검색 결과 큐의 모든 공고 처리를 마쳤습니다.",
+                            }
+                            if queue_complete
+                            else {
+                                "reason": "이미 수집한 공고 URL이므로 상세 읽기를 생략합니다.",
+                                "expected_after": "검색 결과 목록으로 돌아간다.",
+                            }
+                        ),
+                        "id": "skip_existing_job_detail",
+                    }
+                ],
+            )
+            elapsed = time.perf_counter() - started_monotonic
+            logger.info(
+                "Existing job detail skipped before OCR",
+                url=current_url,
+                source=duplicate_trace.get("source", ""),
+                queue_id=skipped_queue_id,
+                duration_sec=round(elapsed, 6),
+            )
+            return {
+                "recent_images": [image_path],
+                "marked_image": "",
+                "current_markers": [],
+                "ui_context": "",
+                "screen_signature": raw_screen_signature,
+                "current_url": current_url,
+                "current_page_role": "job_detail",
+                "current_url_stale": current_url_stale,
+                "pending_transition": {},
+                "transition_status": "ready",
+                "transition_outcome": "existing_job_detail",
+                "transition_source": str(pending_transition.get("source") or ""),
+                "queue_replay_hit": False,
+                "queue_replay_trace": {},
+                "page_policy_hit": True,
+                "page_policy_trace": {
+                    "policy": (
+                        "finish_existing_job_queue"
+                        if queue_complete
+                        else "skip_existing_job_detail"
+                    ),
+                    "queue_id": skipped_queue_id,
+                    **duplicate_trace,
+                },
+                "detail_ocr_buffer": state.get("detail_ocr_buffer", {}),
+                "result_card_queue": result_card_queue,
+                "active_result_card": active_result_card,
+                "last_action_result": duplicate_message,
+                "low_information_screen": False,
+                "low_information_retry_count": 0,
+                "step_durations": [
+                    {
+                        "node": "perception",
+                        "duration": elapsed,
+                        "ocr_skipped": True,
+                        "reason": "existing_job_detail",
+                    }
+                ],
+            }
         no_effect, no_effect_distance = _transition_no_effect_by_phash(
             pending_transition,
             current_url,
@@ -288,6 +422,59 @@ def perception_node(
                 "low_information_screen": False,
                 "low_information_retry_count": 0,
                 "step_durations": [{"node": "perception", "duration": total_elapsed, "ocr_skipped": True}],
+            }
+
+    if observed_transition and str(observed_transition.get("action") or "") == "go_back":
+        queue_msg, cached_markers, queue_trace = _queue_replay_after_return(
+            state,
+            observed_transition,
+            current_url,
+            [],
+            raw_screen_signature,
+            require_anchors=False,
+        )
+        if queue_msg:
+            elapsed = time.perf_counter() - started_monotonic
+            result_page_memory = dict(state.get("result_page_memory") or {})
+            saved_signature = dict(result_page_memory.get("screen_signature") or {})
+            screen_signature = {**saved_signature, **raw_screen_signature}
+            logger.info(
+                "Result card queue replay prepared before OCR",
+                queue_id=queue_trace.get("queue_id", ""),
+                title=queue_trace.get("title", ""),
+                reason=((queue_trace.get("return_match") or {}).get("reason") or ""),
+                duration_sec=round(elapsed, 6),
+            )
+            return {
+                "recent_images": [image_path],
+                "marked_image": str(result_page_memory.get("marked_image") or ""),
+                "current_markers": cached_markers,
+                "ui_context": "",
+                "screen_signature": screen_signature,
+                "current_url": current_url,
+                "current_page_role": "search",
+                "current_url_stale": current_url_stale,
+                "pending_transition": {},
+                "transition_status": "ready",
+                "transition_outcome": "queue_return_phash_match",
+                "transition_source": str(observed_transition.get("source") or ""),
+                "queue_replay_hit": True,
+                "queue_replay_trace": queue_trace,
+                "page_policy_hit": False,
+                "page_policy_trace": {},
+                "detail_ocr_buffer": state.get("detail_ocr_buffer", {}),
+                "last_action_result": queue_msg,
+                "low_information_screen": False,
+                "low_information_retry_count": 0,
+                "step_durations": [
+                    {
+                        "node": "perception",
+                        "duration": elapsed,
+                        "ocr_skipped": True,
+                        "reason": "queue_return_phash_match",
+                        "queue_replay_hit": True,
+                    }
+                ],
             }
 
     analysis = perception.analyze_ui(image_path)
@@ -647,6 +834,12 @@ def _target_count_from_state(state: GraphState) -> int:
         return max(0, int(params.get("target_count") or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _count_mode_from_state(state: GraphState) -> str:
+    params = state.get("recipe_params", {}) or {}
+    raw = params.get("count_mode") or ""
+    return str(getattr(raw, "value", raw)).strip().lower()
 
 
 def _auto_finish_on_target_enabled() -> bool:
@@ -1119,6 +1312,22 @@ def _compact_result_card_queue_context(state: GraphState) -> str:
     )
 
 
+def _compact_result_availability_context(state: GraphState) -> str:
+    availability = dict(state.get("result_availability", {}) or {})
+    if not availability:
+        return "검색 결과 개수 힌트: 없음\n\n"
+    return (
+        "검색 결과 개수 힌트:\n"
+        f"- 현재 검색 조건의 전체 결과 수: {availability.get('available_result_count')}\n"
+        f"- 화면 근거: {availability.get('count_evidence') or '(없음)'}\n"
+        f"- 판단 신뢰도: {availability.get('count_confidence', 0)}\n"
+        "- 이 숫자는 현재 검색어와 필터 조건의 결과 수이지 사이트 전체의 최대치가 아닙니다.\n"
+        "- 현재 조건의 결과를 모두 수집했으면 같은 목록을 더 스크롤하지 마십시오. 목표 수가 남았다면 사용자 의도를 "
+        "유지하는 범위에서 검색어 또는 필터를 넓힐지 판단하고, 적절한 확장 방법이 없으면 수집 건수와 부족분을 밝히며 "
+        "finish_task로 부분 완료하십시오.\n\n"
+    )
+
+
 def _reasoning_image_base64(state: GraphState) -> str:
     marked_image_path = state.get("marked_image")
     if not marked_image_path or not os.path.exists(marked_image_path):
@@ -1145,7 +1354,11 @@ def _reasoning_image_base64(state: GraphState) -> str:
         return ""
 
 
-def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
+def _build_reasoning_messages(
+    state: GraphState,
+    loop_warning: str,
+    selector_trace: dict[str, Any] | None = None,
+) -> list:
     """
     reasoning_node용 LLM 메시지 리스트를 조립합니다.
     마킹 이미지가 있으면 멀티모달, 없으면 텍스트 전용 메시지를 반환합니다.
@@ -1192,6 +1405,16 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
             f"- outcome: {state.get('transition_outcome') or '(없음)'}\n"
             f"- source: {state.get('transition_source') or '(없음)'}\n\n"
         )
+    result_refinement_context = ""
+    selector_trace = selector_trace or {}
+    if selector_trace.get("reason") == "result_refinement_needed":
+        refinement_reason = str(selector_trace.get("refinement_reason") or "").strip()
+        result_refinement_context = (
+            "검색 결과 정제 필요:\n"
+            "- 현재 화면에서 검색어와 직접 일치하는 공고가 목표 수보다 부족합니다. 비슷한 직무로 개수를 채우지 마십시오.\n"
+            "- 검색어를 더 정확하게 표현하는 화면 필터가 있으면 적용하고, 없으면 다음 정확한 후보를 찾도록 스크롤하십시오.\n"
+            f"- 카드 선택기 판단: {refinement_reason or '(구체적 이유 없음)'}\n\n"
+        )
     forbidden_action_context = _build_forbidden_action_context(action_history)
     if forbidden_action_context:
         forbidden_action_context += "\n\n"
@@ -1201,9 +1424,11 @@ def _build_reasoning_messages(state: GraphState, loop_warning: str) -> list:
         f"{_compact_extracted_context(extracted_jd, current_url)}"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"{collection_context}"
+        f"{_compact_result_availability_context(state)}"
         f"{_compact_result_card_queue_context(state)}"
         f"{_compact_detail_ocr_buffer_context(state, current_url)}"
         f"{transition_context}"
+        f"{result_refinement_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
         f"{_compact_recent_actions_context(action_history)}"
@@ -1287,8 +1512,8 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
 
     reasoning_mode = "general_after_card_selector" if selector_trace.get("attempted") else "general"
     response = invoke_with_metrics(
-        _get_ui_llm_with_tools(),
-        _build_reasoning_messages(state, loop_warning),
+        _get_ui_llm_with_tools(_allowed_tool_names_for_state(state)),
+        _build_reasoning_messages(state, loop_warning, selector_trace),
         "vision_reasoning",
     )
 
@@ -1424,6 +1649,22 @@ def _dispatch_state(
             }
     elif action_name == "set_result_card_queue":
         queue, memory = _normalize_result_card_queue(args, state or {}, current_url)
+        selector_trace = dict((state or {}).get("result_card_selector_trace", {}) or {})
+        availability_source = args if args.get("available_result_count") is not None else selector_trace
+        availability = {}
+        try:
+            available_count = int(availability_source.get("available_result_count"))
+            count_confidence = float(availability_source.get("count_confidence") or 0.0)
+        except (TypeError, ValueError):
+            available_count = -1
+            count_confidence = 0.0
+        count_evidence = str(availability_source.get("count_evidence") or "").strip()[:160]
+        if available_count >= len(queue) and count_confidence >= 0.8 and count_evidence:
+            availability = {
+                "available_result_count": available_count,
+                "count_evidence": count_evidence,
+                "count_confidence": count_confidence,
+            }
         result = {
             "action": "set_result_card_queue",
             "status": "success" if queue else "skipped",
@@ -1432,6 +1673,7 @@ def _dispatch_state(
             "queued_titles": [item.get("title", "") for item in queue],
             "_result_card_queue": queue,
             "_result_page_memory": memory,
+            "_result_availability": availability,
         }
     else:
         raise ValueError(f"Unknown state action: {action_name}")
@@ -1490,6 +1732,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     latest_recent_images: list = []
     result_card_queue = [dict(item) for item in (state.get("result_card_queue", []) or []) if isinstance(item, dict)]
     result_page_memory = dict(state.get("result_page_memory", {}) or {})
+    result_availability = dict(state.get("result_availability", {}) or {})
     active_result_card = dict(state.get("active_result_card", {}) or {})
     detail_ocr_buffer = dict(state.get("detail_ocr_buffer", {}) or {})
     screen_changed    = False
@@ -1884,6 +2127,28 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 if action_name == "set_result_card_queue":
                     result_card_queue = list(result.pop("_result_card_queue", []) or [])
                     result_page_memory = dict(result.pop("_result_page_memory", {}) or {})
+                    observed_availability = dict(result.pop("_result_availability", {}) or {})
+                    if observed_availability:
+                        result_availability = observed_availability
+                    pending_cards = _pending_result_cards(result_card_queue)
+                    if pending_cards:
+                        first_card = pending_cards[0]
+                        marker_id = first_card.get("source_marker_id")
+                        if marker_id is not None:
+                            policy_ui_action = (
+                                "click_marker",
+                                {
+                                    "marker_id": marker_id,
+                                    "queue_id": first_card.get("queue_id", ""),
+                                    "target_label": first_card.get("title", ""),
+                                    "target_role": "job_card",
+                                    "target_component": "job_card_title",
+                                    "page_role": "search",
+                                    "reason": "result card queue stored; open the first pending card",
+                                    "expected_after": "selected job detail page is visible",
+                                },
+                                "result_card_queue_first_item",
+                            )
                 if action_name == "finish_detail_reading":
                     detail_ocr_buffer = dict(result.pop("_detail_ocr_buffer", detail_ocr_buffer) or {})
                 if (
@@ -1897,7 +2162,12 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     if detail_complete is True:
                         result_card_queue, active_result_card = _complete_active_result_card(result_card_queue, active_result_card)
                         result["detail_policy"] = "detail_complete"
-                        if target_count > 0 and collected_count < target_count:
+                        pending_cards = _pending_result_cards(result_card_queue)
+                        resolved_count = max(
+                            collected_count,
+                            _completed_result_card_count(result_card_queue),
+                        )
+                        if pending_cards or (target_count > 0 and resolved_count < target_count):
                             policy_ui_action = (
                                 "go_back",
                                 {
@@ -1906,6 +2176,19 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                                 },
                                 "detail_complete_more_items",
                             )
+                        elif (
+                            _auto_finish_on_target_enabled()
+                            and _count_mode_from_state(state) == "visible_all"
+                            and result_card_queue
+                            and not pending_cards
+                        ):
+                            is_finished = True
+                            collected_data.append(
+                                f"Auto-finished after collecting all {collected_count} visible jobs."
+                            )
+                            result["auto_finished"] = True
+                            result["count_mode"] = "visible_all"
+                            result["collected_count"] = collected_count
                 if (
                     action_name in {"update_extracted_info", "finish_detail_reading"}
                     and result.get("status") == "success"
@@ -1914,7 +2197,11 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 ):
                     target_count = _target_count_from_state(state)
                     collected_count = _extracted_job_count(current_jd)
-                    if target_count > 0 and collected_count >= target_count:
+                    resolved_count = max(
+                        collected_count,
+                        _completed_result_card_count(result_card_queue),
+                    )
+                    if target_count > 0 and resolved_count >= target_count:
                         is_finished = True
                         collected_data.append(
                             f"Auto-finished after collecting target_count={target_count} jobs."
@@ -1922,6 +2209,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         result["auto_finished"] = True
                         result["target_count"] = target_count
                         result["collected_count"] = collected_count
+                        result["resolved_count"] = resolved_count
 
             elif action_name == "finish_task":
                 action_tools = _get_action_tools()
@@ -1967,7 +2255,16 @@ def action_node(state: GraphState) -> Dict[str, Any]:
 
             if policy_ui_action and not is_finished:
                 policy_action, policy_args, policy_reason = policy_ui_action
-                append_policy_ui_action(policy_action, policy_args, policy_reason)
+                policy_result = append_policy_ui_action(policy_action, policy_args, policy_reason)
+                if (
+                    policy_result.get("status") == "success"
+                    and policy_action == "click_marker"
+                    and _result_card_click_matches_queue(result_card_queue, policy_args)
+                ):
+                    result_card_queue, active_result_card = _mark_result_card_active(
+                        result_card_queue,
+                        policy_args,
+                    )
                 break
 
             if is_finished:
@@ -2041,6 +2338,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "transition_source": "",
         "result_card_queue": result_card_queue,
         "result_page_memory": result_page_memory,
+        "result_availability": result_availability,
         "active_result_card": active_result_card,
         "queue_replay_hit": False,
         "queue_replay_trace": {},
@@ -2052,19 +2350,3 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "pending_human_approval": pending_human_approval,
         "human_approval_request": human_approval_request,
     }
-
-
-def validate_citations(answer: str, valid_ids: List[int]) -> str:
-    """이전 import 경로를 유지하는 인용 검증 어댑터."""
-
-    from agent.application.chat_service import validate_citations as validate
-
-    return validate(answer, valid_ids)
-
-
-def qa_reasoning_node(state: GraphState) -> Dict[str, Any]:
-    """이전 graph node 호출자를 위한 ChatService 어댑터."""
-
-    from agent.application.chat_service import get_chat_service
-
-    return get_chat_service().run(str(state.get("goal") or ""))

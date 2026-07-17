@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from shared.schema.investigation_schema import ClarificationAnswer
+
 
 class RunStatus(str, Enum):
     QUEUED = "queued"
@@ -46,6 +48,37 @@ class RunEvent(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ChatRequest(BaseModel):
+    """POST /api/chat 요청 본문."""
+
+    query: str
+    resume_run_id: str | None = None
+    conversation_id: str = ""
+    investigation_id: str = ""
+    clarification_answer: ClarificationAnswer | None = None
+
+
+class ChatFinalPayload(BaseModel):
+    """SSE FINAL 프레임의 JSON 본문."""
+
+    run_id: str
+    text: str = ""
+    status: str = RunStatus.COMPLETED.value
+    clarification: dict[str, Any] | None = None
+    investigation_id: str = ""
+    resumed_from_run_id: str | None = None
+    resume_mode: str = ""
+    conversation_id: str = ""
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatErrorPayload(BaseModel):
+    """SSE ERROR 프레임의 JSON 본문."""
+
+    run_id: str
+    message: str
+
+
 RunEventSink = Callable[[RunEvent], None]
 
 
@@ -59,5 +92,8 @@ __all__ = [
     "RunEventSink",
     "RunPhase",
     "RunStatus",
+    "ChatErrorPayload",
+    "ChatFinalPayload",
+    "ChatRequest",
     "new_run_id",
 ]

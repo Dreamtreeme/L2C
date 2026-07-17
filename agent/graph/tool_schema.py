@@ -145,6 +145,13 @@ class set_result_card_queue(BaseModel):
         None,
         description="titles와 같은 순서로 대응되는 회사명 목록입니다. 모르면 생략하십시오.",
     )
+    available_result_count: Optional[int] = Field(
+        None,
+        ge=0,
+        description="화면에 명시된 전체 검색 결과 개수. 숫자의 의미가 확실할 때만 입력합니다.",
+    )
+    count_evidence: Optional[str] = Field(None, description="전체 결과 개수를 판단한 화면 문구")
+    count_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     reason: Optional[str] = Field(None, description="이 카드들을 큐에 넣은 이유")
 
 

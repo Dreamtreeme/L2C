@@ -276,6 +276,24 @@ def test_capture_usable_screen_honors_single_attempt_override(monkeypatch, tmp_p
     assert calls == [None]
 
 
+def test_capture_usable_screen_forwards_input_settle_wait(monkeypatch, tmp_path):
+    from agent.tools.perception import PerceptionEngine
+
+    engine = object.__new__(PerceptionEngine)
+    ready_path = tmp_path / "ready.png"
+    calls = []
+
+    def fake_capture_screen(filename=None, initial_wait_sec=None):
+        calls.append((filename, initial_wait_sec))
+        return ready_path
+
+    monkeypatch.setattr(engine, "capture_screen", fake_capture_screen)
+    monkeypatch.setattr(engine, "screen_quality", lambda _path: {"low_information": False})
+
+    assert engine.capture_usable_screen(max_attempts=1, initial_wait_sec=0.7) == ready_path
+    assert calls == [(None, 0.7)]
+
+
 def test_prepare_som_image_excludes_browser_toolbar_and_bookmarks(monkeypatch, tmp_path):
     from agent.tools.perception import PerceptionEngine
 

@@ -7,12 +7,18 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel
 from pathlib import Path
 
 from shared.db.database import Database
 from agent.application.chat_service import get_chat_service
-from agent.application.run_contracts import RunEvent, RunStatus, new_run_id
+from agent.application.run_contracts import (
+    ChatErrorPayload,
+    ChatFinalPayload,
+    ChatRequest,
+    RunEvent,
+    RunStatus,
+    new_run_id,
+)
 from agent.application.run_registry import get_run_registry
 from agent.utils.logger import logger
 from shared.schema.investigation_schema import ClarificationAnswer
@@ -54,14 +60,6 @@ static_dir.mkdir(parents=True, exist_ok=True)
 
 # 정적 파일 마운트
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-
-class ChatRequest(BaseModel):
-    query: str
-    resume_run_id: str | None = None
-    conversation_id: str = ""
-    investigation_id: str = ""
-    clarification_answer: ClarificationAnswer | None = None
-
 
 def _effective_chat_query(
     query: str,
@@ -179,6 +177,34 @@ async def get_operations_summary():
     }
 
 
+@app.get("/api/contracts")
+async def get_backend_contracts():
+    """실행 모델에서 생성한 백엔드·에이전트 JSON 계약을 반환합니다."""
+
+    from agent.application.backend_contract import build_backend_contract_manifest
+
+    return build_backend_contract_manifest()
+
+
+@app.get("/api/taxonomy/stats")
+async def get_search_taxonomy_stats():
+    """검색 사전 적재 건수와 최상위 직무 카디널리티를 반환합니다."""
+
+    import shared.config as config
+    from agent.application.search_taxonomy_import_service import taxonomy_counts
+    from agent.application.search_taxonomy_service import SearchTaxonomyService
+    from shared.schema.investigation_schema import InvestigationConstraints
+
+    taxonomy = SearchTaxonomyService(config.DB_PATH)
+    question = taxonomy.build_domain_question(InvestigationConstraints())
+    return {
+        "tables": taxonomy_counts(config.DB_PATH),
+        "occupation_domains": (
+            question.model_dump(mode="json") if question is not None else None
+        ),
+    }
+
+
 @app.post("/api/operations/retention")
 async def apply_retention(x_l2c_operation: str = Header(default="")):
     """현재 보존 정책의 만료 후보를 실제로 정리합니다."""
@@ -196,7 +222,15 @@ async def apply_retention(x_l2c_operation: str = Header(default="")):
     )
 
 
-@app.post("/api/chat")
+@app.post(
+    "/api/chat",
+    responses={
+        200: {
+            "description": "SSE frames containing structured progress and final payloads",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
+)
 async def chat_endpoint(req: ChatRequest):
     """
     지휘자 모델(Commander)에 쿼리를 주입하고 SSE 스트리밍 답변을 전달하는 엔드포인트입니다.
@@ -281,7 +315,10 @@ async def chat_endpoint(req: ChatRequest):
             registry.fail(run_id, str(exc))
             logger.exception("Commander execution failed", error=str(exc), run_id=run_id)
             error_payload = json.dumps(
-                {"run_id": run_id, "message": f"지휘자 에이전트 실행 실패: {exc}"},
+                ChatErrorPayload(
+                    run_id=run_id,
+                    message=f"지휘자 에이전트 실행 실패: {exc}",
+                ).model_dump(mode="json"),
                 ensure_ascii=False,
             )
             yield f"data: [ERROR] {error_payload}\n\n"
@@ -289,17 +326,17 @@ async def chat_endpoint(req: ChatRequest):
 
         registry.complete(run_id, result)
         final_payload = json.dumps(
-            {
-                "run_id": run_id,
-                "text": str(result.get("last_action_result") or ""),
-                "status": result.get("run_status", "completed"),
-                "clarification": result.get("clarification"),
-                "investigation_id": result.get("investigation_id", investigation_id),
-                "resumed_from_run_id": req.resume_run_id,
-                "resume_mode": "restart_from_request" if req.resume_run_id else "",
-                "conversation_id": req.conversation_id,
-                "metrics": result.get("metrics", {}),
-            },
+            ChatFinalPayload(
+                run_id=run_id,
+                text=str(result.get("last_action_result") or ""),
+                status=result.get("run_status", "completed"),
+                clarification=result.get("clarification"),
+                investigation_id=result.get("investigation_id", investigation_id),
+                resumed_from_run_id=req.resume_run_id,
+                resume_mode="restart_from_request" if req.resume_run_id else "",
+                conversation_id=req.conversation_id,
+                metrics=result.get("metrics", {}),
+            ).model_dump(mode="json"),
             ensure_ascii=False,
         )
         yield f"data: [FINAL] {final_payload}\n\n"

@@ -125,11 +125,23 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
     markers = list(state.get("current_markers", []) or [])
     signature = dict(state.get("screen_signature", {}) or {})
     size = screen_size_from_signature(signature)
-    queue: list[dict] = []
+    queue: list[dict] = [
+        dict(item)
+        for item in (state.get("result_card_queue", []) or [])
+        if isinstance(item, dict) and str(item.get("status") or "") != "pending"
+    ]
+    existing_labels = {
+        (queue_match_text(item.get("title")), queue_match_text(item.get("company")))
+        for item in queue
+    }
     used_marker_ids: set[int] = set()
     target_count = _target_count_from_state(state)
+    resolved_count = max(
+        _collected_job_count(state.get("extracted_jd", {}) or {}),
+        completed_result_card_count(queue),
+    )
     remaining = (
-        target_count - _collected_job_count(state.get("extracted_jd", {}) or {})
+        target_count - resolved_count
         if target_count > 0
         else len(cards)
     )
@@ -176,9 +188,17 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
         if not bbox_ratio and not marker:
             continue
 
-        queue_id = str(raw.get("queue_id") or raw.get("id") or f"card-{len(queue) + 1}")
-        evidence_texts = raw.get("evidence_texts") if isinstance(raw.get("evidence_texts"), list) else []
         company = str(raw.get("company") or raw.get("company_name") or "").strip()
+        identity = (queue_match_text(label), queue_match_text(company))
+        if identity in existing_labels or (identity[0], "") in existing_labels:
+            continue
+        existing_labels.add(identity)
+
+        queue_id = str(raw.get("queue_id") or f"card-{len(queue) + 1}")
+        existing_queue_ids = {str(item.get("queue_id") or "") for item in queue}
+        if queue_id in existing_queue_ids:
+            queue_id = f"card-{len(queue) + 1}"
+        evidence_texts = raw.get("evidence_texts") if isinstance(raw.get("evidence_texts"), list) else []
         if company and company not in evidence_texts:
             evidence_texts = [company, *evidence_texts]
         queue.append(
@@ -216,6 +236,45 @@ def pending_result_cards(queue: list[dict]) -> list[dict]:
         for item in queue or []
         if isinstance(item, dict) and str(item.get("status") or "pending") == "pending"
     ]
+
+
+def terminal_result_card_count(queue: list[dict]) -> int:
+    """수집 완료 또는 DB 중복으로 현재 큐 처리가 끝난 카드 수를 반환한다."""
+
+    return sum(
+        1
+        for item in queue or []
+        if isinstance(item, dict) and str(item.get("status") or "") in {"done", "skipped"}
+    )
+
+
+def completed_result_card_count(queue: list[dict]) -> int:
+    """상세 정보를 실제로 수집 완료한 카드 수만 반환한다."""
+
+    return sum(
+        1
+        for item in queue or []
+        if isinstance(item, dict) and str(item.get("status") or "") == "done"
+    )
+
+
+def result_card_queue_scope_complete(
+    queue: list[dict],
+    *,
+    count_mode: str,
+    target_count: int,
+) -> bool:
+    """현재 검색 결과 큐가 사용자 요청 범위를 충족했는지 판단한다."""
+
+    if not queue or any(
+        str(item.get("status") or "pending") in {"pending", "active"}
+        for item in queue
+        if isinstance(item, dict)
+    ):
+        return False
+    if str(count_mode or "").strip().lower() == "visible_all":
+        return True
+    return target_count > 0 and completed_result_card_count(queue) >= target_count
 
 
 def same_queue_card(item: dict, args: dict) -> bool:
@@ -270,7 +329,37 @@ def complete_active_result_card(queue: list[dict], active_card: dict) -> tuple[l
     return updated, {}
 
 
-def queue_return_screen_matches(memory: dict, current_url: str, current_signature: dict) -> tuple[bool, dict]:
+def skip_active_result_card(
+    queue: list[dict],
+    active_card: dict,
+    *,
+    reason: str,
+    url: str,
+    job_id: int | None = None,
+) -> tuple[list[dict], dict]:
+    """이미 수집한 상세 URL의 활성 카드를 DB 근거가 확인된 상태로 끝낸다."""
+
+    if not active_card:
+        return queue, {}
+    active_id = str(active_card.get("queue_id") or "")
+    updated = []
+    for raw in queue or []:
+        item = dict(raw)
+        if active_id and str(item.get("queue_id") or "") == active_id:
+            item.update({"status": "skipped", "skip_reason": reason, "detail_url": url})
+            if job_id is not None:
+                item["job_id"] = int(job_id)
+        updated.append(item)
+    return updated, {}
+
+
+def queue_return_screen_matches(
+    memory: dict,
+    current_url: str,
+    current_signature: dict,
+    *,
+    require_anchors: bool = True,
+) -> tuple[bool, dict]:
     if not memory:
         return False, {"reason": "queue_memory_missing"}
     if looks_like_job_detail_url(current_url):
@@ -285,14 +374,26 @@ def queue_return_screen_matches(memory: dict, current_url: str, current_signatur
             "saved_phash": bool(saved_phash),
             "current_phash": bool(current_phash),
         }
+    saved_size = list(saved_signature.get("size") or [])
+    current_size = list((current_signature or {}).get("size") or [])
+    if saved_size and current_size and saved_size != current_size:
+        return False, {
+            "reason": "capture_size_mismatch",
+            "saved_size": saved_size,
+            "current_size": current_size,
+        }
     try:
         from agent.recipe.phash_replay import anchor_overlap
         from agent.vision.screen_signature import hamming_distance
 
         distance = hamming_distance(saved_phash, current_phash)
-        overlap = anchor_overlap(
-            saved_signature.get("anchors") or [],
-            (current_signature or {}).get("anchors") or [],
+        overlap = (
+            anchor_overlap(
+                saved_signature.get("anchors") or [],
+                (current_signature or {}).get("anchors") or [],
+            )
+            if require_anchors
+            else None
         )
     except Exception as exc:
         return False, {"reason": "phash_compare_failed", "error": str(exc)}
@@ -303,9 +404,21 @@ def queue_return_screen_matches(memory: dict, current_url: str, current_signatur
     except ValueError:
         max_distance = 16
         min_overlap = 0.20
-    matched = distance is not None and distance <= max_distance and overlap >= min_overlap
+    matched = bool(
+        distance is not None
+        and distance <= max_distance
+        and (not require_anchors or (overlap is not None and overlap >= min_overlap))
+    )
     return matched, {
-        "reason": "phash_anchor_match" if matched else "phash_anchor_mismatch",
+        "reason": (
+            "phash_anchor_match"
+            if matched and require_anchors
+            else "phash_match"
+            if matched
+            else "phash_anchor_mismatch"
+            if require_anchors
+            else "phash_mismatch"
+        ),
         "distance": distance,
         "max_distance": max_distance,
         "anchor_overlap": overlap,
@@ -356,6 +469,8 @@ def queue_replay_after_return(
     current_url: str,
     markers: list[dict],
     screen_signature: dict,
+    *,
+    require_anchors: bool = True,
 ) -> tuple[AIMessage | None, list[dict], dict]:
     """목록으로 돌아온 직후 큐의 다음 미방문 카드를 클릭하도록 준비한다."""
 
@@ -383,6 +498,7 @@ def queue_replay_after_return(
         dict(state.get("result_page_memory", {}) or {}),
         current_url,
         screen_signature,
+        require_anchors=require_anchors,
     )
     if not matched:
         return None, markers, match_trace
@@ -424,12 +540,14 @@ def queue_replay_after_return(
 
 __all__ = [
     "card_queue_enabled",
+    "completed_result_card_count",
     "complete_active_result_card",
     "mark_result_card_active",
     "marker_by_id",
     "marker_by_label",
     "normalize_result_card_queue",
     "pending_result_cards",
+    "result_card_queue_scope_complete",
     "queue_card_label",
     "queue_marker_for_item",
     "queue_match_text",
@@ -438,5 +556,7 @@ __all__ = [
     "result_card_click_matches_queue",
     "result_card_entries_from_args",
     "same_queue_card",
+    "skip_active_result_card",
+    "terminal_result_card_count",
     "text_list_arg",
 ]

@@ -281,7 +281,12 @@ class PerceptionEngine:
             "dominant_ratio": round(dominant_ratio, 4),
         }
 
-    def capture_usable_screen(self, max_attempts: Optional[int] = None) -> Path:
+    def capture_usable_screen(
+        self,
+        max_attempts: Optional[int] = None,
+        *,
+        initial_wait_sec: Optional[float] = None,
+    ) -> Path:
         """단색 빈 본문이면 OCR 전에 짧게 재캡처하고 마지막 화면을 반환한다."""
         if max_attempts is None:
             max_attempts = self._env_int("VISION_PAGE_CAPTURE_MAX_ATTEMPTS", 4)
@@ -292,7 +297,10 @@ class PerceptionEngine:
             filename = None
             if attempt > 1:
                 filename = f"screen_retry_{int(time.time() * 1000)}_{attempt}.png"
-            last_path = self.capture_screen(filename=filename)
+            if initial_wait_sec is None:
+                last_path = self.capture_screen(filename=filename)
+            else:
+                last_path = self.capture_screen(filename=filename, initial_wait_sec=initial_wait_sec)
             quality = self.screen_quality(last_path)
             self.last_capture_quality = dict(quality)
             logger.info("Screen quality checked", attempt=attempt, max_attempts=max_attempts, **quality)

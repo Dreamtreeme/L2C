@@ -45,6 +45,85 @@ class CollectionService:
     def __init__(self, operations: CollectionOperations):
         self.operations = operations
 
+    @staticmethod
+    def _result_availability(submission: dict, worker_result: dict) -> dict[str, Any]:
+        summary = submission.get("extracted_summary") if isinstance(submission, dict) else {}
+        summary = summary if isinstance(summary, dict) else {}
+        final_state = worker_result.get("final_state") if isinstance(worker_result, dict) else {}
+        final_state = final_state if isinstance(final_state, dict) else {}
+        availability = summary.get("result_availability") or final_state.get("result_availability") or {}
+        return dict(availability) if isinstance(availability, dict) else {}
+
+    @classmethod
+    def _search_scope_exhausted(
+        cls,
+        submission: dict,
+        worker_result: dict,
+        resolved_count: int,
+    ) -> tuple[bool, dict[str, Any]]:
+        """화면에서 확인한 전체 결과를 모두 처리했는지 판단한다."""
+
+        availability = cls._result_availability(submission, worker_result)
+        try:
+            available_count = int(availability.get("available_result_count"))
+            confidence = float(availability.get("count_confidence") or 0.0)
+        except (TypeError, ValueError):
+            return False, {}
+        evidence = str(availability.get("count_evidence") or "").strip()
+        trusted = available_count >= 0 and confidence >= 0.8 and bool(evidence)
+        return bool(trusted and resolved_count >= available_count), availability
+
+    @staticmethod
+    def _merge_persistence_validation(
+        aggregate: dict[str, Any],
+        current: dict[str, Any],
+    ) -> dict[str, Any]:
+        """여러 작업자 시도의 저장 결과를 문서 기준으로 합친다."""
+
+        aggregate_items = [
+            item
+            for item in (aggregate.get("persisted_items") or [])
+            if isinstance(item, dict)
+        ]
+        current_items = [
+            item
+            for item in (current.get("persisted_items") or [])
+            if isinstance(item, dict)
+        ]
+        persisted: dict[str, dict[str, Any]] = {}
+        for item in [*aggregate_items, *current_items]:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("job_id") or item.get("url") or len(persisted))
+            persisted[key] = dict(item)
+        unidentified_count = max(
+            0,
+            int(aggregate.get("persisted_count") or 0) - len(aggregate_items),
+        ) + max(
+            0,
+            int(current.get("persisted_count") or 0) - len(current_items),
+        )
+        rejected = [
+            dict(item)
+            for item in [
+                *(aggregate.get("rejected_items") or []),
+                *(current.get("rejected_items") or []),
+            ]
+            if isinstance(item, dict)
+        ]
+        return {
+            "submitted_count": int(aggregate.get("submitted_count") or 0)
+            + int(current.get("submitted_count") or 0),
+            "persisted_count": len(persisted) + unidentified_count,
+            "created_count": int(aggregate.get("created_count") or 0)
+            + int(current.get("created_count") or 0),
+            "updated_count": int(aggregate.get("updated_count") or 0)
+            + int(current.get("updated_count") or 0),
+            "persisted_items": list(persisted.values()),
+            "rejected_count": len(rejected),
+            "rejected_items": rejected,
+        }
+
     def collect(self, request: CollectionRequest) -> dict[str, Any]:
         keyword = str(request.search_keyword or "").strip()
         if not keyword:
@@ -81,8 +160,27 @@ class CollectionService:
             attempt = max(0, int(request.review_attempt or 0))
             pending_feedback = request.review_feedback or ""
             worker_run_id: str | None = None
+            aggregate_validation: dict[str, Any] = {}
+            observed_job_ids: set[int] = set()
 
             while True:
+                persisted_ids = {
+                    int(item["job_id"])
+                    for item in aggregate_validation.get("persisted_items", [])
+                    if isinstance(item, dict) and str(item.get("job_id", "")).isdigit()
+                }
+                resolved_count = max(
+                    int(aggregate_validation.get("persisted_count") or 0),
+                    len(persisted_ids | observed_job_ids),
+                )
+                remaining_target = (
+                    max(0, target_count - resolved_count)
+                    if target_count > 0
+                    else 0
+                )
+                attempt_intent = dict(intent_payload)
+                if target_count > 0:
+                    attempt_intent["target_count"] = remaining_target
                 with measure_step(
                     "vision_worker",
                     site=request.site or "",
@@ -91,10 +189,10 @@ class CollectionService:
                     worker_result = self.operations.run_worker(
                         keyword,
                         site=request.site,
-                        target_count=target_count,
+                        target_count=remaining_target if target_count > 0 else target_count,
                         task_category=task_category,
                         search_intent_resolved=request.search_intent_resolved,
-                        collection_intent=intent_payload,
+                        collection_intent=attempt_intent,
                         review_feedback=pending_feedback,
                         review_attempt=attempt,
                         run_id=worker_run_id,
@@ -111,7 +209,53 @@ class CollectionService:
                 with measure_step("worker_review", review_attempt=attempt):
                     review, submission_id = self.operations.review_worker(submission)
 
-                if review.get("decision") == "revise" and attempt < max_review_retries:
+                emit_run_event(
+                    "persistence_started",
+                    RunPhase.PERSISTENCE,
+                    "검증된 채용공고를 저장하고 있습니다.",
+                    data={"decision": review.get("decision", "")},
+                )
+                with measure_step("job_persistence"):
+                    (
+                        _persisted_count,
+                        submission,
+                        review,
+                        persisted_submission_id,
+                    ) = self.operations.persist_result(worker_result, review)
+                if persisted_submission_id:
+                    submission_id = persisted_submission_id
+                current_validation = dict(worker_result.get("persistence_validation") or {})
+                aggregate_validation = self._merge_persistence_validation(
+                    aggregate_validation,
+                    current_validation,
+                )
+                observed_job_ids.update(
+                    int(job_id)
+                    for job_id in (worker_result.get("observed_job_ids") or [])
+                    if str(job_id).isdigit() and int(job_id) > 0
+                )
+                persisted_ids = {
+                    int(item["job_id"])
+                    for item in aggregate_validation.get("persisted_items", [])
+                    if isinstance(item, dict) and str(item.get("job_id", "")).isdigit()
+                }
+                resolved_count = max(
+                    int(aggregate_validation.get("persisted_count") or 0),
+                    len(persisted_ids | observed_job_ids),
+                )
+                scope_exhausted, _availability = self._search_scope_exhausted(
+                    submission,
+                    worker_result,
+                    resolved_count,
+                )
+
+                should_retry = bool(
+                    review.get("decision") == "revise"
+                    and review.get("continue_collection", True)
+                    and attempt < max_review_retries
+                    and not scope_exhausted
+                )
+                if should_retry:
                     pending_feedback = self.operations.render_review_feedback(review)
                     attempt += 1
                     logger.info(
@@ -121,21 +265,8 @@ class CollectionService:
                     )
                     continue
 
-                emit_run_event(
-                    "persistence_started",
-                    RunPhase.PERSISTENCE,
-                    "승인된 채용공고를 저장하고 있습니다.",
-                    data={"decision": review.get("decision", "")},
-                )
-                with measure_step("job_persistence"):
-                    (
-                        persisted_count,
-                        submission,
-                        review,
-                        persisted_submission_id,
-                    ) = self.operations.persist_result(worker_result, review)
-                if persisted_submission_id:
-                    submission_id = persisted_submission_id
+                worker_result["persistence_validation"] = aggregate_validation
+                worker_result["observed_job_ids"] = sorted(observed_job_ids)
 
                 return self._build_result(
                     request=request,
@@ -146,7 +277,8 @@ class CollectionService:
                     submission=submission,
                     submission_id=submission_id,
                     review=review,
-                    persisted_count=persisted_count,
+                    persisted_count=int(aggregate_validation.get("persisted_count") or 0),
+                    resolved_count=resolved_count,
                     collection_intent=intent_payload,
                 )
         except Exception as exc:
@@ -175,6 +307,7 @@ class CollectionService:
         submission_id: str,
         review: dict,
         persisted_count: int,
+        resolved_count: int,
         collection_intent: dict[str, Any],
     ) -> dict[str, Any]:
         item_count = int(submission.get("collected_count") or 0)
@@ -185,9 +318,9 @@ class CollectionService:
         is_finished = bool(worker_result.get("is_finished", False))
         recursion_limit = int(worker_result.get("recursion_limit") or 0)
         effective_target_count = int(
-            worker_result.get("target_count")
+            target_count
+            or worker_result.get("target_count")
             or submission.get("target_count")
-            or target_count
             or 0
         )
         effective_task_category = (
@@ -198,7 +331,7 @@ class CollectionService:
         base_needs_approval = self.operations.needs_approval(
             hit_recursion_limit=hit_recursion_limit,
             is_finished=is_finished,
-            persisted_count=persisted_count,
+            persisted_count=resolved_count,
             target_count=effective_target_count,
         )
         intermediate_report = (
@@ -212,12 +345,21 @@ class CollectionService:
             if base_needs_approval
             else {}
         )
-        needs_approval = base_needs_approval and self.operations.report_requires_more_collection(
-            intermediate_report
+        scope_exhausted, availability = self._search_scope_exhausted(
+            submission,
+            worker_result,
+            resolved_count,
+        )
+        needs_approval = (
+            base_needs_approval
+            and not scope_exhausted
+            and self.operations.report_requires_more_collection(intermediate_report)
         )
         validation = dict(worker_result.get("persistence_validation") or {})
         rejected_count = int(validation.get("rejected_count") or 0)
-        if persisted_count <= 0:
+        if scope_exhausted:
+            completion_status = "complete"
+        elif persisted_count <= 0:
             completion_status = "rejected"
         elif (
             rejected_count > 0
@@ -229,7 +371,7 @@ class CollectionService:
         else:
             completion_status = "complete"
         missing_count = (
-            max(0, effective_target_count - persisted_count)
+            max(0, effective_target_count - resolved_count)
             if effective_target_count > 0
             else 0
         )
@@ -240,6 +382,12 @@ class CollectionService:
                 f"keyword={effective_keyword!r}, site={site_name}, collected={item_count}, "
                 f"persisted={persisted_count}; approval required to raise limit to "
                 f"{intermediate_report.get('suggested_recursion_limit')}"
+            )
+        elif scope_exhausted:
+            message = (
+                f"search scope exhausted: keyword={effective_keyword!r}, site={site_name}, "
+                f"available={availability.get('available_result_count', 0)}, "
+                f"resolved={resolved_count}, persisted={persisted_count}"
             )
         elif persisted_count > 0:
             completion_type = "partial collection persisted" if completion_status == "partial" else "vision collection persisted"
@@ -295,8 +443,17 @@ class CollectionService:
             "intermediate_report": intermediate_report,
             "collection_intent": collection_intent,
             "completion_status": completion_status,
+            "search_scope_exhausted": scope_exhausted,
+            "result_availability": availability,
             "missing_count": missing_count,
             "persistence_validation": validation,
+            "observed_job_ids": sorted(
+                {
+                    int(job_id)
+                    for job_id in (worker_result.get("observed_job_ids") or [])
+                    if str(job_id).isdigit() and int(job_id) > 0
+                }
+            ),
         }
 
 

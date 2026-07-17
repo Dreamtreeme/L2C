@@ -241,18 +241,12 @@ def _build_site_goal(
 ) -> str:
     entry = profile["entry"]
     manual = profile["manual"]
-    tools = profile["tools"]
     site_name = entry.get("display_name") or entry.get("slug")
     base_url = entry.get("base_url") or manual.get("base_url")
-    common_flow = _join_manual_items(manual.get("common_flow", []))
-    stable_controls = _join_manual_items(manual.get("stable_controls", []))
-    variable_entities = _join_manual_items(manual.get("variable_entities", []))
-    ignore_elements = _join_manual_items(manual.get("ignore_elements", []))
     required_fields = _join_manual_items(manual.get("collection_policy", {}).get("required_fields", []))
     safe_reflex = _join_manual_items(manual.get("reflex_policy", {}).get("safe_actions", []))
     unsafe_reflex = _join_manual_items(manual.get("reflex_policy", {}).get("unsafe_actions", []))
-    allowed_tools = _join_manual_items(tools.get("allowed_tools", []))
-    site_prompt = profile.get("prompt", "").strip()
+    site_skill = profile.get("skill", "").strip()
     navigation = manual.get("navigation_policy", {}) if isinstance(manual, dict) else {}
     start_url = str(navigation.get("start_url") or base_url or "").strip()
     search_entry = str(navigation.get("search_entry") or "").strip()
@@ -325,15 +319,10 @@ def _build_site_goal(
         f"{target_section}"
         f"{confirmed_request_section}"
         f"{task_context_section}"
-        f"[사이트 공통 흐름]\n{common_flow}\n\n"
-        f"[안정적인 UI/Reflex 후보]\n{stable_controls}\n\n"
-        f"[목표나 실행 시점에 따라 달라지는 UI]\n{variable_entities}\n\n"
-        f"[무시할 요소]\n{ignore_elements}\n\n"
         f"[필수 수집 필드]\n{required_fields}\n\n"
         f"[Reflex 안전 액션]\n{safe_reflex}\n\n"
         f"[Reflex 금지/주의 액션]\n{unsafe_reflex}\n\n"
-        f"[허용 도구]\n{allowed_tools}\n\n"
-        f"[하위 에이전트 사이트 지침]\n{site_prompt}"
+        f"[선택된 사이트 스킬]\n{site_skill}"
     )
 
 
@@ -593,6 +582,15 @@ def run_worker_once(
         target_count=target_count,
         task_category=task_category,
     )
+    observed_job_ids = sorted(
+        {
+            int(item["job_id"])
+            for item in (final_state.get("result_card_queue", []) or [])
+            if isinstance(item, dict)
+            and item.get("status") == "skipped"
+            and item.get("job_id") is not None
+        }
+    )
 
     return {
         "submission": submission,
@@ -612,6 +610,7 @@ def run_worker_once(
         "is_finished": is_finished,
         "feedback_saved": feedback_saved,
         "recursion_limit": recursion_limit,
+        "observed_job_ids": observed_job_ids,
     }
 
 
@@ -680,12 +679,16 @@ def _schedule_recipe_candidate_promotion(candidate_id: str) -> bool:
 
 
 def persist_accepted_worker_result(worker_result: dict, review: dict, source: str = "realtime_scraping") -> tuple[int, dict, dict, str]:
-    """Persist accepted worker data and update the stored submission row."""
+    """검토가 허용한 유효 수집 데이터를 저장하고 제출 상태를 갱신한다."""
     from agent.application.run_context import raise_if_cancelled
 
     raise_if_cancelled()
     submission = dict(worker_result.get("submission") or {})
-    if review.get("decision") != "accept" or not worker_result.get("extracted_jd"):
+    accepts_data = bool(
+        review.get("decision") == "accept"
+        or review.get("accept_collected_data")
+    )
+    if not accepts_data or not worker_result.get("extracted_jd"):
         return 0, submission, review, ""
 
     validation = _persist_collected_data_with_report(
@@ -721,7 +724,7 @@ def persist_accepted_worker_result(worker_result: dict, review: dict, source: st
         source=source,
     )
     learning_mode = _recipe_learning_mode()
-    if learning_mode != "off":
+    if learning_mode != "off" and review.get("decision") == "accept":
         candidate_id = _commit_recipe_candidate(submission, review, source, submission_id, learning_mode)
         if candidate_id:
             submission["recipe_candidate_id"] = candidate_id

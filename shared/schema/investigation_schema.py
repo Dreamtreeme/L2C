@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from shared.schema.agent_contract import CollectionToolArguments, EvidenceField
 
 
 class InvestigationPurpose(str, Enum):
@@ -15,6 +17,15 @@ class InvestigationPurpose(str, Enum):
     COLLECT = "collect"
     COMPARE = "compare"
     TREND = "trend"
+
+
+class EvidencePolicy(str, Enum):
+    """질문에 답할 때 외부 근거를 확보하는 방식."""
+
+    MODEL_KNOWLEDGE = "model_knowledge"
+    DATABASE_FIRST = "database_first"
+    WEB_REQUIRED = "web_required"
+    DATABASE_ONLY = "database_only"
 
 
 class InvestigationStatus(str, Enum):
@@ -34,9 +45,18 @@ class InvestigationStatus(str, Enum):
 class ClarificationOption(BaseModel):
     """사용자가 선택할 수 있는 하나의 확정 값."""
 
+    model_config = ConfigDict(extra="forbid")
+
     option_id: str = Field(min_length=1)
     label: str = Field(min_length=1)
     value: str = Field(min_length=1)
+    collection_search_term: str = ""
+    matching_count: int = Field(default=0, ge=0)
+    concept_count: int = Field(
+        default=0,
+        ge=0,
+        description="이 선택지 아래에 포함된 활성 직무 개념 수.",
+    )
     description: str = ""
 
 
@@ -49,6 +69,9 @@ class ClarificationQuestion(BaseModel):
     options: list[ClarificationOption] = Field(default_factory=list)
     allow_custom: bool = True
     reason: str = ""
+    candidate_count: int = Field(default=0, ge=0)
+    concept_count: int = Field(default=0, ge=0)
+    facet_type: str = ""
 
     @model_validator(mode="after")
     def validate_choices(self) -> "ClarificationQuestion":
@@ -78,13 +101,76 @@ class ClarificationAnswer(BaseModel):
 class InvestigationConstraints(BaseModel):
     """사용자와의 대화를 거쳐 확정된 조사 조건."""
 
-    search_keywords: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    occupation_scope_required: bool = Field(
+        default=False,
+        description=(
+            "공고 조사 목표를 정하려면 사용자가 업무 영역이나 직무를 선택해야 하는지 여부."
+        ),
+    )
+    occupation_domain_query: str = Field(
+        default="",
+        description=(
+            "사용자가 명시한 업무 기능 기준의 넓은 직무 영역. 회사의 산업 분류와 구분한다."
+        ),
+    )
+    occupation_domain_concept_keys: list[str] = Field(
+        default_factory=list,
+        description="검색 의미 사전에서 확정된 직무 영역 개념 키.",
+    )
+    occupation_query: str = Field(
+        default="",
+        description="사용자가 요청한 직무 표현. 사전 해석과 미분류 직무 판정에만 사용한다.",
+    )
+    collection_search_term: str = Field(
+        default="",
+        description="채용 사이트 검색창에 입력할 검색어. DB 후보 판정에는 사용하지 않는다.",
+    )
+    exact_text_groups: list[list[str]] = Field(
+        default_factory=list,
+        description=(
+            "사용자가 문자열 자체를 조건으로 명시한 표현 묶음. 묶음 안은 OR, "
+            "묶음 사이는 AND로 평가하며 직무 동의어 확장에는 사용하지 않는다."
+        ),
+    )
+    occupation_concept_keys: list[str] = Field(
+        default_factory=list,
+        description="검색 의미 사전에서 확정된 직무 개념 키. 여러 값은 OR로 평가한다.",
+    )
+    occupation_resolution: Literal[
+        "unresolved",
+        "exact_alias",
+        "user_selected",
+        "reviewed_alias",
+        "semantic_no_match",
+    ] = Field(
+        default="unresolved",
+        description="직무 표현이 현재 개념 키로 확정된 경로.",
+    )
+    occupation_scope_mode: Literal["unspecified", "all", "selected"] = Field(
+        default="unspecified",
+        description=(
+            "unspecified는 카디널리티 질문 가능, all은 사용자가 전체 하위 직무를 "
+            "명시, selected는 객관식으로 범위를 확정한 상태다."
+        ),
+    )
+    skill_queries: list[str] = Field(
+        default_factory=list,
+        description="사용자가 명시한 기술 표현. 활성 기술 사전으로 해석한다.",
+    )
+    skill_concept_keys: list[str] = Field(
+        default_factory=list,
+        description="검색 의미 사전에서 확정된 기술 개념 키.",
+    )
+    skill_match_mode: Literal["all", "any"] = "all"
+    skill_requirement_type: Literal["any", "required", "preferred", "mentioned"] = "any"
     sites: list[str] = Field(default_factory=list)
     posted_from: str = ""
     posted_to: str = ""
     comparison_posted_from: str = ""
     comparison_posted_to: str = ""
-    count_mode: str = "unspecified"
+    count_mode: Literal["unspecified", "explicit", "visible_all"] = "unspecified"
     target_count: int = Field(default=0, ge=0, le=100)
     location: str = ""
     experience: str = ""
@@ -92,32 +178,68 @@ class InvestigationConstraints(BaseModel):
     analysis_dimensions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def normalize_count_mode(self) -> "InvestigationConstraints":
-        mode = str(self.count_mode or "").strip().lower()
-        aliases = {
-            "all": "visible_all",
-            "every": "visible_all",
-            "limit": "explicit" if self.target_count > 0 else "unspecified",
-        }
-        mode = aliases.get(mode, mode)
-        if mode not in {"unspecified", "explicit", "visible_all"}:
-            mode = "explicit" if self.target_count > 0 else "unspecified"
-        if self.target_count > 0:
-            mode = "explicit"
-        self.count_mode = mode
+    def normalize_occupation_scope_requirement(self) -> "InvestigationConstraints":
+        has_occupation_scope = any(
+            (
+                self.occupation_domain_query.strip(),
+                self.occupation_domain_concept_keys,
+                self.occupation_query.strip(),
+                self.occupation_concept_keys,
+            )
+        )
+        if has_occupation_scope:
+            self.occupation_scope_required = False
+        return self
+
+    @model_validator(mode="after")
+    def validate_count_mode(self) -> "InvestigationConstraints":
+        if self.count_mode == "explicit" and self.target_count == 0:
+            raise ValueError("명시적 수집 개수에는 1 이상의 target_count가 필요합니다.")
+        if self.count_mode != "explicit" and self.target_count > 0:
+            raise ValueError("target_count는 count_mode=explicit일 때만 사용할 수 있습니다.")
         return self
 
 
 class EvidenceRequirement(BaseModel):
     """최종 답변을 뒷받침하기 위해 필요한 자료."""
 
+    model_config = ConfigDict(extra="forbid")
+
     requirement_id: str = Field(min_length=1)
     description: str = Field(min_length=1)
-    cohort: str = ""
-    search_keywords: list[str] = Field(default_factory=list)
+    occupation_domain_query: str = Field(
+        default="",
+        description="이 근거 집단이 속한 업무 기능 기준 직무 영역.",
+    )
+    occupation_domain_concept_keys: list[str] = Field(
+        default_factory=list,
+        description="이 근거 집단에 확정된 직무 영역 개념 키.",
+    )
+    occupation_query: str = Field(
+        default="",
+        description="이 근거 집단의 직무 표현. 코드가 직무 개념 키로 해석한다.",
+    )
+    occupation_concept_keys: list[str] = Field(
+        default_factory=list,
+        description="이 근거 집단에 확정된 직무 개념 키.",
+    )
+    collection_search_term: str = Field(
+        default="",
+        description="이 근거가 부족할 때 사이트 검색창에 입력할 검색어.",
+    )
+    skill_queries: list[str] = Field(default_factory=list)
+    skill_concept_keys: list[str] = Field(default_factory=list)
+    skill_match_mode: Literal["all", "any"] = "all"
+    skill_requirement_type: Literal["any", "required", "preferred", "mentioned"] = "any"
+    exact_text_groups: list[list[str]] = Field(
+        default_factory=list,
+        description=(
+            "문자열 자체가 조건일 때만 사용하는 표현 묶음. 직무·기술 판정은 사전 키를 사용한다."
+        ),
+    )
     posted_from: str = ""
     posted_to: str = ""
-    required_fields: list[str] = Field(default_factory=list)
+    required_fields: list[EvidenceField] = Field(default_factory=list)
     minimum_count: int = Field(default=1, ge=0, le=1000)
     required_sites: list[str] = Field(default_factory=list)
     reason: str = ""
@@ -141,7 +263,7 @@ class InvestigationPlanStep(BaseModel):
     step_id: str = Field(min_length=1)
     action: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: CollectionToolArguments = Field(default_factory=CollectionToolArguments)
     purpose: str = ""
     expected_evidence: list[str] = Field(default_factory=list)
     success_criteria: list[str] = Field(default_factory=list)
@@ -158,9 +280,9 @@ class InvestigationRequest(BaseModel):
     objective: str = ""
     deliverable: str = ""
     purpose: InvestigationPurpose = InvestigationPurpose.LOOKUP
+    evidence_policy: EvidencePolicy = EvidencePolicy.DATABASE_FIRST
     status: InvestigationStatus = InvestigationStatus.UNDERSTANDING
     constraints: InvestigationConstraints = Field(default_factory=InvestigationConstraints)
-    unresolved_fields: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
     clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
@@ -180,36 +302,19 @@ class RequestAnalysis(BaseModel):
     objective: str = Field(min_length=1)
     deliverable: str = Field(min_length=1)
     purpose: InvestigationPurpose = InvestigationPurpose.LOOKUP
+    evidence_policy: EvidencePolicy = EvidencePolicy.DATABASE_FIRST
     constraints: InvestigationConstraints = Field(default_factory=InvestigationConstraints)
-    unresolved_fields: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
 
-    @model_validator(mode="after")
-    def validate_unresolved_questions(self) -> "RequestAnalysis":
-        aliases = {
-            "recent_period": {"recent_period", "posted_from", "posted_to"},
-            "posted_from": {"recent_period", "comparison_period", "posted_from"},
-            "posted_to": {"recent_period", "comparison_period", "posted_to"},
-            "comparison_posted_from": {"comparison_period", "comparison_posted_from"},
-            "comparison_posted_to": {"comparison_period", "comparison_posted_to"},
-            "trend_metric": {"trend_metric", "analysis_dimensions"},
-            "analysis_dimensions": {"trend_metric", "analysis_dimensions"},
-            "site_scope": {"site_scope", "sites"},
-            "sites": {"site_scope", "sites"},
-        }
-        question_fields = {item.field for item in self.clarification_questions}
-        missing_questions = [
-            field
-            for field in self.unresolved_fields
-            if not (question_fields & aliases.get(field, {field}))
-        ]
-        if missing_questions:
-            raise ValueError(
-                "미확정 조건에는 대응하는 확인 질문이 필요합니다: "
-                + ", ".join(missing_questions)
-            )
-        return self
+
+class TaxonomyResolution(BaseModel):
+    """선택된 직무 영역 안에서 사용자 표현을 사전 개념에 대응한 결과."""
+
+    decision: Literal["match", "ambiguous", "no_match"] = "no_match"
+    selected_concept_key: str = ""
+    alternative_concept_keys: list[str] = Field(default_factory=list)
+    reason: str = ""
 
 
 class EvidencePlan(BaseModel):
@@ -229,8 +334,12 @@ class RequirementEvidenceDecision(BaseModel):
     """한 근거 집단에 실제로 포함되는 DB 문서 판단."""
 
     requirement_id: str = Field(min_length=1)
-    matching_document_ids: list[int] = Field(default_factory=list)
-    reason: str = ""
+    matching_document_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "사전으로 확정하지 못한 의미 조건을 만족하는 문서 ID. 제공된 후보 안에서만 반환한다."
+        ),
+    )
 
 
 class EvidenceValidation(BaseModel):
@@ -243,6 +352,7 @@ __all__ = [
     "ClarificationAnswer",
     "ClarificationOption",
     "ClarificationQuestion",
+    "EvidencePolicy",
     "EvidenceRequirement",
     "InvestigationConstraints",
     "InvestigationPlanStep",
@@ -252,6 +362,7 @@ __all__ = [
     "InvestigationActionPlan",
     "EvidencePlan",
     "RequestAnalysis",
+    "TaxonomyResolution",
     "EvidenceValidation",
     "RequirementEvidenceDecision",
     "ToolCapability",

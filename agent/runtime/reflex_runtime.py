@@ -54,6 +54,8 @@ def reflex_action_args(step: dict, marker_id: int | None, params: dict | None = 
             slot_refs = step.get("slot_refs") or []
             slot_name = slot_refs[0] if slot_refs else ""
         text = params.get(slot_name) if slot_name else None
+        if slot_name and step.get("replay_mode") == "parameterized" and not text:
+            return None
         text = text or param.get("text") or value
         if not text:
             return None

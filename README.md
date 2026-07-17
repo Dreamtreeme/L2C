@@ -173,7 +173,7 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
 
 - [x] Phase 6: 수집 데이터 전처리 및 DB 적재 신뢰성 강화
   - [x] 1. 고정밀 텍스트 전처리 엔진 구현 (`preprocessor.py`)
-    - [x] OCR 텍스트 내 불필요 개행, 특수 기호, 마커 잔영(`[id]`) 제거 및 기술 스택 동의어 매핑
+    - [x] OCR 텍스트 내 불필요 개행, 특수 기호, 마커 잔영(`[id]`) 제거 및 목록 필드 정규화
     - [x] LLM이 리스트 필드를 단일 문자열 또는 JSON 문자열로 반환해도 안전하게 리스트로 정규화
     - [x] `3년 이상 ~ 7년 이하` 같은 경력 범위 표현 파싱 보강
   - [x] 2. 수집 필드 확장 스키마 설계 및 마이그레이션 (`jd_schema.py`, `database.py`)
@@ -183,19 +183,22 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
   - [x] 4. E2E 데이터 파이프라인 정합성 최종 검증 (`test_db_persistence.py`)
     - [x] 실제 수집 데이터 기반 전처리·DB 연동 후 적재 검증 패키지 자동 테스트 통과
 
-- [x] Phase 7: 적재 데이터 활용 SQLite 검색 도구 구축 및 지휘자 통합 (RAG 폐기 및 SQL 쿼리 LLM 위임)
-  - [x] 1. SQLite 검색 엔진 구현 및 LLM SQL 생성 위임 (`sqlite_query.py`)
-    - [x] SQL SELECT 구문을 직접 생성하여 조건에 맞는 데이터를 정밀 조회하는 sqlite_query 도구 탑재
-    - [x] 쿼리 유효성 검증 (SELECT 쿼리만 한정하도록 보완) 및 XML 구조화 응답 포맷 연동
-    - [x] XML 특수문자 escaping, 최대 결과 개수 및 본문 길이 제한으로 컨텍스트 파손 방지
-  - [x] 2. 지휘자 도구 통합 및 라우팅 (`agent/application/chat_service.py`)
-    - [x] sqlite_query 검색 도구를 지휘자의 function calling 도구로 등록
-    - [x] 기존 비전 에이전트 수집 흐름을 지휘자의 보조 도구로 통합 및 순차 호출 라우팅
-    - [x] QA 경로와 비전 수집 경로의 런타임 초기화를 분리하여 서버 import 안정성 개선
-  - [x] 3. 답변 생성 및 인용 검증 (`agent/application/chat_service.py`)
-    - [x] XML 구조화 컨텍스트 주입, 스트리밍 응답, 온도 0.0 설정
-    - [x] 답변 생성 후 인용 ID 정합성 검사 및 위반 ID는 `[출처 확인 불가]` 마커로 치환 (`validate_citations`)
-  - [x] 4. E2E SQLite 검색 동작 및 미적재 정보 거절 테스트 검증 (`test_sqlite_qa.py`)
+- [x] Phase 7: 조사 계획 기반 DB 근거 조회와 지휘자 통합
+  - [x] 1. 사용자 질문을 조사 계약으로 변환
+    - [x] 직무 범위, 기술 조건, 사이트 검색어, 필요한 근거를 서로 다른 필드로 분리
+    - [x] LLM이 임의 SQL이나 동의어 목록을 만들지 않고 검색 의미 사전의 개념 키를 사용
+  - [x] 2. 구조화된 SQLite 근거 검사
+    - [x] 직무 계층과 필수·우대·언급 기술 조건을 결정론적으로 조회
+    - [x] 사전에서 확정할 수 없는 의미 조건만 LLM 검증으로 전달
+    - [x] DB 근거가 부족할 때만 비전 수집 단계를 계획
+  - [x] 3. 답변 생성 및 출처 검증
+    - [x] 검증된 공고만 구조화 문서로 답변 모델에 제공
+    - [x] 답변의 `[job_id:N]`이 실제 근거 문서에 포함되는지 검사
+  - [x] 4. 검색 의미 사전 운영
+      - [x] 6개 업무 영역·로컬 직무군·O*NET 세부 직업·소프트웨어 기술 어휘 적재
+      - [x] 업무 영역부터 직무군까지 DB 공고 수와 사전 직무 수를 구분한 단계형 질문
+      - [x] 선택 영역 하위 후보만 이용한 미등록 직무 의미 확인과 사용자 승인 별칭 승격
+      - [x] 미등록 기술을 후보로 모으고 검토 후 별칭 또는 새 개념으로 승인
 
 - [ ] **Phase 8: 피드백 루프 기반 Reflex Recipe 승격 (현재 단계)**
 
@@ -252,11 +255,11 @@ L2C/
 │   ├── runtime/          전환·상세 OCR·카드 큐·Reflex 결정론적 런타임
 │   ├── prompts/          지휘자 프롬프트 (commander)
 │   ├── credentials/      .env 자격증명 관리 매니저
-│   ├── tools/            화면 인식(Perception)·물리 제어·SQLite 검색·실시간 수집 도구
+│   ├── tools/            화면 인식(Perception)·물리 제어·실시간 수집 도구
 │   ├── sites/            지휘자용 사이트 프로필과 매뉴얼 JSON
 │   ├── recipe/           Reflex Recipe 기록·매칭·재생 보조 모듈
 │   ├── utils/            로깅 및 전처리 유틸리티
-│   └── tests/            자동화 유닛/통합 테스트 (DB 영속성, SQLite QA 등)
+│   └── tests/            자동화 유닛/통합 테스트 (DB 영속성, 조사 계획 등)
 │
 ├── shared/             공통 모듈
 │   ├── db/               SQLite 데이터베이스 관리
@@ -290,7 +293,7 @@ L2C/
 | 비전 판단 모델 | Gemini 3.5 Flash |
 | VLM 캡셔닝 폴백 | Qwen2.5-VL (Ollama) |
 | 실행자 텍스트 모델 | Qwen (Ollama) |
-| 검색 방식 | SQLite SELECT + XML 컨텍스트 |
+| 검색 방식 | 검색 의미 사전 + 구조화 SQLite 근거 검사 |
 | 궤적 트래킹 | LangSmith |
 | 자격증명 보안 | .env (python-dotenv) |
 | 저장소 | SQLite |

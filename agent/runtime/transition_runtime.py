@@ -159,7 +159,7 @@ def transition_accepts_visual_change(pending_transition: dict[str, Any]) -> bool
 def idempotent_control_components() -> set[str]:
     raw = os.getenv(
         "REFLEX_IDEMPOTENT_CONTROL_COMPONENTS",
-        "tab_button,search_button,expand_detail_button,reveal_button,details_toggle",
+        "tab_button,search_button,expand_detail_button,reveal_button,details_toggle,result_filter,result_filter_input",
     )
     return {item.strip().casefold() for item in raw.split(",") if item.strip()}
 
