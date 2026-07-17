@@ -351,125 +351,118 @@ class SomEngine:
         attempts = self._ocr_worker_attempts()
         request_timeout = self._ocr_worker_request_timeout_sec()
         last_error: Exception | None = None
+        from agent.application.run_context import observe_step
 
         for attempt in range(1, attempts + 1):
             worker = self._start_ocr_worker()
-            if not worker.stdin or not worker.stdout:
-                raise RuntimeError("PaddleOCR worker pipes are unavailable")
+            with observe_step(
+                "ocr_request",
+                attempt=attempt,
+                request_timeout_sec=request_timeout,
+            ) as observation:
+                observation.update(pid=worker.pid)
+                if not worker.stdin or not worker.stdout:
+                    raise RuntimeError("PaddleOCR worker pipes are unavailable")
 
-            request_id = f"{self._ocr_worker_generation}:{time.time_ns()}"
-            request = json.dumps(
-                {"request_id": request_id, "image_path": str(image_path)},
-                ensure_ascii=False,
-            )
-            started = time.monotonic()
-            worker_timings: dict[str, Any] = {}
-            self._ocr_worker_last_result_timings = {}
-            try:
-                worker.stdin.write(request + "\n")
-                worker.stdin.flush()
+                request_id = f"{self._ocr_worker_generation}:{time.time_ns()}"
+                request = json.dumps(
+                    {"request_id": request_id, "image_path": str(image_path)},
+                    ensure_ascii=False,
+                )
+                started = time.monotonic()
+                worker_timings: dict[str, Any] = {}
+                self._ocr_worker_last_result_timings = {}
+                try:
+                    worker.stdin.write(request + "\n")
+                    worker.stdin.flush()
 
-                while True:
-                    remaining = request_timeout - (time.monotonic() - started)
-                    if remaining <= 0:
-                        diagnostics = self._ocr_worker_diagnostics(request_id)
-                        raise TimeoutError(
-                            f"PaddleOCR worker request timed out after {request_timeout:.1f}s "
-                            f"(last_phase={diagnostics['last_phase'] or 'unknown'}, "
-                            f"stderr={diagnostics['worker_stderr']})"
-                        )
-                    line = self._next_ocr_worker_line(remaining)
-                    if line is None:
-                        diagnostics = self._ocr_worker_diagnostics(request_id)
-                        raise TimeoutError(
-                            f"PaddleOCR worker request timed out after {request_timeout:.1f}s "
-                            f"(last_phase={diagnostics['last_phase'] or 'unknown'}, "
-                            f"stderr={diagnostics['worker_stderr']})"
-                        )
-                    if line == "":
-                        raise RuntimeError("PaddleOCR worker exited before returning a result")
-                    stripped = line.strip()
-                    if stripped.startswith("__OCR_EVENT__"):
-                        event_payload = json.loads(
-                            stripped.removeprefix("__OCR_EVENT__").strip() or "{}"
-                        )
-                        if str(event_payload.get("request_id") or "") == request_id:
-                            self._ocr_worker_last_phase = event_payload
-                        continue
-                    if stripped.startswith("__OCR_WORKER_ERROR__"):
-                        error_payload = json.loads(
-                            stripped.removeprefix("__OCR_WORKER_ERROR__").strip() or "{}"
-                        )
-                        if str(error_payload.get("request_id") or "") != request_id:
+                    while True:
+                        remaining = request_timeout - (time.monotonic() - started)
+                        if remaining <= 0:
+                            diagnostics = self._ocr_worker_diagnostics(request_id)
+                            raise TimeoutError(
+                                f"PaddleOCR worker request timed out after {request_timeout:.1f}s "
+                                f"(last_phase={diagnostics['last_phase'] or 'unknown'}, "
+                                f"stderr={diagnostics['worker_stderr']})"
+                            )
+                        line = self._next_ocr_worker_line(remaining)
+                        if line is None:
+                            diagnostics = self._ocr_worker_diagnostics(request_id)
+                            raise TimeoutError(
+                                f"PaddleOCR worker request timed out after {request_timeout:.1f}s "
+                                f"(last_phase={diagnostics['last_phase'] or 'unknown'}, "
+                                f"stderr={diagnostics['worker_stderr']})"
+                            )
+                        if line == "":
+                            raise RuntimeError("PaddleOCR worker exited before returning a result")
+                        stripped = line.strip()
+                        if stripped.startswith("__OCR_EVENT__"):
+                            event_payload = json.loads(
+                                stripped.removeprefix("__OCR_EVENT__").strip() or "{}"
+                            )
+                            if str(event_payload.get("request_id") or "") == request_id:
+                                self._ocr_worker_last_phase = event_payload
                             continue
-                        raise RuntimeError(
-                            "PaddleOCR worker error "
-                            f"during {error_payload.get('phase') or 'unknown'}: "
-                            f"{error_payload.get('error_type') or 'Error'}: "
-                            f"{error_payload.get('error') or ''}"
-                        )
-                    if not stripped.startswith("__OCR_JSON_RESULT__"):
-                        continue
-                    payload = stripped.removeprefix("__OCR_JSON_RESULT__").strip()
-                    decoded = json.loads(payload) if payload else {}
-                    if isinstance(decoded, dict):
-                        if str(decoded.get("request_id") or "") != request_id:
+                        if stripped.startswith("__OCR_WORKER_ERROR__"):
+                            error_payload = json.loads(
+                                stripped.removeprefix("__OCR_WORKER_ERROR__").strip() or "{}"
+                            )
+                            if str(error_payload.get("request_id") or "") != request_id:
+                                continue
+                            raise RuntimeError(
+                                "PaddleOCR worker error "
+                                f"during {error_payload.get('phase') or 'unknown'}: "
+                                f"{error_payload.get('error_type') or 'Error'}: "
+                                f"{error_payload.get('error') or ''}"
+                            )
+                        if not stripped.startswith("__OCR_JSON_RESULT__"):
                             continue
-                        results = list(decoded.get("results") or [])
-                        worker_timings = dict(decoded.get("timings") or {})
-                    else:
-                        results = list(decoded or [])
-                    duration = time.monotonic() - started
-                    self._ocr_worker_last_result_timings = worker_timings
-                    self._ocr_worker_request_count += 1
-                    logger.info(
-                        "PaddleOCR worker request completed",
-                        pid=worker.pid,
-                        attempt=attempt,
-                        request_count=self._ocr_worker_request_count,
-                        duration=f"{duration:.2f}s",
-                        boxes=len(results),
-                        worker_timings=worker_timings,
-                    )
-                    from agent.application.run_context import current_run_context
-
-                    context = current_run_context()
-                    if context is not None:
-                        context.record_step(
-                            "ocr_request",
-                            duration,
+                        payload = stripped.removeprefix("__OCR_JSON_RESULT__").strip()
+                        decoded = json.loads(payload) if payload else {}
+                        if isinstance(decoded, dict):
+                            if str(decoded.get("request_id") or "") != request_id:
+                                continue
+                            results = list(decoded.get("results") or [])
+                            worker_timings = dict(decoded.get("timings") or {})
+                        else:
+                            results = list(decoded or [])
+                        duration = time.monotonic() - started
+                        self._ocr_worker_last_result_timings = worker_timings
+                        self._ocr_worker_request_count += 1
+                        logger.info(
+                            "PaddleOCR worker request completed",
                             pid=worker.pid,
                             attempt=attempt,
+                            request_count=self._ocr_worker_request_count,
+                            duration=f"{duration:.2f}s",
+                            boxes=len(results),
+                            worker_timings=worker_timings,
+                        )
+                        observation.update(
                             request_count=self._ocr_worker_request_count,
                             boxes=len(results),
                             success=True,
                             **worker_timings,
                         )
-                    return results
-            except Exception as exc:
-                last_error = exc
-                failed_duration = time.monotonic() - started
-                logger.warning(
-                    "PaddleOCR worker request failed",
-                    attempt=attempt,
-                    attempts=attempts,
-                    error=str(exc),
-                )
-                from agent.application.run_context import current_run_context
-
-                context = current_run_context()
-                if context is not None:
-                    context.record_step(
-                        "ocr_request",
-                        failed_duration,
-                        pid=worker.pid,
-                        attempt=attempt,
+                        return results
+                except Exception as exc:
+                    last_error = exc
+                    failure_code = "ocr_timeout" if isinstance(exc, TimeoutError) else "ocr_worker_error"
+                    observation.update(
                         success=False,
                         error=str(exc)[:300],
+                        failure_code=failure_code,
+                        last_phase=str(self._ocr_worker_last_phase.get("phase") or ""),
                     )
-                self._stop_ocr_worker()
-                if attempt >= attempts:
-                    raise
+                    logger.warning(
+                        "PaddleOCR worker request failed",
+                        attempt=attempt,
+                        attempts=attempts,
+                        error=str(exc),
+                    )
+                    self._stop_ocr_worker()
+                    if attempt >= attempts:
+                        raise
 
         if last_error:
             raise last_error

@@ -572,39 +572,38 @@ Example output format:
             if not elements:
                 logger.info("Captioning UI elements via local Ollama SoM (Fallback)...")
                 try:
-                    import time
                     import ollama as _ollama
                     from shared.config import OLLAMA_HOST
                     model_name = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
                     client = _ollama.Client(host=OLLAMA_HOST)
-                    started = time.perf_counter()
-                    resp = client.generate(
-                        model=model_name,
-                        prompt=prompt,
-                        images=[base64_image],
-                        stream=False,
-                        options={"num_ctx": 4096, "num_predict": 1024, "temperature": 0.1}
-                    )
-                    from agent.application.run_context import record_external_llm_usage
+                    from agent.application.run_context import observe_external_llm_call
 
-                    usage_source = (
-                        resp
-                        if isinstance(resp, dict)
-                        else {
-                            "prompt_eval_count": getattr(resp, "prompt_eval_count", 0),
-                            "eval_count": getattr(resp, "eval_count", 0),
-                        }
-                    )
-                    record_external_llm_usage(
+                    with observe_external_llm_call(
                         component="vision_caption",
                         provider="ollama",
                         model=model_name,
-                        usage={
-                            "input_tokens": usage_source.get("prompt_eval_count", 0),
-                            "output_tokens": usage_source.get("eval_count", 0),
-                        },
-                        duration_sec=time.perf_counter() - started,
-                    )
+                    ) as observation:
+                        resp = client.generate(
+                            model=model_name,
+                            prompt=prompt,
+                            images=[base64_image],
+                            stream=False,
+                            options={"num_ctx": 4096, "num_predict": 1024, "temperature": 0.1}
+                        )
+                        usage_source = (
+                            resp
+                            if isinstance(resp, dict)
+                            else {
+                                "prompt_eval_count": getattr(resp, "prompt_eval_count", 0),
+                                "eval_count": getattr(resp, "eval_count", 0),
+                            }
+                        )
+                        observation.set_usage(
+                            {
+                                "input_tokens": usage_source.get("prompt_eval_count", 0),
+                                "output_tokens": usage_source.get("eval_count", 0),
+                            }
+                        )
                     # ollama 버전에 따라 dict 또는 GenerateResponse 객체로 반환됨
                     result_text = (resp.get("response", "") if isinstance(resp, dict) else getattr(resp, "response", "")) or ""
                     thinking_text = (resp.get("thinking", "") if isinstance(resp, dict) else getattr(resp, "thinking", "")) or ""

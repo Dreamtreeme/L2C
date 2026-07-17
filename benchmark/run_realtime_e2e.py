@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -33,11 +34,72 @@ class _Tee:
             stream.flush()
 
 
+def _git_revision() -> tuple[str, bool]:
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=ROOT_DIR,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout.strip()
+        )
+        return commit, dirty
+    except OSError:
+        return "", False
+
+
+def _runtime_config() -> dict[str, str]:
+    defaults = {
+        "VISION_DETAIL_FINAL_EXTRACTION_MODEL": "",
+        "VISION_SEARCH_INTENT_MODEL": "",
+        "VISION_WORKER_REVIEW_MODEL": "",
+        "SOM_OCR_MAX_DIM": "1152",
+        "SOM_OCR_REQUEST_TIMEOUT_SEC": "20",
+        "PADDLEOCR_IR_OPTIM": "0",
+        "REFLEX_ENABLED": "",
+        "VISION_RECIPE_AUTO_PROMOTE": "",
+        "VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT": "",
+        "VISION_BROWSER_WINDOW_SIZE": "",
+        "VISION_BROWSER_WINDOW_WIDTH": "",
+        "VISION_BROWSER_WINDOW_HEIGHT": "",
+        "VISION_REASONING_SCREEN_GUARD": "",
+    }
+    return {key: os.getenv(key, default) for key, default in defaults.items()}
+
+
+def _config_fingerprint(config: dict[str, str]) -> str:
+    serialized = json.dumps(config, sort_keys=True, ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()[:12]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run realtime_scraping E2E and tee stdout/stderr to a log file.")
     parser.add_argument("--site", default="wanted")
     parser.add_argument("--query", required=True)
     parser.add_argument("--target-count", type=int, default=0)
+    parser.add_argument(
+        "--count-mode",
+        choices=("unspecified", "explicit", "visible_all"),
+        default="unspecified",
+    )
+    parser.add_argument("--original-query", default="")
+    parser.add_argument("--scenario-id", default="manual")
+    parser.add_argument(
+        "--run-mode",
+        choices=("unspecified", "cold", "warm"),
+        default="unspecified",
+    )
+    parser.add_argument("--experiment-name", default="")
+    parser.add_argument("--recipe-version", default="")
     parser.add_argument("--log", required=True)
     parser.add_argument("--summary", default="")
     args = parser.parse_args()
@@ -51,6 +113,23 @@ def main() -> int:
     if summary_path.exists():
         raise SystemExit(f"summary already exists: {summary_path}")
 
+    commit, git_dirty = _git_revision()
+    runtime_config = _runtime_config()
+    config_fingerprint = _config_fingerprint(runtime_config)
+    experiment_name = (
+        args.experiment_name
+        or os.getenv("L2C_E2E_EXPERIMENT", "manual")
+        or "manual"
+    )
+    recipe_version = args.recipe_version or os.getenv("VISION_RECIPE_VERSION", "")
+    configured_models = sorted(
+        {
+            value
+            for key, value in runtime_config.items()
+            if key.endswith("MODEL") and value
+        }
+    )
+
     with log_path.open("x", encoding="utf-8", buffering=1) as log_file:
         original_stdout = sys.stdout
         original_stderr = sys.stderr
@@ -59,7 +138,12 @@ def main() -> int:
         try:
             from agent.application.run_context import run_context
             from agent.application.run_contracts import RunPhase, RunStatus
+            from agent.observability.langsmith_adapter import publish_langsmith_feedback
             from agent.tools.realtime_scraping import realtime_scraping
+            from benchmark.e2e_observability import (
+                build_e2e_observability,
+                build_langsmith_feedback,
+            )
             from benchmark.quality_eval import evaluate_collection_summary
 
             events = []
@@ -73,6 +157,25 @@ def main() -> int:
                 query=args.query,
                 event_sink=events.append,
                 prefix="e2e",
+                metadata={
+                    "scenario_id": args.scenario_id,
+                    "experiment_name": experiment_name,
+                    "site": args.site,
+                    "target_count": max(0, args.target_count),
+                    "count_mode": args.count_mode,
+                    "run_mode": args.run_mode,
+                    "git_commit": commit,
+                    "git_dirty": git_dirty,
+                    "config_fingerprint": config_fingerprint,
+                    "recipe_version": recipe_version,
+                    "models": configured_models,
+                },
+                tags=[
+                    "e2e",
+                    f"site:{args.site}",
+                    f"scenario:{args.scenario_id}",
+                    f"mode:{args.run_mode}",
+                ],
             ) as (context, _created):
                 start = time.perf_counter()
                 try:
@@ -81,6 +184,8 @@ def main() -> int:
                             "site": args.site,
                             "query": args.query,
                             "target_count": max(0, args.target_count),
+                            "count_mode": args.count_mode,
+                            "original_query": args.original_query or args.query,
                         }
                     )
                     try:
@@ -105,6 +210,14 @@ def main() -> int:
                         data={"error": error[:300]},
                     )
                 elapsed = time.perf_counter() - start
+                if status == "completed" and quality.get("passed"):
+                    context.set_outcome("success")
+                elif status == "completed":
+                    context.set_outcome(
+                        "partial",
+                        failure_stage="quality_gate",
+                        failure_code="quality_not_passed",
+                    )
                 metrics = context.snapshot()
             if status == "completed" and isinstance(parsed_during_run, dict):
                 candidate_id = str(parsed_during_run.get("submission_id") or "")
@@ -132,57 +245,45 @@ def main() -> int:
             print(f"LOG_TARGET={log_path}")
 
             try:
-                commit = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=ROOT_DIR,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                ).stdout.strip()
-            except OSError:
-                commit = ""
-            try:
                 parsed_result = json.loads(result) if isinstance(result, str) else result
             except json.JSONDecodeError:
                 parsed_result = {"raw": str(result)}
-            config_defaults = {
-                "VISION_DETAIL_FINAL_EXTRACTION_MODEL": "",
-                "VISION_SEARCH_INTENT_MODEL": "",
-                "VISION_WORKER_REVIEW_MODEL": "",
-                "SOM_OCR_MAX_DIM": "1152",
-                "SOM_OCR_REQUEST_TIMEOUT_SEC": "20",
-                "PADDLEOCR_IR_OPTIM": "0",
-                "REFLEX_ENABLED": "",
-                "VISION_RECIPE_AUTO_PROMOTE": "",
-                "VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT": "",
-                "VISION_BROWSER_WINDOW_SIZE": "",
-                "VISION_BROWSER_WINDOW_WIDTH": "",
-                "VISION_BROWSER_WINDOW_HEIGHT": "",
-                "VISION_REASONING_SCREEN_GUARD": "",
-            }
             summary = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "run_id": context.run_id,
                 "status": status,
                 "error": error,
                 "started_at": started_at,
+                "scenario_id": args.scenario_id,
+                "experiment_name": experiment_name,
+                "run_mode": args.run_mode,
                 "site": args.site,
                 "query": args.query,
                 "target_count": max(0, args.target_count),
+                "count_mode": args.count_mode,
+                "original_query": args.original_query or args.query,
                 "execution_time_sec": round(elapsed, 6),
                 "git_commit": commit,
+                "git_dirty": git_dirty,
+                "config_fingerprint": config_fingerprint,
+                "recipe_version": recipe_version,
+                "models": configured_models,
                 "python": platform.python_version(),
                 "platform": platform.platform(),
-                "config": {
-                    key: os.getenv(key, default)
-                    for key, default in config_defaults.items()
-                },
+                "config": runtime_config,
                 "metrics": metrics,
                 "events": [event.model_dump(mode="json") for event in events],
                 "quality": quality or evaluate_collection_summary(parsed_result),
                 "recipe_promotion": recipe_promotion,
                 "result": parsed_result,
             }
+            observability = build_e2e_observability(summary)
+            summary["observability"] = observability
+            trace_id = str((metrics.get("langsmith") or {}).get("trace_id") or "")
+            summary["langsmith_feedback"] = publish_langsmith_feedback(
+                trace_id,
+                build_langsmith_feedback(observability),
+            )
             summary_path.write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2),
                 encoding="utf-8",

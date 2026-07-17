@@ -52,6 +52,7 @@ class ChatService:
         investigation_id: str = "",
     ) -> dict[str, Any]:
         duration = max(0.0, time.perf_counter() - started)
+        context.set_outcome(status)
         metrics = context.snapshot()
         metrics["duration_sec"] = round(duration, 6)
         result = {
@@ -88,6 +89,12 @@ class ChatService:
             query=query,
             event_sink=event_sink,
             prefix="chat",
+            metadata={
+                "conversation_id": conversation_id,
+                "investigation_id": investigation_id,
+                "resume_mode": bool(investigation_id and clarification_answer),
+            },
+            tags=["chat-request"],
         ) as (context, _created):
             started = time.perf_counter()
             if not query and not (investigation_id and clarification_answer):

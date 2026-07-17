@@ -51,7 +51,7 @@ class OllamaDetailExtractionLLM:
     def invoke(self, messages: list[Any]) -> Any:
         from json_repair import repair_json
         from shared.schema.jd_schema import JobPosting
-        from agent.application.run_context import record_external_llm_usage
+        from agent.application.run_context import observe_external_llm_call
 
         system_text = "\n".join(
             _message_content(message)
@@ -69,8 +69,11 @@ class OllamaDetailExtractionLLM:
             f"{json.dumps(JobPosting.model_json_schema(), ensure_ascii=False)}\n\n"
             f"{user_text}"
         )
-        started = time.perf_counter()
-        try:
+        with observe_external_llm_call(
+            component="detail_extraction",
+            provider="ollama",
+            model=self.model_name,
+        ) as observation:
             response = self.client.chat(
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
@@ -82,36 +85,20 @@ class OllamaDetailExtractionLLM:
                     ),
                 },
             )
-        except Exception as exc:
-            record_external_llm_usage(
-                component="detail_extraction",
-                provider="ollama",
-                model=self.model_name,
-                usage={},
-                duration_sec=time.perf_counter() - started,
-                success=False,
-                error=str(exc),
+            observation.set_usage(
+                {
+                    "input_tokens": (
+                        response.get("prompt_eval_count", 0)
+                        if isinstance(response, dict)
+                        else getattr(response, "prompt_eval_count", 0)
+                    ),
+                    "output_tokens": (
+                        response.get("eval_count", 0)
+                        if isinstance(response, dict)
+                        else getattr(response, "eval_count", 0)
+                    ),
+                }
             )
-            raise
-        usage = {
-            "input_tokens": (
-                response.get("prompt_eval_count", 0)
-                if isinstance(response, dict)
-                else getattr(response, "prompt_eval_count", 0)
-            ),
-            "output_tokens": (
-                response.get("eval_count", 0)
-                if isinstance(response, dict)
-                else getattr(response, "eval_count", 0)
-            ),
-        }
-        record_external_llm_usage(
-            component="detail_extraction",
-            provider="ollama",
-            model=self.model_name,
-            usage=usage,
-            duration_sec=time.perf_counter() - started,
-        )
         parsed = repair_json(self._response_content(response), return_objects=True)
         return JobPosting.model_validate(parsed if isinstance(parsed, dict) else {})
 
@@ -158,7 +145,7 @@ class OpenAIDetailExtractionLLM:
     def invoke(self, messages: list[Any]) -> Any:
         from json_repair import repair_json
         from shared.schema.jd_schema import JobPosting
-        from agent.application.run_context import record_external_llm_usage
+        from agent.application.run_context import observe_external_llm_call
 
         system_text = "\n".join(
             _message_content(message)
@@ -189,8 +176,11 @@ class OpenAIDetailExtractionLLM:
             },
             "store": False,
         }
-        started = time.perf_counter()
-        try:
+        with observe_external_llm_call(
+            component="detail_extraction",
+            provider="openai",
+            model=self.model_name,
+        ) as observation:
             response = self.requests.post(
                 "https://api.openai.com/v1/responses",
                 headers={
@@ -200,39 +190,14 @@ class OpenAIDetailExtractionLLM:
                 json=payload,
                 timeout=int(os.getenv("VISION_DETAIL_OPENAI_TIMEOUT", "120")),
             )
-        except Exception as exc:
-            record_external_llm_usage(
-                component="detail_extraction",
-                provider="openai",
-                model=self.model_name,
-                usage={},
-                duration_sec=time.perf_counter() - started,
-                success=False,
-                error=str(exc),
-            )
-            raise
-        try:
-            response_json = response.json()
-        except ValueError:
-            response_json = {"raw_text": response.text}
-        if response.status_code >= 400:
-            record_external_llm_usage(
-                component="detail_extraction",
-                provider="openai",
-                model=self.model_name,
-                usage=response_json.get("usage") or {},
-                duration_sec=time.perf_counter() - started,
-                success=False,
-                error=json.dumps(response_json, ensure_ascii=False)[:300],
-            )
-            raise RuntimeError(json.dumps(response_json, ensure_ascii=False)[:2000])
-        record_external_llm_usage(
-            component="detail_extraction",
-            provider="openai",
-            model=self.model_name,
-            usage=response_json.get("usage") or {},
-            duration_sec=time.perf_counter() - started,
-        )
+            try:
+                response_json = response.json()
+            except ValueError:
+                response_json = {"raw_text": response.text}
+            observation.set_usage(response_json.get("usage") or {})
+            observation.set_output(status_code=int(response.status_code))
+            if response.status_code >= 400:
+                raise RuntimeError(json.dumps(response_json, ensure_ascii=False)[:2000])
         parsed = repair_json(self._output_text(response_json), return_objects=True)
         return JobPosting.model_validate(parsed if isinstance(parsed, dict) else {})
 

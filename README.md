@@ -339,8 +339,8 @@ python -m pytest -m external -q
 # 두 방식 비교. 실패 시 정상 데이터를 임의로 채우지 않음
 python -m benchmark.run_compare_jd
 
-# Realtime E2E: 로그와 구조화된 요약을 함께 생성
-python -m benchmark.run_realtime_e2e --site wanted --query "ios 개발자 공고 2개" --log logs/e2e_wanted_ios2.log
+# Realtime E2E: 로그, 구조화 요약, 선택적 LangSmith trace를 함께 생성
+python -m benchmark.run_realtime_e2e --site wanted --query "ios 개발자 공고 2개" --target-count 2 --count-mode explicit --scenario-id wanted-ios-2 --run-mode warm --log logs/e2e_wanted_ios2.log
 
 # 기존 로그 또는 새 summary의 p50/p95/max, Reflex, OCR 지표 확인
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
@@ -350,7 +350,7 @@ python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 
 기본 보존 기간은 로그 30일, 화면 산출물 14일, 감사 이력 90일, 공고 변경 이력 180일입니다. 공고별 최신 변경 이력은 기간과 관계없이 5개를 남기며, `RETENTION_*` 환경변수로 기준을 조정할 수 있습니다.
 
-E2E 요약은 `run_id`, 실행시간, 단계별 시간, 모델별 토큰, 선택적 비용 추정, 수집 품질을 한 파일에 기록합니다. 모델 단가는 `config/model_pricing.example.json` 형식을 참고해 별도 파일로 관리하고 `LLM_PRICING_FILE`에 지정합니다. 가격표가 없으면 부정확한 비용을 만들지 않고 토큰 원시값만 보존합니다.
+E2E 요약은 `run_id`, 실행시간, 실패 단계, 단계별 시간, 모델별 토큰, 선택적 비용 추정, 수집 품질을 한 파일에 기록합니다. LangSmith를 활성화하면 같은 실행의 trace와 결정론적 feedback도 함께 전송합니다. 설정과 대시보드 기준은 [`docs/e2e_observability.md`](./docs/e2e_observability.md)를 참고하세요. 모델 단가는 `config/model_pricing.example.json` 형식을 참고해 별도 파일로 관리하고 `LLM_PRICING_FILE`에 지정합니다. 가격표가 없으면 부정확한 비용을 만들지 않고 토큰 원시값만 보존합니다.
 
 Windows Python을 WSL/Git Bash에서 직접 호출해 한글이나 이모지가 깨지는 경우에는 `python -X utf8 -m ...` 형태로 실행하세요.
 

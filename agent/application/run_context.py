@@ -22,11 +22,26 @@ from agent.application.run_contracts import (
     new_run_id,
 )
 from agent.application.llm_cost import estimate_llm_cost
+from agent.observability.langsmith_adapter import (
+    finish_langsmith_trace,
+    langsmith_project_name,
+    langsmith_trace,
+    langsmith_tracing_enabled,
+)
+from agent.observability.stages import stage_for_component
 from agent.utils.logger import logger
 
 
 class RunCancelled(RuntimeError):
     """사용자가 현재 실행의 중단을 요청했습니다."""
+
+
+def _failure_code(exc: BaseException) -> str:
+    if isinstance(exc, RunCancelled):
+        return "run_cancelled"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    return type(exc).__name__.removesuffix("Error").casefold() + "_error"
 
 
 def _usage_value(usage: dict[str, Any], key: str) -> int:
@@ -79,8 +94,15 @@ class RunContext:
     event_sink: RunEventSink | None = None
     started_at: float = field(default_factory=time.perf_counter)
     usage_callback: UsageMetadataCallbackHandler | None = None
+    trace_metadata: dict[str, Any] = field(default_factory=dict)
+    trace_tags: list[str] = field(default_factory=list)
     step_metrics: list[dict[str, Any]] = field(default_factory=list)
     llm_calls: list[dict[str, Any]] = field(default_factory=list)
+    langsmith_trace_id: str = ""
+    outcome_status: str = RunStatus.RUNNING.value
+    last_phase: str = RunPhase.RECEIVED.value
+    failure_stage: str = ""
+    failure_code: str = ""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def emit(
@@ -92,6 +114,12 @@ class RunContext:
         status: RunStatus = RunStatus.RUNNING,
         data: dict[str, Any] | None = None,
     ) -> RunEvent:
+        self.last_phase = phase.value
+        if status != RunStatus.RUNNING:
+            self.outcome_status = status.value
+        if status == RunStatus.FAILED:
+            self.failure_stage = phase.value
+            self.failure_code = str((data or {}).get("failure_code") or event or "run_failed")
         item = RunEvent(
             run_id=self.run_id,
             event=event,
@@ -115,14 +143,43 @@ class RunContext:
                 logger.debug("Run event sink failed", error=str(exc), run_event=event)
         return item
 
+    def set_outcome(
+        self,
+        status: str | RunStatus,
+        *,
+        failure_stage: str = "",
+        failure_code: str = "",
+    ) -> None:
+        resolved = status.value if isinstance(status, RunStatus) else str(status or "")
+        if resolved:
+            self.outcome_status = resolved
+        if resolved in {"success", RunStatus.COMPLETED.value} and not (
+            failure_stage or failure_code
+        ):
+            self.failure_stage = ""
+            self.failure_code = ""
+        if failure_stage:
+            self.failure_stage = str(failure_stage)
+        if failure_code:
+            self.failure_code = str(failure_code)
+
+    def add_trace_metadata(self, **metadata: Any) -> None:
+        self.trace_metadata.update(
+            {str(key): value for key, value in metadata.items() if value is not None}
+        )
+
     def record_step(self, component: str, duration_sec: float, **data: Any) -> None:
         metric = {
             "component": component,
+            "stage": str(data.pop("stage", "") or stage_for_component(component)),
             "duration_sec": round(max(0.0, float(duration_sec)), 6),
             **data,
         }
         with self._lock:
             self.step_metrics.append(metric)
+        if data.get("success") is False:
+            self.failure_stage = str(component)
+            self.failure_code = str(data.get("failure_code") or "step_failed")
         logger.info("Runtime step completed", **metric)
 
     def record_llm_call(
@@ -199,6 +256,17 @@ class RunContext:
                 "cost": estimate_llm_cost(billable_by_model),
                 "calls": calls,
             },
+            "outcome": {
+                "status": self.outcome_status,
+                "last_phase": self.last_phase,
+                "failure_stage": self.failure_stage,
+                "failure_code": self.failure_code,
+            },
+            "langsmith": {
+                "enabled": langsmith_tracing_enabled(),
+                "project": langsmith_project_name(),
+                "trace_id": self.langsmith_trace_id,
+            },
         }
 
 
@@ -229,11 +297,17 @@ def run_context(
     query: str = "",
     event_sink: RunEventSink | None = None,
     prefix: str = "run",
+    metadata: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
 ) -> Iterator[tuple[RunContext, bool]]:
     """중첩 호출이면 기존 문맥을 재사용하고, 최상위 호출만 새 문맥을 만든다."""
 
     existing = current_run_context()
     if existing is not None:
+        existing.trace_metadata.update(metadata or {})
+        for tag in tags or []:
+            if tag and tag not in existing.trace_tags:
+                existing.trace_tags.append(tag)
         yield existing, False
         return
 
@@ -244,38 +318,197 @@ def run_context(
             query=query,
             event_sink=event_sink,
             usage_callback=usage_callback,
+            trace_metadata=dict(metadata or {}),
+            trace_tags=[str(tag) for tag in (tags or []) if str(tag)],
         )
-        token = _CURRENT_RUN_CONTEXT.set(context)
-        with bound_contextvars(run_id=resolved_run_id):
-            context.emit(
-                "run_started",
-                RunPhase.RECEIVED,
-                "요청을 접수했습니다.",
-                data={"query": query},
+        root_metadata = {
+            "run_id": resolved_run_id,
+            "run_kind": prefix,
+            **context.trace_metadata,
+        }
+        root_tags = ["l2c", prefix, *context.trace_tags]
+        with langsmith_trace(
+            f"l2c.{prefix}",
+            run_type="chain",
+            inputs={"query": query},
+            metadata=root_metadata,
+            tags=root_tags,
+        ) as root_trace:
+            if root_trace is not None:
+                context.langsmith_trace_id = str(
+                    getattr(root_trace, "trace_id", None)
+                    or getattr(root_trace, "id", "")
+                )
+            token = _CURRENT_RUN_CONTEXT.set(context)
+            with bound_contextvars(run_id=resolved_run_id):
+                context.emit(
+                    "run_started",
+                    RunPhase.RECEIVED,
+                    "요청을 접수했습니다.",
+                    data={"query": query},
+                )
+                try:
+                    yield context, True
+                except BaseException as exc:
+                    context.set_outcome(
+                        RunStatus.CANCELLED if isinstance(exc, RunCancelled) else RunStatus.FAILED,
+                        failure_stage=context.failure_stage or context.last_phase,
+                        failure_code=context.failure_code or _failure_code(exc),
+                    )
+                    raise
+                finally:
+                    snapshot = context.snapshot()
+                    totals = dict((snapshot.get("llm") or {}).get("totals") or {})
+                    finish_langsmith_trace(
+                        root_trace,
+                        outputs={
+                            "run_id": resolved_run_id,
+                            "status": context.outcome_status,
+                            "duration_sec": snapshot.get("duration_sec", 0.0),
+                            "step_count": len(snapshot.get("steps") or []),
+                            "llm_call_count": len((snapshot.get("llm") or {}).get("calls") or []),
+                            "total_tokens": int(totals.get("total_tokens") or 0),
+                        },
+                        metadata={
+                            **context.trace_metadata,
+                            "outcome": context.outcome_status,
+                            "last_phase": context.last_phase,
+                            "failure_stage": context.failure_stage,
+                            "failure_code": context.failure_code,
+                        },
+                    )
+                    _CURRENT_RUN_CONTEXT.reset(token)
+
+
+@dataclass
+class StepObservation:
+    """실행 중 확인된 단계 결과를 종료 시점 계측에 합친다."""
+
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def update(self, **data: Any) -> None:
+        self.data.update(data)
+
+
+@dataclass
+class ExternalLLMObservation:
+    """LangChain 밖에서 호출한 모델의 실제 사용량을 실행 구간에 연결한다."""
+
+    usage: dict[str, Any] = field(default_factory=dict)
+    output: dict[str, Any] = field(default_factory=dict)
+
+    def set_usage(self, usage: dict[str, Any] | None) -> None:
+        self.usage = normalize_usage(dict(usage or {}))
+
+    def set_output(self, **output: Any) -> None:
+        self.output.update(output)
+
+
+@contextmanager
+def observe_external_llm_call(
+    *,
+    component: str,
+    provider: str,
+    model: str,
+) -> Iterator[ExternalLLMObservation]:
+    """직접 호출 모델의 시간·토큰·오류를 로컬과 LangSmith에 한 번씩 기록한다."""
+
+    observation = ExternalLLMObservation()
+    started = time.perf_counter()
+    success = True
+    error = ""
+    with langsmith_trace(
+        component,
+        run_type="llm",
+        inputs={"component": component},
+        metadata={
+            "component": component,
+            "ls_provider": provider,
+            "ls_model_name": model,
+        },
+        tags=["llm", provider, component],
+    ) as llm_trace:
+        try:
+            yield observation
+        except BaseException as exc:
+            success = False
+            error = str(exc)[:300]
+            raise
+        finally:
+            duration = time.perf_counter() - started
+            context = current_run_context()
+            if context is not None:
+                context.record_llm_call(
+                    component,
+                    provider,
+                    model,
+                    observation.usage,
+                    duration,
+                    success=success,
+                    error=error,
+                )
+            finish_langsmith_trace(
+                llm_trace,
+                outputs={
+                    "success": success,
+                    "usage_metadata": normalize_usage(observation.usage),
+                    **observation.output,
+                },
+                metadata={"success": success, "error": error},
+                usage=normalize_usage(observation.usage),
             )
-            try:
-                yield context, True
-            finally:
-                _CURRENT_RUN_CONTEXT.reset(token)
+
+
+@contextmanager
+def observe_step(component: str, **data: Any) -> Iterator[StepObservation]:
+    """로컬 메트릭과 LangSmith child trace를 같은 실행 구간에서 기록한다."""
+
+    observation = StepObservation()
+    started = time.perf_counter()
+    stage = str(data.get("stage") or stage_for_component(component))
+    trace_metadata = {"component": component, "stage": stage, **data}
+    with langsmith_trace(
+        component,
+        run_type="tool",
+        inputs=data,
+        metadata=trace_metadata,
+        tags=["runtime-step", component],
+    ) as step_trace:
+        try:
+            yield observation
+        except BaseException as exc:
+            observation.data["success"] = False
+            observation.data.setdefault("error", str(exc)[:300])
+            observation.data.setdefault("failure_code", _failure_code(exc))
+            raise
+        finally:
+            duration = time.perf_counter() - started
+            metric_data = {"stage": stage, **data, **observation.data}
+            metric_data.setdefault("success", True)
+            context = current_run_context()
+            if context is not None:
+                context.record_step(component, duration, **metric_data)
+            else:
+                logger.info(
+                    "Runtime step completed",
+                    component=component,
+                    duration_sec=round(duration, 6),
+                    **metric_data,
+                )
+            finish_langsmith_trace(
+                step_trace,
+                outputs={"success": metric_data.get("success") is not False, **observation.data},
+                metadata=metric_data,
+                error=str(metric_data.get("error") or "")
+                if metric_data.get("success") is False
+                else "",
+            )
 
 
 @contextmanager
 def measure_step(component: str, **data: Any) -> Iterator[None]:
-    started = time.perf_counter()
-    try:
+    with observe_step(component, **data):
         yield
-    finally:
-        duration = time.perf_counter() - started
-        context = current_run_context()
-        if context is not None:
-            context.record_step(component, duration, **data)
-        else:
-            logger.info(
-                "Runtime step completed",
-                component=component,
-                duration_sec=round(duration, 6),
-                **data,
-            )
 
 
 def emit_run_event(
@@ -411,6 +644,8 @@ __all__ = [
     "invoke_with_metrics",
     "measure_step",
     "normalize_usage",
+    "observe_external_llm_call",
+    "observe_step",
     "record_external_llm_usage",
     "record_graph_state_metrics",
     "raise_if_cancelled",

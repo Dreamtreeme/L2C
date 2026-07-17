@@ -29,7 +29,7 @@ pygetwindow>=0.0.9
 langgraph>=0.0.60
 langchain-core>=0.2.0
 langchain-google-genai>=1.0.6
-langsmith>=0.1.0
+langsmith>=0.8.0,<0.9.0
 
 # ===== Vision / SoM / OCR =====
 ultralytics>=8.0.0
