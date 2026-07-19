@@ -12,6 +12,7 @@ if __name__ == "__main__":
     sys.modules["torch"] = MagicMock()
 
 _DLL_DIRECTORY_HANDLES = []
+SUPPORTED_PADDLE_VERSION = "3.0.0"
 
 
 def _prepend_process_path(path: Path) -> None:
@@ -51,6 +52,8 @@ def _load_paddleocr_runtime():
     _configure_runtime_paths()
     import paddle
 
+    _validate_paddle_version(paddle)
+
     if os.getenv("PADDLEOCR_IR_OPTIM", "0").strip().lower() not in {
         "1",
         "true",
@@ -68,6 +71,16 @@ def _load_paddleocr_runtime():
     from paddleocr import PaddleOCR
 
     return paddle, PaddleOCR
+
+
+def _validate_paddle_version(paddle_module: Any) -> None:
+    installed_version = str(getattr(paddle_module, "__version__", "") or "unknown")
+    if installed_version != SUPPORTED_PADDLE_VERSION:
+        raise RuntimeError(
+            "PaddlePaddle GPU runtime version mismatch: "
+            f"installed={installed_version}, required={SUPPORTED_PADDLE_VERSION}. "
+            "Install the version declared in requirements.txt."
+        )
 
 
 def _paddleocr_model_dirs() -> dict[str, str]:
