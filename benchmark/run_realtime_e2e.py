@@ -223,20 +223,14 @@ def main() -> int:
                 candidate_id = str(parsed_during_run.get("submission_id") or "")
                 if candidate_id:
                     from agent.application.recipe_promotion_service import (
-                        auto_promotion_enabled,
-                        wait_for_recipe_candidate_promotion,
+                        get_recipe_candidate_promotion_status,
                     )
 
-                    if auto_promotion_enabled():
-                        promotion_timeout = float(os.getenv("VISION_E2E_PROMOTION_TIMEOUT_SEC", "90"))
-                        recipe_promotion = wait_for_recipe_candidate_promotion(
-                            candidate_id,
-                            timeout=promotion_timeout,
-                        )
-                        print(
-                            "RECIPE_PROMOTION="
-                            + json.dumps(recipe_promotion, ensure_ascii=False)
-                        )
+                    recipe_promotion = get_recipe_candidate_promotion_status(candidate_id)
+                    print(
+                        "RECIPE_PROMOTION="
+                        + json.dumps(recipe_promotion, ensure_ascii=False)
+                    )
             if isinstance(result, str):
                 print(result)
             else:

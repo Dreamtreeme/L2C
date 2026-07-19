@@ -10,14 +10,14 @@ IMPLAUSIBLE_TEXT_INPUT_TARGET = "implausible_text_input_target"
 
 def _marker_by_id(markers: list[dict[str, Any]], marker_id: Any) -> dict[str, Any] | None:
     try:
-        wanted_id = int(marker_id)
+        target_id = int(marker_id)
     except (TypeError, ValueError):
         return None
     return next(
         (
             marker
             for marker in markers
-            if isinstance(marker, dict) and marker.get("id") == wanted_id
+            if isinstance(marker, dict) and marker.get("id") == target_id
         ),
         None,
     )

@@ -227,6 +227,14 @@ class PerceptionEngine:
             logger.exception("Failed to capture screen", error=str(e))
             raise
 
+    def wait_for_transition_change(self, reference_image_path: str) -> bool:
+        """화면 변경 행동 뒤 이전 화면이 그대로인 동안에는 OCR 캡처를 미룹니다."""
+        region = self._get_browser_region()
+        return self._wait_stable.wait_for_change(
+            reference_image_path,
+            region=region,
+        )
+
     def screen_quality(self, image_path: Path) -> Dict[str, Any]:
         """브라우저 본문이 단색 빈 화면에 가까운지 저비용 이미지 지표로 검사한다."""
         bottom_ignore = self._env_int("VISION_PAGE_CONTENT_BOTTOM_IGNORE_PX", 80)
@@ -266,7 +274,7 @@ class PerceptionEngine:
             return {"low_information": False, "reason": "quality_check_error"}
 
         max_stddev = self._env_float("VISION_PAGE_BLANK_MAX_STDDEV", 6.0)
-        max_edge_mean = self._env_float("VISION_PAGE_BLANK_MAX_EDGE_MEAN", 1.0)
+        max_edge_mean = self._env_float("VISION_PAGE_BLANK_MAX_EDGE_MEAN", 1.2)
         min_dominant_ratio = self._env_float("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", 0.98)
         low_information = (
             stddev <= max_stddev

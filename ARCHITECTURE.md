@@ -21,6 +21,9 @@ flowchart TD
     WG --> WEB[브라우저 화면과 물리 입력]
     WG --> REVIEW[제출물 검토]
     REVIEW --> DB[(SQLite)]
+    REVIEW --> CANDIDATE[승격 후보 pending_review]
+    CANDIDATE --> PROMOTION[별도 승격 작업자]
+    PROMOTION --> RECIPE[활성 Reflex Recipe]
     DB --> CS
     CS --> ANSWER
     ANSWER --> U
@@ -60,7 +63,7 @@ flowchart TD
 
 - `Perception`: 브라우저 화면을 캡처하고 PaddleOCR·OmniParser 마커와 화면 서명을 만듭니다.
 - `Result Card Queue`: 검색 결과에서 LLM이 한 번 고른 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
-- `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 반복 스크롤·펼치기는 결정론적으로 처리하고 마지막에 한 번만 구조화합니다. 최종 정제 모델에는 상세 OCR과 URL만 전달하고, 검색 목록의 카드 메타데이터는 모델이 필드를 비운 경우의 폴백으로만 사용합니다.
+- `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 반복 스크롤은 결정론적으로 처리하고 마지막에 한 번만 구조화합니다. 펼치기 자동 클릭은 사이트 설명서에 선언된 라벨의 정확 일치만 허용하며, 나머지 컨트롤 의미는 LLM이 판단합니다. 최종 정제 모델에는 상세 OCR과 URL만 전달하고, 검색 목록의 카드 메타데이터는 모델이 필드를 비운 경우의 폴백으로만 사용합니다.
 - `Reflex Runtime`: `site + task_category + page_role`로 활성 레시피를 조회하고 ROI pHash와 현재 마커 좌표비율이 맞을 때만 재생합니다.
 - `Reasoning`: 큐, 상세 정책, Reflex로 고정할 수 없는 현재 화면의 의미 판단만 수행합니다.
 - `Action`: `click_marker`, `type_in_marker`, `scroll`, `press_key`, `go_back`을 물리 입력으로 실행합니다.
@@ -75,6 +78,7 @@ flowchart TD
 | 수집 조율 | `agent/application/collection_service.py` | 작업자 실행, 검토 재시도, 승인 데이터 저장 순서 |
 | 작업자 실행 | `agent/application/worker_execution_service.py` | 단일 작업자 직렬화, 그래프 실행, 브라우저 정리 |
 | 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 공고 정규화·UPSERT, 상세 OCR 최종 구조화 |
+| 비동기 승격 | `agent/application/recipe_promotion_service.py`, `recipe_promotion_worker.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
 | 지휘자 그래프 | `agent/graph/investigation_workflow.py` | 요청 이해, 확인 질문, 근거 계획, 도구 실행, 결과 검증 |
 | 작업자 그래프 | `agent/graph/workflow.py`, `state.py`, `state_factory.py` | Vision LangGraph 연결과 WorkerState 계약 |
 | 노드 | `agent/graph/nodes.py` | perception, reasoning, action 실행 |
@@ -98,6 +102,8 @@ flowchart TD
 - PaddleOCR은 별도 subprocess를 요청 간 재사용합니다.
 - 장기 재사용 tail latency를 막기 위해 기본 7회 요청 후 subprocess만 재시작합니다. Perception과 상위 작업자는 유지됩니다.
 - 무거운 화면 모델과 GUI 도구는 수집이 실제로 호출될 때 지연 초기화합니다.
+- 자동승격은 `recipe_candidates` SQLite 상태를 영속 대기열로 사용합니다. API 요청은 `pending_review` 등록 후 답변을 계속하고, FastAPI 수명주기의 단일 작업자가 `reviewing`으로 선점해 Critic을 실행합니다.
+- 백엔드가 중단되면 처리 중이던 후보는 다음 시작에서 `pending_review`로 복구됩니다. Critic 전송 오류는 재시도하며 의미상 `revise`와 시스템 오류 `review_failed`를 구분합니다.
 
 ## Classic 경로
 

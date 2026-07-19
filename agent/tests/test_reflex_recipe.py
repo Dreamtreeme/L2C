@@ -2138,9 +2138,10 @@ def test_detail_ui_context_compacts_ocr_markers_into_ordered_lines(monkeypatch):
     assert "[자격요건]" not in context
     assert "자격요건" in context
     assert "Swift 경험" in context
-    assert "수집 진행용 클릭 후보" in context
-    assert "[id: 30] 상세 정보 더 보기" in context
-    assert "채용" not in context
+    assert "상세 정보 더 보기" in context
+    assert "수집 진행용 클릭 후보" not in context
+    assert "[id: 30]" not in context
+    assert "1. 채용" in context
 
 
 def test_detail_ui_context_keeps_heading_lines_for_llm_judgment(monkeypatch):
@@ -2256,6 +2257,33 @@ def test_detail_ocr_buffer_accumulates_unique_detail_lines(monkeypatch):
     assert len(second["lines"]) == 4
 
 
+def test_detail_ocr_buffer_resets_for_another_card_on_same_url(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_OCR_BUFFER_ENABLED", "1")
+    url = "https://www.rocketpunch.com/jobs"
+    first = nodes._update_detail_ocr_buffer(
+        {},
+        [{"id": 1, "bbox": [100, 220, 260, 250], "text": "첫 번째 공고 업무"}],
+        url,
+        "screen_a.png",
+        page_role="side_panel_detail",
+        detail_key="card-a",
+    )
+    second = nodes._update_detail_ocr_buffer(
+        first,
+        [{"id": 2, "bbox": [100, 220, 260, 250], "text": "두 번째 공고 업무"}],
+        url,
+        "screen_b.png",
+        page_role="side_panel_detail",
+        detail_key="card-b",
+    )
+
+    assert second["detail_key"] == "card-b"
+    assert [line["text"] for line in second["lines"]] == ["두 번째 공고 업무"]
+    assert second["stats"]["screen_count"] == 1
+
+
 def test_detail_ocr_buffer_context_guides_finish_detail_reading(monkeypatch):
     from agent.graph import nodes
 
@@ -2304,6 +2332,93 @@ def test_detail_page_policy_scrolls_until_reading_limit(monkeypatch):
     assert trace["policy"] == "detail_scroll"
     assert msg.tool_calls[0]["name"] == "scroll"
     assert msg.tool_calls[0]["args"]["_transition_source"] == "page_policy"
+
+
+def test_detail_page_policy_does_not_click_unrelated_company_more_button(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
+    url = "https://www.jobkorea.co.kr/Recruit/GI_Read/49450447"
+    buffer = {
+        "url": url,
+        "lines": [{"text": "자격요건 Python"}],
+        "stats": {
+            "screen_count": 3,
+            "added_lines_last_screen": 12,
+            "duplicate_lines_last_screen": 0,
+        },
+    }
+
+    msg, trace = nodes._detail_page_policy_message(
+        url,
+        [{"id": 83, "bbox": [100, 700, 280, 735], "text": "기업정보 더보기"}],
+        buffer,
+        page_role="job_detail",
+    )
+
+    assert trace["policy"] == "detail_scroll"
+    assert msg.tool_calls[0]["name"] == "scroll"
+
+
+def test_detail_page_policy_attempts_declared_reveal_only_once(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
+    url = "https://www.wanted.co.kr/wd/1"
+    buffer = {
+        "url": url,
+        "lines": [{"text": "자격요건 Swift"}],
+        "stats": {
+            "screen_count": 2,
+            "added_lines_last_screen": 12,
+            "duplicate_lines_last_screen": 0,
+        },
+    }
+    markers = [{"id": 30, "bbox": [100, 700, 290, 735], "text": "상세 정보 더 보기"}]
+
+    first_msg, first_trace = nodes._detail_page_policy_message(
+        url,
+        markers,
+        buffer,
+        page_role="job_detail",
+    )
+    second_msg, second_trace = nodes._detail_page_policy_message(
+        url,
+        markers,
+        buffer,
+        page_role="job_detail",
+    )
+
+    assert first_trace["policy"] == "detail_reveal"
+    assert first_msg.tool_calls[0]["name"] == "click_marker"
+    assert second_trace["policy"] == "detail_scroll"
+    assert second_msg.tool_calls[0]["name"] == "scroll"
+
+
+def test_detail_page_policy_requires_exact_declared_reveal_label(monkeypatch):
+    from agent.graph import nodes
+
+    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
+    url = "https://www.wanted.co.kr/wd/1"
+    buffer = {
+        "url": url,
+        "lines": [{"text": "자격요건 Swift"}],
+        "stats": {
+            "screen_count": 2,
+            "added_lines_last_screen": 12,
+            "duplicate_lines_last_screen": 0,
+        },
+    }
+
+    msg, trace = nodes._detail_page_policy_message(
+        url,
+        [{"id": 30, "bbox": [100, 700, 330, 735], "text": "기업 상세 정보 더 보기"}],
+        buffer,
+        page_role="job_detail",
+    )
+
+    assert trace["policy"] == "detail_scroll"
+    assert msg.tool_calls[0]["name"] == "scroll"
 
 
 def test_detail_page_policy_finishes_at_reading_limit(monkeypatch):
@@ -2551,7 +2666,54 @@ def test_database_initializes_feedback_episode_table(tmp_path):
     assert "candidate_id" in candidate_columns
     assert "steps_json" in candidate_columns
     assert "validation_json" in candidate_columns
+    assert "review_attempts" in candidate_columns
+    assert "review_started_at" in candidate_columns
+    assert "next_review_at" in candidate_columns
+    assert "review_error" in candidate_columns
     assert "metadata_json" in recipe_columns
+
+
+def test_database_migrates_existing_recipe_candidate_review_queue(tmp_path):
+    from shared.db.database import Database
+
+    db_path = tmp_path / "legacy-candidates.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE recipe_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            submission_id TEXT NOT NULL,
+            source TEXT,
+            site TEXT,
+            goal TEXT,
+            keyword TEXT,
+            status TEXT NOT NULL DEFAULT 'pending_replay',
+            review_confidence REAL,
+            steps_json TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            review_json TEXT,
+            validation_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    Database(db_path)
+
+    conn = sqlite3.connect(db_path)
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(recipe_candidates)").fetchall()
+    }
+    indexes = {
+        row[1] for row in conn.execute("PRAGMA index_list(recipe_candidates)").fetchall()
+    }
+    conn.close()
+    assert {"review_attempts", "review_started_at", "next_review_at", "review_error"} <= columns
+    assert "idx_recipe_candidates_review_queue" in indexes
 
 
 def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch):
@@ -3418,31 +3580,92 @@ def test_candidate_reviewer_invalid_llm_shape_falls_back_to_revise(tmp_path):
     assert "critic_review_failed" in candidate["validation"]["review"]["reasons"][0]
 
 
-def test_recipe_promotion_service_reviews_candidate_in_background(monkeypatch):
-    import time
-
+def test_recipe_promotion_request_only_enqueues_and_worker_reviews(tmp_path, monkeypatch):
     from agent.application import recipe_promotion_service as service
+    from agent.application.recipe_promotion_worker import RecipePromotionWorker
     from agent.recipe import candidate_reviewer
+    from agent.recipe.candidate_store import RecipeCandidateStore
 
+    db_path = tmp_path / "promotion-worker.db"
+    store = RecipeCandidateStore(db_path)
     seen = []
-    candidate_id = f"candidate-background-{time.time_ns()}"
+    candidate_id = store.commit_candidate(
+        _sample_recipe_candidate_submission(),
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="candidate-background:0",
+    )
     monkeypatch.setenv("VISION_RECIPE_AUTO_PROMOTE", "1")
+
+    assert service.schedule_recipe_candidate_promotion(candidate_id, db_path=db_path) is True
+    assert seen == []
+    queued = service.get_recipe_candidate_promotion_status(candidate_id, db_path=db_path)
+    assert queued["status"] == "pending_review"
+
+    def review(value, db_path=None, mode="review", raise_on_critic_error=False):
+        seen.append((value, mode, raise_on_critic_error))
+        result = {
+            "decision": "accept",
+            "promotion": {"promoted": True, "saved_count": 1},
+        }
+        RecipeCandidateStore(db_path).update_status(
+            value,
+            "accepted",
+            validation={"review": {"decision": "accept"}, "promotion": result["promotion"]},
+        )
+        return result
+
     monkeypatch.setattr(
         candidate_reviewer,
         "review_and_apply_candidate",
-        lambda value, mode="review": seen.append((value, mode))
-        or {
-            "decision": "accept",
-            "promotion": {"promoted": True, "saved_count": 1},
-        },
+        review,
     )
 
-    assert service.schedule_recipe_candidate_promotion(candidate_id) is True
-    result = service.wait_for_recipe_candidate_promotion(candidate_id, timeout=2)
+    result = RecipePromotionWorker(db_path).process_one()
 
-    assert seen == [(candidate_id, "promote")]
+    assert seen == [(candidate_id, "promote", True)]
     assert result["decision"] == "accept"
     assert result["promotion"]["saved_count"] == 1
+    completed = service.get_recipe_candidate_promotion_status(candidate_id, db_path=db_path)
+    assert completed["status"] == "accepted"
+
+
+def test_recipe_promotion_worker_retries_transport_failure(tmp_path, monkeypatch):
+    from agent.application import recipe_promotion_service as service
+    from agent.application.recipe_promotion_worker import RecipePromotionWorker
+    from agent.recipe import candidate_reviewer
+    from agent.recipe.candidate_store import RecipeCandidateStore
+
+    db_path = tmp_path / "promotion-retry.db"
+    store = RecipeCandidateStore(db_path)
+    candidate_id = store.commit_candidate(
+        _sample_recipe_candidate_submission(),
+        review={"decision": "accept", "recipe_candidate": True, "confidence": 0.7},
+        source="test",
+        submission_id="candidate-retry:0",
+    )
+    monkeypatch.setenv("VISION_RECIPE_AUTO_PROMOTE", "1")
+    assert service.schedule_recipe_candidate_promotion(candidate_id, db_path=db_path) is True
+    monkeypatch.setattr(
+        candidate_reviewer,
+        "review_and_apply_candidate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("critic timeout")),
+    )
+    worker = RecipePromotionWorker(
+        db_path,
+        retry_delay_sec=0,
+        max_attempts=2,
+    )
+
+    first = worker.process_one()
+    second = worker.process_one()
+
+    assert first["status"] == "pending_review"
+    assert second["status"] == "review_failed"
+    failed = store.get_candidate(candidate_id)
+    assert failed["status"] == "review_failed"
+    assert failed["review_attempts"] == 2
+    assert "critic timeout" in failed["review_error"]
 
 def _sample_worker_result_for_learning_mode():
     return {
@@ -3771,3 +3994,79 @@ def test_skill_metadata_marks_parameter_candidate_as_required():
 
     slot = next(item for item in evidence["inputs"] if item["name"] == "result_filter_query")
     assert slot["required"] is True
+
+
+def test_card_queue_replay_accepts_close_current_tab_return():
+    from agent.runtime.result_card_queue import queue_replay_after_return
+
+    state = {
+        "result_card_queue": [
+            {
+                "queue_id": "card-2",
+                "status": "pending",
+                "title": "두 번째 iOS 개발자",
+                "bbox_ratio": [0.2, 0.3, 0.5, 0.4],
+                "center_ratio": [0.35, 0.35],
+            }
+        ],
+        "result_page_memory": {
+            "screen_signature": {
+                "phash": "0" * 16,
+                "anchors": ["두 번째 iOS 개발자"],
+                "size": [800, 600],
+            }
+        },
+        "active_result_card": {},
+    }
+
+    message, markers, trace = queue_replay_after_return(
+        state,
+        {"action": "close_current_tab"},
+        "https://www.jobkorea.co.kr/Search/?stext=iOS",
+        [],
+        {"phash": "0" * 16, "anchors": [], "size": [800, 600]},
+        require_anchors=False,
+    )
+
+    assert message is not None
+    assert trace["hit"] is True
+    assert message.tool_calls[0]["args"]["queue_id"] == "card-2"
+    assert markers[0]["bbox"] == [160, 180, 400, 240]
+
+
+def test_autonomous_tab_action_no_effect_is_detected_by_phash():
+    from agent.runtime.transition_runtime import transition_no_effect_by_phash
+
+    no_effect, distance = transition_no_effect_by_phash(
+        {
+            "action": "close_current_tab",
+            "source": "autonomous",
+            "before_url": "https://www.jobkorea.co.kr/Recruit/GI_Read/1",
+            "before_phash": "0" * 16,
+        },
+        "https://www.jobkorea.co.kr/Recruit/GI_Read/1",
+        {"phash": "0" * 16},
+    )
+
+    assert no_effect is True
+    assert distance == 0
+
+
+def test_autonomous_no_effect_routes_directly_to_reasoning():
+    from agent.graph.workflow import route_after_perception
+
+    route = route_after_perception(
+        {
+            "transition_status": "unknown",
+            "transition_source": "autonomous",
+            "transition_observations": [
+                {
+                    "action": "close_current_tab",
+                    "source": "autonomous",
+                    "reason": "no_screen_change",
+                }
+            ],
+        }
+    )
+
+    assert route == "reasoning"

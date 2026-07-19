@@ -157,7 +157,11 @@ def persist_collected_data_with_report(
 
         try:
             normalized_job["url"] = str(url).strip()
-            job_posting = Preprocessor.process_raw_jd(normalized_job)
+            raw_ocr_text = str(normalized_job.get("raw_ocr_text") or "").strip() or None
+            job_posting = Preprocessor.process_raw_jd(
+                normalized_job,
+                raw_ocr_text=raw_ocr_text,
+            )
             issues = _job_validation_issues(job_posting, collection_intent or {})
             if issues:
                 rejected_items.append(
@@ -176,7 +180,18 @@ def persist_collected_data_with_report(
                 )
                 continue
             existed = db.exists(str(url))
-            job_id = db.upsert(url=url, data=dump_model(job_posting))
+            screenshot_path = str(
+                normalized_job.get("_evidence_screenshot_path") or ""
+            ).strip() or None
+            ocr_text_path = str(
+                normalized_job.get("_evidence_ocr_text_path") or ""
+            ).strip() or None
+            job_id = db.upsert(
+                url=url,
+                data=dump_model(job_posting),
+                screenshot_path=screenshot_path,
+                ocr_text_path=ocr_text_path,
+            )
             try:
                 taxonomy_service.link_job(int(job_id))
             except Exception as exc:

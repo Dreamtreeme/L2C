@@ -205,6 +205,32 @@ def test_screen_quality_excludes_dynamic_browser_chrome_from_blank_page(monkeypa
     assert quality["low_information"] is True
 
 
+def test_screen_quality_tolerates_small_loading_edges(monkeypatch, tmp_path):
+    from PIL import ImageDraw
+    from agent.tools.perception import PerceptionEngine
+
+    image_path = tmp_path / "blank-with-loading-edges.png"
+    image = Image.new("RGB", (800, 900), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, 799, 184), fill=(45, 58, 65))
+    for index in range(18):
+        x = 250 + (index % 9) * 35
+        y = 210 + (index // 9) * 35
+        draw.ellipse((x, y, x + 10, y + 10), outline=(80, 80, 80), width=2)
+    image.save(image_path)
+
+    engine = object.__new__(PerceptionEngine)
+    monkeypatch.delenv("VISION_PAGE_CONTENT_TOP_PX", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MAX_STDDEV", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MAX_EDGE_MEAN", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", raising=False)
+
+    quality = engine.screen_quality(image_path)
+
+    assert 1.0 < quality["edge_mean"] < 1.2
+    assert quality["low_information"] is True
+
+
 def test_screen_quality_preserves_sparse_search_ui(monkeypatch, tmp_path):
     from PIL import ImageDraw
     from agent.tools.perception import PerceptionEngine
@@ -412,3 +438,25 @@ def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):
     assert round(seen["yolo_scale"], 3) == round(1024 / 3200, 3)
     assert bboxes[0] == [10, 10, 60, 30]
     assert elements[0]["text"] == "Search"
+
+
+def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
+    from agent.utils.wait_stable import WaitStable
+
+    reference_path = tmp_path / "before.png"
+    Image.new("RGB", (200, 200), "white").save(reference_path)
+
+    wait_stable = object.__new__(WaitStable)
+    wait_stable.perception = object()
+    monkeypatch.setattr(
+        wait_stable,
+        "_capture_memory_image",
+        lambda **_kwargs: Image.new("RGB", (200, 200), "black"),
+    )
+
+    assert wait_stable.wait_for_change(
+        str(reference_path),
+        max_wait_sec=0.1,
+        check_interval_sec=0,
+        region={"top": 0, "left": 0, "width": 200, "height": 200},
+    ) is True

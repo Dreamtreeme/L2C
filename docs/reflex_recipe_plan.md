@@ -15,11 +15,15 @@
 자율탐색 action
 -> recorded_step 저장
 -> worker_submission 저장
--> recipe_candidate 저장
+-> recipe_candidate를 pending_review로 저장
+-> 사용자 답변 경로는 계속 진행
+-> 백엔드 승격 작업자가 후보를 선점
 -> Critic review/promote
 -> active_recipe 저장
 -> 다음 반복탐색에서 Reflex replay
 ```
+
+승격 검토는 현재 답변의 전제 조건이 아니다. FastAPI 수명주기의 단일 작업자가 SQLite 대기열을 처리하므로 요청과 E2E는 Critic 완료를 기다리지 않는다. 전송 오류는 `pending_review`로 재시도하고, 재시도 한도를 넘기면 의미상 거절인 `revise`와 구분해 `review_failed`로 남긴다.
 
 ## Active Recipe 기준
 
@@ -53,7 +57,7 @@ Critic은 의미 판단을 담당한다. 코드는 후보를 포장하고 필수
 - `parameterized`: UI 조작은 같고 입력 슬롯만 바뀌는 단계.
 - `reasoning`: 현재 화면, 현재 결과, 방문 여부, 목표 개수에 따라 판단해야 하는 단계.
 
-공고 제목 클릭은 기본적으로 `reasoning`이다. 검색 열기, 검색어 입력, 검색 제출, 상세 더보기처럼 안정적인 컨트롤만 active recipe 후보가 된다.
+공고 제목 클릭은 기본적으로 `reasoning`이다. 검색 열기, 검색어 입력, 검색 제출처럼 반복 증거가 있는 컨트롤만 active recipe 후보가 된다. 상세 펼치기 자동 클릭은 현재 사이트 `page_guidance.reveal_controls`에 선언된 OCR 라벨과 정확히 일치할 때만 허용한다.
 
 ## 실패 처리
 

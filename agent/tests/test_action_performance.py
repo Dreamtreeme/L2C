@@ -749,6 +749,77 @@ def test_action_node_records_policy_go_back_step(monkeypatch):
     assert recorded_actions == ["go_back"]
 
 
+def test_detail_completion_does_not_repeat_failed_return_action(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    def fake_dispatch_state(action_name, _args, _jd, plan, plan_step, **_kwargs):
+        return (
+            {"action": action_name, "status": "success", "_detail_ocr_buffer": {}},
+            {"공고목록": [{"position": "iOS 개발자"}]},
+            plan,
+            plan_step,
+        )
+
+    monkeypatch.setattr(nodes, "_dispatch_state", fake_dispatch_state)
+    monkeypatch.setattr(
+        nodes,
+        "_dispatch_ui",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("실패한 복귀 행동을 자동 반복하면 안 됩니다.")
+        ),
+    )
+
+    result = nodes.action_node(
+        {
+            "current_url": "https://www.jobkorea.co.kr/Recruit/GI_Read/1",
+            "current_url_stale": False,
+            "current_markers": [],
+            "recent_images": ["same-detail.png"],
+            "transition_status": "unknown",
+            "transition_observations": [
+                {
+                    "action": "go_back",
+                    "status": "unknown",
+                    "reason": "no_screen_change",
+                    "screenshot": "same-detail.png",
+                }
+            ],
+            "recipe_params": {"target_count": 2},
+            "result_card_queue": [
+                {"queue_id": "card-1", "status": "active"},
+                {"queue_id": "card-2", "status": "pending"},
+            ],
+            "active_result_card": {"queue_id": "card-1"},
+            "extracted_jd": {},
+            "detail_ocr_buffer": {},
+            "action_history": [],
+            "collected_data": [],
+            "error_count": 0,
+            "current_plan_step": 0,
+            "plan": [],
+            "is_finished": False,
+            "last_action_result": AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "finish_detail_reading",
+                        "args": {"page_role": "job_detail", "detail_complete": True},
+                        "id": "detail-finish-after-failed-back",
+                    }
+                ],
+            ),
+        }
+    )
+
+    assert [action["action"] for action in result["action_history"]] == [
+        "finish_detail_reading"
+    ]
+    assert result["action_history"][0]["detail_policy"] == "return_requires_reasoning"
+    assert result["action_history"][0]["failed_return_action"] == "go_back"
+    assert result["last_action_screen_changed"] is False
+
+
 def test_action_node_finishes_after_last_visible_result_card(monkeypatch):
     from langchain_core.messages import AIMessage
     from agent.graph import nodes
@@ -1208,3 +1279,169 @@ def test_perception_prefers_bound_browser_window(monkeypatch):
     engine.last_region = None
 
     assert engine._find_browser_window() is wanted
+
+
+def test_tab_actions_use_bounded_browser_hotkeys(monkeypatch):
+    from agent.tools import actions
+    from agent.tools.actions import ActionTools
+
+    calls = []
+
+    class FakePerception:
+        def _get_browser_region(self):
+            calls.append("region")
+            return {"left": 0, "top": 0, "width": 100, "height": 100}
+
+        def release_address_bar_focus(self, key_pause=0.02):
+            calls.append(("release_focus", key_pause))
+
+    class FakePyAutoGUI:
+        def hotkey(self, *keys):
+            calls.append(("hotkey", keys))
+
+    monkeypatch.setattr(actions, "pyautogui", FakePyAutoGUI())
+    monkeypatch.setattr(actions.platform, "system", lambda: "Windows")
+
+    action_tools = object.__new__(ActionTools)
+    action_tools.perception = FakePerception()
+
+    assert action_tools.close_current_tab()["status"] == "success"
+    assert action_tools.switch_tab("next")["status"] == "success"
+    assert action_tools.switch_tab("previous")["status"] == "success"
+    assert calls == [
+        "region",
+        ("release_focus", 0.02),
+        ("hotkey", ("ctrl", "w")),
+        "region",
+        ("release_focus", 0.02),
+        ("hotkey", ("ctrl", "tab")),
+        "region",
+        ("release_focus", 0.02),
+        ("hotkey", ("ctrl", "shift", "tab")),
+    ]
+
+
+def test_targeted_scroll_moves_to_marker_and_uses_wheel(monkeypatch):
+    from agent.tools import actions
+    from agent.tools.actions import ActionTools
+
+    calls = []
+
+    class FakePerception:
+        last_region = {"left": 10, "top": 20, "width": 1000, "height": 800}
+        scale_x = 1.0
+        scale_y = 1.0
+
+    class FakePyAutoGUI:
+        def moveTo(self, x, y, duration=0):
+            calls.append(("move", x, y, duration))
+
+        def scroll(self, steps):
+            calls.append(("scroll", steps))
+
+        def hscroll(self, steps):
+            calls.append(("hscroll", steps))
+
+        def keyDown(self, key):
+            calls.append(("key_down", key))
+
+        def keyUp(self, key):
+            calls.append(("key_up", key))
+
+    monkeypatch.setattr(actions, "pyautogui", FakePyAutoGUI())
+    monkeypatch.setattr(actions.platform, "system", lambda: "Windows")
+    action_tools = object.__new__(ActionTools)
+    action_tools.perception = FakePerception()
+
+    down = action_tools.scroll("down", bbox=[100, 200, 300, 400], amount="small")
+    right = action_tools.scroll("right", bbox=[100, 200, 300, 400], amount="page")
+
+    assert down["status"] == "success"
+    assert right["status"] == "success"
+    assert calls == [
+        ("move", 210, 320, 0.05),
+        ("scroll", -3),
+        ("move", 210, 320, 0.05),
+        ("key_down", "shift"),
+        ("scroll", -8),
+        ("key_up", "shift"),
+    ]
+
+
+def test_action_node_blocks_repeating_no_effect_navigation(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from agent.graph import nodes
+
+    monkeypatch.setattr(
+        nodes,
+        "_dispatch_ui",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("효과 없던 동일 행동을 다시 실행하면 안 됩니다.")
+        ),
+    )
+
+    result = nodes.action_node(
+        {
+            "current_url": "https://www.jobkorea.co.kr/Recruit/GI_Read/1",
+            "current_url_stale": False,
+            "current_markers": [],
+            "recent_images": ["same-screen.png"],
+            "transition_status": "unknown",
+            "transition_observations": [
+                {
+                    "action": "go_back",
+                    "status": "unknown",
+                    "reason": "reflex_no_screen_change",
+                    "screenshot": "same-screen.png",
+                }
+            ],
+            "extracted_jd": {},
+            "action_history": [],
+            "collected_data": [],
+            "error_count": 0,
+            "current_plan_step": 0,
+            "plan": [],
+            "is_finished": False,
+            "last_action_result": AIMessage(
+                content="",
+                tool_calls=[{"name": "go_back", "args": {}, "id": "repeat-back"}],
+            ),
+        }
+    )
+
+    assert result["action_history"][0]["status"] == "skipped"
+    assert result["action_history"][0]["reason"] == "same_screen_no_effect_action_blocked"
+    assert result["last_action_screen_changed"] is False
+
+
+def test_reasoning_prompt_recommends_tab_close_after_back_no_effect():
+    from agent.graph import nodes
+
+    messages = nodes._build_reasoning_messages(
+        {
+            "goal": "잡코리아 공고 두 개 수집",
+            "plan": [],
+            "current_plan_step": 0,
+            "current_url": "https://www.jobkorea.co.kr/Recruit/GI_Read/1",
+            "current_markers": [],
+            "recent_images": ["same-screen.png"],
+            "marked_image": "",
+            "ui_context": "상세 공고",
+            "extracted_jd": {},
+            "action_history": [],
+            "transition_status": "unknown",
+            "transition_source": "page_policy",
+            "transition_observations": [
+                {
+                    "action": "go_back",
+                    "status": "unknown",
+                    "reason": "reflex_no_screen_change",
+                    "screenshot": "same-screen.png",
+                }
+            ],
+        },
+        "",
+    )
+
+    assert "효과가 없었던 행동: go_back" in messages[-1].content
+    assert "close_current_tab" in messages[-1].content

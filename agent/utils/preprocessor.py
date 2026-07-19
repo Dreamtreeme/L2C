@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from urllib.parse import urlparse
 from typing import Any
 from shared.schema.jd_schema import JobPosting
 
@@ -58,21 +57,19 @@ class Preprocessor:
 
     @staticmethod
     def parse_source_platform(url: str | None) -> str:
-        """URL을 바탕으로 수집 출처 플랫폼 분류"""
+        """사이트 레지스트리를 우선 사용해 수집 출처 플랫폼을 분류한다."""
         if not url:
             return "Unknown"
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-        if "wanted.co.kr" in domain:
-            return "Wanted"
-        elif "rememberapp" in domain or "remember" in domain:
-            return "Remember"
-        elif "jobplanet" in domain:
-            return "Jobplanet"
-        elif "saramin" in domain:
-            return "Saramin"
-        elif "linkedin" in domain:
-            return "Linkedin"
+        try:
+            from agent.runtime.site_context import site_profile_for_url
+
+            profile = site_profile_for_url(url)
+            entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
+            source_platform = str(entry.get("source_platform") or "").strip()
+            if source_platform:
+                return source_platform
+        except Exception:
+            pass
         return "Unknown"
 
     @classmethod

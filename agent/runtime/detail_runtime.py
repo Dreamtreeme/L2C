@@ -10,7 +10,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from agent.graph.action_request import build_action_message
-from agent.runtime.site_context import looks_like_job_detail_url
+from agent.runtime.site_context import is_job_detail_context, page_guidance_for_url
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox
 
@@ -23,17 +23,13 @@ def env_enabled(name: str, default: bool = True) -> bool:
 
 
 def marker_prompt_rank(marker: dict) -> tuple[int, int, int]:
-    text = marker.get("text", "")
+    """의미를 추측하지 않고 화면 읽기 순서로 마커를 정렬한다."""
+
     bbox = marker.get("bbox", [0, 0, 0, 0])
     y = int(bbox[1]) if len(bbox) == 4 else 0
     x = int(bbox[0]) if len(bbox) == 4 else 0
-    lowered = text.lower()
-    important_terms = (
-        "검색", "채용", "포지션", "데이터", "엔지니어", "개발", "로그인",
-        "닫기", "x", "원티드", "wanted", "지원", "상세", "회사",
-    )
-    priority = 0 if any(term in lowered for term in important_terms) else 1
-    return (priority, y, x)
+    marker_id = int(marker.get("id") or 0)
+    return (y, x, marker_id)
 
 
 def is_icon_marker(marker: dict) -> bool:
@@ -136,32 +132,10 @@ def group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
 
 
 def is_probable_detail_noise_line(line: dict) -> bool:
-    """브라우저·사이트 헤더와 상세 동작 버튼처럼 본문이 아닌 줄을 거른다."""
+    """내용이 없는 줄만 제거하고 의미상 중요도는 추출 모델에 맡긴다."""
 
-    bbox = line.get("bbox") or [0, 0, 0, 0]
     text = str(line.get("text") or "").strip()
-    if not text:
-        return True
-    collapsed = re.sub(r"\s+", "", text)
-    lowered = collapsed.lower()
-    if len(bbox) == 4 and bbox[1] < 120:
-        return True
-    browser_terms = ("youtube", "github", "gmail", "naver", "chzzk", "모든북마크")
-    if sum(1 for term in browser_terms if term in lowered) >= 2:
-        return True
-    site_nav_terms = ("wanted", "채용", "이력서", "교육이벤트", "콘텐츠", "소셜", "프리랜서", "회원가입", "기업서비스")
-    if ("wanted" in lowered or "원티드" in collapsed) and sum(1 for term in site_nav_terms if term in lowered) >= 2:
-        return True
-    if any(term in collapsed for term in ("상세정보더보기", "지원하기", "합격확률확인하기", "북마크", "공유하기")):
-        return True
-    if any(term in collapsed for term in ("회원가입/로그인", "회원가입로그인", "기업서비스", "합격확률", "이포지션나의합격확률은")):
-        return True
-    if len(bbox) == 4 and bbox[1] < 180 and any(
-        term in collapsed
-        for term in ("wanted", "원티드", "채용", "이력서", "교육이벤트", "콘텐츠", "소셜", "프리랜서", "회원가입", "기업서비스")
-    ):
-        return True
-    return text in {"wanted", "원티드", "채용", "이력서", "교육·이벤트", "콘텐츠", "소셜", "프리랜서", "더보기"}
+    return not text
 
 
 def append_limited_ocr_line(parts: list[str], index: int, line: dict, max_line_chars: int) -> None:
@@ -171,8 +145,21 @@ def append_limited_ocr_line(parts: list[str], index: int, line: dict, max_line_c
     parts.append(f"{index}. {text}")
 
 
-def detail_action_marker_candidates(markers: list[dict], limit: int) -> list[dict]:
-    primary_terms = ("상세 정보 더 보기", "더 보기", "더보기", "상세정보더보기")
+def detail_action_marker_candidates(
+    markers: list[dict],
+    limit: int,
+    allowed_labels: list[str] | None = None,
+) -> list[dict]:
+    """본문 펼치기라고 명확히 선언된 마커만 결정론적 클릭 후보로 고른다."""
+
+    labels = (
+        [str(label) for label in allowed_labels if str(label).strip()]
+        if allowed_labels is not None
+        else []
+    )
+    normalized_labels = {re.sub(r"\s+", "", label).casefold() for label in labels}
+    if not normalized_labels:
+        return []
     primary: list[dict] = []
     seen: set[int] = set()
     for marker in sorted(markers, key=marker_prompt_rank):
@@ -180,15 +167,20 @@ def detail_action_marker_candidates(markers: list[dict], limit: int) -> list[dic
         if marker_id in seen:
             continue
         text = str(marker.get("text") or "").strip()
-        collapsed = re.sub(r"\s+", "", text)
-        bbox = marker_bbox(marker)
-        if any(term.replace(" ", "") in collapsed for term in primary_terms):
-            if "상세" in collapsed or (len(bbox) == 4 and bbox[1] > 240):
-                primary.append(marker)
-                seen.add(marker_id)
+        collapsed = re.sub(r"\s+", "", text).casefold()
+        if collapsed in normalized_labels:
+            primary.append(marker)
+            seen.add(marker_id)
         if len(primary) >= limit:
             break
     return primary
+
+
+def detail_reveal_controls(current_url: str) -> list[str]:
+    """사이트가 명시한 본문 펼치기 컨트롤을 반환하며 빈 목록은 자동 클릭 금지를 뜻한다."""
+
+    guidance = page_guidance_for_url(current_url, "job_detail")
+    return [str(item) for item in guidance.get("reveal_controls", []) if str(item).strip()]
 
 
 def detail_lightweight_marked_image_enabled() -> bool:
@@ -208,10 +200,21 @@ def draw_detail_lightweight_marker(draw: Any, marker: dict, color: tuple[int, in
     draw.text((label_box[0] + 4, label_box[1] + 2), label, fill=(255, 255, 255), font=font)
 
 
-def build_detail_lightweight_marked_image(image_path: Any, markers: list[dict], current_url: str) -> str:
+def build_detail_lightweight_marked_image(
+    image_path: Any,
+    markers: list[dict],
+    current_url: str,
+    *,
+    page_role: str = "",
+) -> str:
     """상세 페이지 reasoning에는 클릭 후보만 표시한 가벼운 이미지를 만든다."""
 
-    if not current_url or not looks_like_job_detail_url(current_url):
+    marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
+    if not current_url or not is_job_detail_context(
+        current_url,
+        page_role=page_role,
+        marker_texts=marker_texts,
+    ):
         return ""
     if not detail_lightweight_marked_image_enabled():
         return ""
@@ -227,7 +230,13 @@ def build_detail_lightweight_marked_image(image_path: Any, markers: list[dict], 
             action_limit = int(os.getenv("VISION_DETAIL_ACTION_MARKER_LIMIT", "35"))
         except ValueError:
             action_limit = 35
-        candidates = detail_action_marker_candidates(markers, action_limit)
+        candidates = detail_action_marker_candidates(
+            markers,
+            action_limit,
+            detail_reveal_controls(current_url),
+        )
+        if not candidates:
+            return ""
 
         image = Image.open(source_path).convert("RGB")
         draw = ImageDraw.Draw(image)
@@ -257,12 +266,10 @@ def build_detail_section_context(markers: list[dict]) -> str:
         min_text_markers = int(os.getenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "120"))
         max_lines = int(os.getenv("VISION_DETAIL_OCR_MAX_LINES", "90"))
         max_line_chars = int(os.getenv("VISION_DETAIL_SECTION_MAX_LINE_CHARS", "180"))
-        action_limit = int(os.getenv("VISION_DETAIL_ACTION_MARKER_LIMIT", "35"))
     except ValueError:
         min_text_markers = 120
         max_lines = 90
         max_line_chars = 180
-        action_limit = 35
 
     text_marker_count = sum(
         1
@@ -284,12 +291,6 @@ def build_detail_section_context(markers: list[dict]) -> str:
     if omitted_lines:
         parts.append(f"본문 압축으로 생략된 줄: {omitted_lines}개")
 
-    action_markers = detail_action_marker_candidates(markers, action_limit)
-    if action_markers:
-        parts.append("수집 진행용 클릭 후보:")
-        for marker in action_markers:
-            parts.append(f"[id: {marker.get('id')}] {marker.get('text', '')}")
-
     parts.append(f"원본 텍스트 마커 {text_marker_count}개를 읽기용 줄 {len(lines)}개로 압축")
     return "\n".join(parts)
 
@@ -310,12 +311,14 @@ def detail_lines_for_buffer(markers: list[dict]) -> list[dict]:
     ]
 
 
-def new_detail_ocr_buffer(current_url: str) -> dict[str, Any]:
+def new_detail_ocr_buffer(current_url: str, detail_key: str = "") -> dict[str, Any]:
     return {
         "url": current_url,
+        "detail_key": detail_key,
         "lines": [],
         "seen_keys": [],
         "screens": [],
+        "screen_evidence": [],
         "stats": {
             "screen_count": 0,
             "added_lines_last_screen": 0,
@@ -330,12 +333,20 @@ def update_detail_ocr_buffer(
     markers: list[dict],
     current_url: str,
     image_path: Any = "",
+    *,
+    page_role: str = "",
+    detail_key: str = "",
 ) -> dict[str, Any]:
-    """상세 페이지 OCR 본문 줄을 URL 단위 버퍼에 누적한다."""
+    """상세 페이지 OCR 본문 줄을 공고 단위 버퍼에 누적한다."""
 
     if not detail_ocr_buffer_enabled():
         return dict(existing or {})
-    if not current_url or not looks_like_job_detail_url(current_url):
+    marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
+    if not current_url or not is_job_detail_context(
+        current_url,
+        page_role=page_role,
+        marker_texts=marker_texts,
+    ):
         return dict(existing or {})
 
     try:
@@ -346,8 +357,11 @@ def update_detail_ocr_buffer(
         max_line_chars = 220
 
     buffer = dict(existing or {})
-    if buffer.get("url") != current_url:
-        buffer = new_detail_ocr_buffer(current_url)
+    if (
+        buffer.get("url") != current_url
+        or (detail_key and buffer.get("detail_key") != detail_key)
+    ):
+        buffer = new_detail_ocr_buffer(current_url, detail_key)
     lines = [dict(item) for item in (buffer.get("lines") or []) if isinstance(item, dict)]
     seen_keys = [str(item) for item in (buffer.get("seen_keys") or []) if str(item)]
     seen = set(seen_keys)
@@ -357,8 +371,10 @@ def update_detail_ocr_buffer(
         from pathlib import Path
 
         screen_name = Path(image_path).name if image_path else ""
+        screen_path = str(Path(image_path).resolve()) if image_path else ""
     except Exception:
         screen_name = str(image_path or "")
+        screen_path = screen_name
 
     for line in detail_lines_for_buffer(markers):
         text = str(line.get("text") or "").strip()
@@ -386,8 +402,23 @@ def update_detail_ocr_buffer(
             break
 
     screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]
-    if screen_name and (not screens or screens[-1] != screen_name):
-        screens.append(screen_name)
+    if screen_path and (not screens or screens[-1] != screen_path):
+        screens.append(screen_path)
+    screen_evidence = [
+        dict(item)
+        for item in (buffer.get("screen_evidence") or [])
+        if isinstance(item, dict)
+    ]
+    if screen_path and (
+        not screen_evidence or screen_evidence[-1].get("path") != screen_path
+    ):
+        screen_evidence.append(
+            {
+                "path": screen_path,
+                "added_lines": added,
+                "duplicate_lines": duplicate,
+            }
+        )
     stats = dict(buffer.get("stats") or {})
     stats["screen_count"] = int(stats.get("screen_count") or 0) + 1
     stats["added_lines_last_screen"] = added
@@ -396,9 +427,11 @@ def update_detail_ocr_buffer(
     buffer.update(
         {
             "url": current_url,
+            "detail_key": detail_key or str(buffer.get("detail_key") or ""),
             "lines": lines[:max_lines],
             "seen_keys": seen_keys[:max_lines],
             "screens": screens[-20:],
+            "screen_evidence": screen_evidence[-20:],
             "stats": stats,
         }
     )
@@ -436,13 +469,20 @@ def detail_page_policy_message(
     markers: list[dict],
     detail_ocr_buffer: dict[str, Any],
     *,
+    page_role: str = "",
     transition_status: str = "",
 ) -> tuple[AIMessage | None, dict[str, Any]]:
     """상세 페이지의 반복 읽기 행동만 결정론적으로 선택한다."""
 
     if not detail_page_policy_enabled() or transition_status == "pending":
         return None, {}
-    if not current_url or not looks_like_job_detail_url(current_url):
+    marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
+    detail_context = is_job_detail_context(
+        current_url,
+        page_role=page_role,
+        marker_texts=marker_texts,
+    )
+    if not current_url or not detail_context:
         return None, {}
     if detail_ocr_buffer.get("url") != current_url:
         return None, {}
@@ -456,11 +496,17 @@ def detail_page_policy_message(
     )
     min_screens, max_screens, min_added_lines, reveal_min_screen = detail_policy_limits()
 
-    candidates = detail_action_marker_candidates(markers, 1)
-    if candidates and screen_count >= reveal_min_screen:
+    candidates = detail_action_marker_candidates(
+        markers,
+        1,
+        detail_reveal_controls(current_url),
+    )
+    reveal_attempted = bool(detail_ocr_buffer.get("reveal_control_attempted"))
+    if candidates and screen_count >= reveal_min_screen and not reveal_attempted:
         marker = candidates[0]
         marker_id = marker.get("id")
         if marker_id is not None:
+            detail_ocr_buffer["reveal_control_attempted"] = True
             trace = {
                 "policy": "detail_reveal",
                 "marker_id": marker_id,
@@ -552,10 +598,15 @@ def detail_page_policy_message(
 
 
 def compact_detail_ocr_buffer_context(state: dict, current_url: str) -> str:
-    if not detail_ocr_buffer_enabled() or not current_url or not looks_like_job_detail_url(current_url):
+    if not detail_ocr_buffer_enabled() or not current_url:
         return ""
     buffer = dict(state.get("detail_ocr_buffer", {}) or {})
     if buffer.get("url") != current_url:
+        return ""
+    if not buffer.get("lines") and not is_job_detail_context(
+        current_url,
+        page_role=str(state.get("current_page_role") or ""),
+    ):
         return ""
     stats = dict(buffer.get("stats") or {})
     lines = [item for item in (buffer.get("lines") or []) if isinstance(item, dict)]
@@ -568,7 +619,7 @@ def compact_detail_ocr_buffer_context(state: dict, current_url: str) -> str:
         f"- 이번 화면 중복 줄 수: {stats.get('duplicate_lines_last_screen', 0)}",
         f"- 상세 화면 관찰 횟수: {stats.get('screen_count', 0)}",
         "- 상세 페이지에서는 중간 DB 추출을 위해 update_extracted_info를 호출하지 마십시오.",
-        "- 더 읽어야 하면 scroll 또는 보이는 상세 펼치기 버튼 클릭을 선택하십시오.",
+        "- 더 읽어야 하면 scroll 또는 현재 사이트 안내에 선언된 상세 펼치기 버튼을 선택하십시오.",
         "- 현재 공고 정보가 충분하면 finish_detail_reading(page_role=\"job_detail\", detail_complete=true)을 호출하십시오.",
     ]
     if preview:
@@ -614,6 +665,7 @@ __all__ = [
     "detail_page_policy_enabled",
     "detail_page_policy_message",
     "detail_policy_limits",
+    "detail_reveal_controls",
     "draw_detail_lightweight_marker",
     "env_enabled",
     "group_text_markers_into_lines",

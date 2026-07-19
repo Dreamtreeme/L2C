@@ -158,7 +158,38 @@ def test_database_records_only_meaningful_job_versions(tmp_path):
     assert versions[0]["evidence_hash"] != versions[1]["evidence_hash"]
     assert {"benefits", "raw_ocr_text"} <= set(versions[0]["changed_fields"])
     assert versions[0]["content"]["benefits"] == ["장비 지원", "재택근무"]
-    assert db.get(job_id)["evidence_hash"] == versions[0]["evidence_hash"]
+    saved = db.get(job_id)
+    assert saved["evidence_hash"] == versions[0]["evidence_hash"]
+    assert saved["raw_json"]["evidence_hash"] == saved["evidence_hash"]
+
+
+def test_persistence_keeps_collected_ocr_and_screenshot_evidence(monkeypatch, tmp_path):
+    import shared.config as cfg
+    from agent.application.job_persistence_service import persist_collected_data_with_report
+
+    db_path = tmp_path / "evidence_jobs.db"
+    monkeypatch.setattr(cfg, "DB_PATH", db_path)
+    screenshot_path = str(tmp_path / "detail.png")
+    result = persist_collected_data_with_report(
+        {
+            "jobs": [
+                {
+                    "company_name": "증거회사",
+                    "position": "iOS 개발자",
+                    "url": "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001",
+                    "requirements": ["Swift"],
+                    "raw_ocr_text": "실제 누적 OCR 원문",
+                    "_evidence_screenshot_path": screenshot_path,
+                }
+            ]
+        },
+        "iOS 개발자",
+    )
+
+    saved = Database(db_path).get(result["persisted_items"][0]["job_id"])
+    assert saved["raw_ocr_text"] == "실제 누적 OCR 원문"
+    assert saved["screenshot_path"] == screenshot_path
+    assert saved["source_platform"] == "JobKorea"
 
 
 def test_pre_persistence_validation_rejects_missing_identity_and_date_mismatch(monkeypatch, tmp_path):

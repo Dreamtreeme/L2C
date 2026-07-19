@@ -107,7 +107,7 @@ def _database_cleanup_candidates(
             candidates["worker_submissions"].append(str(row["submission_id"]))
     for row in conn.execute(
         "SELECT candidate_id, status, updated_at FROM recipe_candidates "
-        "WHERE status IN ('rejected', 'revise')"
+        "WHERE status IN ('rejected', 'revise', 'review_failed')"
     ):
         if _expired(row["updated_at"], audit_cutoff):
             candidates["recipe_candidates"].append(str(row["candidate_id"]))

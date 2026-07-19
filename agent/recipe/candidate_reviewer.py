@@ -231,10 +231,23 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     from langchain_core.messages import HumanMessage, SystemMessage
 
     model_name = os.getenv("VISION_RECIPE_CRITIC_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
+    try:
+        request_timeout = max(
+            1.0,
+            float(os.getenv("VISION_RECIPE_CRITIC_TIMEOUT_SEC", "30")),
+        )
+    except ValueError:
+        request_timeout = 30.0
     promotion_policy = str(payload.get("promotion_policy") or "")
     from agent.application.model_clients import get_structured_google_model
 
-    llm = get_structured_google_model(model_name, RecipeCandidateReview, temperature=0.0)
+    llm = get_structured_google_model(
+        model_name,
+        RecipeCandidateReview,
+        temperature=0.0,
+        request_timeout=request_timeout,
+        retries=1,
+    )
     messages = [
         SystemMessage(
             content=(
@@ -269,12 +282,15 @@ def review_candidate(
     candidate: dict[str, Any],
     critic: CriticFn | None = None,
     allow_promotion: bool = False,
+    raise_on_error: bool = False,
 ) -> dict[str, Any]:
     payload = build_candidate_review_payload(candidate, allow_promotion=allow_promotion)
     try:
         raw = critic(payload) if critic else _llm_review_candidate(payload)
         return _coerce_review(raw)
     except Exception as exc:
+        if raise_on_error:
+            raise
         return _fallback_review(f"critic_review_failed: {str(exc)[:200]}")
 
 
@@ -483,6 +499,7 @@ def review_and_apply_candidate(
     db_path=None,
     critic: CriticFn | None = None,
     mode: str = "review",
+    raise_on_critic_error: bool = False,
 ) -> dict[str, Any]:
     from agent.recipe.candidate_store import RecipeCandidateStore
 
@@ -494,7 +511,12 @@ def review_and_apply_candidate(
     normalized_mode = _process_mode(mode)
     allow_promotion = normalized_mode == "promote"
     review = _ensure_review_task_category(
-        review_candidate(candidate, critic=critic, allow_promotion=allow_promotion),
+        review_candidate(
+            candidate,
+            critic=critic,
+            allow_promotion=allow_promotion,
+            raise_on_error=raise_on_critic_error,
+        ),
         candidate,
     )
     promotion = {"enabled": allow_promotion, "promoted": False, "saved_count": 0, "promoted_step_count": 0, "skipped_steps": []}

@@ -13,7 +13,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from shared.db.reflex_schema import REFLEX_MEMORY_SCHEMA
+from shared.db.reflex_schema import (
+    REFLEX_MEMORY_SCHEMA,
+    ensure_recipe_candidate_queue_schema,
+)
 from shared.db.search_taxonomy_schema import SEARCH_TAXONOMY_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -113,6 +116,7 @@ class Database:
     def _init_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            ensure_recipe_candidate_queue_schema(conn)
             
             # 마이그레이션 지원: 기존 테이블에 신규 컬럼이 없을 경우 동적 추가
             cursor = conn.execute("PRAGMA table_info(jobs)")
@@ -198,6 +202,8 @@ class Database:
         from shared.integrity import source_evidence_hash
 
         evidence_hash = source_evidence_hash(url, data)
+        canonical_data = dict(data)
+        canonical_data["evidence_hash"] = evidence_hash
         payload = {
             "url": url,
             "company_name": data.get("company_name"),
@@ -223,7 +229,7 @@ class Database:
             "experience_min": data.get("experience_min"),
             "experience_max": data.get("experience_max"),
             "experience_text": data.get("experience_text"),
-            "raw_json": json.dumps(data, ensure_ascii=False),
+            "raw_json": json.dumps(canonical_data, ensure_ascii=False),
             "screenshot_path": screenshot_path,
             "ocr_text_path": ocr_text_path,
             "updated_at": now,
@@ -250,7 +256,7 @@ class Database:
                         job_id=int(existing["id"]),
                         observed_at=now,
                         url=url,
-                        data=data,
+                        data=canonical_data,
                         evidence_hash=evidence_hash,
                         previous_raw_json=existing["raw_json"],
                     )
@@ -270,7 +276,7 @@ class Database:
                 job_id=int(new_id),
                 observed_at=now,
                 url=url,
-                data=data,
+                data=canonical_data,
                 evidence_hash=evidence_hash,
                 previous_raw_json=None,
             )

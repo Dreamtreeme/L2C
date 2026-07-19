@@ -64,7 +64,16 @@ def reflex_action_args(step: dict, marker_id: int | None, params: dict | None = 
             args["slot_name"] = slot_name
         return args
     if action == "scroll":
-        return {"direction": param.get("direction") or value or "down", **trace_args}
+        args = {
+            "direction": param.get("direction") or value or "down",
+            "amount": param.get("amount") or "page",
+            **trace_args,
+        }
+        if param.get("targeted"):
+            if marker_id is None:
+                return None
+            args["marker_id"] = marker_id
+        return args
     if action == "press_key":
         key = param.get("key") or value
         return {"key": key, **trace_args} if key else None
@@ -280,7 +289,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                     record_rejection(recipe_key, "page_role_mismatch", step_trace)
                     candidate_valid = False
                     break
-                if action not in {"click_marker", "type_in_marker"}:
+                if action not in {"click_marker", "type_in_marker", "scroll"}:
                     record_rejection(recipe_key, "non_roi_action", step_trace)
                     candidate_valid = False
                     break

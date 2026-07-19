@@ -63,6 +63,19 @@ def route_after_perception(state: GraphState) -> str:
     if transition_status == "pending":
         logger.info("Transition still pending; observing the screen again.")
         return "perception"
+    observations = state.get("transition_observations", []) or []
+    latest_observation = observations[-1] if observations else {}
+    if (
+        transition_status == "unknown"
+        and isinstance(latest_observation, dict)
+        and latest_observation.get("reason") in {"reflex_no_screen_change", "no_screen_change"}
+    ):
+        logger.info(
+            "Atomic action had no screen effect; falling back to reasoning.",
+            action=latest_observation.get("action", ""),
+            source=state.get("transition_source", ""),
+        )
+        return "reasoning"
     if transition_status == "unknown" and state.get("transition_source") in {"reflex", "page_policy"}:
         logger.info(
             "Transition contract could not verify the screen; falling back to reasoning.",

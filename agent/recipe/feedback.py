@@ -21,7 +21,17 @@ from shared.schema.feedback_schema import (
     ParameterCandidate,
 )
 
-_UI_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
+_UI_ACTIONS = {
+    "click_marker",
+    "type_in_marker",
+    "scroll",
+    "press_key",
+    "open_browser",
+    "close_browser",
+    "close_current_tab",
+    "switch_tab",
+    "go_back",
+}
 _STATE_ACTIONS = {"update_plan_progress", "update_extracted_info", "finish_task"}
 
 
@@ -91,7 +101,7 @@ def _marker_by_id(markers: list[dict], marker_id: int | None) -> dict | None:
 
 
 def _target_snapshot(state: dict, action_name: str, args: dict[str, Any]) -> dict[str, Any] | None:
-    if action_name not in {"click_marker", "type_in_marker"}:
+    if action_name not in {"click_marker", "type_in_marker", "scroll"} or args.get("marker_id") is None:
         return None
     marker = _marker_by_id(state.get("current_markers", []) or [], args.get("marker_id"))
     if not marker:

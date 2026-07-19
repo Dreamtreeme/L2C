@@ -317,23 +317,70 @@ class ActionTools:
             
         return self._execute("type_in_marker", _type)
 
-    def scroll(self, direction: str = "down") -> Dict[str, Any]:
-        """화면을 스크롤합니다."""
+    def scroll(
+        self,
+        direction: str = "down",
+        bbox: List[int] | None = None,
+        amount: str = "page",
+    ) -> Dict[str, Any]:
+        """전체 페이지 또는 지정한 화면 영역을 물리적으로 스크롤합니다."""
         def _scroll():
-            # 활성 창(브라우저)의 중앙을 클릭하여 포커스 확보
-            region = getattr(self.perception, "last_region", None)
-            if region:
-                pyautogui.click(region["left"] + region["width"] // 2, region["top"] + region["height"] // 2)
+            if direction not in {"down", "up", "left", "right"}:
+                raise ValueError(f"Unsupported scroll direction: {direction}")
+            if amount not in {"small", "page"}:
+                raise ValueError(f"Unsupported scroll amount: {amount}")
+
+            if bbox:
+                x, y = self._get_absolute_coords(bbox)
+                pyautogui.moveTo(
+                    x,
+                    y,
+                    duration=self._cfg_float("move_duration_sec", "VISION_ACTION_MOVE_DURATION_SEC", 0.05),
+                )
             else:
-                win = gw.getActiveWindow()
-                if win:
-                    pyautogui.click(win.left + win.width // 2, win.top + win.height // 2)
-                
-            key_to_press = "pagedown" if direction == "down" else "pageup"
-            pyautogui.press(key_to_press)
-            logger.info(f"Pressed {key_to_press} for scrolling {direction}")
-            
-            return f"Scrolled {direction} via {key_to_press}"
+                region = getattr(self.perception, "last_region", None)
+                if region:
+                    x = region["left"] + region["width"] // 2
+                    y = region["top"] + region["height"] // 2
+                    pyautogui.moveTo(x, y, duration=0)
+                else:
+                    win = gw.getActiveWindow()
+                    if win:
+                        pyautogui.moveTo(win.left + win.width // 2, win.top + win.height // 2, duration=0)
+
+            # 전체 페이지의 한 화면 이동은 기존 PageUp/PageDown 동작을 유지합니다.
+            if bbox is None and amount == "page" and direction in {"down", "up"}:
+                key_to_press = "pagedown" if direction == "down" else "pageup"
+                pyautogui.press(key_to_press)
+                logger.info(f"Pressed {key_to_press} for scrolling {direction}")
+                return f"Scrolled {direction} via {key_to_press}"
+
+            step_env = "VISION_SCROLL_PAGE_STEPS" if amount == "page" else "VISION_SCROLL_SMALL_STEPS"
+            steps = max(1, self._env_int(step_env, 8 if amount == "page" else 3))
+            signed_steps = steps if direction in {"up", "left"} else -steps
+            if direction in {"left", "right"}:
+                if platform.system() == "Windows":
+                    # PyAutoGUI의 hscroll은 Windows에서 구현되지 않아 Shift+휠을 사용합니다.
+                    pyautogui.keyDown("shift")
+                    try:
+                        pyautogui.scroll(signed_steps)
+                    finally:
+                        pyautogui.keyUp("shift")
+                    method = "shift+wheel"
+                else:
+                    pyautogui.hscroll(signed_steps)
+                    method = "horizontal wheel"
+            else:
+                pyautogui.scroll(signed_steps)
+                method = "vertical wheel"
+            logger.info(
+                "Scrolled physical region",
+                direction=direction,
+                amount=amount,
+                steps=steps,
+                targeted=bool(bbox),
+            )
+            return f"Scrolled {direction} via {method} ({amount})"
             
         return self._execute("scroll", _scroll)
         
@@ -414,6 +461,31 @@ class ActionTools:
             return {"closed": True, "title": title}
 
         return self._execute("close_browser", _close)
+
+    def close_current_tab(self) -> Dict[str, Any]:
+        """현재 활성 브라우저 탭 하나만 닫습니다."""
+        def _close_tab():
+            self.perception._get_browser_region()
+            self.perception.release_address_bar_focus(key_pause=0.02)
+            modifier = "command" if platform.system() == "Darwin" else "ctrl"
+            pyautogui.hotkey(modifier, "w")
+            return "Closed current browser tab"
+
+        return self._execute("close_current_tab", _close_tab)
+
+    def switch_tab(self, direction: str) -> Dict[str, Any]:
+        """현재 브라우저 창에서 다음 또는 이전 탭으로 전환합니다."""
+        def _switch_tab():
+            if direction not in {"next", "previous"}:
+                raise ValueError(f"Unsupported tab direction: {direction}")
+            self.perception._get_browser_region()
+            self.perception.release_address_bar_focus(key_pause=0.02)
+            modifier = "command" if platform.system() == "Darwin" else "ctrl"
+            keys = (modifier, "tab") if direction == "next" else (modifier, "shift", "tab")
+            pyautogui.hotkey(*keys)
+            return f"Switched to {direction} browser tab"
+
+        return self._execute("switch_tab", _switch_tab)
 
     def go_back(self) -> Dict[str, Any]:
         """브라우저의 뒤로가기 동작을 수행합니다."""

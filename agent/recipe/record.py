@@ -13,7 +13,13 @@ from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox, 
 from agent.vision.screen_signature import compute_target_roi_signature
 
 _TARGET_ACTIONS = {"click_marker", "type_in_marker"}
-_RECORDED_ACTIONS = _TARGET_ACTIONS | {"scroll", "press_key", "go_back"}
+_RECORDED_ACTIONS = _TARGET_ACTIONS | {
+    "scroll",
+    "press_key",
+    "go_back",
+    "close_current_tab",
+    "switch_tab",
+}
 
 
 def _squash(s) -> str:
@@ -136,9 +142,17 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             "target_role": normalize_text(args.get("target_role") or args.get("target_role_candidate")),
             "component": normalize_text(args.get("target_component") or args.get("component_candidate")),
             "slot_refs": [slot_name] if slot_name else [],
-            "fixed": action_name in {"scroll", "press_key", "go_back"},
+            "fixed": action_name in {
+                "scroll",
+                "press_key",
+                "go_back",
+                "close_current_tab",
+                "switch_tab",
+            },
         }
-        if action_name in _TARGET_ACTIONS:
+        if action_name in _TARGET_ACTIONS or (
+            action_name == "scroll" and args.get("marker_id") is not None
+        ):
             marker = _marker(markers, args.get("marker_id"))
             if not marker:
                 return
@@ -183,12 +197,25 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
                 if slot_name:
                     step["param"]["slot_name"] = slot_name
                 step["is_param"] = bool(slot_name) or (bool(val) and _squash(val) in _squash(goal))
+            elif action_name == "scroll":
+                step["value"] = args.get("direction", "down")
+                step["param"] = {
+                    "direction": step["value"],
+                    "amount": args.get("amount", "page"),
+                    "targeted": True,
+                }
         elif action_name == "scroll":
             step["value"] = args.get("direction", "down")
-            step["param"] = {"direction": step["value"]}
+            step["param"] = {
+                "direction": step["value"],
+                "amount": args.get("amount", "page"),
+            }
         elif action_name == "press_key":
             step["value"] = args.get("key")
             step["param"] = {"key": step["value"]}
+        elif action_name == "switch_tab":
+            step["value"] = args.get("direction")
+            step["param"] = {"direction": step["value"]}
         recorded_steps.append(step)
     except Exception as e:
         logger.debug("reflex record_ui_step skipped", error=str(e))

@@ -472,12 +472,12 @@ def queue_replay_after_return(
     *,
     require_anchors: bool = True,
 ) -> tuple[AIMessage | None, list[dict], dict]:
-    """목록으로 돌아온 직후 큐의 다음 미방문 카드를 클릭하도록 준비한다."""
+    """어떤 물리 행동으로 복귀했든 목록 화면이 확인되면 다음 카드를 준비한다."""
 
     if not card_queue_enabled():
         return None, markers, {"reason": "queue_disabled"}
-    if str(observed_transition.get("action") or "") != "go_back":
-        return None, markers, {"reason": "last_transition_not_go_back"}
+    if not str(observed_transition.get("action") or ""):
+        return None, markers, {"reason": "return_transition_missing"}
     queue = [
         dict(item)
         for item in (state.get("result_card_queue", []) or [])

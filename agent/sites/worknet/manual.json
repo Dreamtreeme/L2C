@@ -3,17 +3,24 @@
   "display_name": "워크넷/고용24",
   "base_url": "https://www.work24.go.kr",
   "default_query_target": "job search",
-  "screen_roles": ["home", "search_results", "job_detail", "popup"],
-  "common_flow": [
-    "Open Worknet or Work24 and search for the user query.",
-    "On results, identify job cards or table rows by title and company.",
-    "Visit visible unvisited postings in top-to-bottom order.",
-    "On detail, collect employment conditions and job description sections.",
-    "Return to results and continue."
-  ],
-  "stable_controls": ["검색", "채용정보", "상세", "go_back", "scroll_down"],
-  "variable_entities": ["job_row.title", "job_row.company", "region", "employment_type", "deadline", "result_count"],
-  "ignore_elements": ["public service banner", "browser toolbar", "non-job navigation unless needed"],
+  "page_guidance": {
+    "home": {
+      "instructions": ["채용정보 검색 화면에서 사용자 검색어를 입력한다."]
+    },
+    "search": {
+      "visible_cues": ["채용정보", "검색결과"],
+      "minimum_visible_cues": 2,
+      "instructions": ["표 또는 카드의 직무명과 회사명을 함께 보고 미방문 항목을 선택한다."]
+    },
+    "job_detail": {
+      "visible_cues": ["모집요강", "직무내용", "근무조건", "전형방법"],
+      "minimum_visible_cues": 2,
+      "reveal_controls": [],
+      "instructions": ["공공 채용 상세의 직무내용과 근무조건 영역을 모두 누적해서 읽는다."],
+      "reading_targets": ["회사명", "직무명", "직무내용", "경력", "학력", "고용형태", "근무지", "임금", "마감일"],
+      "navigation_notes": ["워크넷과 고용24 사이의 공식 도메인 이동은 같은 수집 흐름으로 취급한다."]
+    }
+  },
   "collection_policy": {
     "card_identity": ["job title", "company name", "region"],
     "visit_order": "top_to_bottom_visible_unvisited",
@@ -24,9 +31,5 @@
     "safe_actions": ["submit_search", "scroll_down", "go_back"],
     "unsafe_actions": ["change_government_service_context_without_need"],
     "reason_after_hit": true
-  },
-  "known_pitfalls": [
-    "Worknet and Work24 domains can both appear.",
-    "Result pages may be table-like rather than card-like, so row identity should include title and company."
-  ]
+  }
 }

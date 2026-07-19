@@ -328,19 +328,10 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     assert [step["action"] for step in submission_payload["recorded_steps"]] == ["click_marker", "go_back", "scroll"]
     assert "state_key" not in submission_payload["recorded_steps"][0]
     assert candidate_row is not None
-    assert candidate_row[0] == "pending_replay"
+    assert candidate_row[0] == "pending_review"
     candidate_steps = json.loads(candidate_row[1])
     assert [step["action"] for step in candidate_steps] == ["click_marker", "go_back", "scroll"]
     assert all("state_key" not in step for step in candidate_steps)
-
-
-def test_browser_back_marker_detection():
-    from agent.graph.nodes import _is_browser_back_marker_bbox
-
-    assert _is_browser_back_marker_bbox([8, 121, 62, 173]) is True
-    assert _is_browser_back_marker_bbox([180, 121, 240, 173]) is False
-    assert _is_browser_back_marker_bbox([8, 210, 62, 260]) is False
-
 
 def test_url_stale_flag_for_actions(monkeypatch):
     from langchain_core.messages import AIMessage

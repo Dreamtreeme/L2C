@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
-from urllib.parse import urlparse
 
 from agent.recipe.text_utils import normalize_text
 
@@ -13,6 +11,8 @@ _ALIASES = {
     "detail": "job_detail",
     "posting_detail": "job_detail",
     "jobdetail": "job_detail",
+    "detail_tab": "job_detail",
+    "side_panel_detail": "job_detail",
     "list": "search",
     "results": "search",
     "search_results": "search",
@@ -48,24 +48,8 @@ def page_role_matches(recorded: Any, current: Any) -> bool:
 
 
 def infer_page_role_from_url_and_texts(current_url: str, marker_texts: list[Any] | None = None) -> str:
-    """URL과 OCR 텍스트만으로 현재 화면 역할을 보수적으로 추정한다."""
+    """호환 API이며 실제 판별 규칙은 사이트 선언 조회기로 위임한다."""
 
-    parsed = urlparse(current_url or "")
-    path = (parsed.path or "").lower()
-    query = (parsed.query or "").lower()
-    if "/wd/" in path or "/job/" in path:
-        return "job_detail"
-    if "search" in path or "query=" in query:
-        return "search"
+    from agent.runtime.site_context import infer_site_page_role
 
-    collapsed_text = "".join(normalize_text(text) for text in marker_texts or [])
-    collapsed_text = re.sub(r"\s+", "", collapsed_text).casefold()
-    if any(term in collapsed_text for term in ("검색어를입력", "인기검색어", "추천검색어")):
-        return "search_overlay"
-
-    host = (parsed.netloc or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-    if host and (parsed.path or "/") in {"", "/"}:
-        return "home"
-    return ""
+    return infer_site_page_role(current_url, marker_texts)

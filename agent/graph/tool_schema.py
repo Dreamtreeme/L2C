@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -46,7 +46,24 @@ class type_in_marker(BaseModel):
 class scroll(BaseModel):
     """화면을 스크롤합니다."""
 
-    direction: str = Field("down", description="스크롤 방향 ('down' 또는 'up')")
+    direction: Literal["down", "up", "left", "right"] = Field(
+        "down",
+        description="스크롤 방향 ('down', 'up', 'left', 'right')",
+    )
+    marker_id: Optional[int] = Field(
+        None,
+        description=(
+            "내부 패널·목록처럼 특정 영역을 스크롤할 때 기준으로 삼을 마커 ID. "
+            "생략하면 전체 페이지를 스크롤합니다."
+        ),
+    )
+    amount: Literal["small", "page"] = Field(
+        "page",
+        description="스크롤 이동량 ('small' 또는 'page')",
+    )
+    target_label: Optional[str] = Field(None, description="스크롤할 영역의 보이는 라벨(target_label)")
+    target_role: Optional[str] = Field(None, description="스크롤 대상 역할(target_role)")
+    target_component: Optional[str] = Field(None, description="스크롤 대상 화면 구성요소(target_component)")
     reason: Optional[str] = Field(None, description="스크롤을 수행한 이유(reason)")
     expected_after: Optional[str] = Field(None, description="스크롤 후 정상이라면 보여야 할 화면 변화(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
@@ -81,6 +98,30 @@ class close_browser(BaseModel):
 
     reason: Optional[str] = Field(None, description="브라우저를 닫는 이유(reason)")
     expected_after: Optional[str] = Field(None, description="브라우저 종료 후 기대 상태(expected_after)")
+    page_role: Optional[str] = Field(None, description="Current page role.")
+    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
+
+
+class close_current_tab(BaseModel):
+    """현재 활성 브라우저 탭 하나를 닫습니다."""
+
+    reason: Optional[str] = Field(None, description="현재 탭을 닫는 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="탭을 닫은 뒤 기대 상태(expected_after)")
+    page_role: Optional[str] = Field(None, description="Current page role.")
+    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
+
+
+class switch_tab(BaseModel):
+    """현재 브라우저 창에서 인접한 탭으로 전환합니다."""
+
+    direction: Literal["next", "previous"] = Field(
+        ...,
+        description="전환할 탭 방향 ('next' 또는 'previous')",
+    )
+    reason: Optional[str] = Field(None, description="탭을 전환하는 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="탭 전환 뒤 기대 상태(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
@@ -164,6 +205,7 @@ class finish_task(BaseModel):
 __all__ = [
     "click_marker",
     "close_browser",
+    "close_current_tab",
     "finish_detail_reading",
     "finish_task",
     "go_back",
@@ -171,6 +213,7 @@ __all__ = [
     "press_key",
     "scroll",
     "set_result_card_queue",
+    "switch_tab",
     "type_in_marker",
     "update_extracted_info",
     "update_plan_progress",

@@ -13,6 +13,7 @@ from agent.graph.state import GraphState
 from agent.graph.tool_schema import (
     click_marker,
     close_browser,
+    close_current_tab,
     finish_detail_reading,
     finish_task,
     go_back,
@@ -20,6 +21,7 @@ from agent.graph.tool_schema import (
     press_key,
     scroll,
     set_result_card_queue,
+    switch_tab,
     type_in_marker,
     update_extracted_info,
     update_plan_progress,
@@ -59,8 +61,11 @@ from agent.runtime.result_card_queue import (
 from agent.runtime.result_card_selector import select_result_cards as _select_result_cards
 from agent.runtime.reflex_runtime import reflex_node
 from agent.runtime.site_context import (
+    infer_site_page_role as _infer_site_page_role,
+    is_job_detail_context as _is_job_detail_context,
     looks_like_job_detail_url as _looks_like_job_detail_url,
     persistence_policy_for_url as _persistence_policy_for_url,
+    site_runtime_guidance as _site_runtime_guidance,
 )
 from agent.runtime.transition_runtime import (
     build_transition_observation as _transition_observation,
@@ -89,11 +94,13 @@ _ACTION_TOOL_SCHEMAS = {
         press_key,
         open_browser,
         close_browser,
+        close_current_tab,
         update_extracted_info,
         finish_detail_reading,
         go_back,
         update_plan_progress,
         set_result_card_queue,
+        switch_tab,
         finish_task,
     )
 }
@@ -179,11 +186,28 @@ def perception_node(
     started_monotonic = time.perf_counter()
     logger.info("Executing Perception Node")
     perception = _get_perception()
+
+    pending_before_capture = dict(state.get("pending_transition", {}) or {})
+    pending_action = str(pending_before_capture.get("action") or "")
+    if pending_action in {
+        "click_marker",
+        "press_key",
+        "open_browser",
+        "go_back",
+        "close_current_tab",
+        "switch_tab",
+    }:
+        wait_for_change = getattr(perception, "wait_for_transition_change", None)
+        before_screenshot = str(pending_before_capture.get("before_screenshot") or "")
+        if callable(wait_for_change) and before_screenshot:
+            try:
+                wait_for_change(before_screenshot)
+            except Exception as exc:
+                logger.debug("Transition screen change wait skipped", error=str(exc))
     
     # 화면 캡처
     capture_usable = getattr(perception, "capture_usable_screen", None)
     if callable(capture_usable):
-        pending_action = str((state.get("pending_transition") or {}).get("action") or "")
         if pending_action == "type_in_marker":
             try:
                 input_wait_sec = max(0.0, float(os.getenv("VISION_INPUT_CAPTURE_INITIAL_WAIT_SEC", "0.7")))
@@ -365,6 +389,11 @@ def perception_node(
         )
         if no_effect and not visual_change_detected:
             transition_source = str(pending_transition.get("source") or "")
+            no_effect_reason = (
+                "reflex_no_screen_change"
+                if transition_source == "reflex"
+                else "no_screen_change"
+            )
             started_at = float(pending_transition.get("started_at") or time.time())
             elapsed_sec = max(0.0, time.time() - started_at)
             attempt = int(pending_transition.get("attempts") or 0) + 1
@@ -381,7 +410,7 @@ def perception_node(
                     transition_status="unknown",
                     transition_outcome="",
                     transition_source=transition_source,
-                    reason="reflex_no_screen_change",
+                    reason=no_effect_reason,
                     elapsed_sec=elapsed_sec,
                     attempt=attempt,
                     markers=markers,
@@ -424,7 +453,7 @@ def perception_node(
                 "step_durations": [{"node": "perception", "duration": total_elapsed, "ocr_skipped": True}],
             }
 
-    if observed_transition and str(observed_transition.get("action") or "") == "go_back":
+    if observed_transition:
         queue_msg, cached_markers, queue_trace = _queue_replay_after_return(
             state,
             observed_transition,
@@ -481,25 +510,6 @@ def perception_node(
     analysis_mode = str(analysis.get("analysis_mode") or "full")
     markers = analysis.get("markers", [])
     marked_image = analysis.get("marked_image", "")
-    
-    # 우측 스크롤바 영역 마커 필터링 (우측 끝 35픽셀 이내 제거)
-    from PIL import Image
-    try:
-        with Image.open(image_path) as img:
-            img_width, _ = img.size
-    except Exception as e:
-        logger.error(f"Failed to open screenshot to get dimensions: {e}")
-        img_width = 1929
-        
-    filtered_markers = []
-    for m in markers:
-        bbox = m.get("bbox", [0, 0, 0, 0])
-        x_center = (bbox[0] + bbox[2]) // 2
-        if x_center >= img_width - 65:
-            logger.info(f"Filtering out scrollbar marker: ID {m.get('id')}, bbox {bbox}, text {m.get('text')}")
-            continue
-        filtered_markers.append(m)
-    markers = filtered_markers
     
     screen_signature = {}
     try:
@@ -624,9 +634,18 @@ def perception_node(
                 reason=((queue_trace.get("return_match") or {}).get("reason") or ""),
             )
 
-    ui_context = _build_ui_context(markers, current_url=current_url)
     current_page_role = _infer_current_page_role(current_url, markers)
-    detail_marked_image = _build_detail_lightweight_marked_image(image_path, markers, current_url)
+    ui_context = _build_ui_context(
+        markers,
+        current_url=current_url,
+        page_role=current_page_role,
+    )
+    detail_marked_image = _build_detail_lightweight_marked_image(
+        image_path,
+        markers,
+        current_url,
+        page_role=current_page_role,
+    )
     if detail_marked_image:
         marked_image = detail_marked_image
     detail_ocr_buffer = _update_detail_ocr_buffer(
@@ -634,11 +653,14 @@ def perception_node(
         markers,
         current_url,
         image_path,
+        page_role=current_page_role,
+        detail_key=_detail_key_from_state(state),
     )
     page_policy_msg, page_policy_trace = _detail_page_policy_message(
         current_url,
         markers,
         detail_ocr_buffer,
+        page_role=current_page_role,
         transition_status=transition_status,
     )
     if page_policy_msg:
@@ -721,15 +743,6 @@ def _should_skip_job_update_without_detail_url(new_data: dict, current_url: str)
         return False
 
     return any(isinstance(job, dict) and not _has_job_url(job) for job in incoming_jobs)
-
-
-def _is_browser_back_marker_bbox(bbox: list) -> bool:
-    """브라우저 툴바의 뒤로가기 버튼 마커를 일반 좌표 클릭 대신 go_back으로 처리합니다."""
-    if len(bbox) != 4:
-        return False
-    x_center = (bbox[0] + bbox[2]) // 2
-    y_center = (bbox[1] + bbox[3]) // 2
-    return x_center <= 90 and 60 <= y_center <= 180
 
 
 def _job_identity(job: dict) -> tuple:
@@ -855,11 +868,7 @@ def _is_detail_update(args: dict[str, Any]) -> bool:
 def _infer_current_page_role(current_url: str, markers: list[dict[str, Any]]) -> str:
     """현재 화면의 replay 적용 범위를 보수적으로 분류한다."""
 
-    from agent.recipe.page_context import infer_page_role_from_url_and_texts
-
-    if _looks_like_job_detail_url(current_url):
-        return "job_detail"
-    return infer_page_role_from_url_and_texts(
+    return _infer_site_page_role(
         current_url,
         [
             marker.get("text")
@@ -869,8 +878,20 @@ def _infer_current_page_role(current_url: str, markers: list[dict[str, Any]]) ->
     )
 
 
+def _detail_key_from_state(state: GraphState) -> str:
+    """같은 URL의 패널형 상세 화면도 공고별로 OCR 버퍼를 분리한다."""
+
+    card = dict(state.get("active_result_card", {}) or {})
+    queue_id = str(card.get("queue_id") or "").strip()
+    if queue_id:
+        return queue_id
+    company = str(card.get("company") or "").strip()
+    title = str(card.get("title") or "").strip()
+    return "|".join(part for part in (company, title) if part)
+
+
 def _sensitive_action_reason(state: GraphState, action_name: str, args: dict[str, Any]) -> str:
-    if action_name in {"close_browser", "go_back", "scroll"}:
+    if action_name in {"close_browser", "close_current_tab", "switch_tab", "go_back", "scroll"}:
         return ""
     if args.get("needs_user_confirmation") is True:
         return "tool_args_requested_user_confirmation"
@@ -923,7 +944,7 @@ def _compact_action_args(action_name: str, args: dict) -> dict:
 
 
 def _action_target_metadata(state: GraphState, action_name: str, args: dict) -> dict | None:
-    if action_name not in {"click_marker", "type_in_marker"}:
+    if action_name not in {"click_marker", "type_in_marker", "scroll"} or args.get("marker_id") is None:
         return None
     marker = _marker_by_id(state.get("current_markers", []), args.get("marker_id"))
     if not marker:
@@ -969,6 +990,24 @@ def _is_open_browser_noop(action: dict) -> bool:
     return isinstance(result, dict) and result.get("opened") is False
 
 
+def _latest_no_effect_transition(state: GraphState) -> dict[str, Any]:
+    """현재 화면에서 효과가 없다고 확인된 가장 최근 물리 행동을 반환합니다."""
+    observations = state.get("transition_observations", []) or []
+    if not observations:
+        return {}
+    latest = observations[-1]
+    if not isinstance(latest, dict) or latest.get("status") != "unknown":
+        return {}
+    if latest.get("reason") not in {"reflex_no_screen_change", "no_screen_change"}:
+        return {}
+    recent_images = state.get("recent_images", []) or []
+    latest_screen = str(recent_images[-1]) if recent_images else ""
+    observed_screen = str(latest.get("screenshot") or "")
+    if latest_screen and observed_screen and latest_screen != observed_screen:
+        return {}
+    return latest
+
+
 def _recent_forbidden_actions(action_history: list[dict], limit: int = 6) -> list[dict]:
     forbidden = []
     seen = set()
@@ -979,7 +1018,11 @@ def _recent_forbidden_actions(action_history: list[dict], limit: int = 6) -> lis
 
         reason = action.get("reason", "") or ""
         forbidden_reason = ""
-        if reason in {"unsafe_ui_action_chain", IMPLAUSIBLE_TEXT_INPUT_TARGET}:
+        if reason in {
+            "unsafe_ui_action_chain",
+            "same_screen_no_effect_action_blocked",
+            IMPLAUSIBLE_TEXT_INPUT_TARGET,
+        }:
             forbidden_reason = reason
         elif _is_open_browser_noop(action):
             forbidden_reason = action.get("result", {}).get("reason", "open_browser_no_screen_change")
@@ -1024,12 +1067,22 @@ def _build_forbidden_action_context(action_history: list[dict]) -> str:
             + f" ({item['reason']})"
         )
     lines.append(
-        "Choose a different visible marker, scroll, go back, extract information, or finish the task instead."
+        "Choose a different visible marker or a different atomic navigation tool instead. "
+        "If go_back had no effect on a detail page opened from results, consider close_current_tab."
     )
     return "\n".join(lines)
 
 def _chain_boundary_reached(action_name: str) -> bool:
-    return action_name in {"click_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
+    return action_name in {
+        "click_marker",
+        "scroll",
+        "press_key",
+        "open_browser",
+        "close_browser",
+        "close_current_tab",
+        "switch_tab",
+        "go_back",
+    }
 
 
 def _is_allowed_same_screen_ui_chain(previous_ui_action: str | None, action_name: str) -> bool:
@@ -1044,8 +1097,21 @@ def _is_allowed_same_screen_ui_chain(previous_ui_action: str | None, action_name
 
 
 
-def _build_ui_context(markers: list[dict], current_url: str = "") -> str:
-    if current_url and _looks_like_job_detail_url(current_url) and _env_enabled("VISION_DETAIL_SECTION_CONTEXT_ENABLED", True):
+def _build_ui_context(
+    markers: list[dict],
+    current_url: str = "",
+    page_role: str = "",
+) -> str:
+    marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
+    if (
+        current_url
+        and _is_job_detail_context(
+            current_url,
+            page_role=page_role,
+            marker_texts=marker_texts,
+        )
+        and _env_enabled("VISION_DETAIL_SECTION_CONTEXT_ENABLED", True)
+    ):
         section_context = _build_detail_section_context(markers)
         if section_context:
             return section_context
@@ -1399,12 +1465,21 @@ def _build_reasoning_messages(
     )
     transition_context = ""
     if state.get("transition_status"):
+        latest_transition = _latest_no_effect_transition(state)
         transition_context = (
             "직전 화면 전환 검증:\n"
             f"- status: {state.get('transition_status')}\n"
             f"- outcome: {state.get('transition_outcome') or '(없음)'}\n"
-            f"- source: {state.get('transition_source') or '(없음)'}\n\n"
+            f"- source: {state.get('transition_source') or '(없음)'}\n"
         )
+        if latest_transition:
+            transition_context += (
+                f"- 효과가 없었던 행동: {latest_transition.get('action') or '(없음)'}\n"
+                f"- 판정 이유: {latest_transition.get('reason') or '(없음)'}\n"
+                "- 같은 행동을 반복하지 마십시오. 상세 공고가 별도 탭에 열렸을 가능성이 있으면 "
+                "close_current_tab을 사용하고, 이전 탭을 유지해야 하면 switch_tab을 사용하십시오.\n"
+            )
+        transition_context += "\n"
     result_refinement_context = ""
     selector_trace = selector_trace or {}
     if selector_trace.get("reason") == "result_refinement_needed":
@@ -1423,6 +1498,7 @@ def _build_reasoning_messages(
         f"{plan_context}"
         f"{_compact_extracted_context(extracted_jd, current_url)}"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
+        f"{_site_runtime_guidance(current_url, state.get('current_page_role', ''))}"
         f"{collection_context}"
         f"{_compact_result_availability_context(state)}"
         f"{_compact_result_card_queue_context(state)}"
@@ -1548,20 +1624,27 @@ def _dispatch_ui(action_name: str, args: dict, get_bbox, current_url: str = "") 
     action_tools = _get_action_tools()
     if action_name == "click_marker":
         bbox = get_bbox(args["marker_id"])
-        if _is_browser_back_marker_bbox(bbox):
-            logger.info(f"Redirecting browser toolbar back marker click to go_back: marker_id={args['marker_id']}, bbox={bbox}")
-            return action_tools.go_back()
         return action_tools.click_marker(bbox)
     elif action_name == "type_in_marker":
         return action_tools.type_in_marker(get_bbox(args["marker_id"]), args["text"])
     elif action_name == "scroll":
-        return action_tools.scroll(direction=args.get("direction", "down"))
+        marker_id = args.get("marker_id")
+        bbox = get_bbox(marker_id) if marker_id is not None else None
+        return action_tools.scroll(
+            direction=args.get("direction", "down"),
+            bbox=bbox,
+            amount=args.get("amount", "page"),
+        )
     elif action_name == "press_key":
         return action_tools.press_key(args["key"])
     elif action_name == "open_browser":
         return action_tools.open_browser(args["url"], current_url=current_url)
     elif action_name == "close_browser":
         return action_tools.close_browser()
+    elif action_name == "close_current_tab":
+        return action_tools.close_current_tab()
+    elif action_name == "switch_tab":
+        return action_tools.switch_tab(args["direction"])
     elif action_name == "go_back":
         return action_tools.go_back()
     raise ValueError(f"Unknown UI action: {action_name}")
@@ -1967,10 +2050,27 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             step_start,
         )
 
-    UI_ACTIONS    = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
-    SCREEN_CHANGING_ACTIONS = {"click_marker", "type_in_marker", "scroll", "press_key", "open_browser", "close_browser", "go_back"}
-    URL_STALE_ACTIONS = {"click_marker", "press_key", "open_browser", "close_browser", "go_back"}
-    OBSERVATION_REQUIRED_ACTIONS = {"click_marker", "press_key", "open_browser", "go_back"}
+    UI_ACTIONS = {
+        "click_marker",
+        "type_in_marker",
+        "scroll",
+        "press_key",
+        "open_browser",
+        "close_browser",
+        "close_current_tab",
+        "switch_tab",
+        "go_back",
+    }
+    SCREEN_CHANGING_ACTIONS = set(UI_ACTIONS)
+    URL_STALE_ACTIONS = {
+        "click_marker",
+        "press_key",
+        "open_browser",
+        "close_browser",
+        "close_current_tab",
+        "switch_tab",
+        "go_back",
+    }
     STATE_ACTIONS = {"update_plan_progress", "update_extracted_info", "finish_detail_reading", "set_result_card_queue"}
 
     for idx, tool_call in enumerate(ai_msg.tool_calls):
@@ -2023,6 +2123,21 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                             details=guard_result,
                         )
                         break
+                no_effect_transition = _latest_no_effect_transition(state)
+                if no_effect_transition.get("action") == action_name:
+                    append_guard_result(
+                        action_name,
+                        args,
+                        before_snapshot,
+                        "skipped",
+                        "same_screen_no_effect_action_blocked",
+                        (
+                            "Blocked an atomic UI action that already had no effect on this screen. "
+                            "Choose another navigation method."
+                        ),
+                        step_start,
+                    )
+                    break
                 sensitive_reason = _sensitive_action_reason(
                     {**state, "current_markers": latest_markers},
                     action_name,
@@ -2168,14 +2283,24 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                             _completed_result_card_count(result_card_queue),
                         )
                         if pending_cards or (target_count > 0 and resolved_count < target_count):
-                            policy_ui_action = (
+                            no_effect_return = _latest_no_effect_transition(state)
+                            if no_effect_return.get("action") in {
                                 "go_back",
-                                {
-                                    "reason": "detail page complete and more result cards remain",
-                                    "expected_after": "job result list is visible",
-                                },
-                                "detail_complete_more_items",
-                            )
+                                "close_current_tab",
+                                "switch_tab",
+                            }:
+                                # 실패가 확인된 복귀 방식을 자동 반복하지 않고 LLM이 다른 원자 도구를 고르게 합니다.
+                                result["detail_policy"] = "return_requires_reasoning"
+                                result["failed_return_action"] = no_effect_return.get("action")
+                            else:
+                                policy_ui_action = (
+                                    "go_back",
+                                    {
+                                        "reason": "detail page complete and more result cards remain",
+                                        "expected_after": "job result list is visible",
+                                    },
+                                    "detail_complete_more_items",
+                                )
                         elif (
                             _auto_finish_on_target_enabled()
                             and _count_mode_from_state(state) == "visible_all"

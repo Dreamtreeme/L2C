@@ -1029,6 +1029,30 @@ def test_google_model_clients_are_reused_by_configuration(monkeypatch):
     model_clients.clear_model_client_cache()
 
 
+def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from agent.application import recipe_promotion_worker
+    from agent.web_server import app
+
+    calls = []
+    monkeypatch.setattr(
+        recipe_promotion_worker,
+        "start_recipe_promotion_worker",
+        lambda: calls.append("start"),
+    )
+    monkeypatch.setattr(
+        recipe_promotion_worker,
+        "stop_recipe_promotion_worker",
+        lambda timeout_sec=1.0: calls.append(("stop", timeout_sec)) or True,
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/api/contracts").status_code == 200
+
+    assert calls == ["start", ("stop", 0.5)]
+
+
 def test_browser_closes_by_default(monkeypatch):
     from agent.application import worker_execution_service
     from agent.graph import nodes
@@ -1077,7 +1101,17 @@ def test_detail_extraction_prompt_prioritizes_page_text_over_ocr_hints():
     assert "보조 근거로만 사용" in prompt
     assert "active_result_card" not in prompt
     assert "회사명은 로고" not in prompt
+    assert "직무명 괄호 안의 세부 분야" in prompt
     assert "evidence_hash는 출력하지 마십시오" in prompt
+
+
+def test_openai_detail_extraction_schema_keeps_numeric_experience_fields():
+    from agent.application.detail_extraction_service import OpenAIDetailExtractionLLM
+
+    properties = OpenAIDetailExtractionLLM._job_posting_schema()["properties"]
+
+    assert "experience_min" in properties
+    assert "experience_max" in properties
 
 
 def test_detail_extraction_request_keeps_card_metadata_as_fallback_only(monkeypatch):
@@ -1105,6 +1139,11 @@ def test_detail_extraction_request_keeps_card_metadata_as_fallback_only(monkeypa
             "detail_ocr_buffer": {
                 "url": "https://example.com/jobs/1",
                 "lines": [{"text": "상세 페이지 회사 상세 페이지 직무"}],
+                "screens": ["C:/tmp/loading.png", "C:/tmp/detail-screen.png"],
+                "screen_evidence": [
+                    {"path": "C:/tmp/loading.png", "added_lines": 0},
+                    {"path": "C:/tmp/detail-screen.png", "added_lines": 1},
+                ],
             },
             "active_result_card": {
                 "company": "잘못 인식한 카드 회사",
@@ -1118,3 +1157,5 @@ def test_detail_extraction_request_keeps_card_metadata_as_fallback_only(monkeypa
     assert "active_result_card" not in request_payload
     assert result["company_name"] == "상세 페이지 회사"
     assert result["position"] == "상세 페이지 직무"
+    assert result["raw_ocr_text"] == "1. 상세 페이지 회사 상세 페이지 직무"
+    assert result["_evidence_screenshot_path"] == "C:/tmp/detail-screen.png"

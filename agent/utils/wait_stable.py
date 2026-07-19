@@ -42,6 +42,60 @@ class WaitStable:
             logger.exception("Failed to capture memory image for stabilization check", error=str(e))
             raise
 
+    def wait_for_change(
+        self,
+        reference_image_path: str,
+        *,
+        max_wait_sec: Optional[float] = None,
+        check_interval_sec: Optional[float] = None,
+        region: Optional[dict] = None,
+    ) -> bool:
+        """이전 스크린샷과 의미 있는 픽셀 차이가 생길 때까지만 짧게 기다립니다."""
+        if not reference_image_path or not os.path.exists(reference_image_path):
+            return False
+        if max_wait_sec is None:
+            max_wait_sec = self._env_float("VISION_TRANSITION_CHANGE_MAX_WAIT_SEC", 1.2)
+        if check_interval_sec is None:
+            check_interval_sec = self._env_float("VISION_TRANSITION_CHANGE_CHECK_SEC", 0.08)
+        minimum_ratio = max(
+            0.0,
+            self._env_float("REFLEX_VISUAL_CHANGE_MIN_RATIO", 0.03),
+        )
+        intensity_threshold = min(
+            255,
+            max(0, self._env_int("REFLEX_VISUAL_CHANGE_PIXEL_THRESHOLD", 8)),
+        )
+        target_size = (196, 212)
+
+        try:
+            with Image.open(reference_image_path) as source:
+                reference = source.convert("L").resize(target_size, Image.Resampling.BILINEAR)
+        except Exception as exc:
+            logger.debug("Transition reference image could not be loaded", error=str(exc))
+            return False
+
+        started = time.perf_counter()
+        while (time.perf_counter() - started) < max_wait_sec:
+            current = self._capture_memory_image(region=region, sample_width=0)
+            current = current.convert("L").resize(target_size, Image.Resampling.BILINEAR)
+            histogram = ImageChops.difference(reference, current).histogram()
+            changed_pixels = sum(histogram[intensity_threshold + 1 :])
+            changed_ratio = changed_pixels / float(target_size[0] * target_size[1])
+            if changed_ratio >= minimum_ratio:
+                logger.info(
+                    "Transition screen change detected",
+                    elapsed_sec=round(time.perf_counter() - started, 3),
+                    changed_ratio=round(changed_ratio, 4),
+                )
+                return True
+            time.sleep(max(0.0, check_interval_sec))
+
+        logger.info(
+            "Transition screen change wait expired",
+            max_wait_sec=max_wait_sec,
+        )
+        return False
+
     @staticmethod
     def _env_float(name: str, default: float) -> float:
         try:

@@ -78,9 +78,15 @@ def transition_no_effect_by_phash(
         return False, None
     source = str(pending_transition.get("source") or "")
     action = str(pending_transition.get("action") or "")
-    if source not in {"reflex", "page_policy"}:
+    if source not in {"reflex", "page_policy", "card_queue", "autonomous"}:
         return False, None
-    if action not in {"click_marker", "press_key", "go_back"}:
+    if action not in {
+        "click_marker",
+        "press_key",
+        "go_back",
+        "close_current_tab",
+        "switch_tab",
+    }:
         return False, None
     before_url = str(pending_transition.get("before_url") or "")
     before_phash = str(pending_transition.get("before_phash") or "")

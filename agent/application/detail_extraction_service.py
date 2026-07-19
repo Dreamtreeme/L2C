@@ -140,8 +140,6 @@ class OpenAIDetailExtractionLLM:
             "raw_ocr_text",
             "content_hash",
             "evidence_hash",
-            "experience_min",
-            "experience_max",
         ):
             properties.pop(noisy_field, None)
         schema["properties"] = properties
@@ -294,6 +292,24 @@ def extract_job_from_detail_ocr_buffer(state: dict, current_url: str) -> dict[st
         extracted["position"] = active_card.get("title")
     if active_card.get("company") and not (extracted.get("company_name") or extracted.get("회사명")):
         extracted["company_name"] = active_card.get("company")
+    # 구조화 결과와 별개로 실제 누적 OCR과 대표 화면을 출처 증거로 보존합니다.
+    extracted["raw_ocr_text"] = ocr_text
+    screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]
+    screen_evidence = [
+        dict(item)
+        for item in (buffer.get("screen_evidence") or [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
+    representative = next(
+        (
+            str(item["path"])
+            for item in screen_evidence
+            if int(item.get("added_lines") or 0) > 0
+        ),
+        screens[0] if screens else "",
+    )
+    if representative:
+        extracted["_evidence_screenshot_path"] = representative
     return extracted
 
 

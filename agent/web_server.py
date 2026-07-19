@@ -1,6 +1,7 @@
 import json
 import asyncio
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -23,7 +24,24 @@ from agent.application.run_registry import get_run_registry
 from agent.utils.logger import logger
 from shared.schema.investigation_schema import ClarificationAnswer
 
-app = FastAPI(title="L2C Q&A API Server")
+
+@asynccontextmanager
+async def _application_lifespan(_app: FastAPI):
+    """사용자 요청과 독립적인 후처리 작업자의 수명주기를 관리합니다."""
+
+    from agent.application.recipe_promotion_worker import (
+        start_recipe_promotion_worker,
+        stop_recipe_promotion_worker,
+    )
+
+    start_recipe_promotion_worker()
+    try:
+        yield
+    finally:
+        stop_recipe_promotion_worker(timeout_sec=0.5)
+
+
+app = FastAPI(title="L2C Q&A API Server", lifespan=_application_lifespan)
 
 DEFAULT_LOCAL_ORIGINS = (
     "http://127.0.0.1:8000",

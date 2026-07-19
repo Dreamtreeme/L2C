@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS recipe_candidates (
     payload_json      TEXT NOT NULL,
     review_json       TEXT,
     validation_json   TEXT,
+    review_attempts   INTEGER NOT NULL DEFAULT 0,
+    review_started_at TEXT,
+    next_review_at    TEXT,
+    review_error      TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );
@@ -72,6 +76,35 @@ RECIPE_CANDIDATES_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_run ON recipe_candidates(run_id);",
     "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_site_status ON recipe_candidates(site, status);",
 )
+
+RECIPE_CANDIDATES_QUEUE_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_review_queue ON recipe_candidates(status, next_review_at, created_at);",
+)
+
+RECIPE_CANDIDATE_QUEUE_COLUMNS = {
+    "review_attempts": "INTEGER NOT NULL DEFAULT 0",
+    "review_started_at": "TEXT",
+    "next_review_at": "TEXT",
+    "review_error": "TEXT",
+}
+
+
+def ensure_recipe_candidate_queue_schema(conn) -> None:
+    """기존 후보 테이블에 영속 검토 대기열 컬럼과 인덱스를 순서대로 보강한다."""
+
+    columns = {
+        row["name"] if hasattr(row, "keys") else row[1]
+        for row in conn.execute("PRAGMA table_info(recipe_candidates)").fetchall()
+    }
+    if "validation_json" not in columns:
+        conn.execute("ALTER TABLE recipe_candidates ADD COLUMN validation_json TEXT")
+    for column, definition in RECIPE_CANDIDATE_QUEUE_COLUMNS.items():
+        if column not in columns:
+            conn.execute(
+                f"ALTER TABLE recipe_candidates ADD COLUMN {column} {definition}"
+            )
+    for sql in RECIPE_CANDIDATES_QUEUE_INDEX_SQL:
+        conn.execute(sql)
 
 REFLEX_MEMORY_SCHEMA = "\n".join(
     [

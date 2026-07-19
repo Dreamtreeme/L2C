@@ -29,7 +29,10 @@ class VisibleResultCard(BaseModel):
 
     marker_id: int
     title: str
-    company: str = ""
+    company: str = Field(
+        "",
+        description="공고 카드에서 제목과 인접해 별도 표시된 회사명. 제목 괄호의 직무 분야는 회사명이 아님",
+    )
 
 
 class ResultCardSelection(BaseModel):
@@ -213,6 +216,8 @@ def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
         "비슷한 필터는 다시 선택하지 마십시오. 적합한 마커가 없으면 refinement_action을 none으로 하고 "
         "refinement_marker_id를 비우십시오. "
         "cards에는 공고 제목 자체에 붙은 마커 ID만 사용하고 회사명, 보상금, 배지, 버튼, 필터의 마커를 넣지 마십시오. "
+        "각 card의 company에는 같은 카드에서 제목과 인접해 별도로 표시된 회사명만 넣으십시오. "
+        "'Data Engineer(AI데이터플랫폼)'처럼 제목 괄호 안의 직무 분야나 조직명은 회사명으로 분리하지 마십시오. "
         "excluded_cards에 있는 제목과 회사의 공고는 이미 방문했으므로 cards에 다시 넣지 마십시오. "
         "검색 결과 탭이나 결과 요약에 전체 공고 개수가 명시되어 있으면 available_result_count에 넣고, 그 판단에 사용한 "
         "화면 문구를 count_evidence에 그대로 적으십시오. 페이지 번호, 알림, 필터 선택 개수는 결과 개수로 해석하지 마십시오. "

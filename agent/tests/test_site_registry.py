@@ -125,10 +125,74 @@ def test_all_site_manuals_define_reflex_boundaries():
 
     for entry in list_supported_sites():
         manual = load_site_profile(entry["slug"])["manual"]
-        assert manual["stable_controls"]
-        assert manual["variable_entities"]
         assert manual["reflex_policy"]["safe_actions"]
         assert manual["reflex_policy"]["unsafe_actions"]
+        assert "stable_controls" not in manual
+        assert "common_flow" not in manual
+
+
+def test_all_site_manuals_define_role_scoped_guidance():
+    from agent.sites import list_supported_sites, load_site_profile
+
+    for entry in list_supported_sites():
+        guidance = load_site_profile(entry["slug"])["manual"]["page_guidance"]
+        assert guidance["home"]["instructions"]
+        assert guidance["search"]["instructions"]
+        assert guidance["job_detail"]["instructions"]
+        assert guidance["job_detail"]["reading_targets"]
+
+
+def test_jobkorea_detail_role_uses_declared_url_signal():
+    from agent.runtime.site_context import infer_site_page_role, looks_like_job_detail_url
+
+    url = "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001"
+
+    assert looks_like_job_detail_url(url) is True
+    assert infer_site_page_role(url, []) == "job_detail"
+
+
+def test_unregistered_site_does_not_use_generic_job_url_heuristic():
+    from agent.runtime.site_context import infer_site_page_role
+
+    assert infer_site_page_role("https://example.com/job/123", ["추천 검색어"]) == ""
+
+
+def test_detail_context_does_not_require_a_detail_url_pattern():
+    from agent.runtime.site_context import is_job_detail_context
+
+    assert is_job_detail_context(
+        "https://www.rocketpunch.com/jobs",
+        page_role="side_panel_detail",
+    ) is True
+    assert is_job_detail_context(
+        "https://www.work24.go.kr/search",
+        marker_texts=["모집요강", "직무내용", "근무조건"],
+    ) is True
+
+
+def test_runtime_guidance_contains_only_current_site_and_role():
+    from agent.runtime.site_context import site_runtime_guidance
+
+    guidance = site_runtime_guidance(
+        "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001",
+        "job_detail",
+    )
+
+    assert "잡코리아 / job_detail" in guidance
+    assert "급여" in guidance
+    assert "미방문 카드 큐" not in guidance
+    assert "원티드" not in guidance
+
+
+def test_preprocessor_uses_registry_source_platform():
+    from agent.utils.preprocessor import Preprocessor
+
+    assert (
+        Preprocessor.parse_source_platform(
+            "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001"
+        )
+        == "JobKorea"
+    )
 
 
 def test_realtime_scraping_goal_uses_requested_site_profile():
@@ -247,10 +311,6 @@ def test_realtime_scraping_direct_search_url_encodes_keyword():
             "navigation_policy": {
                 "search_url_template": "https://example.com/search?query={query}&tab=position",
             },
-            "common_flow": [],
-            "stable_controls": [],
-            "variable_entities": [],
-            "ignore_elements": [],
             "collection_policy": {"required_fields": []},
             "reflex_policy": {"safe_actions": [], "unsafe_actions": []},
         },

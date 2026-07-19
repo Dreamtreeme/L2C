@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from agent.recipe.payload_sanitizer import strip_state_debug_fields
 from agent.recipe.sqlite_store import SQLiteStore
-from shared.db.reflex_schema import RECIPE_CANDIDATES_INDEX_SQL, RECIPE_CANDIDATES_TABLE_SQL
+from shared.db.reflex_schema import (
+    RECIPE_CANDIDATES_INDEX_SQL,
+    RECIPE_CANDIDATES_TABLE_SQL,
+    ensure_recipe_candidate_queue_schema,
+)
 
 
 class RecipeCandidateStore(SQLiteStore):
@@ -16,9 +20,7 @@ class RecipeCandidateStore(SQLiteStore):
             conn.execute(RECIPE_CANDIDATES_TABLE_SQL)
             for sql in RECIPE_CANDIDATES_INDEX_SQL:
                 conn.execute(sql)
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(recipe_candidates)").fetchall()}
-            if "validation_json" not in columns:
-                conn.execute("ALTER TABLE recipe_candidates ADD COLUMN validation_json TEXT")
+            ensure_recipe_candidate_queue_schema(conn)
 
     def commit_candidate(
         self,
@@ -93,10 +95,114 @@ class RecipeCandidateStore(SQLiteStore):
             result = conn.execute(
                 """
                 UPDATE recipe_candidates
-                SET status=?, validation_json=?, updated_at=?
+                SET status=?, validation_json=?, review_started_at=NULL,
+                    next_review_at=NULL, review_error='', updated_at=?
                 WHERE candidate_id=?
                 """,
                 (status, self.dump_json(validation or {}), now, candidate_id),
+            )
+            return result.rowcount > 0
+
+    def enqueue_review(self, candidate_id: str) -> bool:
+        """아직 검토되지 않은 후보를 영속 승격 대기열에 넣는다."""
+
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as conn:
+            result = conn.execute(
+                """
+                UPDATE recipe_candidates
+                SET status='pending_review', review_started_at=NULL,
+                    next_review_at=NULL, review_error='', updated_at=?
+                WHERE candidate_id=? AND status='pending_replay'
+                """,
+                (now, candidate_id),
+            )
+            return result.rowcount > 0
+
+    def recover_interrupted_reviews(self) -> int:
+        """이전 프로세스가 처리 중이던 후보를 다시 대기 상태로 돌린다."""
+
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as conn:
+            result = conn.execute(
+                """
+                UPDATE recipe_candidates
+                SET status='pending_review', review_started_at=NULL,
+                    next_review_at=NULL,
+                    review_error='review_worker_interrupted', updated_at=?
+                WHERE status='reviewing'
+                """,
+                (now,),
+            )
+            return result.rowcount
+
+    def claim_next_review(self) -> dict[str, Any] | None:
+        """가장 오래 대기한 후보 하나를 원자적으로 선점한다."""
+
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT candidate_id
+                FROM recipe_candidates
+                WHERE status='pending_review'
+                  AND (next_review_at IS NULL OR next_review_at <= ?)
+                ORDER BY created_at ASC, candidate_id ASC
+                LIMIT 1
+                """,
+                (now,),
+            ).fetchone()
+            if row is None:
+                return None
+            candidate_id = str(row["candidate_id"])
+            claimed = conn.execute(
+                """
+                UPDATE recipe_candidates
+                SET status='reviewing', review_started_at=?,
+                    review_attempts=review_attempts + 1,
+                    review_error='', updated_at=?
+                WHERE candidate_id=? AND status='pending_review'
+                """,
+                (now, now, candidate_id),
+            )
+            if claimed.rowcount != 1:
+                return None
+            claimed_row = conn.execute(
+                "SELECT * FROM recipe_candidates WHERE candidate_id=?",
+                (candidate_id,),
+            ).fetchone()
+        return self._row_to_item(claimed_row) if claimed_row else None
+
+    def defer_review(
+        self,
+        candidate_id: str,
+        error: str,
+        *,
+        retry_delay_sec: float,
+        terminal: bool = False,
+    ) -> bool:
+        """일시 오류는 재시도하고, 한도를 넘긴 오류는 별도 실패 상태로 남긴다."""
+
+        now_value = datetime.now()
+        next_review_at = (
+            None
+            if terminal
+            else (now_value + timedelta(seconds=max(0.0, retry_delay_sec))).isoformat(
+                timespec="seconds"
+            )
+        )
+        now = now_value.isoformat(timespec="seconds")
+        status = "review_failed" if terminal else "pending_review"
+        with self._conn() as conn:
+            result = conn.execute(
+                """
+                UPDATE recipe_candidates
+                SET status=?, review_started_at=NULL, next_review_at=?,
+                    review_error=?, updated_at=?
+                WHERE candidate_id=? AND status='reviewing'
+                """,
+                (status, next_review_at, str(error or "")[:1000], now, candidate_id),
             )
             return result.rowcount > 0
 
