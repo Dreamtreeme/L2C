@@ -3,7 +3,7 @@ title: "E2E 관측 환경"
 type: guide
 area: observability
 status: active
-updated: 2026-07-23
+updated: 2026-07-24
 tags:
   - l2c
   - docs/observability
@@ -29,6 +29,16 @@ VISION_RECIPE_VERSION=roi-v1
 ```
 
 입출력 숨김은 채용공고 OCR 원문이나 사용자 질문이 외부 trace에 노출되지 않게 하는 기본 권장값입니다. 추적이나 feedback 전송이 실패해도 실제 수집과 로컬 요약 저장은 계속됩니다.
+
+## 모델 가격표
+
+기본 가격표는 `config/model_pricing.json`입니다. 현재 사용하는 Gemini 모델의
+Standard 유료 단가만 기록하며, 출력 단가는 공개 답변과 내부 사고 토큰을 모두
+포함합니다. 공식 가격표를 다시 확인한 날짜와 원문 URL도 파일에 함께 보존합니다.
+
+모델을 바꾸거나 공급사가 단가를 변경하면 가격표를 먼저 갱신해야 합니다. 실행에
+사용된 모델 ID가 없으면 비용을 임의로 추정하지 않고 `unpriced_models`에 남깁니다.
+별도 가격표를 비교할 때만 `LLM_PRICING_FILE`로 경로를 재정의합니다.
 
 ## 실행
 

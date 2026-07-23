@@ -132,6 +132,19 @@ def test_llm_cost_uses_external_exact_model_pricing(tmp_path):
     assert result["unpriced_models"] == []
 
 
+def test_default_pricing_covers_runtime_gemini_models():
+    from pathlib import Path
+
+    from agent.application.llm_cost import load_model_pricing
+
+    prices, source = load_model_pricing()
+
+    assert Path(source).parts[-2:] == ("config", "model_pricing.json")
+    for model in ("gemini-3.6-flash", "gemini-3.5-flash-lite"):
+        assert prices[model]["input_usd_per_million"] > 0
+        assert prices[model]["output_usd_per_million"] > 0
+
+
 def test_chat_service_returns_run_contract_and_progress_events():
     from agent.application.chat_service import ChatService
     from agent.application.run_context import emit_run_event
