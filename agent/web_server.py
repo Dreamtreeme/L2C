@@ -3,7 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -72,12 +72,21 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-L2C-Operation"],
 )
 
-# 정적 파일 서빙용 디렉토리 생성 보장
+# React 빌드가 없을 때는 기존 단일 HTML 화면을 개발용 폴백으로 사용합니다.
 static_dir = Path(__file__).resolve().parent / "static"
+frontend_dist_dir = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+frontend_index_path = frontend_dist_dir / "index.html"
+frontend_assets_dir = frontend_dist_dir / "assets"
 static_dir.mkdir(parents=True, exist_ok=True)
 
-# 정적 파일 마운트
+# 기존 정적 화면과 React 빌드 자산을 서로 다른 경로로 제공합니다.
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+if frontend_assets_dir.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(frontend_assets_dir)),
+        name="frontend-assets",
+    )
 
 def _effective_chat_query(
     query: str,
@@ -117,7 +126,8 @@ def _effective_chat_query(
 
 @app.get("/")
 async def redirect_to_index():
-    from fastapi.responses import RedirectResponse
+    if frontend_index_path.is_file():
+        return FileResponse(frontend_index_path)
     return RedirectResponse(url="/static/index.html")
 
 @app.get("/api/jobs/{job_id}")
@@ -138,6 +148,7 @@ async def get_job_detail(job_id: int):
         "posted_at_text": job.get("posted_at_text"),
         "evidence_hash": job.get("evidence_hash"),
         "collected_at": job["created_at"],
+        "source_platform": job.get("source_platform"),
         "raw_text": job["raw_ocr_text"] or f"회사명: {job['company_name']}\n직무: {job['position']}\n기술스택: {job['tech_stack']}"
     }
 

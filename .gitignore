@@ -33,6 +33,12 @@ Thumbs.db
 # 캐시
 .cache/
 .pytest_cache/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # 단, 샘플은 커밋
 !data/samples/
