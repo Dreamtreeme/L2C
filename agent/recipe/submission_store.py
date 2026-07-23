@@ -63,6 +63,44 @@ class SubmissionStore(SQLiteStore):
             )
         return submission_id
 
+    def _row_to_item(self, row: Any) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = strip_state_debug_fields(
+            self.load_json(item.pop("payload_json", ""), {})
+        )
+        item["review"] = self.load_json(item.pop("review_json", ""), {})
+        return item
+
+    def get_submission(self, submission_id: str) -> dict[str, Any] | None:
+        """제출물 식별자로 단일 작업자 제출물을 조회한다."""
+
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM worker_submissions WHERE submission_id=?",
+                (submission_id,),
+            ).fetchone()
+        return self._row_to_item(row) if row else None
+
+    def get_run_attempt(
+        self,
+        run_id: str,
+        review_attempt: int | None = None,
+    ) -> dict[str, Any] | None:
+        """실행 ID와 검토 시도로 제출물을 조회한다.
+
+        검토 시도를 생략하면 같은 실행에서 가장 최근 제출물을 반환한다.
+        """
+
+        sql = "SELECT * FROM worker_submissions WHERE run_id=?"
+        params: list[Any] = [run_id]
+        if review_attempt is not None:
+            sql += " AND review_attempt=?"
+            params.append(review_attempt)
+        sql += " ORDER BY review_attempt DESC, updated_at DESC LIMIT 1"
+        with self._conn() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return self._row_to_item(row) if row else None
+
     def list_recent(self, limit: int = 20, decision: str | None = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM worker_submissions"
         params: list[Any] = []
@@ -73,10 +111,4 @@ class SubmissionStore(SQLiteStore):
         params.append(limit)
         with self._conn() as conn:
             rows = conn.execute(sql, params).fetchall()
-        out = []
-        for row in rows:
-            item = dict(row)
-            item["payload"] = strip_state_debug_fields(self.load_json(item.pop("payload_json", ""), {}))
-            item["review"] = self.load_json(item.pop("review_json", ""), {})
-            out.append(item)
-        return out
+        return [self._row_to_item(row) for row in rows]
