@@ -121,8 +121,6 @@ class SomEngine:
     def ensure_ocr_worker_ready(self):
         """재사용 OCR 작업자가 요청을 받을 수 있을 때까지 대기한다."""
 
-        if not get_settings().ocr.worker_reuse:
-            raise RuntimeError("OCR worker readiness requires SOM_OCR_WORKER_REUSE")
         return self._start_ocr_worker()
 
     def _read_ocr_worker_stdout(self, worker: subprocess.Popen, generation: int, output_queue: queue.Queue) -> None:
@@ -406,32 +404,6 @@ class SomEngine:
             raise last_error
         return []
 
-    def _run_paddle_ocr_once(self, image_path: Path) -> List[Dict[str, Any]]:
-        runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
-        ocr_python = self._resolve_ocr_python()
-        timeout = get_settings().ocr.oneshot_timeout_sec
-        try:
-            result = subprocess.run(
-                [str(ocr_python), str(runner_script), str(image_path)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-                env=self._ocr_worker_env(),
-                check=False,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("PaddleOCR one-shot runner timed out", timeout=f"{timeout:.1f}s")
-            return []
-        marker = "__OCR_JSON_START__"
-        if marker not in result.stdout:
-            if result.stderr:
-                logger.warning("PaddleOCR one-shot runner produced stderr", stderr=result.stderr.strip())
-            return []
-        payload = result.stdout.split(marker, 1)[-1].strip()
-        return json.loads(payload) if payload else []
-
     def _ensure_model_downloaded(self) -> None:
         if self.model_path.exists():
             return
@@ -508,15 +480,7 @@ class SomEngine:
             image_path = image
 
         try:
-            if get_settings().ocr.worker_reuse:
-                try:
-                    results = self._run_paddle_ocr_worker(image_path)
-                except Exception as exc:
-                    logger.warning("PaddleOCR worker failed; falling back to one-shot runner", error=str(exc))
-                    self._stop_ocr_worker()
-                    results = self._run_paddle_ocr_once(image_path)
-            else:
-                results = self._run_paddle_ocr_once(image_path)
+            results = self._run_paddle_ocr_worker(image_path)
             return self._normalize_paddleocr_results(results, scale=scale)
         finally:
             if temp_path is not None:
@@ -609,7 +573,7 @@ class SomEngine:
         self,
         img: Image.Image,
         final_elements: List[Dict],
-    ) -> Tuple[Image.Image, Dict[int, List[int]], Dict[int, List[int]]]:
+    ) -> Tuple[Image.Image, Dict[int, List[int]]]:
         marked_img = img.copy()
         draw = ImageDraw.Draw(marked_img)
 
@@ -618,14 +582,12 @@ class SomEngine:
         except OSError:
             font = ImageFont.load_default()
 
-        marker_coords: Dict[int, List[int]] = {}
         marker_bboxes: Dict[int, List[int]] = {}
 
         for marker_id, elem in enumerate(final_elements):
             bbox = elem["bbox"]
             xmin, ymin, xmax, ymax = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
 
-            marker_coords[marker_id] = [(xmin + xmax) // 2, (ymin + ymax) // 2]
             marker_bboxes[marker_id] = [xmin, ymin, xmax, ymax]
 
             draw.rectangle([xmin, ymin, xmax, ymax], outline=(255, 127, 80), width=2)
@@ -643,13 +605,13 @@ class SomEngine:
             draw.rectangle([tag_xmin, tag_ymin, tag_xmax, tag_ymax], fill=(0, 0, 0))
             draw.text((tag_xmin + 3, tag_ymin + 1), label_text, fill=(255, 255, 255), font=font)
 
-        return marked_img, marker_coords, marker_bboxes
+        return marked_img, marker_bboxes
 
     def process_image(
         self,
         image_path: Path,
         output_filename: str = "marked_screen.png",
-    ) -> Tuple[Path, Dict[int, List[int]], Dict[int, List[int]], List[Dict[str, Any]]]:
+    ) -> Tuple[Path, Dict[int, List[int]], List[Dict[str, Any]]]:
         if not image_path.exists():
             raise FileNotFoundError(f"Image not found at: {image_path}")
 
@@ -694,7 +656,7 @@ class SomEngine:
             )
 
         ocr_started = time.perf_counter()
-        text_boxes = self._filter_overlaps(self._run_paddle_ocr(ocr_image, scale=ocr_scale))
+        text_boxes = self._run_paddle_ocr(ocr_image, scale=ocr_scale)
         ocr_duration = time.perf_counter() - ocr_started
         yolo_started = time.perf_counter()
         icon_boxes = self._filter_overlaps(self._run_yolo(inference_img, yolo_scale))
@@ -708,7 +670,7 @@ class SomEngine:
             icon=len(icon_boxes),
             total=len(final_elements),
         )
-        marked_img, marker_coords, marker_bboxes = self._draw_markers(img, final_elements)
+        marked_img, marker_bboxes = self._draw_markers(img, final_elements)
 
         output_path = image_path.parent / output_filename
         if marked_img.mode != "RGB":
@@ -721,7 +683,7 @@ class SomEngine:
         logger.info(
             "Set-of-Marks image synthesized and saved successfully",
             output_path=str(output_path),
-            markers_count=len(marker_coords),
+            markers_count=len(marker_bboxes),
         )
         logger.info(
             "SoM analysis stages completed",
@@ -731,4 +693,4 @@ class SomEngine:
             text_markers=len(text_boxes),
             icon_markers=len(icon_boxes),
         )
-        return output_path, marker_coords, marker_bboxes, final_elements
+        return output_path, marker_bboxes, final_elements

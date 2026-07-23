@@ -130,11 +130,6 @@ def _box_from_polygon(polygon: Any) -> list[float]:
     return [min(xs), min(ys), max(xs), max(ys)]
 
 
-def extract_text_boxes(ocr: Any, image_path: str) -> list[dict]:
-    results = list(ocr.predict(image_path))
-    return extract_text_boxes_from_results(results)
-
-
 def extract_text_boxes_from_results(results: list) -> list[dict]:
     extracted = []
     for result in results:
@@ -249,21 +244,9 @@ def worker_main() -> None:
 
 
 def main() -> None:
-    if len(sys.argv) >= 2 and sys.argv[1] == "--worker":
-        worker_main()
-        return
-
-    if len(sys.argv) < 2:
-        print("__OCR_JSON_START__\n[]")
-        return
-
-    try:
-        ocr = build_ocr()
-        extracted = extract_text_boxes(ocr, sys.argv[1])
-        print(f"__OCR_JSON_START__\n{json.dumps(extracted, ensure_ascii=False)}")
-    except Exception as exc:
-        print("__OCR_JSON_START__\n[]")
-        sys.stderr.write(str(exc))
+    if len(sys.argv) != 2 or sys.argv[1] != "--worker":
+        raise SystemExit("paddle_ocr_runner.py는 --worker 모드로만 실행할 수 있습니다.")
+    worker_main()
 
 
 if __name__ == "__main__":

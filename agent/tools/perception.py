@@ -1,7 +1,6 @@
 import datetime
 import hashlib
 import math
-import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -396,7 +395,6 @@ class PerceptionEngine:
             return
         self._analysis_cache[key] = {
             "markers": [dict(marker) for marker in analysis.get("markers", [])],
-            "original_image": analysis.get("original_image", ""),
             "marked_image": analysis.get("marked_image", ""),
             "content_top": int(analysis.get("content_top", 0) or 0),
         }
@@ -479,19 +477,8 @@ class PerceptionEngine:
         return best_y
 
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
-        """
-        Set-of-Marks (SoM) 기반의 UI 분석 엔진입니다.
-        OmniParser YOLO 및 PaddleOCR로 마킹 이미지를 생성한 뒤 VLM(Gemini/Ollama)을 호출하여
-        각 마커 ID의 서비스 상 용도를 캡셔닝하고 물리 좌표와 맵핑하여 반환합니다.
-        
-        Args:
-            image_path: 원본 스크린샷 이미지 경로
-            
-        Returns:
-            UI 마커의 ID, 텍스트, 바운딩 박스(bbox) 목록을 담은 딕셔너리
-        """
-        import json
-        
+        """OmniParser와 PaddleOCR 결과를 물리 좌표가 있는 SoM 마커로 변환한다."""
+
         if not image_path.exists():
             logger.error("Image file not found for UI analysis", image_path=str(image_path))
             raise FileNotFoundError(f"Image not found: {image_path}")
@@ -502,7 +489,6 @@ class PerceptionEngine:
             logger.info("UI analysis cache hit", markers_count=len(cached.get("markers", [])))
             return {
                 "markers": [dict(marker) for marker in cached.get("markers", [])],
-                "original_image": str(image_path),
                 "marked_image": cached.get("marked_image", ""),
                 "content_top": int(cached.get("content_top", 0) or 0),
                 "analysis_mode": str(cached.get("analysis_mode") or "full"),
@@ -512,7 +498,7 @@ class PerceptionEngine:
         som_image_path, crop_top = self._prepare_som_image(image_path)
         try:
             marked_filename = f"marked_{image_path.name}"
-            marked_path, marker_coords, marker_bboxes, final_elements = self.som_engine.process_image(
+            marked_path, marker_bboxes, final_elements = self.som_engine.process_image(
                 som_image_path,
                 output_filename=marked_filename,
             )
@@ -520,12 +506,10 @@ class PerceptionEngine:
                 for bbox in marker_bboxes.values():
                     bbox[1] += crop_top
                     bbox[3] += crop_top
-                for coords in marker_coords.values():
-                    coords[1] += crop_top
                 logger.info("Applied browser chrome crop for SoM", crop_top=crop_top)
         except Exception as som_err:
             logger.error("Local SoM processing failed", error=str(som_err))
-            return {"markers": [], "original_image": str(image_path)}
+            return {"markers": [], "marked_image": ""}
         finally:
             if som_image_path != image_path:
                 try:
@@ -533,160 +517,16 @@ class PerceptionEngine:
                 except Exception:
                     pass
 
-        skip_vlm_caption = get_settings().vision.skip_vlm_caption
-        elements = []
-
-        if skip_vlm_caption:
-            logger.info("Bypassing VLM captioning node as SKIP_VLM_CAPTION is set to true.")
-        else:
-            # 2. 마킹된 이미지 로드 및 리사이징 (JPEG 압축 및 VLM 최적화)
-            try:
-                from agent.utils.image_utils import image_to_base64_jpeg
-                # fast=False: LANCZOS 리사이징 + quality=80 으로 화질 우선 (캡셔닝 정확도)
-                base64_image = image_to_base64_jpeg(marked_path, max_dim=1024, quality=80, fast=False)
-            except Exception as img_err:
-                logger.error("Failed to load and resize marked image", error=str(img_err))
-                return {"markers": [], "original_image": str(image_path)}
-
-            # 3. VLM 프롬프트 작성 (ID 매핑 요청 - 토큰 길이 및 속도 최적화 버전)
-            prompt = """
-Analyze this UI screenshot of a Korean website, which has numbered markers on it (like [0], [1], [2], ...).
-Describe ONLY the most important clickable/interactable elements (e.g. GNB menu items, major buttons, input fields, search results, tabs).
-
-Optimization rules:
-1. Focus ONLY on interactive/clickable elements. Ignore background static texts, tiny decorations, or unidentifiable symbols.
-2. Keep descriptions extremely short and concise (e.g., 2-4 words maximum, like "검색창", "구글 로그인", "데이터 분석가 채용").
-3. Limit the response to at most 35-40 of the most significant elements to keep it compact.
-
-You MUST return a single JSON object with the key "elements".
-Each object in the "elements" array must have:
-- "id": integer corresponding to the marker number in the image
-- "text": short description of the element (e.g. "구글 로그인")
-
-Example output format:
-{
-  "elements": [
-    {"id": 0, "text": "검색창"},
-    {"id": 1, "text": "회원가입"}
-  ]
-}
-"""
-
-            configured_key = get_settings().models.gemini_api_key
-            api_key = configured_key.get_secret_value() if configured_key else ""
-
-            # 4. Gemini Flash 호출 시도 (langchain_google_genai — llm_engine.py와 동일한 클라이언트)
-            if api_key:
-                try:
-                    from agent.application.model_clients import get_google_chat_model
-                    from agent.application.model_policy import lightweight_model_name
-                    from langchain_core.messages import HumanMessage
-                    model_name = lightweight_model_name("VISION_CAPTION_MODEL")
-                    logger.info("Captioning UI elements via Gemini SoM...", model=model_name)
-                    llm = get_google_chat_model(model_name, temperature=0.1)
-                    message = HumanMessage(content=[
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                    ])
-                    from agent.application.run_context import invoke_with_metrics
-
-                    response = invoke_with_metrics(
-                        llm,
-                        [message],
-                        "vision_caption",
-                        stream=True,
-                    )
-                    output = response.content
-                    if isinstance(output, list):
-                        output = "\n".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in output)
-                    # 마크다운 펜스가 있으면 제거
-                    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", output, re.DOTALL)
-                    json_str = m.group(1).strip() if m else output.strip()
-                    data = json.loads(json_str)
-                    elements = data.get("elements", [])
-                    logger.info("Gemini SoM captioning completed successfully", elements_count=len(elements))
-                except Exception as gemini_err:
-                    logger.warning("Gemini SoM captioning failed, falling back to local Ollama", error=str(gemini_err))
-
-            # 5. 로컬 Ollama (Qwen2.5-VL) Fallback 호출 시도 (ollama 클라이언트 — llm_engine.py와 동일)
-            if not elements:
-                logger.info("Captioning UI elements via local Ollama SoM (Fallback)...")
-                try:
-                    import ollama as _ollama
-                    from shared.config import OLLAMA_HOST
-                    model_name = get_settings().models.ollama_model
-                    client = _ollama.Client(host=OLLAMA_HOST)
-                    from agent.application.run_context import observe_external_llm_call
-
-                    with observe_external_llm_call(
-                        component="vision_caption",
-                        provider="ollama",
-                        model=model_name,
-                    ) as observation:
-                        resp = client.generate(
-                            model=model_name,
-                            prompt=prompt,
-                            images=[base64_image],
-                            stream=False,
-                            options={"num_ctx": 4096, "num_predict": 1024, "temperature": 0.1}
-                        )
-                        usage_source = (
-                            resp
-                            if isinstance(resp, dict)
-                            else {
-                                "prompt_eval_count": getattr(resp, "prompt_eval_count", 0),
-                                "eval_count": getattr(resp, "eval_count", 0),
-                            }
-                        )
-                        observation.set_usage(
-                            {
-                                "input_tokens": usage_source.get("prompt_eval_count", 0),
-                                "output_tokens": usage_source.get("eval_count", 0),
-                            }
-                        )
-                    # ollama 버전에 따라 dict 또는 GenerateResponse 객체로 반환됨
-                    result_text = (resp.get("response", "") if isinstance(resp, dict) else getattr(resp, "response", "")) or ""
-                    thinking_text = (resp.get("thinking", "") if isinstance(resp, dict) else getattr(resp, "thinking", "")) or ""
-                    parse_target = result_text.strip() or thinking_text.strip()
-
-                    if parse_target:
-                        m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", parse_target, re.DOTALL)
-                        json_str = m.group(1).strip() if m else parse_target.strip()
-                        try:
-                            parsed = json.loads(json_str)
-                            if isinstance(parsed, dict) and "elements" in parsed:
-                                elements = parsed["elements"]
-                            elif isinstance(parsed, list):
-                                elements = parsed
-                        except Exception:
-                            pass
-                    logger.info("Ollama SoM captioning completed", elements_count=len(elements))
-                except Exception as ollama_err:
-                    logger.error("Failed to caption UI elements via Ollama", error=str(ollama_err))
-
-        # 6. 매핑 정보 병합 및 안전한 Fallback 매핑 (VLM 누락 마커 처리)
-        id_to_text = {}
-        if skip_vlm_caption:
-            for marker_id, elem in enumerate(final_elements):
-                local_text = elem.get("text", "")
-                elem_type = elem.get("type", "element")
-                if elem_type == "text" and local_text:
-                    id_to_text[marker_id] = local_text
-                else:
-                    id_to_text[marker_id] = f"상호작용 가능한 요소 ({elem_type})"
-        else:
-            if elements:
-                for elem in elements:
-                    if isinstance(elem, dict) and "id" in elem:
-                        try:
-                            id_to_text[int(elem["id"])] = elem.get("text", "상호작용 가능한 요소")
-                        except ValueError:
-                            continue
-
         markers = []
         for marker_id, bbox in marker_bboxes.items():
-            text = id_to_text.get(marker_id, "상호작용 가능한 요소 (미식별)")
             elem = final_elements[marker_id] if marker_id < len(final_elements) else {}
+            elem_type = elem.get("type", "element")
+            local_text = str(elem.get("text") or "")
+            text = (
+                local_text
+                if elem_type == "text" and local_text
+                else f"상호작용 가능한 요소 ({elem_type})"
+            )
             marker = {
                 "id": marker_id,
                 "text": text,
@@ -700,7 +540,6 @@ Example output format:
         logger.info("UI analysis pipeline complete", final_markers_count=len(markers))
         analysis = {
             "markers": markers,
-            "original_image": str(image_path),
             "marked_image": str(marked_path),
             "content_top": crop_top,
             "analysis_mode": "full",

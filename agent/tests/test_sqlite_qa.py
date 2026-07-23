@@ -787,7 +787,6 @@ def test_analyze_ui_returns_cached_result_without_som(tmp_path):
     key = engine._image_signature(image_path)
     engine._analysis_cache[key] = {
         "markers": [{"id": 7, "text": "검색", "bbox": [10, 20, 30, 40]}],
-        "original_image": str(image_path),
         "marked_image": "marked.png",
     }
 

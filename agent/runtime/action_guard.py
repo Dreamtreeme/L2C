@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
 from agent.config import get_settings
@@ -24,17 +25,26 @@ def check_reasoning_screen_stale(state: dict[str, Any], perception: Any) -> dict
         return {"checked": False, "stale": False, "reason": "previous_phash_missing"}
 
     filename = f"pre_action_{int(time.time() * 1000)}.png"
+    image_path: Path | None = None
     try:
-        image_path = perception.capture_screen(
-            filename=filename,
-            initial_wait_sec=0,
-            wait_for_stable=False,
+        image_path = Path(
+            perception.capture_screen(
+                filename=filename,
+                initial_wait_sec=0,
+                wait_for_stable=False,
+            )
         )
         current_phash = perceptual_hash(image_path)
         distance = hamming_distance(previous_phash, current_phash)
     except Exception as exc:
         logger.debug("Reasoning screen guard skipped", error=str(exc))
         return {"checked": False, "stale": False, "reason": "capture_failed"}
+    finally:
+        if image_path is not None and image_path.name == filename:
+            try:
+                image_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.debug("Reasoning screen guard temporary capture cleanup failed", error=str(exc))
 
     max_distance = get_settings().vision.reasoning_stale_phash_max_distance
     stale = distance is not None and distance > max_distance
@@ -44,7 +54,6 @@ def check_reasoning_screen_stale(state: dict[str, Any], perception: Any) -> dict
         "reason": "screen_changed_during_reasoning" if stale else "screen_unchanged",
         "distance": distance,
         "max_distance": max_distance,
-        "image_path": str(image_path),
     }
     logger.info("Reasoning screen guard completed", **result)
     return result

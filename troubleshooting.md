@@ -148,7 +148,7 @@ Windows에서는 `paddle`을 먼저 import하면 `torch`가 `shm.dll` 로딩 중
 
 ---
 
-## 8. VLM 캡셔닝 단계 제거 및 통합 최적화 (SKIP_VLM_CAPTION)
+## 8. VLM 캡셔닝 단계 제거
 
 ### [현상]
 * 로컬 탐지를 완료했으나, 매 루프마다 생성한 마킹 이미지를 VLM(Gemini/Ollama)에 전달해 텍스트 설명을 적는 **VLM 캡셔닝 단계(Perception Node의 API 호출)**에서 매번 **6~9초의 큰 지연시간**이 고정 발생하여 전체 시나리오 지연의 주원인으로 나타남.
@@ -156,13 +156,14 @@ Windows에서는 `paddle`을 먼저 import하면 `torch`가 `shm.dll` 로딩 중
 ### [사용자 지시 및 검증 결과]
 * **요청**: "이젠 OCR 분석시간보다 다른 병목 시간을 찾아 해결해 봐라. VLM 단계 호출 횟수를 축소해 볼 것."
 * **해결 조치**:
-  1. Gemini 3.5 Flash는 비전 능력이 탁월하므로 굳이 텍스트 사전 설명이 필요 없음을 간파.
-  2. `SKIP_VLM_CAPTION=true` 환경변수 옵션을 추가하여 **VLM 캡셔닝 단계를 완전히 우회(Bypass)** 처리함.
-  3. PaddleOCR이 감지한 텍스트 좌표와 OmniParser YOLO의 탐지 좌표를 직접 결합하여 최소한의 텍스트 설명 컨텍스트를 perception 레벨에서 자율 매핑함.
+  1. Gemini 화면 판단에는 별도의 마커 설명 API 호출이 필요하지 않음을 확인했다.
+  2. 초기에는 `SKIP_VLM_CAPTION=true`로 기존 캡셔닝을 우회했다.
+  3. 우회 경로가 기본 동작으로 안정화된 뒤 설정 분기, Gemini/Ollama 캡셔닝 구현과 전용 벤치마크를 삭제했다.
+  4. PaddleOCR 텍스트와 OmniParser 아이콘 좌표를 직접 결합해 마커를 만든다.
 * **결과**: Perception Node 소요 지연 시간이 **7.12초 ➡️ 평균 1.31초로 약 81.7% 급감**함.
 
 ### [관련 참조 리소스]
-* **캡셔닝 Bypass 분기 구현체**: [perception.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/perception.py)
+* **로컬 마커 매핑 구현체**: [perception.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/perception.py)
 
 ---
 
@@ -256,7 +257,7 @@ Phase 3 이후 성능 최적화를 위해 도구와 LLM 클라이언트를 모�
 
 ### [시도한 방향]
 1. **성능 최적화**
-   - `SKIP_VLM_CAPTION=true`, WaitStable 대기 단축, OCR 입력 리사이즈로 perception 병목을 줄였다.
+   - VLM 캡셔닝 경로 제거, WaitStable 대기 단축, OCR 입력 리사이즈로 perception 병목을 줄였다.
    - 이후 병목은 주로 reasoning 호출 시간과 반복 판단 비용으로 이동했다.
 
 2. **저수준 Reflex Recipe**
@@ -550,13 +551,14 @@ cu126은 시작 시간이 0.054초 짧고 p50은 같았지만, cu118보다 p95�
 ### [남긴 해결책]
 
 - 운영 `.venv`는 검증된 PaddlePaddle GPU 3.0.0 cu118 조합을 사용한다.
-- `venv/paddle3`는 cu126 비교를 재현할 수 있는 검증 환경으로 남긴다.
+- 당시 `venv/paddle3`를 cu126 비교 재현용으로 남겼지만, Python 3.13 런타임 전환 후에는 측정 결과만 보존하고 구 가상환경은 제거했다.
 - `requirements.txt`에 `paddlepaddle-gpu==3.0.0`을 고정했다.
 - OCR worker 시작 시 설치 버전이 3.0.0인지 검사해 오래된 환경을 즉시 실패시킨다.
 - `SOM_OCR_MAX_DIM` 기본값을 `1152`로 낮췄다.
 - GPU와 IR 끔을 기본 경로로 유지한다.
 - OCR worker는 한 번 시작하면 작업 종료까지 재사용하며 요청 수 기준 재시작을 하지 않는다.
 - 20초 timeout과 실패 시 재시작은 실제 hang/crash 복구용으로만 유지한다.
+- 재시도까지 실패하면 같은 요청을 일회성 OCR 프로세스로 다시 실행하지 않는다.
 - worker stderr를 버리지 않고 별도 reader thread에서 수집한다.
 - 요청별 단계, 추론/후처리/직렬화 시간, worker pid와 요청 번호를 로그에 남긴다.
 

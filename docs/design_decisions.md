@@ -31,7 +31,7 @@ LLM에게 절대 좌표를 직접 예측하게 하지 않고, 로컬 비전 엔�
 
 현재 SoM 텍스트 감지는 분리된 `.venv-ocr`에서 PaddleOCR 3.7.0과 PaddlePaddle GPU 3.3.1의 `predict()` 계약을 사용합니다. 입력 이미지는 기본적으로 긴 변 1152px 이하로 줄인 뒤 OCR에 넣고, 감지 좌표는 원본 스크린샷 기준으로 복원합니다. 정확한 Python, CUDA, cuDNN 조합과 후보별 검증 결과는 [런타임 호환 기준](runtime_compatibility.md)을 단일 기준으로 사용합니다.
 
-PaddleOCR은 별도 subprocess를 작업 종료까지 재사용합니다. 요청 수 기준 재시작은 구형 런타임에서 발생한 지연을 worker 누적 상태 문제로 오인한 조치였으므로 제거했습니다. 요청 timeout과 1회 재시도는 성능 최적화가 아니라 predictor crash나 실제 hang에서 상위 작업이 무기한 멈추지 않도록 하는 복구 경계입니다. OCR worker와 호환성 검사기는 PaddlePaddle 3.3.1, PaddleOCR 3.7.0과 CUDA 연산 가능 여부를 시작 시 확인합니다.
+PaddleOCR은 별도 subprocess를 작업 종료까지 재사용합니다. 요청 수 기준 재시작은 구형 런타임에서 발생한 지연을 worker 누적 상태 문제로 오인한 조치였으므로 제거했습니다. 요청 timeout과 1회 재시도는 성능 최적화가 아니라 predictor crash나 실제 hang에서 상위 작업이 무기한 멈추지 않도록 하는 복구 경계입니다. 재시도까지 실패하면 별도의 일회성 OCR 프로세스를 다시 띄우지 않고 호출자에게 실패를 반환합니다. OCR worker와 호환성 검사기는 PaddlePaddle 3.3.1, PaddleOCR 3.7.0과 CUDA 연산 가능 여부를 시작 시 확인합니다.
 
 ## 4. Lazy Initialization
 
@@ -39,11 +39,11 @@ PaddleOCR은 별도 subprocess를 작업 종료까지 재사용합니다. 요청
 
 이렇게 분리하면 SQLite QA 서버나 테스트가 단순 import만으로 GUI/모델 환경에 묶이지 않습니다.
 
-## 5. VLM Caption Bypass
+## 5. 로컬 마커 설명
 
-`SKIP_VLM_CAPTION=true` 설정에서는 마커별 설명을 VLM으로 다시 캡셔닝하지 않고, 로컬 OCR 텍스트와 아이콘 타입만 reasoning context에 전달합니다.
+마커별 설명을 위한 별도 VLM 호출은 사용하지 않습니다. 로컬 OCR 텍스트와 아이콘 타입을 reasoning context에 전달하고, 텍스트가 없는 아이콘의 의미는 reasoning 단계가 현재 화면 이미지에서 판단합니다.
 
-이 경로는 perception 비용과 API 호출 수를 줄이는 대신, 텍스트가 없는 아이콘의 의미 추론은 reasoning 단계의 이미지 입력에 더 의존합니다.
+과거에는 `SKIP_VLM_CAPTION` 분기로 기존 VLM 캡셔닝을 우회했지만, 항상 우회하는 경로가 안정화된 뒤 설정과 비활성 구현을 제거했습니다.
 
 ## 6. Reflex Recipe 방향
 
@@ -99,7 +99,7 @@ Gemini 클라이언트는 모델명, temperature, 구조화 출력 스키마별�
 
 ## 13. 지휘자와 경량 모델 분리
 
-복잡한 조사 계획, 화면 행동 판단, worker 결과 검토와 레시피 Critic은 `gemini-3.6-flash`를 사용합니다. 상세 OCR 구조화, 검색 의도 추출, 결과 카드 후보 선택, UI 캡션과 요약·정규화는 `gemini-3.5-flash-lite`를 사용합니다. 역할별 기본값은 `agent/application/model_policy.py` 한 곳에서 관리하고 `COMMANDER_MODEL`, `VISION_LIGHTWEIGHT_MODEL`로 교체할 수 있습니다.
+복잡한 조사 계획, 화면 행동 판단, worker 결과 검토와 레시피 Critic은 `gemini-3.6-flash`를 사용합니다. 상세 OCR 구조화, 검색 의도 추출, 결과 카드 후보 선택과 요약·정규화는 `gemini-3.5-flash-lite`를 사용합니다. 역할별 기본값은 `agent/application/model_policy.py` 한 곳에서 관리하고 `COMMANDER_MODEL`, `VISION_LIGHTWEIGHT_MODEL`로 교체할 수 있습니다.
 
 선택 근거는 Google이 공개한 2026년 7월 평가에서 3.6 Flash가 OSWorld-Verified 83.0%, CharXiv 85.2%를 기록해 비교 모델보다 컴퓨터 조작과 복잡한 화면 정보 추론에서 우위를 보였고, 3.5 Flash-Lite는 문서 추출·구조화 작업을 주요 용도로 제시하면서 초당 350 출력 토큰의 처리량과 낮은 단가를 제공한 점입니다. 이 수치는 공급사 평가이므로 L2C의 실제 채용 사이트 완료율을 보장하지 않으며, 모델 교체 효과는 동일 E2E의 완료율, 잘못된 도구 선택, 구조화 품질, 실행시간과 토큰 비용으로 별도 검증합니다.
 

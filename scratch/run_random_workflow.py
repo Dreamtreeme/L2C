@@ -56,8 +56,6 @@ def main():
         "reflex_validation_status": "",
     }
     
-    os.environ["SKIP_VLM_CAPTION"] = "true"
-    
     logger.info("--- RANDOM WORKFLOW START ---", goal=initial_state["goal"])
     
     step_logs = []

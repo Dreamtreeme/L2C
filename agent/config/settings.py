@@ -74,7 +74,6 @@ class ModelSettings(SectionSettings):
     jd_normalization_model: str | None = Field(None, validation_alias="VISION_JD_NORMALIZATION_MODEL")
     worker_summary_model: str | None = Field(None, validation_alias="VISION_WORKER_SUMMARY_MODEL")
     worker_review_model: str | None = Field(None, validation_alias="VISION_WORKER_REVIEW_MODEL")
-    caption_model: str | None = Field(None, validation_alias="VISION_CAPTION_MODEL")
     search_intent_model: str | None = Field(None, validation_alias="VISION_SEARCH_INTENT_MODEL")
     result_card_selector_model: str | None = Field(
         None,
@@ -121,7 +120,6 @@ class ModelSettings(SectionSettings):
             "VISION_JD_NORMALIZATION_MODEL": "jd_normalization_model",
             "VISION_WORKER_SUMMARY_MODEL": "worker_summary_model",
             "VISION_WORKER_REVIEW_MODEL": "worker_review_model",
-            "VISION_CAPTION_MODEL": "caption_model",
             "VISION_SEARCH_INTENT_MODEL": "search_intent_model",
             "VISION_RESULT_CARD_SELECTOR_MODEL": "result_card_selector_model",
             "VISION_RECIPE_CRITIC_MODEL": "recipe_critic_model",
@@ -224,7 +222,6 @@ class VisionSettings(SectionSettings):
     ui_analysis_cache_limit: int = Field(8, ge=0, le=128, validation_alias="VISION_UI_ANALYSIS_CACHE_LIMIT")
     page_content_top_px: str = Field("auto", validation_alias="VISION_PAGE_CONTENT_TOP_PX")
     som_crop_top: str = Field("auto", validation_alias="VISION_SOM_CROP_TOP")
-    skip_vlm_caption: bool = Field(True, validation_alias="SKIP_VLM_CAPTION")
     capture_initial_wait_sec: float = Field(0.16, ge=0, le=10, validation_alias="VISION_CAPTURE_INITIAL_WAIT_SEC")
     page_content_bottom_ignore_px: int = Field(80, ge=0, le=2000, validation_alias="VISION_PAGE_CONTENT_BOTTOM_IGNORE_PX")
     page_quality_sample_width: int = Field(240, ge=32, le=4096, validation_alias="VISION_PAGE_QUALITY_SAMPLE_WIDTH")
@@ -265,7 +262,6 @@ class OcrSettings(SectionSettings):
     use_gpu: bool | None = Field(None, validation_alias="PADDLEOCR_USE_GPU")
     cuda_bin_dir: Path | None = Field(None, validation_alias="PADDLE_CUDA_BIN_DIR")
     cudnn_bin_dir: Path | None = Field(None, validation_alias="PADDLE_CUDNN_BIN_DIR")
-    worker_reuse: bool = Field(True, validation_alias="SOM_OCR_WORKER_REUSE")
     worker_start_timeout_sec: float = Field(
         45.0,
         ge=1,
@@ -277,12 +273,6 @@ class OcrSettings(SectionSettings):
         ge=1,
         le=300,
         validation_alias="SOM_OCR_REQUEST_TIMEOUT_SEC",
-    )
-    oneshot_timeout_sec: float = Field(
-        60.0,
-        ge=1,
-        le=600,
-        validation_alias="SOM_OCR_ONESHOT_TIMEOUT_SEC",
     )
     worker_max_attempts: int = Field(
         2,

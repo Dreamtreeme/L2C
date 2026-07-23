@@ -412,17 +412,41 @@ def test_som_engine_removes_icon_containers_that_duplicate_ocr_text():
     assert filtered == icon_boxes[1:]
 
 
-def test_som_engine_ensure_ocr_worker_ready_uses_reusable_worker(monkeypatch):
+def test_som_engine_ensure_ocr_worker_ready_starts_reusable_worker(monkeypatch):
     from agent.tools.som_engine import SomEngine
 
     engine = object.__new__(SomEngine)
     worker = object()
     started = []
-    monkeypatch.setenv("SOM_OCR_WORKER_REUSE", "true")
     monkeypatch.setattr(engine, "_start_ocr_worker", lambda: started.append(True) or worker)
 
     assert engine.ensure_ocr_worker_ready() is worker
     assert started == [True]
+
+
+def test_som_engine_propagates_worker_failure_without_oneshot_fallback(monkeypatch, tmp_path):
+    from agent.tools.som_engine import SomEngine
+
+    engine = object.__new__(SomEngine)
+    image_path = tmp_path / "screen.png"
+    image_path.touch()
+    calls = []
+
+    def fail_worker(path):
+        calls.append(path)
+        raise RuntimeError("worker failed")
+
+    monkeypatch.setattr(engine, "_run_paddle_ocr_worker", fail_worker)
+
+    try:
+        engine._run_paddle_ocr(image_path)
+    except RuntimeError as exc:
+        assert str(exc) == "worker failed"
+    else:
+        raise AssertionError("OCR 작업자 실패를 일회성 프로세스로 숨기면 안 됩니다.")
+
+    assert calls == [image_path]
+    assert not hasattr(SomEngine, "_run_paddle_ocr_once")
 
 
 def test_som_engine_resolves_ocr_python_from_separate_environment(monkeypatch, tmp_path):
@@ -477,7 +501,7 @@ def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):
     monkeypatch.setattr(engine, "_run_paddle_ocr", fake_ocr)
     monkeypatch.setattr(engine, "_run_yolo", fake_yolo)
 
-    _marked, _coords, bboxes, elements = engine.process_image(image_path, output_filename="marked.jpg")
+    _marked, bboxes, elements = engine.process_image(image_path, output_filename="marked.jpg")
 
     assert seen["ocr_is_image"] is True
     assert seen["ocr_scale"] == 1280 / 3200

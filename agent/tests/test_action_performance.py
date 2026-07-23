@@ -1251,19 +1251,19 @@ def test_reasoning_screen_guard_detects_changed_screen(tmp_path, monkeypatch):
     from agent.vision.screen_signature import perceptual_hash
 
     before = tmp_path / "before.png"
-    after = tmp_path / "after.png"
     before_image = Image.new("RGB", (256, 256), "white")
     ImageDraw.Draw(before_image).rectangle([0, 0, 96, 256], fill="black")
     before_image.save(before)
     after_image = Image.new("RGB", (256, 256), "white")
     ImageDraw.Draw(after_image).ellipse([100, 20, 240, 160], fill="black")
-    after_image.save(after)
 
     class FakePerception:
         def capture_screen(self, **kwargs):
             assert kwargs["initial_wait_sec"] == 0
             assert kwargs["wait_for_stable"] is False
-            return after
+            temporary = tmp_path / kwargs["filename"]
+            after_image.save(temporary)
+            return temporary
 
     monkeypatch.setenv("VISION_REASONING_STALE_PHASH_MAX_DISTANCE", "10")
     result = check_reasoning_screen_stale(
@@ -1275,6 +1275,7 @@ def test_reasoning_screen_guard_detects_changed_screen(tmp_path, monkeypatch):
     assert result["stale"] is True
     assert result["reason"] == "screen_changed_during_reasoning"
     assert result["distance"] > result["max_distance"]
+    assert not list(tmp_path.glob("pre_action_*.png"))
 
 
 def test_open_browser_navigates_bound_window_instead_of_opening_another(monkeypatch):

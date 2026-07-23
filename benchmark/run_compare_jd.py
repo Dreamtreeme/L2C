@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -67,7 +66,6 @@ def _run_vision(target_url: str) -> tuple[dict[str, Any], str, float]:
         "구조화된 JSON으로 반환하세요."
     )
     try:
-        os.environ["SKIP_VLM_CAPTION"] = "true"
         app = build_graph()
         final_state: dict[str, Any] = {}
         for output in app.stream(create_worker_state(goal), {"recursion_limit": 100}):
