@@ -7,7 +7,12 @@ import {
   ScanSearch,
 } from "lucide-react";
 
-import { PHASE_LABELS, relativeDate, STATUS_LABELS } from "../lib/format";
+import {
+  collapseInvestigationRuns,
+  PHASE_LABELS,
+  relativeDate,
+  STATUS_LABELS,
+} from "../lib/format";
 import type { RunRecord } from "../types";
 
 interface AppSidebarProps {
@@ -31,6 +36,8 @@ export function AppSidebar({
   onNewConversation,
   onOpenOperations,
 }: AppSidebarProps) {
+  const investigations = collapseInvestigationRuns(recentRuns);
+
   return (
     <>
       <button
@@ -90,10 +97,10 @@ export function AppSidebar({
             최근 실행
           </div>
           <div className="recent-run-list">
-            {recentRuns.length === 0 ? (
+            {investigations.length === 0 ? (
               <p className="sidebar-empty">실행 기록이 없습니다.</p>
             ) : (
-              recentRuns.slice(0, 8).map((run) => (
+              investigations.slice(0, 8).map((run) => (
                 <div
                   className={`recent-run ${
                     run.run_id === activeRunId ? "is-active" : ""

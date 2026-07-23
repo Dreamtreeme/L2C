@@ -1,4 +1,4 @@
-import type { RunPhase, RunStatus } from "../types";
+import type { RunPhase, RunRecord, RunStatus } from "../types";
 
 export const PHASE_LABELS: Record<RunPhase, string> = {
   received: "요청 접수",
@@ -96,6 +96,33 @@ export function relativeDate(value?: string): string {
 export function extractCitationIds(text: string): number[] {
   const matches = text.matchAll(/\[job_id:(\d+)\]/g);
   return [...new Set(Array.from(matches, (match) => Number(match[1])))];
+}
+
+export function collapseInvestigationRuns(runs: RunRecord[]): RunRecord[] {
+  const grouped = new Map<string, RunRecord>();
+
+  for (const run of runs) {
+    const investigationId =
+      typeof run.result?.investigation_id === "string"
+        ? run.result.investigation_id
+        : "";
+    const key = investigationId || run.run_id;
+    const latest = grouped.get(key);
+
+    if (!latest) {
+      grouped.set(key, { ...run });
+      continue;
+    }
+
+    grouped.set(key, {
+      ...latest,
+      query: run.query || latest.query,
+      user_query: run.user_query || latest.user_query,
+      created_at: run.created_at || latest.created_at,
+    });
+  }
+
+  return Array.from(grouped.values());
 }
 
 export function hostLabel(url: string): string {
