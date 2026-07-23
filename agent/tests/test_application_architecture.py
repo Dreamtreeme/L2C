@@ -49,6 +49,17 @@ def test_investigation_prompts_include_runtime_date_and_evidence_rules():
     assert "트렌드는 현재 기간과 동일 길이의 이전 비교 기간" in evidence_prompt
     assert "사용자가 요청하지 않은 배경, 심화 항목" in final_prompt
     assert "별도의 조사 범위, 가정, 한계 문단을 만들지 마십시오" in final_prompt
+    assert "각 ID를 독립된 토큰" in final_prompt
+
+
+def test_citation_validation_normalizes_grouped_ids_before_validation():
+    from agent.application.chat_service import validate_citations
+
+    answer = "공통 기술입니다 [job_id:64, 85, 999]."
+
+    assert validate_citations(answer, [64, 85]) == (
+        "공통 기술입니다 [job_id:64] [job_id:85] [출처 확인 불가]."
+    )
 
 
 def test_run_context_collects_usage_steps_and_events():

@@ -21,10 +21,19 @@ def validate_citations(answer: str, valid_ids: list[int]) -> str:
 
     valid = {str(job_id) for job_id in valid_ids}
 
+    def expand_group(match: re.Match[str]) -> str:
+        citation_ids = re.findall(r"\d+", match.group(1))
+        return " ".join(f"[job_id:{job_id}]" for job_id in citation_ids)
+
     def replace(match: re.Match[str]) -> str:
         return match.group(0) if match.group(1) in valid else "[출처 확인 불가]"
 
-    return re.sub(r"\[job_id:(\d+)\]", replace, answer)
+    normalized = re.sub(
+        r"\[job_id:(\d+(?:\s*,\s*\d+)+)\]",
+        expand_group,
+        answer,
+    )
+    return re.sub(r"\[job_id:(\d+)\]", replace, normalized)
 
 
 class ChatService:

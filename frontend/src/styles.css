@@ -531,6 +531,30 @@ button:disabled {
   color: #526171;
 }
 
+.markdown-body table {
+  display: block;
+  max-width: 100%;
+  margin: 14px 0 18px;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown-body th,
+.markdown-body td {
+  min-width: 112px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-body th {
+  color: #354454;
+  background: #f4f6f8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .citation-token {
   display: inline-flex;
   height: 22px;
