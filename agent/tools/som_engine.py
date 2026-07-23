@@ -1,9 +1,7 @@
 import os
 import json
 import queue
-import site
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -13,20 +11,17 @@ from typing import Any, Dict, List, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
+from agent.config import get_settings
 from agent.utils.logger import logger
-
-
-_DLL_DIRECTORY_HANDLES = []
 
 
 class SomEngine:
     def __init__(self):
         self.root_dir = Path(__file__).resolve().parent.parent.parent
-        self._configure_runtime_paths()
+        self._configure_cache_paths()
 
-        self.paddleocr_dir = self._resolve_paddleocr_base_dir()
-        self.paddleocr_dir.mkdir(parents=True, exist_ok=True)
-        os.environ["PADDLE_OCR_BASE_DIR"] = str(self.paddleocr_dir)
+        self.paddlex_cache_dir = self._resolve_paddlex_cache_dir()
+        self.paddlex_cache_dir.mkdir(parents=True, exist_ok=True)
         self._ocr_worker = None
         self._ocr_worker_stdout_queue = None
         self._ocr_worker_stderr_lines = deque(maxlen=40)
@@ -46,129 +41,73 @@ class SomEngine:
         logger.info("Loading local YOLOv8 OmniParser model", model_path=str(self.model_path))
         self.yolo_model = YOLO(str(self.model_path))
 
-        logger.info("SomEngine will invoke PaddleOCR in an isolated worker", cache_dir=str(self.paddleocr_dir))
+        logger.info(
+            "SomEngine will invoke PaddleOCR in an isolated worker",
+            cache_dir=str(self.paddlex_cache_dir),
+        )
         logger.info("SomEngine initialization complete")
 
     def __del__(self):
+        self.close()
+
+    def close(self) -> None:
+        """재사용 OCR 하위 프로세스를 종료한다."""
+
         self._stop_ocr_worker()
 
-    def _configure_runtime_paths(self) -> None:
-        yolo_config_dir = Path(os.getenv("YOLO_CONFIG_DIR", self.root_dir / ".cache" / "ultralytics"))
+    def _configure_cache_paths(self) -> None:
+        yolo_config_dir = get_settings().ocr.yolo_config_dir
         yolo_config_dir.mkdir(parents=True, exist_ok=True)
         os.environ["YOLO_CONFIG_DIR"] = str(yolo_config_dir)
 
-        for path in self._candidate_cuda_dll_dirs():
-            try:
-                exists = path.exists()
-            except OSError:
-                exists = False
-            if not exists:
-                continue
-            self._prepend_process_path(path)
-            if hasattr(os, "add_dll_directory"):
-                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(path)))
-            logger.debug("Added CUDA DLL search path", path=str(path))
-
-    def _candidate_cuda_dll_dirs(self) -> List[Path]:
-        paths: List[Path] = []
-        for key in ("PADDLE_CUDA_BIN_DIR", "PADDLE_CUDNN_BIN_DIR", "CUDA_PATH", "CUDA_PATH_V11_8"):
-            value = os.getenv(key)
-            if value:
-                base = Path(value)
-                paths.append(base / "bin" if base.name.lower() != "bin" else base)
-
-        for site_dir in site.getsitepackages():
-            nvidia_dir = Path(site_dir) / "nvidia"
-            paths.extend(
-                [
-                    nvidia_dir / "cudnn" / "bin",
-                    nvidia_dir / "cublas" / "bin",
-                    nvidia_dir / "cuda_runtime" / "bin",
-                    nvidia_dir / "cuda_nvrtc" / "bin",
-                ]
-            )
-        user_site = site.getusersitepackages()
-        if user_site:
-            nvidia_dir = Path(user_site) / "nvidia"
-            paths.extend(
-                [
-                    nvidia_dir / "cudnn" / "bin",
-                    nvidia_dir / "cublas" / "bin",
-                    nvidia_dir / "cuda_runtime" / "bin",
-                    nvidia_dir / "cuda_nvrtc" / "bin",
-                ]
-            )
-
-        unique_paths: List[Path] = []
-        seen = set()
-        for path in paths:
-            key = str(path).lower()
-            if key not in seen:
-                seen.add(key)
-                unique_paths.append(path)
-        return unique_paths
-
-    @staticmethod
-    def _prepend_process_path(path: Path) -> None:
-        path_text = str(path)
-        current = os.environ.get("PATH", "")
-        parts = [part for part in current.split(os.pathsep) if part]
-        if path_text.lower() not in {part.lower() for part in parts}:
-            os.environ["PATH"] = path_text + os.pathsep + current
-
-    def _resolve_paddleocr_base_dir(self) -> Path:
-        configured = os.getenv("PADDLE_OCR_BASE_DIR")
+    def _resolve_paddlex_cache_dir(self) -> Path:
+        configured = get_settings().ocr.paddlex_cache_dir
         if configured:
-            return Path(configured)
+            return configured
 
-        project_cache = self.root_dir / ".cache" / "paddleocr"
-        if (project_cache / "whl").exists():
+        project_cache = self.root_dir / ".cache" / "paddlex"
+        if project_cache.exists():
             return project_cache
 
-        home_cache = Path.home() / ".paddleocr"
-        if (home_cache / "whl").exists():
+        home_cache = Path.home() / ".paddlex"
+        if home_cache.exists():
             return home_cache
 
         return project_cache
 
-    def _paddleocr_model_dirs(self) -> Dict[str, str]:
-        whl_dir = self.paddleocr_dir / "whl"
-        dirs = {
-            "det_model_dir": whl_dir / "det" / "ml" / "Multilingual_PP-OCRv3_det_infer",
-            "rec_model_dir": whl_dir / "rec" / "korean" / "korean_PP-OCRv4_rec_infer",
-            "cls_model_dir": whl_dir / "cls" / "ch_ppocr_mobile_v2.0_cls_infer",
-        }
-        if all(path.exists() for path in dirs.values()):
-            return {key: str(path) for key, path in dirs.items()}
-        return {}
-
-    @staticmethod
-    def _should_use_paddle_gpu(torch_cuda_available: bool) -> bool:
-        raw = os.getenv("PADDLEOCR_USE_GPU")
-        if raw is not None:
-            return raw.strip().lower() not in {"0", "false", "no", "off"}
-        return torch_cuda_available
+    def _resolve_ocr_python(self) -> Path:
+        python_path = get_settings().ocr.python_executable
+        if not python_path.is_file():
+            raise FileNotFoundError(
+                "PaddleOCR 작업자 Python을 찾을 수 없습니다: "
+                f"{python_path}. scripts/setup_runtime.ps1을 실행하거나 "
+                "PADDLE_OCR_PYTHON을 설정하세요."
+            )
+        return python_path
 
     def _ocr_worker_env(self) -> Dict[str, str]:
         env = dict(os.environ)
-        env["PADDLE_OCR_BASE_DIR"] = str(self.paddleocr_dir)
+        settings = get_settings().ocr
+        env["PADDLE_PDX_CACHE_HOME"] = str(self.paddlex_cache_dir)
+        env["PADDLE_PDX_MODEL_SOURCE"] = settings.model_source
+        env["PADDLEOCR_LANG"] = settings.language
+        env["PADDLEOCR_VERSION"] = settings.ocr_version
+        if settings.use_gpu is not None:
+            env["PADDLEOCR_USE_GPU"] = "1" if settings.use_gpu else "0"
+        if settings.cuda_bin_dir is not None:
+            env["PADDLE_CUDA_BIN_DIR"] = str(settings.cuda_bin_dir)
+        if settings.cudnn_bin_dir is not None:
+            env["PADDLE_CUDNN_BIN_DIR"] = str(settings.cudnn_bin_dir)
         return env
 
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        try:
-            return max(0.0, float(os.getenv(name, str(default))))
-        except ValueError:
-            return default
-
     def _ocr_worker_start_timeout_sec(self) -> float:
-        return max(1.0, self._env_float("SOM_OCR_WORKER_START_TIMEOUT_SEC", 45.0))
+        return get_settings().ocr.worker_start_timeout_sec
 
     def _ocr_worker_request_timeout_sec(self) -> float:
-        return max(1.0, self._env_float("SOM_OCR_REQUEST_TIMEOUT_SEC", 20.0))
+        return get_settings().ocr.request_timeout_sec
 
     def _ocr_worker_attempts(self) -> int:
-        return max(1, self._env_int("SOM_OCR_WORKER_MAX_ATTEMPTS", 2))
+        return get_settings().ocr.worker_max_attempts
 
     def _ocr_lifecycle_lock(self):
         """테스트용 비정상 생성 경로에서도 OCR 작업자 잠금을 지연 생성한다."""
@@ -182,13 +121,7 @@ class SomEngine:
     def ensure_ocr_worker_ready(self):
         """재사용 OCR 작업자가 요청을 받을 수 있을 때까지 대기한다."""
 
-        use_worker = os.getenv("SOM_OCR_WORKER_REUSE", "true").strip().lower() not in {
-            "0",
-            "false",
-            "no",
-            "off",
-        }
-        if not use_worker:
+        if not get_settings().ocr.worker_reuse:
             raise RuntimeError("OCR worker readiness requires SOM_OCR_WORKER_REUSE")
         return self._start_ocr_worker()
 
@@ -251,7 +184,12 @@ class SomEngine:
             return self._ocr_worker
 
         runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
-        logger.info("Starting isolated PaddleOCR worker", script=str(runner_script))
+        ocr_python = self._resolve_ocr_python()
+        logger.info(
+            "Starting isolated PaddleOCR worker",
+            script=str(runner_script),
+            python=str(ocr_python),
+        )
         self._ocr_worker_generation += 1
         generation = self._ocr_worker_generation
         self._ocr_worker_stdout_queue = queue.Queue()
@@ -259,7 +197,7 @@ class SomEngine:
         self._ocr_worker_last_phase = {}
         self._ocr_worker_last_result_timings = {}
         self._ocr_worker = subprocess.Popen(
-            [sys.executable, str(runner_script), "--worker"],
+            [str(ocr_python), str(runner_script), "--worker"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -470,10 +408,11 @@ class SomEngine:
 
     def _run_paddle_ocr_once(self, image_path: Path) -> List[Dict[str, Any]]:
         runner_script = Path(__file__).parent / "paddle_ocr_runner.py"
-        timeout = max(1.0, self._env_float("SOM_OCR_ONESHOT_TIMEOUT_SEC", 60.0))
+        ocr_python = self._resolve_ocr_python()
+        timeout = get_settings().ocr.oneshot_timeout_sec
         try:
             result = subprocess.run(
-                [sys.executable, str(runner_script), str(image_path)],
+                [str(ocr_python), str(runner_script), str(image_path)],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -524,17 +463,11 @@ class SomEngine:
             return 0.0
         return (x_right - x_left) * (y_bottom - y_top)
 
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        try:
-            return max(0, int(os.getenv(name, str(default))))
-        except ValueError:
-            return default
-
     def _ocr_scale_for_image(self, width: int, height: int) -> float:
-        if os.getenv("SOM_OCR_RESIZE", "true").strip().lower() in {"0", "false", "no", "off"}:
+        settings = get_settings().ocr
+        if not settings.resize_enabled:
             return 1.0
-        max_dim = self._env_int("SOM_OCR_MAX_DIM", 1152)
+        max_dim = settings.max_image_dim
         if max_dim <= 0:
             return 1.0
         longest = max(width, height)
@@ -544,71 +477,24 @@ class SomEngine:
 
     def _normalize_paddleocr_results(self, ocr_results: List, scale: float = 1.0) -> List[Dict]:
         raw_boxes = []
-        if ocr_results and isinstance(ocr_results[0], dict):
-            for item in ocr_results:
-                confidence = float(item.get("confidence", item.get("conf", 0.0)))
-                if confidence < 0.2:
-                    continue
-                bbox = item["bbox"]
-                raw_boxes.append(
-                    {
-                        "bbox": [float(coord) / scale for coord in bbox],
-                        "type": "text",
-                        "text": str(item.get("text", "")),
-                        "conf": confidence,
-                    }
-                )
-            logger.debug("PaddleOCR text detection complete", count=len(raw_boxes))
-            return raw_boxes
-
-        for line in self._iter_paddleocr_lines(ocr_results):
-            bbox = line[0]
-            text = line[1][0]
-            confidence = float(line[1][1])
+        for item in ocr_results:
+            if not isinstance(item, dict):
+                raise TypeError("PaddleOCR worker result must be a mapping")
+            confidence = float(item.get("confidence", item.get("conf", 0.0)))
             if confidence < 0.2:
                 continue
-
-            xs = [point[0] / scale for point in bbox]
-            ys = [point[1] / scale for point in bbox]
+            bbox = item["bbox"]
             raw_boxes.append(
                 {
-                    "bbox": [float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))],
+                    "bbox": [float(coord) / scale for coord in bbox],
                     "type": "text",
-                    "text": text,
-                    "conf": float(confidence),
+                    "text": str(item.get("text", "")),
+                    "conf": confidence,
                 }
             )
 
         logger.debug("PaddleOCR text detection complete", count=len(raw_boxes))
         return raw_boxes
-
-    @staticmethod
-    def _iter_paddleocr_lines(ocr_results: List) -> List:
-        if not ocr_results:
-            return []
-        first = ocr_results[0]
-        if SomEngine._looks_like_paddleocr_line(first):
-            return ocr_results
-        lines = []
-        for page in ocr_results:
-            if not page:
-                continue
-            if SomEngine._looks_like_paddleocr_line(page):
-                lines.append(page)
-            else:
-                lines.extend(line for line in page if SomEngine._looks_like_paddleocr_line(line))
-        return lines
-
-    @staticmethod
-    def _looks_like_paddleocr_line(value: Any) -> bool:
-        return (
-            isinstance(value, (list, tuple))
-            and len(value) >= 2
-            and isinstance(value[0], (list, tuple))
-            and isinstance(value[1], (list, tuple))
-            and len(value[1]) >= 2
-            and isinstance(value[1][0], str)
-        )
 
     def _run_paddle_ocr(self, image: Image.Image | Path, scale: float = 1.0) -> List[Dict]:
         temp_path: Path | None = None
@@ -622,8 +508,7 @@ class SomEngine:
             image_path = image
 
         try:
-            use_worker = os.getenv("SOM_OCR_WORKER_REUSE", "true").strip().lower() not in {"0", "false", "no", "off"}
-            if use_worker:
+            if get_settings().ocr.worker_reuse:
                 try:
                     results = self._run_paddle_ocr_worker(image_path)
                 except Exception as exc:
@@ -688,6 +573,38 @@ class SomEngine:
         logger.info("Overlap filtering complete", before=len(raw_boxes), after=len(final_elements))
         return final_elements
 
+    def _remove_text_covered_icons(
+        self,
+        icon_boxes: List[Dict],
+        text_boxes: List[Dict],
+    ) -> List[Dict]:
+        """OCR 글자를 감싼 의미 없는 icon 컨테이너 중복을 제거한다."""
+
+        filtered = []
+        for icon in icon_boxes:
+            icon_bbox = icon["bbox"]
+            icon_area = self._get_area(icon_bbox)
+            contains_text = False
+            for text in text_boxes:
+                text_bbox = text["bbox"]
+                text_area = self._get_area(text_bbox)
+                if text_area <= 0 or icon_area < text_area:
+                    continue
+                intersection = self._get_intersection_area(icon_bbox, text_bbox)
+                if intersection / text_area > 0.8:
+                    contains_text = True
+                    break
+            if not contains_text:
+                filtered.append(icon)
+
+        logger.info(
+            "Cross-modal marker deduplication complete",
+            before=len(icon_boxes),
+            after=len(filtered),
+            removed=len(icon_boxes) - len(filtered),
+        )
+        return filtered
+
     def _draw_markers(
         self,
         img: Image.Image,
@@ -744,10 +661,7 @@ class SomEngine:
 
         original_w, original_h = img.size
 
-        try:
-            yolo_max_dim = int(os.getenv("SOM_INFERENCE_MAX_DIM", "1024"))
-        except ValueError:
-            yolo_max_dim = 1024
+        yolo_max_dim = get_settings().ocr.inference_max_dim
 
         if original_w > yolo_max_dim or original_h > yolo_max_dim:
             yolo_scale = yolo_max_dim / max(original_w, original_h)
@@ -784,6 +698,7 @@ class SomEngine:
         ocr_duration = time.perf_counter() - ocr_started
         yolo_started = time.perf_counter()
         icon_boxes = self._filter_overlaps(self._run_yolo(inference_img, yolo_scale))
+        icon_boxes = self._remove_text_covered_icons(icon_boxes, text_boxes)
         yolo_duration = time.perf_counter() - yolo_started
         final_elements = text_boxes + icon_boxes
         final_elements.sort(key=lambda item: (item["bbox"][1] // 20, item["bbox"][0]))

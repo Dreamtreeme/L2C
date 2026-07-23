@@ -1,6 +1,6 @@
 import datetime
 import hashlib
-import os
+import math
 import re
 import time
 from pathlib import Path
@@ -11,6 +11,7 @@ import mss.tools
 import pygetwindow as gw
 from PIL import Image, ImageFilter, ImageStat
 
+from agent.config import get_settings
 from agent.utils.logger import logger
 from shared.config import SCREENSHOT_DIR
 
@@ -36,7 +37,7 @@ class PerceptionEngine:
         self.last_capture_quality: Dict[str, Any] = {}
         self._analysis_cache: Dict[str, Dict[str, Any]] = {}
         self._analysis_cache_order: list[str] = []
-        self._analysis_cache_limit = int(os.getenv("VISION_UI_ANALYSIS_CACHE_LIMIT", "8"))
+        self._analysis_cache_limit = get_settings().vision.ui_analysis_cache_limit
 
         # WaitStable은 PerceptionEngine을 역참조하므로 순환 import를 피하기 위해 lazy 로딩합니다.
         from agent.utils.wait_stable import WaitStable
@@ -44,19 +45,16 @@ class PerceptionEngine:
 
         logger.info("PerceptionEngine initialized with SomEngine", screenshot_dir=str(self.screenshot_dir))
 
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        try:
-            return float(os.getenv(name, str(default)))
-        except ValueError:
-            return default
+    def close(self) -> None:
+        """OCR 하위 프로세스와 화면 캡처 핸들을 명시적으로 정리한다."""
 
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        try:
-            return max(0, int(os.getenv(name, str(default))))
-        except ValueError:
-            return default
+        close_som = getattr(self.som_engine, "close", None)
+        if callable(close_som):
+            close_som()
+        close_capture = getattr(self.sct, "close", None)
+        if callable(close_capture):
+            close_capture()
+        self.clear_browser_window()
 
     @staticmethod
     def _window_id(window) -> int | None:
@@ -170,7 +168,7 @@ class PerceptionEngine:
         """
         # 액션 효과가 캡처에 반영되기 시작할 짧은 시간만 확보합니다.
         if initial_wait_sec is None:
-            initial_wait_sec = self._env_float("VISION_CAPTURE_INITIAL_WAIT_SEC", 0.16)
+            initial_wait_sec = get_settings().vision.capture_initial_wait_sec
         if initial_wait_sec > 0:
             time.sleep(initial_wait_sec)
 
@@ -237,12 +235,13 @@ class PerceptionEngine:
 
     def screen_quality(self, image_path: Path) -> Dict[str, Any]:
         """브라우저 본문이 단색 빈 화면에 가까운지 저비용 이미지 지표로 검사한다."""
-        bottom_ignore = self._env_int("VISION_PAGE_CONTENT_BOTTOM_IGNORE_PX", 80)
-        sample_width = self._env_int("VISION_PAGE_QUALITY_SAMPLE_WIDTH", 240)
+        settings = get_settings().vision
+        bottom_ignore = settings.page_content_bottom_ignore_px
+        sample_width = settings.page_quality_sample_width
         try:
             with Image.open(image_path) as source:
                 source_rgb = source.convert("RGB")
-                content_top_setting = os.getenv("VISION_PAGE_CONTENT_TOP_PX", "auto").strip().lower()
+                content_top_setting = settings.page_content_top_px.strip().lower()
                 if content_top_setting in {"", "auto"}:
                     content_top = self._detect_browser_content_top(source_rgb)
                 else:
@@ -273,9 +272,10 @@ class PerceptionEngine:
             logger.debug("Screen quality check skipped", error=str(exc), image_path=str(image_path))
             return {"low_information": False, "reason": "quality_check_error"}
 
-        max_stddev = self._env_float("VISION_PAGE_BLANK_MAX_STDDEV", 6.0)
-        max_edge_mean = self._env_float("VISION_PAGE_BLANK_MAX_EDGE_MEAN", 1.2)
-        min_dominant_ratio = self._env_float("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", 0.98)
+        settings = get_settings().vision
+        max_stddev = settings.page_blank_max_stddev
+        max_edge_mean = settings.page_blank_max_edge_mean
+        min_dominant_ratio = settings.page_blank_min_dominant_ratio
         low_information = (
             stddev <= max_stddev
             and edge_mean <= max_edge_mean
@@ -295,16 +295,21 @@ class PerceptionEngine:
         *,
         initial_wait_sec: Optional[float] = None,
     ) -> Path:
-        """단색 빈 본문이면 OCR 전에 짧게 재캡처하고 마지막 화면을 반환한다."""
+        """단색 빈 본문이면 한 경로에서 기다리고 마지막 화면만 보존한다."""
+        settings = get_settings().vision
+        retry_interval = settings.page_capture_retry_sec
+        ready_timeout = settings.page_ready_timeout_sec
         if max_attempts is None:
-            max_attempts = self._env_int("VISION_PAGE_CAPTURE_MAX_ATTEMPTS", 4)
-        max_attempts = max(1, int(max_attempts))
-        retry_interval = self._env_float("VISION_PAGE_CAPTURE_RETRY_SEC", 0.4)
+            polling_interval = max(0.05, retry_interval)
+            max_attempts = max(1, math.ceil(max(0.0, ready_timeout) / polling_interval) + 1)
+            deadline = time.monotonic() + max(0.0, ready_timeout)
+        else:
+            max_attempts = max(1, int(max_attempts))
+            deadline = None
         last_path: Path | None = None
         for attempt in range(1, max_attempts + 1):
-            filename = None
-            if attempt > 1:
-                filename = f"screen_retry_{int(time.time() * 1000)}_{attempt}.png"
+            # 로딩 재관찰은 같은 파일을 덮어써 빈 화면 산출물이 쌓이지 않게 한다.
+            filename = last_path.name if last_path is not None else None
             if initial_wait_sec is None:
                 last_path = self.capture_screen(filename=filename)
             else:
@@ -314,8 +319,14 @@ class PerceptionEngine:
             logger.info("Screen quality checked", attempt=attempt, max_attempts=max_attempts, **quality)
             if not quality.get("low_information"):
                 return last_path
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             if attempt < max_attempts and retry_interval > 0:
-                time.sleep(retry_interval)
+                wait_sec = retry_interval
+                if deadline is not None:
+                    wait_sec = min(wait_sec, max(0.0, deadline - time.monotonic()))
+                if wait_sec > 0:
+                    time.sleep(wait_sec)
         return last_path
 
     def get_current_url(self) -> str:
@@ -327,16 +338,24 @@ class PerceptionEngine:
 
             old_pause = pyautogui.PAUSE
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
-            key_pause = self._env_float("VISION_URL_KEY_PAUSE_SEC", 0.015)
-            copy_wait = self._env_float("VISION_URL_COPY_WAIT_SEC", 0.015)
+            settings = get_settings().vision
+            key_pause = settings.url_key_pause_sec
+            copy_wait = settings.url_copy_wait_sec
+            copy_timeout = settings.url_copy_timeout_sec
             pyautogui.PAUSE = min(old_pause, key_pause)
             try:
                 pyperclip.copy("")
                 pyautogui.hotkey(modifier, "l")
                 pyautogui.hotkey(modifier, "c")
-                if copy_wait > 0:
-                    time.sleep(copy_wait)
-                url = (pyperclip.paste() or "").strip()
+                deadline = time.monotonic() + max(0.0, copy_timeout)
+                url = ""
+                while True:
+                    url = (pyperclip.paste() or "").strip()
+                    if url.startswith(("http://", "https://")):
+                        break
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(max(0.005, copy_wait))
             finally:
                 self.release_address_bar_focus(pyautogui, key_pause=key_pause)
                 pyautogui.PAUSE = old_pause
@@ -345,7 +364,7 @@ class PerceptionEngine:
                 return url
         except Exception as e:
             logger.debug("Failed to read current browser URL", error=str(e))
-        return self._last_url
+        return ""
 
     def release_address_bar_focus(self, pyautogui_module=None, key_pause: float = 0.02) -> None:
         """주소창 URL 복사 후 남는 브라우저 툴바 포커스를 페이지 쪽으로 되돌립니다."""
@@ -389,7 +408,7 @@ class PerceptionEngine:
             self._analysis_cache.pop(old_key, None)
 
     def _prepare_som_image(self, image_path: Path) -> tuple[Path, int]:
-        crop_setting = os.getenv("VISION_SOM_CROP_TOP", "auto").strip().lower()
+        crop_setting = get_settings().vision.som_crop_top.strip().lower()
         try:
             with Image.open(image_path) as img:
                 if crop_setting in {"", "auto"}:
@@ -417,16 +436,17 @@ class PerceptionEngine:
     def _detect_browser_content_top(self, image: Image.Image) -> int:
         """브라우저 chrome과 페이지 사이의 전체 폭 수평 경계를 찾는다."""
 
-        fallback_top = self._env_int("VISION_SOM_CROP_FALLBACK_TOP_PX", 140)
-        min_y = self._env_int("VISION_SOM_CROP_SCAN_MIN_Y", 80)
+        settings = get_settings().vision
+        fallback_top = settings.som_crop_fallback_top_px
+        min_y = settings.som_crop_scan_min_y
         max_y = min(
-            self._env_int("VISION_SOM_CROP_SCAN_MAX_Y", 320),
+            settings.som_crop_scan_max_y,
             max(0, image.height - 400),
         )
         if max_y <= min_y:
             return fallback_top
 
-        sample_width = max(32, self._env_int("VISION_SOM_CROP_SAMPLE_WIDTH", 256))
+        sample_width = settings.som_crop_sample_width
         sample = image.convert("RGB")
         if sample.width > sample_width:
             sample = sample.resize((sample_width, sample.height), Image.Resampling.BILINEAR)
@@ -443,7 +463,7 @@ class PerceptionEngine:
                 best_delta = delta
                 best_y = y
 
-        min_delta = self._env_float("VISION_SOM_CROP_MIN_ROW_DELTA", 60.0)
+        min_delta = settings.som_crop_min_row_delta
         if best_delta < min_delta:
             logger.debug(
                 "Browser content boundary was weak; using crop fallback",
@@ -513,7 +533,7 @@ class PerceptionEngine:
                 except Exception:
                     pass
 
-        skip_vlm_caption = os.getenv("SKIP_VLM_CAPTION", "true").lower() == "true"
+        skip_vlm_caption = get_settings().vision.skip_vlm_caption
         elements = []
 
         if skip_vlm_caption:
@@ -552,15 +572,18 @@ Example output format:
 }
 """
 
-            api_key = os.getenv("GEMINI_API_KEY")
+            configured_key = get_settings().models.gemini_api_key
+            api_key = configured_key.get_secret_value() if configured_key else ""
 
             # 4. Gemini Flash 호출 시도 (langchain_google_genai — llm_engine.py와 동일한 클라이언트)
             if api_key:
                 try:
                     from agent.application.model_clients import get_google_chat_model
+                    from agent.application.model_policy import lightweight_model_name
                     from langchain_core.messages import HumanMessage
-                    logger.info("Captioning UI elements via Gemini Flash SoM...")
-                    llm = get_google_chat_model("gemini-3.5-flash", temperature=0.1)
+                    model_name = lightweight_model_name("VISION_CAPTION_MODEL")
+                    logger.info("Captioning UI elements via Gemini SoM...", model=model_name)
+                    llm = get_google_chat_model(model_name, temperature=0.1)
                     message = HumanMessage(content=[
                         {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
@@ -571,6 +594,7 @@ Example output format:
                         llm,
                         [message],
                         "vision_caption",
+                        stream=True,
                     )
                     output = response.content
                     if isinstance(output, list):
@@ -590,7 +614,7 @@ Example output format:
                 try:
                     import ollama as _ollama
                     from shared.config import OLLAMA_HOST
-                    model_name = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
+                    model_name = get_settings().models.ollama_model
                     client = _ollama.Client(host=OLLAMA_HOST)
                     from agent.application.run_context import observe_external_llm_call
 

@@ -1,3 +1,14 @@
+---
+title: "E2E 관측 환경"
+type: guide
+area: observability
+status: active
+updated: 2026-07-23
+tags:
+  - l2c
+  - docs/observability
+---
+
 # E2E 관측 환경
 
 L2C는 로컬 `*.summary.json`을 원본 실행 기록으로 유지하고, LangSmith를 trace 탐색과 추세 시각화에 사용합니다. 별도의 LLM 평가자는 두지 않습니다. 답변의 의미 적합성은 사용자 테스트로 검증하고, 자동 지표는 실행 성공 여부와 수집 결과처럼 코드로 판정 가능한 값만 기록합니다.
@@ -38,6 +49,12 @@ python -m benchmark.run_realtime_e2e `
 
 실행 결과는 로그 옆의 `.summary.json`에도 남습니다. `git_commit`, 변경 파일 유무, 설정 fingerprint, 모델, 레시피 버전을 저장하므로 성능 변화가 코드와 설정 중 어디에서 발생했는지 비교할 수 있습니다.
 
+성능 비교의 단일 원본은 `.summary.json`입니다. 텍스트 로그는 화면·행동 원인을 조사할 때만 사용하며, 정규식으로 OCR·추론·Reflex 횟수나 시간을 다시 계산하지 않습니다.
+
+```powershell
+python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
+```
+
 ## Trace 구조
 
 - `l2c.e2e`: 한 E2E 실행의 root trace
@@ -46,7 +63,7 @@ python -m benchmark.run_realtime_e2e `
 - LangGraph 노드와 LLM 호출: 판단 흐름과 모델 토큰
 - 직접 호출한 OpenAI/Ollama 모델: 별도의 LLM child trace
 
-각 단계에는 `stage`, `component`, 성공 여부와 실패 코드가 붙습니다. 중간 실패 후 복구된 실행은 최종 성공으로 집계하고, 실패 이력은 `recovered_failure_count`와 `internal_failure_codes`에 남깁니다.
+각 단계에는 `stage`, `component`, 성공 여부와 실패 코드가 붙습니다. `graph:reflex`의 `action_source=reflex`와 `graph:selection`의 `action_source=card_queue`가 각각 Reflex와 카드 큐 hit의 기준입니다. 중간 실패 후 복구된 실행은 최종 성공으로 집계하고, 실패 이력은 `recovered_failure_count`와 `internal_failure_codes`에 남깁니다.
 
 ## 대시보드
 

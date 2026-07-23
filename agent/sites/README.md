@@ -13,12 +13,10 @@ The intended flow is:
 
 Files per site:
 
-- `manual.json`: structured site strategy and known stable/variable UI concepts.
-- `SKILL.md`: 선택된 사이트 작업자에게만 주입하는 짧은 판단 지침.
-- `tools.json`: allowed tool policy and Reflex boundaries.
+- `profile.json`: 사이트 정체성, 공식 주소, 화면 역할, 허용 도구, Reflex 경계와 판단 지침의 단일 계약.
 
 `ChatService` is the canonical user-facing orchestrator. `agent.graph.investigation_workflow` resolves material ambiguity, defines evidence requirements, checks DB coverage, and invokes `realtime_scraping` only through a validated action plan. 사이트 선택은 코드가 확정하며 LLM이 스킬 파일을 찾기 위한 별도 호출은 하지 않습니다.
 
 ## 공식 시작 주소
 
-`registry.json`의 `base_url`은 각 사이트의 공식 HTTPS 시작 주소를 나타내는 단일 기준입니다. `get_official_site_url()`은 slug, 한글 이름, 별칭, 도메인 요청을 이 주소로 변환하고 등록 도메인과 일치하는지 검증합니다. Vision 작업자는 LLM에게 주소 선택을 맡기지 않고 `open_browser(site=...)`로 이 주소를 먼저 연 뒤 화면 탐색을 시작합니다.
+각 `profile.json`의 `base_url`은 해당 사이트의 공식 HTTPS 시작 주소입니다. 서버 시작 시 모든 프로필을 Pydantic으로 읽어 URL 패턴, 도구 이름, 중복 도메인을 검증합니다. `get_official_site_url()`은 slug, 한글 이름, 별칭, 도메인 요청을 이 주소로 변환합니다. Vision 작업자는 `open_browser(site=...)`로 이 주소를 먼저 연 뒤 화면 탐색을 시작합니다.

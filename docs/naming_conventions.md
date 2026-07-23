@@ -1,3 +1,14 @@
+---
+title: "L2C 네이밍 규칙"
+type: reference
+area: architecture
+status: active
+updated: 2026-07-23
+tags:
+  - l2c
+  - docs/architecture
+---
+
 # L2C 네이밍 규칙
 
 이 문서는 코드 분할과 리팩터링 때 사용할 이름 기준이다. 새 코드는 이 규칙을 따르고, 기존 코드는 관련 파일을 수정할 때 함께 정리한다. 대규모 일괄 rename은 피한다.
@@ -32,13 +43,19 @@
 | `result_card_queue` | 검색 결과 목록에서 수집할 카드 작업 큐 |
 | `result_page_memory` | 카드 큐를 만든 검색 결과 페이지 복귀 검증용 기억 |
 | `detail_ocr_buffer` | 상세페이지 OCR 본문 누적 버퍼 |
+| `pending_action` | 아직 실행하지 않은 검증된 `ActionRequest` |
+| `last_action_result` | 직전에 실행한 요청의 `ActionResult`. 다음 행동을 담지 않는다 |
+| `tool_call_metadata` | 큐 ID, 전환 출처처럼 물리 도구 인자가 아닌 실행 추적값 |
+| `current_capture_id` | 현재 작업 상태로 채택된 물리 화면 캡처의 실행 내 식별자 |
+| `decision_capture_id` | 행동을 선택할 때 근거로 사용한 캡처 식별자 |
+| `from_capture_id` / `to_capture_id` | 화면 전환의 이전 캡처와 다음 캡처 식별자 |
 
 ## 함수 동사 규칙
 
 | 접두어 | 사용 기준 |
 |---|---|
 | `normalize_` | 값 비교를 위한 결정론적 정규화 |
-| `build_` | 입력으로 새 dict/message/payload를 조립. 외부 부작용 없음 |
+| `build_` | 입력으로 새 계약 객체, dict 또는 payload를 조립. 외부 부작용 없음 |
 | `extract_` | 원문, OCR, LLM 응답에서 구조화 값을 뽑음 |
 | `record_` | 런타임 관찰/행동을 메모리 리스트에 추가 |
 | `commit_` | DB에 제출물, 후보, 피드백 같은 기록을 저장 |
@@ -89,6 +106,18 @@
 | `*_prompt.py` | 프롬프트 문자열 조립 |
 | `*_report.py` | 사용자/중간 보고서 생성 |
 
+작업자 그래프 모듈은 `worker_<책임>.py`를 사용한다.
+
+| 모듈 | 책임 |
+|---|---|
+| `worker_observation.py` | 캡처와 OCR 관찰 |
+| `worker_transition.py` | 행동 전후 화면 전환 판정 |
+| `worker_collection.py` | 관찰 결과와 상세 본문 상태 반영 |
+| `worker_selection.py` | 결정론적 행동 선택 |
+| `worker_reasoning.py` | LLM 의미 판단과 행동 계약 생성 |
+| `worker_execution.py` | 검증된 원자 행동 실행 |
+| `worker_recording.py` | 실행 결과와 학습 증거 기록 |
+
 ## 피해야 할 이름
 
 - `recipe`: 단독 사용 금지. `recipe_candidate`, `active_recipe`, `site_recipe`, `recipe_step` 중 하나를 쓴다.
@@ -129,7 +158,7 @@ def test_candidate_promotion_skips_non_target_action():
 ## 기존 코드 정리 우선순위
 
 1. `target_snapshot` 생성 로직을 공통화한다.
-2. [완료] `nodes.py`에서 `result_card_queue`, `detail_ocr_buffer`, `reflex_runtime`을 분리한다. 다음 대상은 `action_executor`다.
+2. [완료] `nodes.py`를 책임별 `worker_*` 모듈로 분리하고 원본 파일을 삭제한다.
 3. `candidate_reviewer.py`에서 promotion 로직을 `candidate_promotion.py`로 분리한다.
-4. `RecipeStore`를 `recipe_key + site + task_category + page_role + roi_signature` 기준 이름과 스키마로 정리한다.
+4. [완료] `RecipeStore` 조회를 `recipe_key + site + task_category + page_role + roi_signature` 기준으로 정리한다.
 5. 남은 `_dump_model`, `_bbox`, `_center` 같은 작은 중복 유틸을 공통 모듈로 옮긴다.

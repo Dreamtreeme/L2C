@@ -1,0 +1,50 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.inFolder("docs")'
+
+properties:
+  file.name:
+    displayName: "문서"
+  type:
+    displayName: "유형"
+  area:
+    displayName: "영역"
+  status:
+    displayName: "상태"
+  updated:
+    displayName: "검토일"
+
+views:
+  - type: table
+    name: "현재 문서"
+    filters:
+      and:
+        - 'status == "active"'
+    order:
+      - file.name
+      - type
+      - area
+      - status
+      - updated
+
+  - type: table
+    name: "진행 계획"
+    filters:
+      and:
+        - 'type == "plan"'
+    order:
+      - file.name
+      - area
+      - status
+      - updated
+
+  - type: table
+    name: "역사 기록"
+    filters:
+      and:
+        - 'status == "historical"'
+    order:
+      - file.name
+      - area
+      - updated

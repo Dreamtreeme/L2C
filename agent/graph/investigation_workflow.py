@@ -12,10 +12,10 @@ from typing import Any, Callable, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 
 from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence, load_job_evidence_documents
-from agent.application.investigation_store import InvestigationStore
 from agent.application.search_taxonomy_review_service import SearchTaxonomyReviewService
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.run_context import emit_run_event, invoke_with_metrics, raise_if_cancelled
@@ -30,6 +30,7 @@ from agent.prompts.investigation import (
     taxonomy_resolution_prompt,
 )
 from agent.tools.realtime_scraping import realtime_scraping
+from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     ClarificationOption,
@@ -83,53 +84,61 @@ class InvestigationModels:
     def analysis(self) -> Any:
         if self.analysis_model is None:
             from agent.application.model_clients import get_structured_google_model
+            from agent.application.model_policy import commander_model_name
 
             self.analysis_model = get_structured_google_model(
-                "gemini-3.5-flash", RequestAnalysis, temperature=0.0
+                commander_model_name(), RequestAnalysis, temperature=0.0
             )
         return self.analysis_model
 
     def evidence(self) -> Any:
         if self.evidence_model is None:
             from agent.application.model_clients import get_structured_google_model
+            from agent.application.model_policy import commander_model_name
 
             self.evidence_model = get_structured_google_model(
-                "gemini-3.5-flash", EvidencePlan, temperature=0.0
+                commander_model_name(), EvidencePlan, temperature=0.0
             )
         return self.evidence_model
 
     def taxonomy(self) -> Any:
         if self.taxonomy_model is None:
             from agent.application.model_clients import get_structured_google_model
+            from agent.application.model_policy import commander_model_name
 
             self.taxonomy_model = get_structured_google_model(
-                "gemini-3.5-flash", TaxonomyResolution, temperature=0.0
+                commander_model_name(), TaxonomyResolution, temperature=0.0
             )
         return self.taxonomy_model
 
     def action(self) -> Any:
         if self.action_model is None:
             from agent.application.model_clients import get_structured_google_model
+            from agent.application.model_policy import commander_model_name
 
             self.action_model = get_structured_google_model(
-                "gemini-3.5-flash", InvestigationActionPlan, temperature=0.0
+                commander_model_name(), InvestigationActionPlan, temperature=0.0
             )
         return self.action_model
 
     def validation(self) -> Any:
         if self.validation_model is None:
             from agent.application.model_clients import get_structured_google_model
+            from agent.application.model_policy import commander_model_name
 
             self.validation_model = get_structured_google_model(
-                "gemini-3.5-flash", EvidenceValidation, temperature=0.0
+                commander_model_name(), EvidenceValidation, temperature=0.0
             )
         return self.validation_model
 
     def answer(self) -> Any:
         if self.answer_model is None:
             from agent.application.model_clients import get_google_chat_model
+            from agent.application.model_policy import commander_model_name
 
-            self.answer_model = get_google_chat_model("gemini-3.5-flash", temperature=0.0)
+            self.answer_model = get_google_chat_model(
+                commander_model_name(), temperature=0.0
+            )
         return self.answer_model
 
 
@@ -163,12 +172,12 @@ def _normalize_site_slugs(constraints):
         from agent.sites import list_supported_sites
 
         aliases: dict[str, str] = {}
-        for entry in list_supported_sites(enabled_only=False):
-            slug = str(entry.get("slug") or "").strip()
+        for profile in list_supported_sites(enabled_only=False):
+            slug = profile.slug
             values = [
                 slug,
-                str(entry.get("display_name") or ""),
-                *(str(item) for item in entry.get("domains", [])),
+                profile.display_name,
+                *(str(item) for item in profile.domains),
             ]
             for value in values:
                 if value.strip():
@@ -616,7 +625,7 @@ class InvestigationWorkflow:
         self,
         *,
         db_path: str | Path,
-        store: InvestigationStore | None = None,
+        checkpoint_runtime: InvestigationCheckpointRuntime | None = None,
         models: InvestigationModels | None = None,
         capabilities: list[Any] | None = None,
         collection_tool: Any = None,
@@ -628,7 +637,10 @@ class InvestigationWorkflow:
         from shared.db.database import Database
 
         Database(self.db_path)
-        self.store = store or InvestigationStore(self.db_path)
+        self._owns_checkpoint_runtime = checkpoint_runtime is None
+        self.checkpoint_runtime = checkpoint_runtime or InvestigationCheckpointRuntime(
+            self.db_path
+        )
         self.models = models or InvestigationModels()
         self.capabilities = capabilities or build_tool_capability_catalog()
         self.collection_tool = collection_tool or realtime_scraping
@@ -639,9 +651,11 @@ class InvestigationWorkflow:
         self.now = now or (lambda: datetime.now().astimezone())
         self.graph = self._build_graph()
 
-    def _save(self, investigation: InvestigationRequest) -> dict[str, Any]:
-        self.store.save(investigation)
-        return investigation.model_dump(mode="json")
+    def close(self) -> None:
+        """이 실행기가 만든 체크포인트 연결을 닫는다."""
+
+        if self._owns_checkpoint_runtime:
+            self.checkpoint_runtime.close()
 
     @staticmethod
     def _non_taxonomy_questions(
@@ -880,7 +894,7 @@ class InvestigationWorkflow:
                 ),
             }
         )
-        return {"investigation": self._save(updated)}
+        return {"investigation": updated.model_dump(mode="json")}
 
     @staticmethod
     def _route_after_understand(state: InvestigationGraphState) -> str:
@@ -904,17 +918,35 @@ class InvestigationWorkflow:
             ],
             "investigation_id": investigation.investigation_id,
         }
-        emit_run_event(
-            "clarification_required",
-            RunPhase.CLARIFICATION,
-            question.question,
-            status=RunStatus.WAITING_INPUT,
-            data=payload,
+        answer = ClarificationAnswer.model_validate(interrupt(payload))
+        self._accept_confirmed_semantic_alias(investigation, answer)
+        updated = apply_clarification_answer(
+            investigation,
+            answer,
+            today=self.now().date(),
+        )
+        constraints = self.taxonomy_service.enrich_constraints(updated.constraints)
+        answered_question_ids = [
+            item.question_id for item in updated.clarification_answers
+        ]
+        constraints, remaining_questions = self._prepare_taxonomy_questions(
+            constraints,
+            updated.clarification_questions,
+            answered_question_ids=answered_question_ids,
+        )
+        updated = updated.model_copy(
+            update={
+                "constraints": constraints,
+                "clarification_questions": remaining_questions,
+                "status": (
+                    InvestigationStatus.AWAITING_CLARIFICATION
+                    if remaining_questions
+                    else InvestigationStatus.CHECKING_EVIDENCE
+                ),
+            }
         )
         return {
-            "clarification": payload,
-            "final_answer": question.question,
-            "run_status": RunStatus.WAITING_INPUT.value,
+            "investigation": updated.model_dump(mode="json"),
         }
 
     def _define_evidence(self, state: InvestigationGraphState) -> dict[str, Any]:
@@ -952,7 +984,7 @@ class InvestigationWorkflow:
                 "status": InvestigationStatus.CHECKING_EVIDENCE,
             }
         )
-        return {"investigation": self._save(updated)}
+        return {"investigation": updated.model_dump(mode="json")}
 
     def _inspect_evidence(self, state: InvestigationGraphState) -> dict[str, Any]:
         raise_if_cancelled()
@@ -1002,7 +1034,7 @@ class InvestigationWorkflow:
             }
         )
         return {
-            "investigation": self._save(updated),
+            "investigation": updated.model_dump(mode="json"),
             "db_report": report,
             "valid_ids": evidence_document_ids,
         }
@@ -1074,7 +1106,7 @@ class InvestigationWorkflow:
             }
         )
         return {
-            "investigation": self._save(updated),
+            "investigation": updated.model_dump(mode="json"),
             "cannot_proceed_reason": plan.cannot_proceed_reason,
         }
 
@@ -1134,7 +1166,7 @@ class InvestigationWorkflow:
             }
         )
         return {
-            "investigation": self._save(updated),
+            "investigation": updated.model_dump(mode="json"),
             "collection_results": [*state.get("collection_results", []), parsed_result],
         }
 
@@ -1185,7 +1217,6 @@ class InvestigationWorkflow:
                 "status": InvestigationStatus.COMPLETED,
             }
         )
-        self._save(updated)
         emit_run_event("run_completed", RunPhase.COMPLETED, "답변을 완료했습니다.", status=RunStatus.COMPLETED)
         return {
             "investigation": updated.model_dump(mode="json"),
@@ -1213,7 +1244,15 @@ class InvestigationWorkflow:
                 "define_evidence": "define_evidence",
             },
         )
-        workflow.add_edge("clarify", END)
+        workflow.add_conditional_edges(
+            "clarify",
+            self._route_after_understand,
+            {
+                "clarify": "clarify",
+                "answer": "answer",
+                "define_evidence": "define_evidence",
+            },
+        )
         workflow.add_edge("define_evidence", "inspect_evidence")
         workflow.add_conditional_edges(
             "inspect_evidence",
@@ -1232,7 +1271,42 @@ class InvestigationWorkflow:
         workflow.add_edge("execute", "inspect_evidence")
         workflow.add_edge("load_documents", "answer")
         workflow.add_edge("answer", END)
-        return workflow.compile()
+        return workflow.compile(checkpointer=self.checkpoint_runtime.saver)
+
+    @staticmethod
+    def _thread_config(investigation_id: str) -> dict[str, dict[str, str]]:
+        return {"configurable": {"thread_id": investigation_id}}
+
+    @staticmethod
+    def _pending_clarification(result: dict[str, Any]) -> dict[str, Any] | None:
+        interruptions = result.get("__interrupt__") or ()
+        if not interruptions:
+            return None
+        payload = getattr(interruptions[0], "value", None)
+        return dict(payload) if isinstance(payload, dict) else None
+
+    def _normalize_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        clarification = self._pending_clarification(result)
+        normalized = {
+            key: value for key, value in result.items() if key != "__interrupt__"
+        }
+        if clarification is None:
+            return normalized
+        emit_run_event(
+            "clarification_required",
+            RunPhase.CLARIFICATION,
+            str(clarification.get("question") or "추가 정보가 필요합니다."),
+            status=RunStatus.WAITING_INPUT,
+            data=clarification,
+        )
+        normalized.update(
+            {
+                "clarification": clarification,
+                "final_answer": str(clarification.get("question") or ""),
+                "run_status": RunStatus.WAITING_INPUT.value,
+            }
+        )
+        return normalized
 
     def run(
         self,
@@ -1243,58 +1317,45 @@ class InvestigationWorkflow:
         clarification_answer: ClarificationAnswer | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if investigation_id:
-            investigation = self.store.get(investigation_id)
-            if investigation is None:
+            config = self._thread_config(investigation_id)
+            snapshot = self.graph.get_state(config)
+            if not snapshot.values:
                 raise ValueError("재개할 조사 상태를 찾을 수 없습니다.")
-            if clarification_answer is not None:
-                resolved_clarification_answer = ClarificationAnswer.model_validate(
-                    clarification_answer
-                )
-                self._accept_confirmed_semantic_alias(
-                    investigation,
-                    resolved_clarification_answer,
-                )
-                investigation = apply_clarification_answer(
-                    investigation,
-                    resolved_clarification_answer,
-                    today=self.now().date(),
-                )
-                constraints = self.taxonomy_service.enrich_constraints(
-                    investigation.constraints
-                )
-                answered_question_ids = [
-                    item.question_id for item in investigation.clarification_answers
-                ]
-                constraints, remaining_questions = self._prepare_taxonomy_questions(
-                    constraints,
-                    investigation.clarification_questions,
-                    answered_question_ids=answered_question_ids,
-                )
-                investigation = investigation.model_copy(
-                    update={
-                        "constraints": constraints,
-                        "clarification_questions": remaining_questions,
-                        "status": (
-                            InvestigationStatus.AWAITING_CLARIFICATION
-                            if remaining_questions
-                            else InvestigationStatus.CHECKING_EVIDENCE
-                        ),
-                    }
-                )
-                self.store.save(investigation)
-        else:
-            investigation = InvestigationRequest(
-                investigation_id=f"investigation-{uuid.uuid4().hex}",
-                conversation_id=conversation_id,
-                original_query=str(query or "").strip(),
+            if clarification_answer is None:
+                raise ValueError("조사를 재개하려면 확인 질문의 답변이 필요합니다.")
+            answer = ClarificationAnswer.model_validate(clarification_answer)
+            pending = [
+                interrupt_value.value
+                for task in snapshot.tasks
+                for interrupt_value in task.interrupts
+                if isinstance(interrupt_value.value, dict)
+            ]
+            if not pending:
+                raise ValueError("현재 재개할 확인 질문이 없습니다.")
+            if str(pending[0].get("question_id") or "") != answer.question_id:
+                raise ValueError("현재 확인 질문과 답변의 식별자가 다릅니다.")
+            result = self.graph.invoke(
+                Command(resume=answer.model_dump(mode="json")),
+                config=config,
             )
+            return self._normalize_result(dict(result))
+
+        investigation = InvestigationRequest(
+            investigation_id=f"investigation-{uuid.uuid4().hex}",
+            conversation_id=conversation_id,
+            original_query=str(query or "").strip(),
+        )
         state: InvestigationGraphState = {
             "investigation": investigation.model_dump(mode="json"),
             "capability_catalog": [item.model_dump(mode="json") for item in self.capabilities],
             "collection_results": [],
             "valid_ids": [],
         }
-        return self.graph.invoke(state)
+        result = self.graph.invoke(
+            state,
+            config=self._thread_config(investigation.investigation_id),
+        )
+        return self._normalize_result(dict(result))
 
 
 __all__ = ["InvestigationModels", "InvestigationWorkflow"]

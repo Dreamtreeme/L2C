@@ -15,6 +15,7 @@ from typing import Any, Iterator
 
 from shared.db.reflex_schema import (
     REFLEX_MEMORY_SCHEMA,
+    ensure_feedback_episode_schema,
     ensure_recipe_candidate_queue_schema,
 )
 from shared.db.search_taxonomy_schema import SEARCH_TAXONOMY_SCHEMA
@@ -116,6 +117,7 @@ class Database:
     def _init_schema(self) -> None:
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            ensure_feedback_episode_schema(conn)
             ensure_recipe_candidate_queue_schema(conn)
             
             # 마이그레이션 지원: 기존 테이블에 신규 컬럼이 없을 경우 동적 추가

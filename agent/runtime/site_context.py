@@ -9,35 +9,36 @@ from urllib.parse import urlparse
 
 from agent.recipe.page_context import normalize_page_role
 from agent.recipe.text_utils import normalize_text
+from agent.sites.profile import PageGuidance, SiteProfile
 
 
 @lru_cache(maxsize=32)
-def _site_profile_for_host(host: str) -> dict:
+def _site_profile_for_host(host: str) -> SiteProfile | None:
     """같은 작업 중 반복 조회되는 사이트 프로필을 호스트 단위로 재사용한다."""
 
     if host.startswith("www."):
         host = host[4:]
     if not host:
-        return {}
+        return None
     try:
         from agent.sites import list_supported_sites, load_site_profile
 
-        for entry in list_supported_sites(enabled_only=False):
-            domains = [str(domain or "").lower() for domain in entry.get("domains", [])]
+        for profile in list_supported_sites(enabled_only=False):
+            domains = [str(domain or "").lower() for domain in profile.domains]
             if any(host == domain or host.endswith("." + domain) for domain in domains):
-                return load_site_profile(str(entry.get("slug") or ""))
+                return load_site_profile(profile.slug)
     except Exception:
-        return {}
-    return {}
+        return None
+    return None
 
 
-def site_profile_for_url(url: str) -> dict:
+def site_profile_for_url(url: str) -> SiteProfile | None:
     """URL 호스트와 일치하는 활성·비활성 사이트 프로필을 반환한다."""
 
     try:
         host = (urlparse(url or "").netloc or "").lower()
     except Exception:
-        return {}
+        return None
     return _site_profile_for_host(host)
 
 
@@ -45,22 +46,17 @@ def persistence_policy_for_url(url: str) -> dict:
     """URL에 해당하는 사이트의 저장 정책을 반환한다."""
 
     profile = site_profile_for_url(url)
-    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-    policy = manual.get("persistence_policy", {}) if isinstance(manual, dict) else {}
-    return policy if isinstance(policy, dict) else {}
+    return profile.persistence_policy.model_dump(mode="json") if profile else {}
 
 
 def page_guidance_for_url(url: str, page_role: str) -> dict[str, Any]:
     """현재 사이트와 화면 역할에 해당하는 선언형 안내만 반환한다."""
 
     profile = site_profile_for_url(url)
-    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-    guidance = manual.get("page_guidance", {}) if isinstance(manual, dict) else {}
-    if not isinstance(guidance, dict):
-        return {}
+    guidance = profile.page_guidance if profile else {}
     role = normalize_page_role(page_role)
-    value = guidance.get(role, {})
-    return dict(value) if isinstance(value, dict) else {}
+    value = guidance.get(role)
+    return value.model_dump(mode="json") if isinstance(value, PageGuidance) else {}
 
 
 def _matches_declared_url_pattern(url: str, patterns: list[Any]) -> bool:
@@ -92,20 +88,21 @@ def infer_site_page_role(url: str, marker_texts: list[Any] | None = None) -> str
 
     texts = list(marker_texts or [])
     profile = site_profile_for_url(url)
-    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-    guidance = manual.get("page_guidance", {}) if isinstance(manual, dict) else {}
-    if isinstance(guidance, dict):
-        for raw_role, raw_config in guidance.items():
-            if not isinstance(raw_config, dict):
-                continue
+    guidance = profile.page_guidance if profile else {}
+    if guidance:
+        cue_guidance = sorted(
+            guidance.items(),
+            key=lambda item: normalize_page_role(item[0]) != "job_detail",
+        )
+        for raw_role, config in cue_guidance:
+            raw_config = config.model_dump(mode="json")
             role = normalize_page_role(raw_role)
             patterns = list(raw_config.get("url_patterns") or [])
             if url and _matches_declared_url_pattern(url, patterns):
                 return role
 
-        for raw_role, raw_config in guidance.items():
-            if not isinstance(raw_config, dict):
-                continue
+        for raw_role, config in cue_guidance:
+            raw_config = config.model_dump(mode="json")
             cues = list(raw_config.get("visible_cues") or [])
             matched = _matched_visible_cues(texts, cues)
             try:
@@ -183,12 +180,11 @@ def site_runtime_guidance(url: str, page_role: str) -> str:
     profile = site_profile_for_url(url)
     if not profile:
         return ""
-    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
     role = normalize_page_role(page_role) or "unknown"
     guidance = page_guidance_for_url(url, role)
     if not guidance:
         return ""
-    display_name = str(entry.get("display_name") or entry.get("slug") or "현재 사이트")
+    display_name = profile.display_name or profile.slug
     parts = [f"현재 사이트 안내: {display_name} / {role}"]
     instructions = [str(item).strip() for item in guidance.get("instructions", []) if str(item).strip()]
     reading_targets = [str(item).strip() for item in guidance.get("reading_targets", []) if str(item).strip()]

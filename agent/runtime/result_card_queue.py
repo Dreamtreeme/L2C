@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from langchain_core.messages import AIMessage
-
-from agent.graph.action_request import build_action_message
+from agent.config import get_settings
+from agent.graph.action_request import ActionRequest, build_action_request
 from agent.graph.state import GraphState
 from agent.runtime.site_context import looks_like_job_detail_url
 from agent.vision.marker_geometry import (
@@ -26,8 +24,7 @@ def marker_by_id(markers: list[dict], marker_id: int | None) -> dict | None:
 
 
 def card_queue_enabled() -> bool:
-    raw = os.getenv("VISION_RESULT_CARD_QUEUE_ENABLED", "1")
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return get_settings().reflex.result_card_queue_enabled
 
 
 def queue_card_label(card: dict) -> str:
@@ -138,7 +135,7 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
     target_count = _target_count_from_state(state)
     resolved_count = max(
         _collected_job_count(state.get("extracted_jd", {}) or {}),
-        completed_result_card_count(queue),
+        terminal_result_card_count(queue),
     )
     remaining = (
         target_count - resolved_count
@@ -274,7 +271,7 @@ def result_card_queue_scope_complete(
         return False
     if str(count_mode or "").strip().lower() == "visible_all":
         return True
-    return target_count > 0 and completed_result_card_count(queue) >= target_count
+    return target_count > 0 and terminal_result_card_count(queue) >= target_count
 
 
 def same_queue_card(item: dict, args: dict) -> bool:
@@ -398,12 +395,9 @@ def queue_return_screen_matches(
     except Exception as exc:
         return False, {"reason": "phash_compare_failed", "error": str(exc)}
 
-    try:
-        max_distance = int(os.getenv("VISION_CARD_QUEUE_RETURN_PHASH_MAX_DISTANCE", "16"))
-        min_overlap = float(os.getenv("VISION_CARD_QUEUE_RETURN_MIN_ANCHOR_OVERLAP", "0.20"))
-    except ValueError:
-        max_distance = 16
-        min_overlap = 0.20
+    settings = get_settings().reflex
+    max_distance = settings.card_queue_return_phash_max_distance
+    min_overlap = settings.card_queue_return_min_anchor_overlap
     matched = bool(
         distance is not None
         and distance <= max_distance
@@ -471,7 +465,7 @@ def queue_replay_after_return(
     screen_signature: dict,
     *,
     require_anchors: bool = True,
-) -> tuple[AIMessage | None, list[dict], dict]:
+) -> tuple[ActionRequest | None, list[dict], dict]:
     """어떤 물리 행동으로 복귀했든 목록 화면이 확인되면 다음 카드를 준비한다."""
 
     if not card_queue_enabled():
@@ -518,18 +512,19 @@ def queue_replay_after_return(
         "reason": "검색 결과 카드 큐에서 다음 미방문 공고를 선택합니다.",
         "expected_after": "선택한 공고의 상세 페이지가 열린다.",
     }
-    message = build_action_message(
+    request = build_action_request(
         "card_queue",
         "cached next result card",
         [
             {
                 "name": "click_marker",
-                "args": args,
+                "args": {key: value for key, value in args.items() if key != "queue_id"},
                 "id": f"card_queue_{item.get('queue_id', 'next')}",
+                "metadata": {"queue_id": item.get("queue_id", "")},
             }
         ],
     )
-    return message, next_markers, {
+    return request, next_markers, {
         "hit": True,
         "queue_id": item.get("queue_id", ""),
         "title": item.get("title", ""),

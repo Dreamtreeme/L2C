@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "registration_order": 40,
+  "slug": "worknet",
+  "display_name": "워크넷/고용24",
+  "source_platform": "Work24",
+  "aliases": ["worknet", "work24", "워크넷", "고용24"],
+  "domains": ["work.go.kr", "www.work.go.kr", "work24.go.kr", "www.work24.go.kr"],
+  "base_url": "https://www.work24.go.kr",
+  "enabled": true,
+  "runner": "vision_react",
+  "classic_adapter": "worknet",
+  "default_query_target": "job search",
+  "navigation_policy": {},
+  "persistence_policy": {"require_detail_url_for_job_update": true},
+  "page_guidance": {
+    "home": {
+      "url_patterns": ["/cm/main\\.do"],
+      "instructions": ["채용정보 검색 화면에서 사용자 검색어를 입력한다."]
+    },
+    "search": {
+      "visible_cues": ["채용정보", "검색결과"],
+      "minimum_visible_cues": 2,
+      "instructions": ["표 또는 카드의 직무명과 회사명을 함께 보고 미방문 항목을 선택한다."]
+    },
+    "job_detail": {
+      "url_patterns": ["/empDetailAuthView\\.do"],
+      "visible_cues": ["모집요강", "직무내용", "근무조건", "전형방법"],
+      "minimum_visible_cues": 2,
+      "instructions": ["공공 채용 상세의 직무내용과 근무조건 영역을 모두 누적해서 읽는다."],
+      "reading_targets": ["회사명", "직무명", "직무내용", "경력", "학력", "고용형태", "근무지", "임금", "마감일"],
+      "navigation_notes": ["워크넷과 고용24의 공식 도메인 이동은 같은 흐름으로 취급한다."]
+    }
+  },
+  "collection_policy": {
+    "card_identity": ["job title", "company name", "region"],
+    "visit_order": "top_to_bottom_visible_unvisited",
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "근무지", "고용형태", "url"],
+    "finish_condition": "Requested trend sample size is reached or no unvisited rows remain."
+  },
+  "reflex_policy": {
+    "safe_actions": ["submit_search", "scroll_down", "go_back"],
+    "unsafe_actions": ["change_government_service_context_without_need"],
+    "reason_after_hit": true
+  },
+  "tools": {
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "tool_rules": {"click_marker": "표 행의 직무명과 회사를 함께 확인한 뒤 선택한다."},
+    "reflex": {
+      "enabled_by_profile": true,
+      "safe_replay_actions": ["type_in_marker", "press_key", "scroll", "go_back"],
+      "conditional_replay_actions": ["click_marker"],
+      "requires_reasoning_after_hit": true
+    }
+  },
+  "guidance": "결과 행 또는 카드를 직무명, 회사명, 지역으로 식별한다. 공식 워크넷·고용24 도메인 이동은 허용하되 행 선택과 필터 해석은 현재 화면을 기준으로 판단한다."
+}

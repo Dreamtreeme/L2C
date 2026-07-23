@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
-from agent.application.investigation_store import InvestigationStore
 from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.tool_capabilities import build_tool_capability_catalog
+from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
 from shared.db.database import Database
 from agent.tools.evidence_inventory import inspect_job_evidence as inspect_job_evidence_tool
 from shared.schema.investigation_schema import (
@@ -252,44 +253,31 @@ def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
     assert requirement_report["occupation_query"] == "알려지지 않은 신직무"
 
 
-def test_investigation_store_round_trip(tmp_path):
-    store = InvestigationStore(tmp_path / "jobs.db")
-    investigation = InvestigationRequest(
-        investigation_id="investigation-1",
-        conversation_id="conversation-1",
-        original_query="최근 AI 개발자 채용 트렌드를 알려줘",
-        objective="AI 개발자 채용 트렌드 분석",
-        purpose=InvestigationPurpose.TREND,
-        status=InvestigationStatus.AWAITING_CLARIFICATION,
-        clarification_questions=[
-            ClarificationQuestion(
-                question_id="analysis_dimensions",
-                field="analysis_dimensions",
-                question="어떤 변화를 분석할까요?",
-                options=[
-                    ClarificationOption(
-                        option_id="job_count",
-                        label="공고 수",
-                        value="공고 수",
-                    )
-                ],
-            )
-        ],
-        clarification_answers=[
-            ClarificationAnswer(
-                question_id="site_scope",
-                selected_option_id="all_sites",
-                value="all_enabled",
-            )
-        ],
-    )
+def test_investigation_checkpoint_is_separate_from_business_database(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    Database(db_path)
+    checkpoint_runtime = InvestigationCheckpointRuntime(db_path)
+    checkpoint_path = checkpoint_runtime.checkpoint_path
+    checkpoint_runtime.close()
 
-    store.save(investigation)
-    loaded = store.get("investigation-1")
-    latest = store.latest_for_conversation("conversation-1")
+    with sqlite3.connect(db_path) as connection:
+        business_tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    with sqlite3.connect(checkpoint_path) as connection:
+        checkpoint_tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
 
-    assert loaded == investigation
-    assert latest == investigation
+    assert "investigation_sessions" not in business_tables
+    assert "checkpoints" not in business_tables
+    assert {"checkpoints", "writes"} <= checkpoint_tables
 
 
 def test_recent_three_months_resolves_analysis_and_comparison_periods():
@@ -827,6 +815,32 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
         now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
     )
     first = workflow.run("최근 AI 개발자 채용 트렌드를 알려줘")
+    workflow.close()
+
+    workflow = InvestigationWorkflow(
+        db_path=tmp_path / "jobs.db",
+        models=InvestigationModels(
+            analysis_model=analysis_model,
+            evidence_model=evidence_model,
+            action_model=_FakeModel(
+                InvestigationActionPlan(cannot_proceed_reason="게시일 근거를 확인할 수 없음")
+            ),
+            answer_model=_FakeModel("게시일 근거가 없어 비교할 수 없습니다."),
+        ),
+        capabilities=_test_capabilities(),
+        collection_tool=_FailingTool(),
+        now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(ValueError, match="식별자가 다릅니다"):
+        workflow.run(
+            "",
+            investigation_id=first["investigation"]["investigation_id"],
+            clarification_answer={
+                "question_id": "different-question",
+                "selected_option_id": "job_count",
+            },
+        )
 
     resumed = workflow.run(
         "",
@@ -845,6 +859,9 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
         item["requirement_id"]
         for item in resumed["investigation"]["evidence_requirements"]
     ] == ["current", "previous"]
+    assert analysis_model.calls == 1
+    assert evidence_model.calls == 1
+    workflow.close()
 
 
 def test_workflow_executes_only_registered_collection_plan(tmp_path):

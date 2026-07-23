@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any
 
-from langchain_core.messages import AIMessage
-
-from agent.graph.action_request import build_action_message
+from agent.config import get_settings
 from agent.runtime.site_context import is_job_detail_context, page_guidance_for_url
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox
 
 
 def env_enabled(name: str, default: bool = True) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    values = {
+        "VISION_DETAIL_SECTION_CONTEXT_ENABLED": get_settings().vision.detail_section_context_enabled,
+        "VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED": get_settings().vision.detail_lightweight_marked_image_enabled,
+        "VISION_DETAIL_OCR_BUFFER_ENABLED": get_settings().vision.detail_ocr_buffer_enabled,
+    }
+    return values.get(name, default)
 
 
 def marker_prompt_rank(marker: dict) -> tuple[int, int, int]:
@@ -226,10 +225,7 @@ def build_detail_lightweight_marked_image(
         source_path = Path(image_path)
         if not source_path.exists():
             return ""
-        try:
-            action_limit = int(os.getenv("VISION_DETAIL_ACTION_MARKER_LIMIT", "35"))
-        except ValueError:
-            action_limit = 35
+        action_limit = get_settings().vision.detail_action_marker_limit
         candidates = detail_action_marker_candidates(
             markers,
             action_limit,
@@ -262,14 +258,10 @@ def build_detail_lightweight_marked_image(
 
 
 def build_detail_section_context(markers: list[dict]) -> str:
-    try:
-        min_text_markers = int(os.getenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "120"))
-        max_lines = int(os.getenv("VISION_DETAIL_OCR_MAX_LINES", "90"))
-        max_line_chars = int(os.getenv("VISION_DETAIL_SECTION_MAX_LINE_CHARS", "180"))
-    except ValueError:
-        min_text_markers = 120
-        max_lines = 90
-        max_line_chars = 180
+    settings = get_settings().vision
+    min_text_markers = settings.detail_section_min_text_markers
+    max_lines = settings.detail_ocr_max_lines
+    max_line_chars = settings.detail_section_max_line_chars
 
     text_marker_count = sum(
         1
@@ -349,12 +341,9 @@ def update_detail_ocr_buffer(
     ):
         return dict(existing or {})
 
-    try:
-        max_lines = int(os.getenv("VISION_DETAIL_OCR_BUFFER_MAX_LINES", "260"))
-        max_line_chars = int(os.getenv("VISION_DETAIL_OCR_BUFFER_MAX_LINE_CHARS", "220"))
-    except ValueError:
-        max_lines = 260
-        max_line_chars = 220
+    settings = get_settings().vision
+    max_lines = settings.detail_buffer_max_lines
+    max_line_chars = settings.detail_buffer_max_line_chars
 
     buffer = dict(existing or {})
     if (
@@ -446,157 +435,6 @@ def update_detail_ocr_buffer(
     return buffer
 
 
-def detail_page_policy_enabled() -> bool:
-    return env_enabled("VISION_DETAIL_PAGE_POLICY_ENABLED", True)
-
-
-def detail_policy_limits() -> tuple[int, int, int, int]:
-    try:
-        min_screens = int(os.getenv("VISION_DETAIL_POLICY_MIN_SCREENS", "3"))
-        max_screens = int(os.getenv("VISION_DETAIL_POLICY_MAX_SCREENS", "4"))
-        min_added_lines = int(os.getenv("VISION_DETAIL_POLICY_MIN_ADDED_LINES", "8"))
-        reveal_min_screen = int(os.getenv("VISION_DETAIL_POLICY_REVEAL_MIN_SCREEN", "2"))
-    except ValueError:
-        min_screens = 3
-        max_screens = 4
-        min_added_lines = 8
-        reveal_min_screen = 2
-    return min_screens, max(max_screens, min_screens), min_added_lines, reveal_min_screen
-
-
-def detail_page_policy_message(
-    current_url: str,
-    markers: list[dict],
-    detail_ocr_buffer: dict[str, Any],
-    *,
-    page_role: str = "",
-    transition_status: str = "",
-) -> tuple[AIMessage | None, dict[str, Any]]:
-    """상세 페이지의 반복 읽기 행동만 결정론적으로 선택한다."""
-
-    if not detail_page_policy_enabled() or transition_status == "pending":
-        return None, {}
-    marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
-    detail_context = is_job_detail_context(
-        current_url,
-        page_role=page_role,
-        marker_texts=marker_texts,
-    )
-    if not current_url or not detail_context:
-        return None, {}
-    if detail_ocr_buffer.get("url") != current_url:
-        return None, {}
-
-    stats = dict(detail_ocr_buffer.get("stats") or {})
-    screen_count = int(stats.get("screen_count") or 0)
-    added_lines = int(stats.get("added_lines_last_screen") or 0)
-    duplicate_lines = int(stats.get("duplicate_lines_last_screen") or 0)
-    total_lines = len(
-        [item for item in (detail_ocr_buffer.get("lines") or []) if isinstance(item, dict)]
-    )
-    min_screens, max_screens, min_added_lines, reveal_min_screen = detail_policy_limits()
-
-    candidates = detail_action_marker_candidates(
-        markers,
-        1,
-        detail_reveal_controls(current_url),
-    )
-    reveal_attempted = bool(detail_ocr_buffer.get("reveal_control_attempted"))
-    if candidates and screen_count >= reveal_min_screen and not reveal_attempted:
-        marker = candidates[0]
-        marker_id = marker.get("id")
-        if marker_id is not None:
-            detail_ocr_buffer["reveal_control_attempted"] = True
-            trace = {
-                "policy": "detail_reveal",
-                "marker_id": marker_id,
-                "screen_count": screen_count,
-                "added_lines_last_screen": added_lines,
-                "duplicate_lines_last_screen": duplicate_lines,
-                "total_lines": total_lines,
-            }
-            message = build_action_message(
-                "page_policy",
-                "detail reveal",
-                [
-                    {
-                        "name": "click_marker",
-                        "args": {
-                            "marker_id": marker_id,
-                            "page_role": "job_detail",
-                            "target_role": "button",
-                            "target_component": "expand_detail_button",
-                            "target_label": str(marker.get("text") or "상세 정보 더 보기"),
-                            "reason": "상세 페이지 본문을 더 펼치기 위해 보이는 상세 정보 버튼을 클릭합니다.",
-                            "expected_after": "상세 페이지 본문이 펼쳐지거나 추가 본문이 노출됩니다.",
-                            "risk_level": "safe_read",
-                            "needs_user_confirmation": False,
-                            "_transition_source": "page_policy",
-                        },
-                        "id": "detail_policy_reveal",
-                    }
-                ],
-            )
-            return message, trace
-
-    should_scroll = screen_count < max_screens and (
-        screen_count < min_screens or added_lines >= min_added_lines
-    )
-    if should_scroll:
-        trace = {
-            "policy": "detail_scroll",
-            "screen_count": screen_count,
-            "added_lines_last_screen": added_lines,
-            "duplicate_lines_last_screen": duplicate_lines,
-            "total_lines": total_lines,
-        }
-        message = build_action_message(
-            "page_policy",
-            "detail scroll",
-            [
-                {
-                    "name": "scroll",
-                    "args": {
-                        "direction": "down",
-                        "page_role": "job_detail",
-                        "reason": "상세 페이지 OCR 본문을 더 누적하기 위해 다음 화면으로 이동합니다.",
-                        "expected_after": "상세 페이지의 아래쪽 본문이 화면에 나타납니다.",
-                        "risk_level": "safe_read",
-                        "needs_user_confirmation": False,
-                        "_transition_source": "page_policy",
-                    },
-                    "id": "detail_policy_scroll",
-                }
-            ],
-        )
-        return message, trace
-
-    trace = {
-        "policy": "detail_finish",
-        "screen_count": screen_count,
-        "added_lines_last_screen": added_lines,
-        "duplicate_lines_last_screen": duplicate_lines,
-        "total_lines": total_lines,
-        "max_screens": max_screens,
-    }
-    message = build_action_message(
-        "page_policy",
-        "detail finish",
-        [
-            {
-                "name": "finish_detail_reading",
-                "args": {
-                    "page_role": "job_detail",
-                    "detail_complete": True,
-                    "reason": "상세 페이지 OCR 본문을 충분히 누적했으므로 읽기를 종료합니다.",
-                },
-                "id": "detail_policy_finish",
-            }
-        ],
-    )
-    return message, trace
-
-
 def compact_detail_ocr_buffer_context(state: dict, current_url: str) -> str:
     if not detail_ocr_buffer_enabled() or not current_url:
         return ""
@@ -610,8 +448,12 @@ def compact_detail_ocr_buffer_context(state: dict, current_url: str) -> str:
         return ""
     stats = dict(buffer.get("stats") or {})
     lines = [item for item in (buffer.get("lines") or []) if isinstance(item, dict)]
+    first_preview = [str(item.get("text") or "").strip() for item in lines[:8]]
+    first_preview = [line for line in first_preview if line]
     preview = [str(item.get("text") or "").strip() for item in lines[-8:]]
     preview = [line for line in preview if line]
+    followup = dict(state.get("detail_followup_required") or {})
+    followup_active = bool(followup and followup.get("url") == current_url)
     parts = [
         "상세 OCR 누적 상태:",
         f"- 누적 본문 줄 수: {len(lines)}",
@@ -622,6 +464,20 @@ def compact_detail_ocr_buffer_context(state: dict, current_url: str) -> str:
         "- 더 읽어야 하면 scroll 또는 현재 사이트 안내에 선언된 상세 펼치기 버튼을 선택하십시오.",
         "- 현재 공고 정보가 충분하면 finish_detail_reading(page_role=\"job_detail\", detail_complete=true)을 호출하십시오.",
     ]
+    if followup_active:
+        parts.extend(
+            [
+                "- 직전 상세 완료는 실제 직무 본문 부족으로 거부되었습니다.",
+                "- 누적 OCR과 화면을 보고 원문 공고 이동 수단 또는 추가 본문 공개 수단이 있는지 판단하십시오.",
+                "- 원문 이동 수단이 현재 화면에 없으면 위로 스크롤하고, 보이면 해당 마커를 click_marker로 선택하십시오.",
+                "- URL을 추측해 open_browser를 호출하지 마십시오.",
+            ]
+        )
+    if first_preview:
+        parts.append(
+            "- 처음 누적 본문 미리보기: "
+            + json.dumps(first_preview, ensure_ascii=False, separators=(",", ":"))
+        )
     if preview:
         parts.append(
             "- 최근 누적 본문 미리보기: "
@@ -633,10 +489,7 @@ def compact_detail_ocr_buffer_context(state: dict, current_url: str) -> str:
 def detail_buffer_text(buffer: dict[str, Any]) -> str:
     """누적 OCR 줄을 최종 추출 모델의 입력 크기에 맞춰 렌더링한다."""
 
-    try:
-        max_chars = int(os.getenv("VISION_DETAIL_FINAL_OCR_MAX_CHARS", "16000"))
-    except ValueError:
-        max_chars = 16000
+    max_chars = get_settings().vision.detail_final_ocr_max_chars
     lines = [item for item in (buffer.get("lines") or []) if isinstance(item, dict)]
     rendered: list[str] = []
     total = 0
@@ -663,8 +516,6 @@ __all__ = [
     "detail_lines_for_buffer",
     "detail_ocr_buffer_enabled",
     "detail_page_policy_enabled",
-    "detail_page_policy_message",
-    "detail_policy_limits",
     "detail_reveal_controls",
     "draw_detail_lightweight_marker",
     "env_enabled",

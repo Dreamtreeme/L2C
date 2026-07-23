@@ -32,7 +32,7 @@ _UI_ACTIONS = {
     "switch_tab",
     "go_back",
 }
-_STATE_ACTIONS = {"update_plan_progress", "update_extracted_info", "finish_task"}
+_STATE_ACTIONS = {"update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task"}
 
 
 def _message_text(content: Any) -> str:
@@ -188,7 +188,7 @@ def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, A
 def record_action_episode(
     episodes: list[dict[str, Any]],
     state: dict,
-    ai_msg: Any,
+    action_request: Any,
     action_name: str,
     args: dict[str, Any],
     enriched_result: dict[str, Any],
@@ -203,7 +203,7 @@ def record_action_episode(
         proposal = ActionProposal(
             action=action_name,
             args=_compact_args(action_name, args),
-            llm_thought=_message_text(getattr(ai_msg, "content", "")),
+            llm_thought=_message_text(getattr(action_request, "summary", "")),
             reason=str(args.get("reason") or ""),
             target=target,
             target_label=(args.get("target_label") or args.get("semantic_label")),
@@ -214,6 +214,7 @@ def record_action_episode(
             fixed_candidate=action_name in {"scroll", "press_key", "go_back"},
         )
         before = {
+            "capture_id": str(before_snapshot.get("capture_id") or ""),
             "url": before_snapshot.get("url", ""),
             "screenshot": before_snapshot.get("screenshot", ""),
             "marked_image": before_snapshot.get("marked_image", ""),

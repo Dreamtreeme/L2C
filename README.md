@@ -12,7 +12,7 @@
 
 이 프로젝트는 두 방식의 장점을 결합하는 구조를 실험합니다. 처음 보는 사이트나 화면은 비전 에이전트가 직접 탐색하고, 그 과정에서 행동 제안, 전후 화면 변화, 성공/실패 피드백을 누적합니다. 반복적으로 성공한 패턴만 Reflex Recipe로 승격하여 이후에는 필요한 파라미터만 바꿔 빠르게 실행합니다. **사이트별 사전 분석 없이 시작 가능하고, 사용량이 누적될수록 추론이 필요한 구간만 남아 운영 비용이 점진적으로 감소**하는 자동화 시스템을 목표로 합니다.
 
-첫 번째 실험 도메인은 채용공고 수집이며, Phase 5의 정량 비교를 통해 비전 기반 자율 수집이 작동함을 확인했습니다. 현재는 Phase 8에서 자율탐색 기록을 반복탐색에 재사용해 reasoning 호출을 줄이는 구조를 검증 중입니다. 자세한 결과는 [`benchmark/jd_comparison_report.md`](./benchmark/jd_comparison_report.md)와 [`troubleshooting.md`](./troubleshooting.md)에서 확인할 수 있습니다.
+첫 번째 실험 도메인은 채용공고 수집이며, Phase 5의 정량 비교를 통해 비전 기반 자율 수집이 작동함을 확인했습니다. 현재는 Phase 8에서 자율탐색 기록을 반복탐색에 재사용해 reasoning 호출을 줄이는 구조를 검증 중입니다. 자세한 결과는 [`benchmark/jd_comparison_report.md`](./benchmark/jd_comparison_report.md)와 [`troubleshooting.md`](./troubleshooting.md)에서 확인할 수 있습니다. 설계·실험·운영 문서 전체는 [`docs/index.md`](./docs/index.md)에서 찾을 수 있습니다.
 
 ## 현재 단계
 
@@ -283,14 +283,15 @@ L2C/
 
 | 카테고리 | 기술 |
 |---------|------|
-| 언어·런타임 | Python 3.10+ |
+| 언어·런타임 | Python 3.13.14 |
 | Classic 브라우저 자동화 | Playwright DOM/selector |
 | Realtime 브라우저 자동화 | 화면/OCR + PyAutoGUI 물리 입력 |
 | UI 요소 검출 | OmniParser (Microsoft) |
-| OCR | PaddleOCR GPU subprocess 재사용 |
-| 에이전트 워크플로우 | LangGraph |
-| 지휘자 모델 | Gemini 3.5 Flash |
-| 비전 판단 모델 | Gemini 3.5 Flash |
+| OCR | PaddlePaddle 3.3.1 + PaddleOCR 3.7 GPU subprocess 재사용 |
+| 에이전트 워크플로우 | LangGraph 1.2 |
+| 지휘자 모델 | Gemini 3.6 Flash |
+| 비전 판단 모델 | Gemini 3.6 Flash |
+| 경량 구조화 모델 | Gemini 3.5 Flash Lite |
 | VLM 캡셔닝 폴백 | Qwen2.5-VL (Ollama) |
 | 실행자 텍스트 모델 | Qwen (Ollama) |
 | 검색 방식 | 검색 의미 사전 + 구조화 SQLite 근거 검사 |
@@ -312,14 +313,12 @@ cd L2C
 
 # 환경 설정
 Copy-Item .env.example .env
-& 'C:\Program Files\Python310\python.exe' -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m playwright install chromium
+.\scripts\setup_runtime.ps1
+.\.venv-app\Scripts\Activate.ps1
 
 # Gemini 기반 지휘자/QA 사용 시 .env에 GEMINI_API_KEY를 설정
 # 기본값 SKIP_VLM_CAPTION=true 로 VLM 캡셔닝 단계를 우회
-# 비전 자율 수집은 VISION_AGENT_RECURSION_LIMIT=60 기본값으로 실행
+# 분할된 비전 작업자 그래프는 VISION_AGENT_RECURSION_LIMIT=180 기본값으로 실행
 
 # Classic 방식 — URL 직접 입력
 python -m classic.main extract https://www.wanted.co.kr/wd/350432
@@ -345,13 +344,17 @@ python -m benchmark.run_compare_jd
 # Realtime E2E: 로그, 구조화 요약, 선택적 LangSmith trace를 함께 생성
 python -m benchmark.run_realtime_e2e --site wanted --query "ios 개발자 공고 2개" --target-count 2 --count-mode explicit --scenario-id wanted-ios-2 --run-mode warm --log logs/e2e_wanted_ios2.log
 
-# 기존 로그 또는 새 summary의 p50/p95/max, Reflex, OCR 지표 확인
+# 구조화 summary의 p50/p95/max, Reflex, OCR 지표 확인
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 ```
 
+설치 스크립트는 Python 3.13을 사용해 `.venv-app`과 `.venv-ocr`을 따로 만듭니다. OmniParser/PyTorch와 PaddleOCR/PaddlePaddle의 CUDA 런타임을 분리하므로 한 프로세스 안에서 DLL과 import 순서를 맞추는 우회 코드가 필요하지 않습니다. 설치 뒤 `scripts/check_runtime_compat.py`가 패키지 버전, OpenCV 중복 설치, GPU 연산을 검사합니다.
+
+고정 버전의 선택 근거와 GPU 실측 결과는 [`docs/runtime_compatibility.md`](./docs/runtime_compatibility.md)에 정리했습니다.
+
 웹 화면 오른쪽 위의 활동 아이콘에서 최근 실행 상태와 저장 현황을 확인할 수 있습니다. 만료 항목 정리는 먼저 삭제 후보와 예상 용량을 미리 계산하고, 사용자가 확인한 경우에만 오래된 로그·미참조 화면 산출물·감사 이력을 삭제합니다. 현재 공고, 활성 레시피, 공고가 참조하는 화면 파일은 정리 대상에서 제외합니다.
 
-기본 보존 기간은 로그 30일, 화면 산출물 14일, 감사 이력 90일, 공고 변경 이력 180일입니다. 공고별 최신 변경 이력은 기간과 관계없이 5개를 남기며, `RETENTION_*` 환경변수로 기준을 조정할 수 있습니다.
+기본 보존 기간은 로그 30일, 화면 산출물과 감사 이력 90일, 공고 변경 이력 180일입니다. 공고별 최신 변경 이력은 기간과 관계없이 5개를 남기며, `RETENTION_*` 환경변수로 기준을 조정할 수 있습니다.
 
 E2E 요약은 `run_id`, 실행시간, 실패 단계, 단계별 시간, 모델별 토큰, 선택적 비용 추정, 수집 품질을 한 파일에 기록합니다. LangSmith를 활성화하면 같은 실행의 trace와 결정론적 feedback도 함께 전송합니다. 설정과 대시보드 기준은 [`docs/e2e_observability.md`](./docs/e2e_observability.md)를 참고하세요. 모델 단가는 `config/model_pricing.example.json` 형식을 참고해 별도 파일로 관리하고 `LLM_PRICING_FILE`에 지정합니다. 가격표가 없으면 부정확한 비용을 만들지 않고 토큰 원시값만 보존합니다.
 

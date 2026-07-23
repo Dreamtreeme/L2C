@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
+from agent.config import get_settings
 from agent.recipe.text_utils import normalize_text
 from agent.utils.model_dump import dump_model
 from agent.vision.marker_geometry import marker_center_ratio
@@ -82,8 +82,9 @@ def capture_context_match(
     if not saved_size or not current_size:
         return {"matched": True, "reason": "capture_context_unknown"}
 
-    width_tolerance = max(0, int(os.getenv("REFLEX_CAPTURE_WIDTH_TOLERANCE_PX", "32")))
-    height_tolerance = max(0, int(os.getenv("REFLEX_CAPTURE_HEIGHT_TOLERANCE_PX", "48")))
+    settings = get_settings().reflex
+    width_tolerance = settings.capture_width_tolerance_px
+    height_tolerance = settings.capture_height_tolerance_px
     if (
         abs(saved_size[0] - current_size[0]) > width_tolerance
         or abs(saved_size[1] - current_size[1]) > height_tolerance
@@ -107,7 +108,7 @@ def roi_signature_match(
     current_image_path: str,
     current_signature: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    max_distance = int(os.getenv("REFLEX_ROI_PHASH_MAX_DISTANCE", "22"))
+    max_distance = get_settings().reflex.roi_phash_max_distance
     crop_rect_ratio = saved.get("crop_rect_ratio") or []
     if not current_image_path:
         return {"matched": False, "reason": "roi_current_image_missing", "distance": None, "mode": "roi_phash"}
@@ -165,7 +166,7 @@ def match_target_by_ratio(target: Any, markers: list[dict[str, Any]], screen_siz
     target_center = _target_center_ratio(target)
     if len(target_center) != 2 or not screen_size or len(screen_size) != 2:
         return None
-    max_distance = float(os.getenv("REFLEX_TARGET_CENTER_MAX_DISTANCE", "0.065"))
+    max_distance = get_settings().reflex.target_center_max_distance
     scored: list[tuple[float, int]] = []
     for marker in markers or []:
         if not isinstance(marker, dict):

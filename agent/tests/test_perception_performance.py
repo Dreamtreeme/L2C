@@ -24,15 +24,15 @@ def test_paddle_worker_emits_phases_and_request_scoped_result(monkeypatch, capsy
     from agent.tools import paddle_ocr_runner as runner
 
     class FakeOcr:
-        def ocr(self, _image_path, cls=False):
-            assert cls is False
+        def predict(self, _image_path):
             return [
-                [
-                    [
-                        [[0, 0], [10, 0], [10, 10], [0, 10]],
-                        ("검색", 0.9),
-                    ]
-                ]
+                {
+                    "res": {
+                        "rec_texts": ["검색"],
+                        "rec_scores": [0.9],
+                        "rec_boxes": [[0, 0, 10, 10]],
+                    }
+                }
             ]
 
     monkeypatch.setattr(runner, "build_ocr", lambda: FakeOcr())
@@ -71,7 +71,7 @@ def test_paddle_worker_emits_explicit_error_instead_of_empty_result(monkeypatch,
     from agent.tools import paddle_ocr_runner as runner
 
     class FailingOcr:
-        def ocr(self, _image_path, cls=False):
+        def predict(self, _image_path):
             raise RuntimeError("predictor stopped")
 
     monkeypatch.setattr(runner, "build_ocr", lambda: FailingOcr())
@@ -269,8 +269,8 @@ def test_capture_usable_screen_retries_before_ocr(monkeypatch, tmp_path):
         calls.append(filename)
         return paths[len(calls) - 1]
 
-    monkeypatch.setenv("VISION_PAGE_CAPTURE_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("VISION_PAGE_CAPTURE_RETRY_SEC", "0")
+    monkeypatch.setenv("VISION_PAGE_READY_TIMEOUT_SEC", "1")
     monkeypatch.setattr(engine, "capture_screen", fake_capture_screen)
     monkeypatch.setattr(
         engine,
@@ -281,7 +281,7 @@ def test_capture_usable_screen_retries_before_ocr(monkeypatch, tmp_path):
     assert engine.capture_usable_screen() == paths[1]
     assert len(calls) == 2
     assert calls[0] is None
-    assert calls[1].startswith("screen_retry_")
+    assert calls[1] == "blank.png"
 
 
 def test_capture_usable_screen_honors_single_attempt_override(monkeypatch, tmp_path):
@@ -357,10 +357,8 @@ def test_som_engine_normalizes_paddleocr_results_and_scales_boxes():
 
     engine = object.__new__(SomEngine)
     results = [
-        [
-            ([[2.0, 4.0], [6.0, 4.0], [6.0, 8.0], [2.0, 8.0]], ("Search", 0.9)),
-            ([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], ("noise", 0.1)),
-        ]
+        {"bbox": [2.0, 4.0, 6.0, 8.0], "text": "Search", "confidence": 0.9},
+        {"bbox": [0.0, 0.0, 1.0, 1.0], "text": "noise", "confidence": 0.1},
     ]
 
     boxes = engine._normalize_paddleocr_results(results, scale=0.5)
@@ -376,6 +374,7 @@ def test_som_engine_normalizes_paddleocr_results_and_scales_boxes():
 
 
 def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
+    from agent.config import clear_settings_cache
     from agent.tools.som_engine import SomEngine
 
     engine = object.__new__(SomEngine)
@@ -387,10 +386,30 @@ def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
     assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1152 / 3846, 3)
 
     monkeypatch.setenv("SOM_OCR_MAX_DIM", "1600")
+    clear_settings_cache()
     assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1600 / 3846, 3)
 
     monkeypatch.setenv("SOM_OCR_RESIZE", "0")
+    clear_settings_cache()
     assert engine._ocr_scale_for_image(3846, 2094) == 1.0
+
+
+def test_som_engine_removes_icon_containers_that_duplicate_ocr_text():
+    from agent.tools.som_engine import SomEngine
+
+    engine = object.__new__(SomEngine)
+    text_boxes = [
+        {"bbox": [20, 20, 80, 40], "type": "text", "text": "채용", "conf": 0.9}
+    ]
+    icon_boxes = [
+        {"bbox": [10, 10, 100, 50], "type": "icon", "text": "icon", "conf": 0.8},
+        {"bbox": [120, 10, 150, 40], "type": "icon", "text": "icon", "conf": 0.8},
+        {"bbox": [70, 20, 110, 40], "type": "icon", "text": "icon", "conf": 0.8},
+    ]
+
+    filtered = engine._remove_text_covered_icons(icon_boxes, text_boxes)
+
+    assert filtered == icon_boxes[1:]
 
 
 def test_som_engine_ensure_ocr_worker_ready_uses_reusable_worker(monkeypatch):
@@ -404,6 +423,34 @@ def test_som_engine_ensure_ocr_worker_ready_uses_reusable_worker(monkeypatch):
 
     assert engine.ensure_ocr_worker_ready() is worker
     assert started == [True]
+
+
+def test_som_engine_resolves_ocr_python_from_separate_environment(monkeypatch, tmp_path):
+    from agent.tools.som_engine import SomEngine
+
+    engine = object.__new__(SomEngine)
+    engine.root_dir = tmp_path
+    ocr_python = tmp_path / ".venv-ocr" / "Scripts" / "python.exe"
+    ocr_python.parent.mkdir(parents=True)
+    ocr_python.touch()
+    monkeypatch.setenv("PADDLE_OCR_PYTHON", str(ocr_python))
+
+    assert engine._resolve_ocr_python() == ocr_python
+
+
+def test_som_engine_rejects_missing_ocr_environment(monkeypatch, tmp_path):
+    from agent.tools.som_engine import SomEngine
+
+    engine = object.__new__(SomEngine)
+    engine.root_dir = tmp_path
+    monkeypatch.setenv("PADDLE_OCR_PYTHON", str(tmp_path / "missing-python.exe"))
+
+    try:
+        engine._resolve_ocr_python()
+    except FileNotFoundError as exc:
+        assert "scripts/setup_runtime.ps1" in str(exc)
+    else:
+        raise AssertionError("Missing OCR environment must fail before worker launch")
 
 
 def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):

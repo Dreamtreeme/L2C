@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 
-from agent.graph.action_request import build_action_message
+from agent.config import get_settings
+from agent.graph.action_request import build_action_request
 from agent.graph.state import GraphState
 from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
 from agent.utils.logger import logger
@@ -83,8 +83,7 @@ def reflex_action_args(step: dict, marker_id: int | None, params: dict | None = 
 
 
 def reflex_compound_search_submit_enabled() -> bool:
-    raw = os.getenv("REFLEX_COMPOUND_SEARCH_SUBMIT_ENABLED", "1")
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return get_settings().reflex.compound_search_submit_enabled
 
 
 def step_should_append_enter_after_type(step: dict, args: dict) -> bool:
@@ -118,7 +117,6 @@ def compound_enter_args_from_type_args(args: dict) -> dict:
         "reason": "검색 입력 레시피와 같은 묶음으로 검색을 실행합니다.",
         "expected_after": "검색 결과 화면 또는 결과 탭이 표시된다.",
         "risk_level": "safe_navigation",
-        "_transition_source": "reflex_compound",
     }
 
 
@@ -143,16 +141,12 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
     started = time.perf_counter()
     logger.info("Executing Reflex Node")
 
-    def miss(elapsed: float, reason: str = "", trace: dict | None = None) -> dict[str, Any]:
+    def miss(_elapsed: float, reason: str = "", trace: dict | None = None) -> dict[str, Any]:
         reflex_trace = dict(trace or {})
         reflex_trace.update({"hit": False, "reason": reason or reflex_trace.get("reason", "")})
         return {
-            "reflex_hit": False,
             "reflex_trace": reflex_trace,
             "reflex_transition_contracts": {},
-            "step_durations": [
-                {"node": "reflex", "duration": elapsed, "hit": False, "reason": reason}
-            ],
         }
 
     try:
@@ -163,7 +157,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
         from agent.recipe.text_utils import recipe_url_scope_matches, url_template
 
         markers = state.get("current_markers", []) or []
-        params = dict(state.get("recipe_params", {}) or {})
+        params = dict(state.get("recipe_params") or {})
         params.setdefault("goal", state.get("goal", ""))
         requested_task_category = str(params.get("task_category") or "").strip()
         site = str(params.get("site") or "").strip()
@@ -174,7 +168,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
         current_url_template = url_template(current_url)
         transition_failed_recipe_keys = {
             str(key)
-            for key in state.get("reflex_blocked_recipe_keys", []) or []
+            for key in (state.get("reflex_blocked_recipe_keys") or [])
             if str(key)
         }
         already_used_recipe_keys = used_idempotent_recipe_keys_on_url(
@@ -328,7 +322,12 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                     enter_call_id = f"{call_id}_enter"
                     enter_args = compound_enter_args_from_type_args(args)
                     tool_calls.append(
-                        {"name": "press_key", "args": enter_args, "id": enter_call_id}
+                        {
+                            "name": "press_key",
+                            "args": enter_args,
+                            "id": enter_call_id,
+                            "metadata": {"transition_source": "reflex_compound"},
+                        }
                     )
                     tool_call_traces[enter_call_id] = {
                         "seq": step.get("seq"),
@@ -377,7 +376,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
             )
 
         recipe_key, recipe, tool_calls, transition_contracts, tool_call_traces = selected
-        message = build_action_message(
+        request = build_action_request(
             "reflex",
             f"cached {len(tool_calls)} action(s)",
             tool_calls,
@@ -395,27 +394,18 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
             )[:80],
             duration=f"{elapsed:.3f}s",
         )
+        reflex_trace = {
+            "hit": True,
+            "recipe_key": recipe_key,
+            "candidate_count": len(recipe_candidates),
+            "task_category": requested_task_category,
+            "actions": [call["name"] for call in tool_calls],
+            "tool_calls": tool_call_traces,
+        }
         return {
-            "last_action_result": message,
-            "reflex_hit": True,
-            "reflex_trace": {
-                "hit": True,
-                "recipe_key": recipe_key,
-                "candidate_count": len(recipe_candidates),
-                "task_category": requested_task_category,
-                "actions": [call["name"] for call in tool_calls],
-                "tool_calls": tool_call_traces,
-            },
+            "pending_action": request,
+            "reflex_trace": reflex_trace,
             "reflex_transition_contracts": transition_contracts,
-            "step_durations": [
-                {
-                    "node": "reflex",
-                    "duration": elapsed,
-                    "hit": True,
-                    "candidate_count": len(recipe_candidates),
-                    "actions": [call["name"] for call in tool_calls],
-                }
-            ],
         }
     except Exception as exc:
         elapsed = time.perf_counter() - started

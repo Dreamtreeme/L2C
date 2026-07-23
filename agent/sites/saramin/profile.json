@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "registration_order": 30,
+  "slug": "saramin",
+  "display_name": "사람인",
+  "source_platform": "Saramin",
+  "aliases": ["saramin", "사람인"],
+  "domains": ["saramin.co.kr", "www.saramin.co.kr"],
+  "base_url": "https://www.saramin.co.kr",
+  "enabled": true,
+  "runner": "vision_react",
+  "classic_adapter": "saramin",
+  "default_query_target": "job search",
+  "navigation_policy": {},
+  "persistence_policy": {"require_detail_url_for_job_update": true},
+  "page_guidance": {
+    "home": {
+      "url_patterns": ["/zf_user/?$"],
+      "instructions": ["보이는 검색 입력창에서 사용자 검색어를 검색한다."]
+    },
+    "search": {
+      "url_patterns": ["/zf_user/search"],
+      "instructions": ["배지보다 공고 제목과 회사명을 기준으로 미방문 공고를 선택한다."]
+    },
+    "job_detail": {
+      "url_patterns": ["/zf_user/jobs/relay/view"],
+      "visible_cues": ["담당업무", "자격요건", "우대사항", "근무조건"],
+      "minimum_visible_cues": 2,
+      "instructions": ["실제로 표시되는 상세 본문과 근무조건을 누적해서 읽는다."],
+      "reading_targets": ["회사명", "직무명", "담당업무", "자격요건", "우대사항", "기술", "경력", "학력", "고용형태", "근무지", "급여", "마감일"],
+      "navigation_notes": ["상세가 새 탭이면 뒤로가기 대신 현재 탭 닫기가 필요할 수 있다."]
+    }
+  },
+  "collection_policy": {
+    "card_identity": ["job title", "company name"],
+    "visit_order": "top_to_bottom_visible_unvisited",
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "근무조건", "url"],
+    "finish_condition": "Requested trend sample size is reached or no useful unvisited cards remain."
+  },
+  "reflex_policy": {
+    "safe_actions": ["submit_search", "scroll_down", "go_back"],
+    "unsafe_actions": ["choose_job_card_without_title", "click_recommendation_as_job"],
+    "reason_after_hit": true
+  },
+  "tools": {
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "tool_rules": {"click_marker": "배지나 추천이 아니라 공고 제목 마커를 선택한다."},
+    "reflex": {
+      "enabled_by_profile": true,
+      "safe_replay_actions": ["type_in_marker", "press_key", "scroll", "go_back"],
+      "conditional_replay_actions": ["click_marker"],
+      "requires_reasoning_after_hit": true
+    }
+  },
+  "guidance": "보이는 공고를 직무명과 회사명으로 식별한다. 배지, 추천, 광고는 공고로 취급하지 않고 실제 상세 본문에서 확인한 사실만 수집한다."
+}

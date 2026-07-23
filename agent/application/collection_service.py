@@ -359,11 +359,11 @@ class CollectionService:
         rejected_count = int(validation.get("rejected_count") or 0)
         if scope_exhausted:
             completion_status = "complete"
-        elif persisted_count <= 0:
+        elif resolved_count <= 0:
             completion_status = "rejected"
         elif (
             rejected_count > 0
-            or (effective_target_count > 0 and persisted_count < effective_target_count)
+            or (effective_target_count > 0 and resolved_count < effective_target_count)
             or hit_recursion_limit
             or not is_finished
         ):
@@ -394,6 +394,11 @@ class CollectionService:
             message = (
                 f"{completion_type}: keyword={effective_keyword!r}, site={site_name}, "
                 f"collected={item_count}, persisted={persisted_count}"
+            )
+        elif resolved_count > 0:
+            message = (
+                f"existing database jobs confirmed: keyword={effective_keyword!r}, "
+                f"site={site_name}, resolved={resolved_count}"
             )
         elif review.get("decision") == "revise":
             feedback_text = review.get("feedback_to_worker") or "; ".join(

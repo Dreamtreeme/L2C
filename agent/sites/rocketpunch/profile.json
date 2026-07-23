@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "registration_order": 50,
+  "slug": "rocketpunch",
+  "display_name": "로켓펀치",
+  "source_platform": "RocketPunch",
+  "aliases": ["rocketpunch", "로켓펀치"],
+  "domains": ["rocketpunch.com", "www.rocketpunch.com"],
+  "base_url": "https://www.rocketpunch.com",
+  "enabled": true,
+  "runner": "vision_react",
+  "classic_adapter": "rocketpunch",
+  "default_query_target": "job search",
+  "navigation_policy": {},
+  "persistence_policy": {"require_detail_url_for_job_update": true},
+  "page_guidance": {
+    "home": {"instructions": ["왼쪽 통합검색을 사용하지 말고 사이드바의 '채용' 메뉴로 이동한다."]},
+    "search": {
+      "visible_cues": ["키워드", "직군", "숙련도", "기업 규모", "근무 방식"],
+      "minimum_visible_cues": 3,
+      "instructions": ["페이지 중앙 채용 검색 영역의 '기업명, 직무명, 기술 스택, 담당 업무' 입력창을 사용한다.", "왼쪽 사이드바의 '관심 주제, 공고, 사람, 기업' 통합검색은 비로그인 상태에서 로그인 창을 열 수 있으므로 채용 검색에 사용하지 않는다.", "회사명과 포지션을 함께 확인한다."]
+    },
+    "job_detail": {
+      "url_patterns": ["/jobs/\\d+"],
+      "visible_cues": ["주요업무", "자격요건", "우대사항", "채용 상세"],
+      "minimum_visible_cues": 2,
+      "instructions": ["전용 페이지와 측면 패널 모두에서 보이는 상세 본문을 누적한다."],
+      "reading_targets": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "기술", "경력", "고용형태", "근무지", "혜택"],
+      "navigation_notes": ["같은 목록 URL의 측면 상세는 선택한 회사명과 직무명으로 구분한다."]
+    }
+  },
+  "collection_policy": {
+    "card_identity": ["job title", "company name"],
+    "visit_order": "top_to_bottom_visible_unvisited",
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "혜택", "url"],
+    "finish_condition": "Requested trend sample size is reached or no unvisited cards remain."
+  },
+  "reflex_policy": {
+    "safe_actions": ["submit_search", "scroll_down", "go_back"],
+    "unsafe_actions": ["choose_job_card_without_title", "click_tag_chip"],
+    "reason_after_hit": true
+  },
+  "tools": {
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "tool_rules": {"click_marker": "직무명과 회사명이 확인되는 채용 항목만 선택한다."},
+    "reflex": {
+      "enabled_by_profile": true,
+      "safe_replay_actions": ["type_in_marker", "press_key", "scroll", "go_back"],
+      "conditional_replay_actions": ["click_marker"],
+      "requires_reasoning_after_hit": true
+    }
+  },
+  "guidance": "직무명과 회사명으로 공고를 식별한다. 상세가 측면 패널에 열리면 활성 상세 화면의 사실을 수집하고, 명확한 원본 상세 링크가 있을 때만 추가 이동한다."
+}

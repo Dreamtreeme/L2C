@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from agent.config import get_settings
 from agent.prompts.detail_extraction import build_detail_extraction_system_prompt
 from agent.runtime.detail_runtime import detail_buffer_text
 from agent.utils.logger import logger
@@ -33,10 +33,8 @@ class OllamaDetailExtractionLLM:
 
     def __init__(self, model_name: str):
         import ollama
-        from shared.config import OLLAMA_HOST
-
         self.model_name = model_name
-        self.client = ollama.Client(host=os.getenv("OLLAMA_HOST", str(OLLAMA_HOST)))
+        self.client = ollama.Client(host=get_settings().models.ollama_host)
 
     @staticmethod
     def _response_content(response: Any) -> str:
@@ -80,9 +78,7 @@ class OllamaDetailExtractionLLM:
                 format="json",
                 options={
                     "temperature": 0,
-                    "num_predict": int(
-                        os.getenv("VISION_DETAIL_OLLAMA_NUM_PREDICT", "2048")
-                    ),
+                    "num_predict": get_settings().models.detail_ollama_num_predict,
                 },
             )
             observation.set_usage(
@@ -108,9 +104,8 @@ class OpenAIDetailExtractionLLM:
 
     def __init__(self, model_name: str):
         import requests
-        from shared.config import BASE_DIR  # noqa: F401 - .env 로드를 보장한다.
-
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        configured_key = get_settings().models.openai_api_key
+        api_key = configured_key.get_secret_value().strip() if configured_key else ""
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
         self.model_name = model_name
@@ -170,7 +165,7 @@ class OpenAIDetailExtractionLLM:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text},
             ],
-            "max_output_tokens": int(os.getenv("VISION_DETAIL_OPENAI_MAX_OUTPUT_TOKENS", "2048")),
+            "max_output_tokens": get_settings().models.detail_openai_max_output_tokens,
             "temperature": 0,
             "text": {
                 "format": {
@@ -194,7 +189,7 @@ class OpenAIDetailExtractionLLM:
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=int(os.getenv("VISION_DETAIL_OPENAI_TIMEOUT", "120")),
+                timeout=get_settings().models.detail_openai_timeout_sec,
             )
             try:
                 response_json = response.json()
@@ -209,7 +204,9 @@ class OpenAIDetailExtractionLLM:
 
 
 def detail_extraction_model_spec() -> str:
-    return os.getenv("VISION_DETAIL_FINAL_EXTRACTION_MODEL", "openai:gpt-5.4-mini").strip()
+    from agent.application.model_policy import lightweight_model_name
+
+    return lightweight_model_name("VISION_DETAIL_FINAL_EXTRACTION_MODEL")
 
 
 _detail_extraction_llm: Any = None
@@ -239,6 +236,14 @@ def get_detail_extraction_llm() -> Any:
             )
         _detail_extraction_llm_key = model_spec
     return _detail_extraction_llm
+
+
+def clear_detail_extraction_model_cache() -> None:
+    """애플리케이션 런타임 종료 시 상세 정제 모델 참조를 해제한다."""
+
+    global _detail_extraction_llm, _detail_extraction_llm_key
+    _detail_extraction_llm = None
+    _detail_extraction_llm_key = None
 
 
 def extract_job_from_detail_ocr_buffer(state: dict, current_url: str) -> dict[str, Any]:
@@ -275,7 +280,12 @@ def extract_job_from_detail_ocr_buffer(state: dict, current_url: str) -> dict[st
     else:
         from agent.application.run_context import invoke_with_metrics
 
-        response = invoke_with_metrics(llm, messages, "detail_extraction")
+        response = invoke_with_metrics(
+            llm,
+            messages,
+            "detail_extraction",
+            stream=True,
+        )
     extracted = dump_model(response)
     duration = time.perf_counter() - started
     logger.info(
@@ -314,6 +324,7 @@ def extract_job_from_detail_ocr_buffer(state: dict, current_url: str) -> dict[st
 
 
 __all__ = [
+    "clear_detail_extraction_model_cache",
     "OllamaDetailExtractionLLM",
     "OpenAIDetailExtractionLLM",
     "detail_extraction_model_spec",

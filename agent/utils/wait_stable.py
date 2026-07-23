@@ -4,6 +4,7 @@ from typing import Optional
 
 from PIL import Image, ImageChops, ImageStat
 
+from agent.config import get_settings
 from agent.tools.perception import PerceptionEngine
 from agent.utils.logger import logger
 
@@ -54,17 +55,11 @@ class WaitStable:
         if not reference_image_path or not os.path.exists(reference_image_path):
             return False
         if max_wait_sec is None:
-            max_wait_sec = self._env_float("VISION_TRANSITION_CHANGE_MAX_WAIT_SEC", 1.2)
+            max_wait_sec = get_settings().vision.transition_change_max_wait_sec
         if check_interval_sec is None:
-            check_interval_sec = self._env_float("VISION_TRANSITION_CHANGE_CHECK_SEC", 0.08)
-        minimum_ratio = max(
-            0.0,
-            self._env_float("REFLEX_VISUAL_CHANGE_MIN_RATIO", 0.03),
-        )
-        intensity_threshold = min(
-            255,
-            max(0, self._env_int("REFLEX_VISUAL_CHANGE_PIXEL_THRESHOLD", 8)),
-        )
+            check_interval_sec = get_settings().vision.transition_change_check_sec
+        minimum_ratio = get_settings().reflex.visual_change_min_ratio
+        intensity_threshold = get_settings().reflex.visual_change_pixel_threshold
         target_size = (196, 212)
 
         try:
@@ -96,20 +91,6 @@ class WaitStable:
         )
         return False
 
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        try:
-            return float(os.getenv(name, str(default)))
-        except ValueError:
-            return default
-
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        try:
-            return int(os.getenv(name, str(default)))
-        except ValueError:
-            return default
-
     def wait(
         self,
         max_wait_sec: Optional[float] = None,
@@ -130,12 +111,12 @@ class WaitStable:
             안정화 도달 시 True, 시간 초과 시 False
         """
         if max_wait_sec is None:
-            max_wait_sec = self._env_float("VISION_STABLE_MAX_WAIT_SEC", 2.0)
+            max_wait_sec = get_settings().vision.stable_max_wait_sec
         if check_interval_sec is None:
-            check_interval_sec = self._env_float("VISION_STABLE_CHECK_INTERVAL_SEC", 0.04)
+            check_interval_sec = get_settings().vision.stable_check_interval_sec
         if threshold_percent is None:
-            threshold_percent = self._env_float("VISION_STABLE_THRESHOLD_PERCENT", 1.0)
-        sample_width = self._env_int("VISION_STABLE_SAMPLE_WIDTH", 360)
+            threshold_percent = get_settings().vision.stable_threshold_percent
+        sample_width = get_settings().vision.stable_sample_width
 
         logger.info("Waiting for screen to stabilize...")
         start_time = time.perf_counter()

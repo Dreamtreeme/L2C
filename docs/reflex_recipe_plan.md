@@ -1,3 +1,14 @@
+---
+title: "Reflex Recipe 구현 기준"
+type: plan
+area: reflex
+status: active
+updated: 2026-07-23
+tags:
+  - l2c
+  - docs/reflex
+---
+
 # L2C 반사 레시피(Reflex Recipe) 구현 기준
 
 > 네이밍 기준은 `docs/naming_conventions.md`를 따른다. 새 코드의 active recipe는 `state_key`가 아니라 `recipe_key`, `site`, `task_category`, `page_role`, `roi_signature` 기준으로 동작한다.

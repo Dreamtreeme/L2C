@@ -12,6 +12,7 @@ from typing import Any, Iterator
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.callbacks.usage import get_usage_metadata_callback
+from langchain_core.messages import BaseMessageChunk
 from structlog.contextvars import bound_contextvars
 
 from agent.application.run_contracts import (
@@ -168,7 +169,14 @@ class RunContext:
             {str(key): value for key, value in metadata.items() if value is not None}
         )
 
-    def record_step(self, component: str, duration_sec: float, **data: Any) -> None:
+    def record_step(
+        self,
+        component: str,
+        duration_sec: float,
+        *,
+        log_event: bool = True,
+        **data: Any,
+    ) -> None:
         metric = {
             "component": component,
             "stage": str(data.pop("stage", "") or stage_for_component(component)),
@@ -180,7 +188,8 @@ class RunContext:
         if data.get("success") is False:
             self.failure_stage = str(component)
             self.failure_code = str(data.get("failure_code") or "step_failed")
-        logger.info("Runtime step completed", **metric)
+        if log_event:
+            logger.info("Runtime step completed", **metric)
 
     def record_llm_call(
         self,
@@ -536,7 +545,43 @@ def _supports_invoke_config(runnable: Any) -> bool:
     )
 
 
-def invoke_with_metrics(runnable: Any, inputs: Any, component: str) -> Any:
+def _stream_result(
+    runnable: Any,
+    inputs: Any,
+    config: dict[str, Any],
+) -> tuple[Any, float]:
+    """스트림 청크를 최종 응답으로 조립하고 첫 청크 도착 시간을 반환한다."""
+
+    started = time.perf_counter()
+    chunks = (
+        runnable.stream(inputs, config=config)
+        if _supports_invoke_config(runnable)
+        else runnable.stream(inputs)
+    )
+    result: Any = None
+    message_chunk: BaseMessageChunk | None = None
+    first_chunk_sec: float | None = None
+    for chunk in chunks:
+        if first_chunk_sec is None:
+            first_chunk_sec = time.perf_counter() - started
+        if isinstance(chunk, BaseMessageChunk):
+            message_chunk = chunk if message_chunk is None else message_chunk + chunk
+            result = message_chunk
+        else:
+            # 구조화 출력 파서는 완성도가 높아진 객체를 내보내므로 마지막 값을 사용합니다.
+            result = chunk
+    if result is None:
+        raise RuntimeError("LLM stream returned no chunks")
+    return result, float(first_chunk_sec or 0.0)
+
+
+def invoke_with_metrics(
+    runnable: Any,
+    inputs: Any,
+    component: str,
+    *,
+    stream: bool = False,
+) -> Any:
     """LangChain 호출을 실행하고 구성 요소별 토큰과 시간을 기록한다."""
 
     raise_if_cancelled()
@@ -550,8 +595,12 @@ def invoke_with_metrics(runnable: Any, inputs: Any, component: str) -> Any:
         },
     }
     started = time.perf_counter()
+    first_chunk_sec: float | None = None
+    use_stream = stream and callable(getattr(runnable, "stream", None))
     try:
-        if _supports_invoke_config(runnable):
+        if use_stream:
+            result, first_chunk_sec = _stream_result(runnable, inputs, config)
+        elif _supports_invoke_config(runnable):
             result = runnable.invoke(inputs, config=config)
         else:
             result = runnable.invoke(inputs)
@@ -570,6 +619,13 @@ def invoke_with_metrics(runnable: Any, inputs: Any, component: str) -> Any:
         raise
 
     duration = time.perf_counter() - started
+    if use_stream:
+        logger.info(
+            "LLM stream completed",
+            component=component,
+            first_chunk_sec=round(float(first_chunk_sec or 0.0), 6),
+            duration_sec=round(duration, 6),
+        )
     usage_by_model = dict(callback.usage_metadata or {})
     if context is not None:
         if usage_by_model:
@@ -611,31 +667,6 @@ def record_external_llm_usage(
     )
 
 
-def record_graph_state_metrics(state: dict[str, Any]) -> None:
-    """LangGraph 상태에 누적된 노드 시간을 최상위 실행 요약에 병합한다."""
-
-    context = current_run_context()
-    if context is None:
-        return
-    for item in state.get("step_durations", []) or []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            duration = float(item.get("duration") or 0.0)
-        except (TypeError, ValueError):
-            continue
-        data = {
-            key: value
-            for key, value in item.items()
-            if key not in {"node", "duration"}
-        }
-        context.record_step(
-            f"graph:{str(item.get('node') or 'unknown')}",
-            duration,
-            **data,
-        )
-
-
 __all__ = [
     "RunContext",
     "RunCancelled",
@@ -647,7 +678,6 @@ __all__ = [
     "observe_external_llm_call",
     "observe_step",
     "record_external_llm_usage",
-    "record_graph_state_metrics",
     "raise_if_cancelled",
     "run_context",
 ]

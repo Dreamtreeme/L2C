@@ -1,21 +1,20 @@
 import json
 import logging
-from typing import Any
-
 from langchain_core.tools import tool
+from agent.sites.profile import SiteProfile
 
 logger = logging.getLogger(__name__)
 
 
-def _site_entry_payload(entry: dict[str, Any]) -> dict[str, Any]:
+def _site_entry_payload(profile: SiteProfile) -> dict[str, object]:
     return {
-        "slug": entry.get("slug", ""),
-        "display_name": entry.get("display_name", ""),
-        "domains": entry.get("domains", []),
-        "base_url": entry.get("base_url", ""),
-        "enabled": bool(entry.get("enabled", True)),
-        "runner": entry.get("runner", ""),
-        "classic_adapter": entry.get("classic_adapter", ""),
+        "slug": profile.slug,
+        "display_name": profile.display_name,
+        "domains": list(profile.domains),
+        "base_url": profile.base_url,
+        "enabled": profile.enabled,
+        "runner": profile.runner,
+        "classic_adapter": profile.classic_adapter,
     }
 
 
@@ -29,7 +28,7 @@ def list_collection_sites(enabled_only: bool = True) -> str:
     try:
         from agent.sites import list_supported_sites
 
-        sites = [_site_entry_payload(entry) for entry in list_supported_sites(enabled_only=enabled_only)]
+        sites = [_site_entry_payload(profile) for profile in list_supported_sites(enabled_only=enabled_only)]
         return json.dumps(
             {
                 "count": len(sites),
@@ -49,17 +48,15 @@ def get_collection_site_profile(site: str) -> str:
     """
     특정 채용 사이트의 지휘자용 프로필을 조회합니다.
     site는 slug, 표시명, 도메인 중 하나를 사용할 수 있습니다.
-    반환값에는 사이트 기본 정보, manual.json, tools.json, SKILL.md가 포함됩니다.
+    반환값에는 검증된 단일 사이트 프로필이 포함됩니다.
     """
     try:
         from agent.sites import load_site_profile
 
         profile = load_site_profile(site)
         payload = {
-            "site": _site_entry_payload(profile["entry"]),
-            "manual": profile["manual"],
-            "tools": profile["tools"],
-            "skill": profile["skill"],
+            "site": _site_entry_payload(profile),
+            "profile": profile.prompt_payload(),
         }
         return json.dumps(payload, ensure_ascii=False, indent=2)
     except Exception as e:

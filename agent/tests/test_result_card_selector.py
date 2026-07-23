@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from agent.graph import worker_reasoning
+
 
 def _state(image_path: Path) -> dict:
     return {
@@ -38,13 +40,13 @@ def test_result_card_selector_builds_queue_and_first_click(tmp_path, monkeypatch
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(_state(image_path))
+    request, trace = selector.select_result_cards(_state(image_path))
 
     assert trace["reason"] == "cards_selected"
     assert trace["marker_ids"] == [10, 20]
-    assert [call["name"] for call in message.tool_calls] == ["set_result_card_queue", "click_marker"]
-    assert message.tool_calls[0]["args"]["cards"][0]["company"] == "회사 A"
-    assert message.tool_calls[1]["args"]["marker_id"] == 10
+    assert [call.name for call in request.tool_calls] == ["set_result_card_queue", "click_marker"]
+    assert request.tool_calls[0].args["cards"][0]["company"] == "회사 A"
+    assert request.tool_calls[1].args["marker_id"] == 10
 
 
 def test_result_card_selector_carries_generic_result_count_evidence(tmp_path, monkeypatch):
@@ -66,11 +68,11 @@ def test_result_card_selector_carries_generic_result_count_evidence(tmp_path, mo
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(_state(image_path))
+    request, trace = selector.select_result_cards(_state(image_path))
 
     assert trace["available_result_count"] == 4
     assert trace["count_evidence"] == "검색 결과 4개"
-    assert message.tool_calls[0]["args"]["available_result_count"] == 4
+    assert request.tool_calls[0].args["available_result_count"] == 4
 
 
 def test_result_card_selector_ignores_low_confidence_result_count(tmp_path, monkeypatch):
@@ -92,16 +94,15 @@ def test_result_card_selector_ignores_low_confidence_result_count(tmp_path, monk
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(_state(image_path))
+    request, trace = selector.select_result_cards(_state(image_path))
 
     assert "available_result_count" not in trace
-    assert "available_result_count" not in message.tool_calls[0]["args"]
+    assert "available_result_count" not in request.tool_calls[0].args
 
 
 def test_result_count_hint_is_presented_as_current_condition_context():
-    from agent.graph import nodes
 
-    context = nodes._compact_result_availability_context(
+    context = worker_reasoning._compact_result_availability_context(
         {
             "result_availability": {
                 "available_result_count": 4,
@@ -137,11 +138,11 @@ def test_result_card_selector_handles_visible_all_without_fixed_count(tmp_path, 
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(state)
+    request, trace = selector.select_result_cards(state)
 
     assert trace["reason"] == "cards_selected"
     assert trace["card_count"] == 2
-    assert [call["name"] for call in message.tool_calls] == ["set_result_card_queue", "click_marker"]
+    assert [call.name for call in request.tool_calls] == ["set_result_card_queue", "click_marker"]
 
 
 def test_result_card_selector_handles_visible_all_enum(tmp_path):
@@ -171,6 +172,29 @@ def test_result_card_selector_skips_unspecified_zero_count(tmp_path):
     assert selector.should_select_result_cards(state) is False
 
 
+def test_result_card_selector_yields_to_general_reasoning_after_no_effect(tmp_path):
+    from agent.runtime import result_card_selector as selector
+
+    image_path = tmp_path / "same-screen.png"
+    image_path.write_bytes(b"screen")
+    state = _state(image_path)
+    state.update(
+        {
+            "recent_images": [str(image_path)],
+            "transition_observations": [
+                {
+                    "action": "click_marker",
+                    "status": "unknown",
+                    "reason": "no_screen_change",
+                    "screenshot": str(image_path),
+                }
+            ],
+        }
+    )
+
+    assert selector.should_select_result_cards(state) is False
+
+
 def test_result_card_selector_skips_non_result_screen(tmp_path, monkeypatch):
     from PIL import Image
     from agent.runtime import result_card_selector as selector
@@ -184,9 +208,9 @@ def test_result_card_selector_skips_non_result_screen(tmp_path, monkeypatch):
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(_state(image_path))
+    request, trace = selector.select_result_cards(_state(image_path))
 
-    assert message is None
+    assert request is None
     assert trace == {"attempted": True, "reason": "not_result_list"}
 
 
@@ -208,9 +232,9 @@ def test_result_card_selector_requests_refinement_instead_of_adjacent_role(tmp_p
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(_state(image_path))
+    request, trace = selector.select_result_cards(_state(image_path))
 
-    assert message is None
+    assert request is None
     assert trace == {
         "attempted": True,
         "reason": "result_refinement_needed",
@@ -243,13 +267,13 @@ def test_result_card_selector_clicks_model_selected_filter(tmp_path, monkeypatch
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(state)
+    request, trace = selector.select_result_cards(state)
 
     assert trace["reason"] == "result_refinement_action"
     assert trace["marker_id"] == 40
-    assert [call["name"] for call in message.tool_calls] == ["click_marker"]
-    assert message.tool_calls[0]["args"]["target_component"] == "result_filter"
-    assert message.tool_calls[0]["args"]["target_label"] == "기술스택"
+    assert [call.name for call in request.tool_calls] == ["click_marker"]
+    assert request.tool_calls[0].args["target_component"] == "result_filter"
+    assert request.tool_calls[0].args["target_label"] == "기술스택"
 
 
 def test_result_card_selector_types_filter_query_without_general_reasoning(tmp_path, monkeypatch):
@@ -278,12 +302,12 @@ def test_result_card_selector_types_filter_query_without_general_reasoning(tmp_p
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(state)
+    request, trace = selector.select_result_cards(state)
 
     assert trace["action"] == "type_in_marker"
-    assert [call["name"] for call in message.tool_calls] == ["type_in_marker"]
-    assert message.tool_calls[0]["args"]["text"] == "iOS"
-    assert message.tool_calls[0]["args"]["slot_name"] == "result_filter_query"
+    assert [call.name for call in request.tool_calls] == ["type_in_marker"]
+    assert request.tool_calls[0].args["text"] == "iOS"
+    assert request.tool_calls[0].args["slot_name"] == "result_filter_query"
 
 
 def test_result_card_selector_rejects_marker_when_model_label_disagrees_with_ocr(tmp_path, monkeypatch):
@@ -312,9 +336,9 @@ def test_result_card_selector_rejects_marker_when_model_label_disagrees_with_ocr
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(state)
+    request, trace = selector.select_result_cards(state)
 
-    assert message is None
+    assert request is None
     assert trace["reason"] == "result_refinement_needed"
 
 
@@ -344,11 +368,11 @@ def test_result_card_selector_types_into_wide_marker_without_ocr_text(tmp_path, 
 
     monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
 
-    message, trace = selector.select_result_cards(state)
+    request, trace = selector.select_result_cards(state)
 
     assert trace["action"] == "type_in_marker"
-    assert message.tool_calls[0]["args"]["marker_id"] == 54
-    assert message.tool_calls[0]["args"]["target_label"] == "기술스택 검색창"
+    assert request.tool_calls[0].args["marker_id"] == 54
+    assert request.tool_calls[0].args["target_label"] == "기술스택 검색창"
 
 
 def test_compact_markers_includes_only_wide_empty_icon_as_input_candidate():
@@ -379,6 +403,8 @@ def test_result_card_selector_includes_search_query_in_model_context(tmp_path):
 
     assert payload["search_query"] == "iOS 개발자"
     assert payload["remaining_count"] == 2
+    assert "공고 제목의 직무 정체성이 직접 일치" in messages[0].content
+    assert "기술 스택이나 업무 일부의 일치" in messages[0].content
 
 
 def test_result_card_selector_marks_visible_all_in_model_context(tmp_path):
@@ -399,13 +425,10 @@ def test_result_card_selector_marks_visible_all_in_model_context(tmp_path):
 
 
 def test_reasoning_prompt_uses_visible_filter_after_selector_requests_refinement():
-    from agent.graph import nodes
 
-    messages = nodes._build_reasoning_messages(
+    messages = worker_reasoning._build_reasoning_messages(
         {
             "goal": "iOS 공고 두 개 수집",
-            "plan": [],
-            "current_plan_step": 0,
             "extracted_jd": {},
             "ui_context": "[id: 1] 기술스택\n[id: 2] Software Engineer (iOS)",
             "current_url": "https://www.wanted.co.kr/search",
@@ -428,27 +451,26 @@ def test_reasoning_prompt_uses_visible_filter_after_selector_requests_refinement
 
 
 def test_reasoning_node_uses_card_selector_without_general_model(monkeypatch):
-    from agent.graph import nodes
-    from agent.graph.action_request import build_action_message
+    from agent.graph.action_request import build_action_request
 
-    message = build_action_message(
+    request = build_action_request(
         "card_selector",
         "selected",
         [{"name": "click_marker", "args": {"marker_id": 10}, "id": "click"}],
     )
     monkeypatch.setattr(
-        nodes,
+        worker_reasoning,
         "_select_result_cards",
-        lambda state: (message, {"attempted": True, "reason": "cards_selected"}),
+        lambda state: (request, {"attempted": True, "reason": "cards_selected"}),
     )
     monkeypatch.setattr(
-        nodes,
+        worker_reasoning,
         "_get_ui_llm_with_tools",
         lambda: (_ for _ in ()).throw(AssertionError("카드 선택 후 범용 모델을 호출함")),
     )
 
-    result = nodes.reasoning_node({"action_history": []})
+    result = worker_reasoning.reasoning_node({"action_history": []})
 
-    assert result["last_action_result"] is message
-    assert result["step_durations"][0]["reasoning_mode"] == "card_selection"
+    assert result["pending_action"] is request
+    assert result["pending_action"].source == "card_selector"
     assert result["reflex_trace"]["source"] == "card_selector"

@@ -1,19 +1,23 @@
 {
-  "site": "wanted",
+  "schema_version": 1,
+  "registration_order": 10,
+  "slug": "wanted",
   "display_name": "원티드",
+  "source_platform": "Wanted",
+  "aliases": ["wanted", "원티드"],
+  "domains": ["wanted.co.kr", "www.wanted.co.kr"],
   "base_url": "https://www.wanted.co.kr",
+  "enabled": true,
+  "runner": "vision_react",
+  "classic_adapter": "wanted",
   "default_query_target": "position search",
   "navigation_policy": {
     "allow_direct_search_url": false,
-    "search_entry": "Open the home page first, then use the visible search UI. Do not open /search?query URLs directly."
+    "search_entry": "홈 화면의 보이는 검색 UI를 열고 주소를 직접 조합하지 않는다."
   },
-  "persistence_policy": {
-    "require_detail_url_for_job_update": true
-  },
+  "persistence_policy": {"require_detail_url_for_job_update": true},
   "page_guidance": {
-    "home": {
-      "instructions": ["홈 화면의 보이는 검색 UI를 열고 주소를 직접 조합하지 않는다."]
-    },
+    "home": {"instructions": ["홈 화면의 보이는 검색 UI를 연다."]},
     "search_overlay": {
       "visible_cues": ["검색어를 입력", "추천 검색어"],
       "minimum_visible_cues": 1,
@@ -21,7 +25,7 @@
     },
     "search": {
       "url_patterns": ["/search"],
-      "instructions": ["직무명과 회사명이 보이는 미방문 공고만 큐에 넣고 보상금이나 태그를 카드로 오인하지 않는다."]
+      "instructions": ["직무명과 회사명이 보이는 미방문 공고만 큐에 넣는다."]
     },
     "job_detail": {
       "url_patterns": ["/wd/\\d+"],
@@ -43,5 +47,20 @@
     "safe_actions": ["open_search", "submit_search", "expand_detail", "scroll_down", "go_back"],
     "unsafe_actions": ["replay_recorded_job_title", "choose_job_card_without_semantic_label", "click_reward_badge", "click_tag_chip"],
     "reason_after_hit": true
-  }
+  },
+  "tools": {
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "tool_rules": {
+      "open_browser": "처음에는 공식 홈 주소만 연다.",
+      "click_marker": "보이는 마커만 클릭하고 공고 카드는 직무명을 target_label로 보존한다.",
+      "go_back": "상세에서 결과 목록으로 돌아갈 때 사용한다."
+    },
+    "reflex": {
+      "enabled_by_profile": true,
+      "safe_replay_actions": ["type_in_marker", "press_key", "scroll", "go_back"],
+      "conditional_replay_actions": ["click_marker"],
+      "requires_reasoning_after_hit": true
+    }
+  },
+  "guidance": "원티드 채용공고 수집. 원티드 홈의 보이는 검색 UI를 사용한다. 검색 결과는 직무명과 회사명으로 식별하고 보상금, 태그, 배지를 카드로 오인하지 않는다. 검색·상세 펼침·스크롤·뒤로가기는 재생 후보지만 실행마다 달라지는 공고 선택은 현재 화면에서 판단한다."
 }

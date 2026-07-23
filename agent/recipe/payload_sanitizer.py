@@ -14,6 +14,16 @@ STATE_DEBUG_FIELDS = {
     "screen_signature",
 }
 
+REPLAY_RUNTIME_FIELDS = {
+    "worker_run_id",
+    "worker_attempt_index",
+    "capture_sequence",
+    "current_capture_id",
+    "decision_capture_id",
+    "from_capture_id",
+    "to_capture_id",
+}
+
 
 def strip_state_debug_fields(value: Any) -> Any:
     """저장용 payload에서 화면상태 키와 전체 화면 디버그 서명을 제거한다."""
@@ -26,4 +36,18 @@ def strip_state_debug_fields(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [strip_state_debug_fields(item) for item in value]
+    return value
+
+
+def strip_replay_runtime_fields(value: Any) -> Any:
+    """활성 레시피에서 특정 실행에만 유효한 추적 식별자를 제거한다."""
+
+    if isinstance(value, dict):
+        return {
+            key: strip_replay_runtime_fields(child)
+            for key, child in value.items()
+            if key not in REPLAY_RUNTIME_FIELDS
+        }
+    if isinstance(value, list):
+        return [strip_replay_runtime_fields(item) for item in value]
     return value

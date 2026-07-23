@@ -1,139 +1,109 @@
-"""Site profile loader for commander-driven multi-site collection.
-
-This module only reads the architecture files under agent/sites. It does not
-start browsers; realtime tools may load these profiles to build site-specific
-vision collection goals.
-"""
+"""단일 `profile.json` 계약을 사용하는 사이트 프로필 저장소."""
 
 from __future__ import annotations
 
-import json
+from functools import lru_cache
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlsplit
+
+from pydantic import ValidationError
+
+from agent.sites.profile import SiteProfile
+
 
 SITES_DIR = Path(__file__).resolve().parent
-REGISTRY_PATH = SITES_DIR / "registry.json"
+PROFILE_FILE_NAME = "profile.json"
 
 
 class SiteProfileError(ValueError):
-    """Raised when a requested site profile is missing or malformed."""
+    """사이트 프로필이 없거나 계약을 만족하지 않을 때 발생한다."""
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def _load_profile_file(path: Path) -> SiteProfile:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        return SiteProfile.model_validate_json(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise SiteProfileError(f"Site profile file not found: {path}") from exc
-    except json.JSONDecodeError as exc:
-        raise SiteProfileError(f"Invalid JSON in site profile file: {path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise SiteProfileError(f"Site profile JSON must be an object: {path}")
-    return data
+        raise SiteProfileError(f"사이트 프로필 파일을 찾을 수 없습니다: {path}") from exc
+    except (ValidationError, ValueError) as exc:
+        raise SiteProfileError(f"잘못된 사이트 프로필입니다: {path}: {exc}") from exc
 
 
-def load_registry() -> dict[str, Any]:
-    registry = _read_json(REGISTRY_PATH)
-    sites = registry.get("sites")
-    if not isinstance(sites, list):
-        raise SiteProfileError("registry.json must contain a 'sites' list")
-    return registry
+@lru_cache(maxsize=1)
+def _all_profiles() -> tuple[SiteProfile, ...]:
+    paths = sorted(SITES_DIR.glob(f"*/{PROFILE_FILE_NAME}"))
+    profiles = tuple(
+        sorted(
+            (_load_profile_file(path) for path in paths),
+            key=lambda profile: (profile.registration_order, profile.slug),
+        )
+    )
+    if not profiles:
+        raise SiteProfileError("등록된 사이트 profile.json이 없습니다.")
+
+    seen_slugs: set[str] = set()
+    seen_orders: set[int] = set()
+    seen_domains: dict[str, str] = {}
+    for profile in profiles:
+        if profile.slug in seen_slugs:
+            raise SiteProfileError(f"중복 사이트 slug입니다: {profile.slug}")
+        seen_slugs.add(profile.slug)
+        if profile.registration_order in seen_orders:
+            raise SiteProfileError(
+                f"중복 사이트 registration_order입니다: {profile.registration_order}"
+            )
+        seen_orders.add(profile.registration_order)
+        for domain in profile.domains:
+            owner = seen_domains.get(domain)
+            if owner and owner != profile.slug:
+                raise SiteProfileError(
+                    f"사이트 도메인이 중복 등록되었습니다: {domain} ({owner}, {profile.slug})"
+                )
+            seen_domains[domain] = profile.slug
+    return profiles
 
 
-def list_supported_sites(enabled_only: bool = True) -> list[dict[str, Any]]:
-    """Return registry entries for known sites."""
-    sites = list(load_registry()["sites"])
-    if enabled_only:
-        sites = [site for site in sites if site.get("enabled", True)]
-    return sites
+def list_supported_sites(enabled_only: bool = True) -> list[SiteProfile]:
+    profiles = list(_all_profiles())
+    return [profile for profile in profiles if profile.enabled] if enabled_only else profiles
 
 
-def get_site_entry(site: str) -> dict[str, Any]:
-    """Resolve a site by slug, display name, or domain substring."""
-    needle = (site or "").strip().lower()
+def load_site_profile(site: str) -> SiteProfile:
+    needle = str(site or "").strip()
     if not needle:
-        raise SiteProfileError("site is required")
+        raise SiteProfileError("site 값이 필요합니다.")
+    for profile in _all_profiles():
+        if profile.matches(needle):
+            return profile
+    raise SiteProfileError(f"지원하지 않는 사이트입니다: {site}")
 
-    for entry in list_supported_sites(enabled_only=False):
-        slug = str(entry.get("slug", "")).lower()
-        display_name = str(entry.get("display_name", "")).lower()
-        aliases = {
-            str(alias).strip().lower()
-            for alias in entry.get("aliases", []) or []
-            if str(alias).strip()
-        }
-        domains = [str(domain).lower() for domain in entry.get("domains", [])]
-        if needle == slug or needle == display_name or needle in aliases or needle in domains:
-            return entry
-        if any(needle in domain or domain in needle for domain in domains):
-            return entry
-    raise SiteProfileError(f"Unsupported site: {site}")
+
+def get_site_entry(site: str) -> SiteProfile:
+    """이전 이름의 조회 함수도 동일한 타입 객체를 반환한다."""
+
+    return load_site_profile(site)
 
 
 def get_official_site_url(site: str) -> str:
-    """요청 사이트에 등록된 공식 HTTPS 시작 주소를 반환한다."""
-
-    entry = get_site_entry(site)
-    official_url = str(entry.get("base_url") or "").strip().rstrip("/")
-    parsed = urlsplit(official_url)
-    domains = {
-        str(domain).strip().lower()
-        for domain in entry.get("domains", []) or []
-        if str(domain).strip()
-    }
-    if (
-        parsed.scheme.lower() != "https"
-        or not parsed.hostname
-        or parsed.hostname.lower() not in domains
-    ):
-        raise SiteProfileError(
-            f"Invalid official base_url for {entry.get('slug')}: {official_url}"
-        )
-    return official_url
+    return load_site_profile(site).base_url.rstrip("/")
 
 
-def _profile_path(entry: dict[str, Any], key: str) -> Path:
-    rel = entry.get(key)
-    if not isinstance(rel, str) or not rel:
-        raise SiteProfileError(f"Registry entry for {entry.get('slug')} missing {key}")
-    path = (SITES_DIR / rel).resolve()
-    try:
-        path.relative_to(SITES_DIR.resolve())
-    except ValueError as exc:
-        raise SiteProfileError(f"Site profile path escapes sites dir: {path}") from exc
-    return path
+def validate_site_profiles() -> tuple[SiteProfile, ...]:
+    """서버 시작 시 전체 프로필과 사이트 간 유일성을 한 번에 검증한다."""
+
+    return _all_profiles()
 
 
-def load_site_profile(site: str) -> dict[str, Any]:
-    """사이트 레지스트리, 실행 정책, 선택형 스킬 지침을 불러온다."""
-    entry = get_site_entry(site)
-    manual = _read_json(_profile_path(entry, "manual_path"))
-    tools = _read_json(_profile_path(entry, "tools_path"))
-    skill_path = _profile_path(entry, "skill_path")
-    try:
-        skill = skill_path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise SiteProfileError(f"Site skill file not found: {skill_path}") from exc
-
-    manual_site = str(manual.get("site", ""))
-    if manual_site and manual_site != entry.get("slug"):
-        raise SiteProfileError(
-            f"Manual site mismatch: registry={entry.get('slug')} manual={manual_site}"
-        )
-
-    return {
-        "entry": entry,
-        "manual": manual,
-        "skill": skill,
-        "tools": tools,
-    }
+def clear_site_profile_cache() -> None:
+    _all_profiles.cache_clear()
 
 
 __all__ = [
+    "PROFILE_FILE_NAME",
+    "SITES_DIR",
     "SiteProfileError",
-    "load_registry",
-    "list_supported_sites",
-    "get_site_entry",
+    "clear_site_profile_cache",
     "get_official_site_url",
+    "get_site_entry",
+    "list_supported_sites",
     "load_site_profile",
+    "validate_site_profiles",
 ]

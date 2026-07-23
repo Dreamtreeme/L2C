@@ -9,8 +9,12 @@ import pyautogui
 import pyperclip
 import pygetwindow as gw
 
+from agent.config import get_settings
 from agent.utils.logger import logger
 from agent.tools.perception import PerceptionEngine
+
+
+_WINDOWS_WHEEL_DELTA = 120
 
 class ActionTools:
     """
@@ -20,46 +24,34 @@ class ActionTools:
 
     def __init__(self, perception_engine: PerceptionEngine):
         self.perception = perception_engine
-        self.action_pause_sec = self._env_float("VISION_ACTION_PAUSE_SEC", 0.03)
-        self.move_duration_sec = self._env_float("VISION_ACTION_MOVE_DURATION_SEC", 0.05)
-        self.input_delay_sec = self._env_float("VISION_ACTION_INPUT_DELAY_SEC", 0.02)
-        self.clipboard_delay_sec = self._env_float("VISION_ACTION_CLIPBOARD_DELAY_SEC", 0.02)
+        settings = get_settings().browser
+        self.action_pause_sec = settings.action_pause_sec
+        self.move_duration_sec = settings.action_move_duration_sec
+        self.input_delay_sec = settings.action_input_delay_sec
+        self.clipboard_delay_sec = settings.action_clipboard_delay_sec
 
         # pyautogui 기본 안전 설정
         pyautogui.FAILSAFE = True
         pyautogui.PAUSE = self.action_pause_sec
 
-    @staticmethod
-    def _env_float(name: str, default: float) -> float:
-        try:
-            return max(0.0, float(os.getenv(name, str(default))))
-        except ValueError:
-            return default
-
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        try:
-            return max(0, int(os.getenv(name, str(default))))
-        except ValueError:
-            return default
-
-    def _cfg_float(self, attr: str, env_name: str, default: float) -> float:
-        return getattr(self, attr, self._env_float(env_name, default))
+    def _cfg_float(self, attr: str, _env_name: str, default: float) -> float:
+        return max(0.0, float(getattr(self, attr, default)))
 
     def _sleep(self, seconds: float) -> None:
         if seconds > 0:
             time.sleep(seconds)
 
     def _window_id(self, window: Any) -> int | None:
-        helper = getattr(self.perception, "_window_id", None)
+        helper = getattr(getattr(self, "perception", None), "_window_id", None)
         if helper:
             return helper(window)
         return getattr(window, "_hWnd", None) or getattr(window, "hWnd", None)
 
     def _browser_windows(self) -> list[Any]:
-        looks_like = getattr(self.perception, "_looks_like_browser_window", self._looks_like_browser_window)
+        perception = getattr(self, "perception", None)
+        looks_like = getattr(perception, "_looks_like_browser_window", self._looks_like_browser_window)
         is_visible = getattr(
-            self.perception,
+            perception,
             "_is_visible_window",
             lambda win: not bool(getattr(win, "isMinimized", False))
             and int(getattr(win, "width", 0) or 0) > 0
@@ -105,13 +97,18 @@ class ActionTools:
         return self._bind_browser_window(target)
 
     def _browser_window_size_enabled(self) -> bool:
-        raw = os.getenv("VISION_BROWSER_WINDOW_SIZE", "1")
-        return raw.strip().lower() not in {"0", "false", "no", "off"}
+        return get_settings().browser.use_configured_window_size
 
     def _browser_window_dimensions(self) -> tuple[int, int]:
-        width = self._env_int("VISION_BROWSER_WINDOW_WIDTH", 1976)
-        height = self._env_int("VISION_BROWSER_WINDOW_HEIGHT", 2129)
-        return width, height
+        settings = get_settings().browser
+        return settings.vision_window_width, settings.vision_window_height
+
+    def _browser_profile_dir(self) -> Path:
+        """사용자 Chrome과 분리된 자동화 전용 프로필 경로를 준비한다."""
+
+        profile_dir = get_settings().paths.browser_profile_dir
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        return profile_dir
 
     def _normalize_browser_window(self, window: Any) -> bool:
         """전용 브라우저의 실제 창 크기를 고정해 비전 좌표계를 안정화한다."""
@@ -125,7 +122,7 @@ class ActionTools:
             if bool(getattr(window, "isMaximized", False)):
                 window.restore()
             window.resizeTo(width, height)
-            self._sleep(self._env_float("VISION_BROWSER_RESIZE_WAIT_SEC", 0.12))
+            self._sleep(get_settings().browser.resize_wait_sec)
             logger.info(
                 "Normalized browser window geometry",
                 requested_width=width,
@@ -139,7 +136,7 @@ class ActionTools:
             return False
 
     def _browser_executable(self) -> Path | None:
-        configured = os.getenv("VISION_BROWSER_EXECUTABLE", "").strip().strip('"')
+        configured = str(get_settings().browser.executable or "").strip().strip('"')
         if configured:
             path = Path(configured)
             if path.exists():
@@ -163,20 +160,25 @@ class ActionTools:
         return None
 
     def _browser_window_cli_args(self) -> list[str]:
+        args = [
+            f"--user-data-dir={self._browser_profile_dir()}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-session-crashed-bubble",
+        ]
         if not self._browser_window_size_enabled():
-            return []
+            return args
         width, height = self._browser_window_dimensions()
         if width <= 0 or height <= 0:
-            return []
-        return [f"--window-size={width},{height}"]
+            return args
+        return [*args, f"--window-size={width},{height}"]
 
     def _reset_browser_zoom(self) -> None:
         """사이트별로 기억된 브라우저 확대율을 100%로 되돌린다."""
 
-        raw = os.getenv("VISION_BROWSER_RESET_ZOOM", "1")
-        if raw.strip().lower() in {"0", "false", "no", "off"}:
+        if not get_settings().browser.reset_zoom:
             return
-        wait_sec = self._env_float("VISION_BROWSER_ZOOM_RESET_WAIT_SEC", 0.08)
+        wait_sec = get_settings().browser.zoom_reset_wait_sec
         self._sleep(wait_sec)
         modifier = "command" if platform.system() == "Darwin" else "ctrl"
         try:
@@ -199,7 +201,7 @@ class ActionTools:
             import webbrowser
             webbrowser.open_new(url)
 
-        self._sleep(self._env_float("VISION_BROWSER_OPEN_WAIT_SEC", 0.8))
+        self._sleep(get_settings().browser.open_wait_sec)
         bound = self._bind_new_or_active_browser_window(before_ids)
         return {"opened": True, "url": url, "reason": "new_browser_window", "launcher": launcher, "bound_window": bound}
 
@@ -210,7 +212,7 @@ class ActionTools:
 
         modifier = "command" if platform.system() == "Darwin" else "ctrl"
         old_pause = pyautogui.PAUSE
-        key_pause = self._env_float("VISION_URL_KEY_PAUSE_SEC", 0.015)
+        key_pause = get_settings().vision.url_key_pause_sec
         pyautogui.PAUSE = min(old_pause, key_pause)
         try:
             pyautogui.hotkey(modifier, "l")
@@ -221,24 +223,6 @@ class ActionTools:
         finally:
             pyautogui.PAUSE = old_pause
         return {"opened": True, "url": url, "reason": "dedicated_browser_navigated"}
-
-    def _open_url_after_window_ready(self, url: str) -> dict[str, Any]:
-        """빈 브라우저 창을 먼저 바인딩한 뒤 주소창으로 목표 URL을 연다."""
-
-        window_result = self._open_url_in_new_window("about:blank")
-        if not window_result.get("bound_window"):
-            logger.warning("Blank browser window was not bound; opening target directly", target_url=url)
-            return self._open_url_in_new_window(url)
-
-        navigation_result = self._navigate_bound_browser(url)
-        self._reset_browser_zoom()
-        if navigation_result.get("reason") == "dedicated_browser_navigated":
-            navigation_result = {
-                **navigation_result,
-                "reason": "new_browser_window_navigated",
-                "window_url": "about:blank",
-            }
-        return navigation_result
 
     def _action_region(self):
         return getattr(self.perception, "last_region", None) or self.perception._get_browser_region()
@@ -355,23 +339,34 @@ class ActionTools:
                 logger.info(f"Pressed {key_to_press} for scrolling {direction}")
                 return f"Scrolled {direction} via {key_to_press}"
 
-            step_env = "VISION_SCROLL_PAGE_STEPS" if amount == "page" else "VISION_SCROLL_SMALL_STEPS"
-            steps = max(1, self._env_int(step_env, 8 if amount == "page" else 3))
+            browser_settings = get_settings().browser
+            steps = (
+                browser_settings.scroll_page_steps
+                if amount == "page"
+                else browser_settings.scroll_small_steps
+            )
             signed_steps = steps if direction in {"up", "left"} else -steps
+            # pyautogui 0.9.54의 Windows 구현은 mouse_event에 값을 그대로 넘긴다.
+            # Win32 휠 한 칸은 120 단위이므로 실제 칸 수로 환산해야 한다.
+            wheel_delta = (
+                signed_steps * _WINDOWS_WHEEL_DELTA
+                if platform.system() == "Windows"
+                else signed_steps
+            )
             if direction in {"left", "right"}:
                 if platform.system() == "Windows":
                     # PyAutoGUI의 hscroll은 Windows에서 구현되지 않아 Shift+휠을 사용합니다.
                     pyautogui.keyDown("shift")
                     try:
-                        pyautogui.scroll(signed_steps)
+                        pyautogui.scroll(wheel_delta)
                     finally:
                         pyautogui.keyUp("shift")
                     method = "shift+wheel"
                 else:
-                    pyautogui.hscroll(signed_steps)
+                    pyautogui.hscroll(wheel_delta)
                     method = "horizontal wheel"
             else:
-                pyautogui.scroll(signed_steps)
+                pyautogui.scroll(wheel_delta)
                 method = "vertical wheel"
             logger.info(
                 "Scrolled physical region",
@@ -412,7 +407,9 @@ class ActionTools:
             if self._bound_browser_window_exists():
                 return self._navigate_bound_browser(target_url)
 
-            return self._open_url_after_window_ready(target_url)
+            result = self._open_url_in_new_window(target_url)
+            self._reset_browser_zoom()
+            return result
 
         logger.info(
             "Opening browser target",
@@ -426,8 +423,27 @@ class ActionTools:
         return PerceptionEngine._looks_like_browser_window(window)
 
     def _find_browser_window(self):
+        perception = getattr(self, "perception", None)
+        preferred_id = getattr(perception, "_browser_window_id", None)
+        if preferred_id:
+            for window in self._browser_windows():
+                if self._window_id(window) == preferred_id:
+                    return window
+            logger.info(
+                "Bound browser window disappeared; refusing to close another window",
+                window_id=preferred_id,
+            )
+            clear_binding = getattr(perception, "clear_browser_window", None)
+            if callable(clear_binding):
+                clear_binding()
+            return None
+
         active_window = gw.getActiveWindow()
-        if active_window and self._looks_like_browser_window(active_window):
+        if (
+            active_window
+            and self._looks_like_browser_window(active_window)
+            and not bool(getattr(active_window, "isMinimized", False))
+        ):
             return active_window
 
         for window in gw.getAllWindows():
@@ -441,7 +457,7 @@ class ActionTools:
         return None
 
     def close_browser(self) -> Dict[str, Any]:
-        """열려 있는 브라우저 창을 닫습니다."""
+        """바인딩된 자동화 브라우저 창을 닫습니다."""
         def _close():
             window = self._find_browser_window()
             if not window:

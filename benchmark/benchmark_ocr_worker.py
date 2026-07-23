@@ -84,7 +84,7 @@ def build_ocr_client():
 
     engine = object.__new__(SomEngine)
     engine.root_dir = ROOT_DIR
-    engine.paddleocr_dir = engine._resolve_paddleocr_base_dir()
+    engine.paddlex_cache_dir = engine._resolve_paddlex_cache_dir()
     engine._ocr_worker = None
     engine._ocr_worker_stdout_queue = None
     engine._ocr_worker_stderr_lines = deque(maxlen=40)
@@ -113,7 +113,6 @@ def selected_screenshots(screenshots: list[Path], indices: list[int] | None) -> 
 
 def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     os.environ["PADDLEOCR_USE_GPU"] = "1" if args.backend == "gpu" else "0"
-    os.environ["PADDLEOCR_IR_OPTIM"] = "1" if args.ir_optim == "on" else "0"
     os.environ["SOM_OCR_REQUEST_TIMEOUT_SEC"] = str(args.timeout)
     os.environ["SOM_OCR_WORKER_MAX_ATTEMPTS"] = "1"
 
@@ -183,7 +182,6 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         )
     return {
         "backend": args.backend,
-        "ir_optim": args.ir_optim,
         "source_log": str(args.log),
         "loops": args.loops,
         "image_count": len(screenshots),
@@ -210,7 +208,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--backend", choices=("gpu", "cpu"), required=True)
-    parser.add_argument("--ir-optim", choices=("on", "off"), default="off")
     parser.add_argument("--loops", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--max-dim", type=int, default=1152)

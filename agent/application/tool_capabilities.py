@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from shared.schema.agent_contract import EVIDENCE_FIELDS
 from shared.schema.investigation_schema import ToolCapability
+from agent.sites.profile import SiteProfile
 
 
-def _site_capability(profile: dict[str, Any]) -> ToolCapability:
-    entry = profile.get("entry", {})
-    manual = profile.get("manual", {})
-    declared = manual.get("capabilities", {}) if isinstance(manual, dict) else {}
-    slug = str(entry.get("slug") or manual.get("site") or "unknown")
+def _site_capability(profile: SiteProfile) -> ToolCapability:
+    declared = profile.capabilities
+    slug = profile.slug
     return ToolCapability(
         tool_name=f"realtime_scraping:{slug}",
-        purpose=f"{entry.get('display_name') or slug} 공개 채용공고 수집",
+        purpose=f"{profile.display_name or slug} 공개 채용공고 수집",
         supported_operations=["public_search", "visible_result_collection", "detail_reading"],
         supported_filters={
             "keyword": "supported",
@@ -65,8 +62,8 @@ def build_tool_capability_catalog() -> list[ToolCapability]:
     try:
         from agent.sites import list_supported_sites, load_site_profile
 
-        for entry in list_supported_sites(enabled_only=True):
-            capabilities.append(_site_capability(load_site_profile(entry["slug"])))
+        for profile in list_supported_sites(enabled_only=True):
+            capabilities.append(_site_capability(load_site_profile(profile.slug)))
     except Exception:
         # 사이트 구성 오류는 실제 계획 검증 단계에서 드러나도록 DB 도구 목록은 유지한다.
         pass

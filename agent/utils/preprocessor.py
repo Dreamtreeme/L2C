@@ -64,8 +64,7 @@ class Preprocessor:
             from agent.runtime.site_context import site_profile_for_url
 
             profile = site_profile_for_url(url)
-            entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
-            source_platform = str(entry.get("source_platform") or "").strip()
+            source_platform = str(profile.source_platform if profile else "").strip()
             if source_platform:
                 return source_platform
         except Exception:

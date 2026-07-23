@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
+from agent.config import get_settings
 from agent.recipe.page_context import normalize_page_role
 from agent.recipe.text_utils import normalize_text
 from agent.vision.marker_geometry import marker_bbox, marker_center
@@ -55,10 +55,7 @@ def marker_ordinal(target_marker: dict, markers: list[dict]) -> int | None:
             and marker_region(marker, markers) == target_region
         )
     ]
-    try:
-        content_top = int(os.getenv("VISION_INTERACTIVE_CONTENT_TOP_PX", "180"))
-    except ValueError:
-        content_top = 180
+    content_top = get_settings().reflex.interactive_content_top_px
     if marker_bbox(target_marker)[1] >= content_top:
         content_matches = [marker for marker in matches if marker_bbox(marker)[1] >= content_top]
         if content_matches:

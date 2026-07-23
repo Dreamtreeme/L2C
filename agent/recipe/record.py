@@ -127,6 +127,7 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
         declared_page_role = normalize_page_role(args.get("page_role"))
         step = {
             "seq": seq,
+            "decision_capture_id": str(state.get("current_capture_id") or ""),
             "url_template": url_template(url),
             "page_role": observed_page_role or declared_page_role,
             "observed_page_role": observed_page_role,

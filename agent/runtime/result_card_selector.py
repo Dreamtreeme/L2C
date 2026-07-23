@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from agent.graph.action_request import build_action_message
+from agent.config import get_settings
+from agent.graph.action_request import build_action_request
 from agent.graph.state import GraphState
 from agent.recipe.page_context import normalize_page_role
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.result_card_queue import (
     card_queue_enabled,
-    completed_result_card_count,
     result_card_queue_scope_complete,
+    terminal_result_card_count,
 )
+from agent.runtime.site_context import site_runtime_guidance
+from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.utils.image_utils import image_to_base64_jpeg
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
@@ -56,8 +58,7 @@ class ResultCardSelection(BaseModel):
 
 
 def result_card_selector_enabled() -> bool:
-    raw = os.getenv("VISION_RESULT_CARD_SELECTOR_ENABLED", "1")
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return get_settings().reflex.result_card_selector_enabled
 
 
 def _target_count(state: GraphState) -> int:
@@ -104,6 +105,7 @@ def should_select_result_cards(state: GraphState) -> bool:
     return bool(
         result_card_selector_enabled()
         and card_queue_enabled()
+        and not latest_no_effect_transition(state)
         and normalize_page_role(state.get("current_page_role")) == "search"
         and (target_count > collected_count or needs_visible_screen)
         and (not queue or queue_exhausted)
@@ -114,7 +116,9 @@ def should_select_result_cards(state: GraphState) -> bool:
 
 
 def _selector_model_name() -> str:
-    return os.getenv("VISION_RESULT_CARD_SELECTOR_MODEL", "gemini-3.5-flash")
+    from agent.application.model_policy import lightweight_model_name
+
+    return lightweight_model_name("VISION_RESULT_CARD_SELECTOR_MODEL")
 
 
 def _get_result_card_selector_model() -> Any:
@@ -173,12 +177,9 @@ def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
     recipe_params = dict(state.get("recipe_params") or {})
     search_query = str(recipe_params.get("query") or recipe_params.get("keyword") or "").strip()
     visible_all = _count_mode(state) == "visible_all" and _target_count(state) == 0
-    try:
-        max_dim = int(os.getenv("VISION_REASONING_IMAGE_MAX_DIM", "768"))
-        quality = int(os.getenv("VISION_REASONING_IMAGE_QUALITY", "60"))
-    except ValueError:
-        max_dim = 768
-        quality = 60
+    settings = get_settings().vision
+    max_dim = settings.reasoning_image_max_dim
+    quality = settings.reasoning_image_quality
     image = image_to_base64_jpeg(
         Path(str(state.get("marked_image") or "")),
         max_dim=max_dim,
@@ -200,7 +201,10 @@ def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
     )
     instruction = (
         "현재 화면이 채용공고 검색 결과 목록인지 판단하고, 실제로 보이는 공고 중 수집할 카드를 고르십시오. "
-        "사용자의 검색어와 직무명 또는 핵심 기술이 직접 일치하는 공고를 우선하십시오. 직접 일치하는 공고가 충분하면 "
+        "사용자 검색어가 직무를 나타내면 공고 제목의 직무 정체성이 직접 일치해야 합니다. 기술 스택이나 업무 일부의 "
+        "일치는 직무가 일치한 공고 사이의 순위 판단에만 사용하고, 제목이 다른 직무를 나타내는 공고를 직접 일치로 "
+        "간주하지 마십시오. 검색어가 기술 자체만을 요구한 경우에만 제목 또는 기술 표기의 직접 일치를 사용하십시오. "
+        "직접 일치하는 공고가 충분하면 "
         "단지 관련 기술이라는 이유만으로 범위가 더 넓거나 다른 직무의 공고를 섞지 마십시오. "
         f"수집 범위는 {selection_scope}입니다. "
         f"{refinement_rule}"
@@ -226,11 +230,18 @@ def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
         "숨겨진 카드나 화면에 없는 정보는 추측하지 마십시오. 검색 결과 목록이 아니거나 확실한 공고 제목을 찾지 못하면 "
         "is_result_list를 false로 하고 cards를 비우십시오."
     )
+    current_url = str(state.get("current_url") or "")
+    site_guidance = site_runtime_guidance(
+        current_url,
+        str(state.get("current_page_role") or "search"),
+    )
+    if site_guidance:
+        instruction += "\n\n" + site_guidance.strip()
     payload = {
         "search_query": search_query,
         "count_mode": _count_mode(state),
         "remaining_count": remaining_count,
-        "current_url": str(state.get("current_url") or ""),
+        "current_url": current_url,
         "allowed_markers": markers,
         "excluded_cards": [
             {
@@ -346,7 +357,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
     target_count = _target_count(state)
     resolved_count = max(
         _collected_count(state),
-        completed_result_card_count(list(state.get("result_card_queue") or [])),
+        terminal_result_card_count(list(state.get("result_card_queue") or [])),
     )
     remaining_count = (
         target_count - resolved_count
@@ -360,6 +371,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
             _get_result_card_selector_model(),
             _selection_messages(state, remaining_count),
             "result_card_selection",
+            stream=True,
         )
         selection = dump_model(raw)
     except Exception as exc:
@@ -416,7 +428,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
                         "slot_name": "result_filter_query",
                     }
                 )
-            message = build_action_message(
+            request = build_action_request(
                 "card_selector",
                 f"refine results with {action_name} on {refinement_target['label']}",
                 [
@@ -433,7 +445,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
                 marker_id=refinement_target["marker_id"],
                 label=refinement_target["label"],
             )
-            return message, {
+            return request, {
                 "attempted": True,
                 "reason": "result_refinement_action",
                 "refinement_reason": refinement_reason,
@@ -477,7 +489,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
         return None, {"attempted": True, "reason": "no_valid_card", **availability}
 
     first = cards[0]
-    message = build_action_message(
+    request = build_action_request(
         "card_selector",
         f"selected {len(cards)} visible result card(s)",
         [
@@ -513,7 +525,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
         first_marker_id=first["marker_id"],
         first_title=first["title"],
     )
-    return message, {
+    return request, {
         "attempted": True,
         "reason": "cards_selected",
         "card_count": len(cards),

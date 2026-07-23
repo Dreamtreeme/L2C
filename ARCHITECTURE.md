@@ -8,7 +8,8 @@ L2C는 Windows 로컬 애플리케이션이며 사용자 질의, 필요 시 웹 
 flowchart TD
     U[사용자] --> UI[Chat UI]
     UI --> API[FastAPI]
-    API --> CS[ChatService]
+    API --> RT[ApplicationRuntime]
+    RT --> CS[ChatService]
     CS --> PLAN[Investigation LangGraph]
     PLAN --> CLARIFY{중요한 조건이 확정됐는가?}
     CLARIFY -->|아니오| INPUT[객관식 확인 질문 및 중단]
@@ -29,7 +30,7 @@ flowchart TD
     ANSWER --> U
 ```
 
-`ChatService`가 사용자 진입점의 유일한 지휘자이며 `agent.graph.investigation_workflow`를 실행합니다. 지휘자는 요청 이해, 확인 질문, 필요 근거 정의, DB 충분성 검사, 수집 계획, 결과 검증, 답변 순서로 진행합니다. CLI는 같은 서비스를 직접 호출하는 개발·복구용 어댑터일 뿐 별도 운영 경로가 아닙니다.
+FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫습니다. 이 런타임은 조사 체크포인터, 컴파일된 조사·작업자 그래프, `ChatService`, 지연 생성 비전 자원, 자동승격 작업자를 소유합니다. `ChatService`가 사용자 진입점의 유일한 지휘자이며 요청 이해, 확인 질문, 필요 근거 정의, DB 충분성 검사, 수집 계획, 결과 검증, 답변 순서로 진행합니다. CLI는 같은 런타임을 여는 개발·복구용 어댑터일 뿐 별도 운영 경로가 아닙니다.
 
 ## 백엔드 요청 생명주기
 
@@ -39,7 +40,7 @@ flowchart TD
 4. UI는 문자 단위 가짜 스트리밍 대신 진행 이벤트와 최종 응답을 구분해 표시합니다.
 5. `GET /api/runs/{run_id}`로 최근 실행 상태와 최종 계측값을 다시 조회할 수 있습니다.
 
-실행 레지스트리는 단일 사용자 로컬 앱을 위한 메모리 저장소입니다. 실행 진행 이벤트는 프로세스 재시작 후 복구하지 않지만, 확인 질문과 확정 조건을 포함한 조사 상태는 SQLite `investigation_sessions`에 저장합니다.
+실행 레지스트리는 단일 사용자 로컬 앱을 위한 메모리 저장소입니다. 실행 진행 이벤트는 프로세스 재시작 후 복구하지 않지만, 확인 질문과 확정 조건을 포함한 조사 상태는 업무 DB와 분리된 LangGraph SQLite 체크포인트에 저장합니다. `investigation_id`가 체크포인트의 `thread_id`이며 확인 답변은 같은 스레드를 재개합니다.
 
 ## Vision Worker
 
@@ -49,16 +50,22 @@ Realtime/Vision 경로는 DOM과 Playwright selector를 사용하지 않습니�
 flowchart TD
     S[WorkerState 생성] --> START{시작 화면 관찰 여부}
     START -->|없음| REASON[Reasoning]
-    START -->|있음| REFLEX[Reflex ROI 검증]
-    PERCEPTION[Perception 및 화면 서명] --> POLICY{결정론적 재생 가능?}
-    POLICY -->|카드 큐 또는 상세 정책| ACTION[Action]
-    POLICY -->|아니오| REFLEX
+    START -->|있음| SELECT[결정론적 행동 선택]
+    CAPTURE[화면 캡처] --> TRANSITION[전환 판정]
+    TRANSITION -->|OCR 필요| OCR[SoM 및 OCR]
+    OCR --> COLLECT[관찰 및 상세 본문 반영]
+    COLLECT --> SELECT
+    TRANSITION -->|OCR 불필요| SELECT
+    SELECT -->|카드 큐 또는 상세 정책| ACTION[원자 행동 실행]
+    SELECT -->|재생 후보| REFLEX[Reflex ROI 검증]
+    SELECT -->|의미 판단 필요| REASON
     REFLEX -->|ROI pHash와 마커 비율 일치| ACTION
     REFLEX -->|불일치| REASON
     REASON --> ACTION
-    ACTION -->|화면 변경| PERCEPTION
-    ACTION -->|같은 화면 연속 행동| REASON
-    ACTION -->|완료 또는 승인 필요| END[종료]
+    ACTION --> RECORD[실행 기록]
+    RECORD -->|화면 변경| CAPTURE
+    RECORD -->|같은 화면 연속 행동| REASON
+    RECORD -->|완료 또는 승인 필요| END[종료]
 ```
 
 - `Perception`: 브라우저 화면을 캡처하고 PaddleOCR·OmniParser 마커와 화면 서명을 만듭니다.
@@ -74,14 +81,15 @@ flowchart TD
 |---|---|---|
 | 진입점 | `agent/main.py`, `agent/web_server.py` | CLI·HTTP 입력과 응답 |
 | 실행 계약 | `agent/application/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
-| 애플리케이션 | `agent/application/chat_service.py`, `investigation_store.py`, `evidence_service.py` | 조사 실행 진입, 확인 상태 저장, DB 근거 충분성 검사 |
+| 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py` | 조사 실행 진입과 DB 근거 충분성 검사 |
 | 수집 조율 | `agent/application/collection_service.py` | 작업자 실행, 검토 재시도, 승인 데이터 저장 순서 |
-| 작업자 실행 | `agent/application/worker_execution_service.py` | 단일 작업자 직렬화, 그래프 실행, 브라우저 정리 |
+| 런타임 소유권 | `agent/runtime/application_runtime.py`, `vision_worker_runtime.py` | 체크포인터·그래프·OCR·모델·잠금·승격 작업자의 생성과 종료 |
+| 작업자 실행 | `agent/application/worker_execution_service.py` | 시작 화면 준비, 그래프 실행, 브라우저 정리 순서 |
 | 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 공고 정규화·UPSERT, 상세 OCR 최종 구조화 |
 | 비동기 승격 | `agent/application/recipe_promotion_service.py`, `recipe_promotion_worker.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
 | 지휘자 그래프 | `agent/graph/investigation_workflow.py` | 요청 이해, 확인 질문, 근거 계획, 도구 실행, 결과 검증 |
 | 작업자 그래프 | `agent/graph/workflow.py`, `state.py`, `state_factory.py` | Vision LangGraph 연결과 WorkerState 계약 |
-| 노드 | `agent/graph/nodes.py` | perception, reasoning, action 실행 |
+| 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 수집, 선택, 추론, 원자 실행, 기록 |
 | 런타임 정책 | `agent/runtime/` | 전환 검증, 상세 버퍼, 카드 큐, Reflex 재생 |
 | 화면·입력 | `agent/tools/perception.py`, `som_engine.py`, `actions.py` | 화면/OCR/마커 생성과 물리 입력 |
 | 학습 메모리 | `agent/recipe/` | 행동 기록, 후보 검토, 활성 레시피 저장·매칭 |
@@ -89,19 +97,25 @@ flowchart TD
 ## 상태와 행동 계약
 
 - 모든 작업자 진입점은 `create_worker_state()`로 독립된 초기 상태를 만듭니다.
-- LLM과 결정론적 정책은 `ActionRequest` 형태의 도구 호출 묶음을 공유합니다.
-- 기존 `action_node`가 LangChain `AIMessage`를 받으므로 현재는 `ActionRequest.to_ai_message()` 어댑터를 사용합니다.
+- 작업자 상태는 체크포인트 직렬화가 가능한 하나의 평면 `GraphState`입니다. 중첩 상태와 평면 호환 필드를 동시에 유지하지 않으며 각 `worker_*` 모듈이 자기 책임의 필드만 갱신합니다.
+- LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 결과 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
+- 실행 전 명령은 `pending_action: ActionRequest`, 실행 후 결과는 `last_action_result: ActionResult`로 분리합니다.
+- `action_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
+- 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
 - 행동 전후 검증은 `pending_transition`과 `transition_observations`로 연결합니다.
 - 결정론적 정책이 검증에 실패하면 행동을 강행하지 않고 reasoning으로 폴백합니다.
 
 ## 로컬 작업자 생명주기
 
-- 브라우저·Perception·OCR은 한 프로세스 안에서 재사용합니다.
-- `worker_execution_session()`이 전체 수집, 검토 재시도, 브라우저 정리를 직렬화해 동시 요청이 같은 화면을 조작하지 못하게 합니다.
+- `ApplicationRuntime`은 FastAPI 시작 때 한 번 생성되고 CLI·E2E에서는 명시적인 컨텍스트로 관리됩니다.
+- Perception·ActionTools·OCR·컴파일된 작업자 그래프·판단 모델은 애플리케이션 수명 동안 재사용합니다.
+- `VisionWorkerRuntime.execution_session()`이 전체 수집, 검토 재시도, 브라우저 정리를 직렬화해 동시 요청이 같은 화면을 조작하지 못하게 합니다.
+- 브라우저 창은 수집 요청마다 열고 기본적으로 요청 종료 때 닫습니다. 이때 OCR worker는 유지됩니다.
 - PaddleOCR은 별도 subprocess를 요청 간 재사용합니다.
-- 장기 재사용 tail latency를 막기 위해 기본 7회 요청 후 subprocess만 재시작합니다. Perception과 상위 작업자는 유지됩니다.
+- OCR subprocess는 요청 횟수로 재시작하지 않으며 실제 timeout이나 프로세스 실패 때만 한 번 복구합니다.
 - 무거운 화면 모델과 GUI 도구는 수집이 실제로 호출될 때 지연 초기화합니다.
+- DB 근거만으로 답할 수 있는 요청은 비전 런타임을 초기화하지 않습니다.
 - 자동승격은 `recipe_candidates` SQLite 상태를 영속 대기열로 사용합니다. API 요청은 `pending_review` 등록 후 답변을 계속하고, FastAPI 수명주기의 단일 작업자가 `reviewing`으로 선점해 Critic을 실행합니다.
 - 백엔드가 중단되면 처리 중이던 후보는 다음 시작에서 `pending_review`로 복구됩니다. Critic 전송 오류는 재시도하며 의미상 `revise`와 시스템 오류 `review_failed`를 구분합니다.
 
@@ -114,6 +128,6 @@ Classic은 Playwright DOM 기반 베이스라인입니다. 사이트별 selector
 - 처리 시간은 시스템 시각 변경의 영향을 받지 않는 `time.perf_counter()`로 측정합니다.
 - `RunContext`가 한 요청의 단계별 실행시간, LLM 호출시간, 모델별 입력·출력 토큰을 `run_id`로 묶습니다.
 - 비용은 코드에 단가를 하드코딩하지 않습니다. `LLM_PRICING_FILE`로 정확한 모델 ID별 가격표를 제공했을 때만 추정하고, 가격이 없으면 `null`과 미등록 모델명을 남깁니다.
-- 브라우저 E2E는 로그와 `.summary.json`을 새 파일로 함께 만들며 기존 결과를 덮어쓰지 않습니다. 요약에는 코드 버전, 환경 설정, 실행시간, 토큰, 품질 판정이 포함됩니다.
+- 브라우저 E2E는 로그와 `.summary.json`을 새 파일로 함께 만들며 기존 결과를 덮어쓰지 않습니다. 요약에는 코드 버전, 환경 설정, 실행시간, 토큰, 품질 판정이 포함됩니다. 성능 수치는 텍스트 로그에서 다시 계산하지 않고 구조화 요약만 집계 원본으로 사용합니다.
 - 기본 `pytest`는 외부 API와 물리 브라우저 테스트를 제외합니다. `external`, `e2e` 표식을 명시해야 실제 외부 자원을 사용합니다.
 - 품질 평가는 자카드 유사도를 성공 기준으로 쓰지 않습니다. 목표 수집 개수, DB 적재 개수, 필수 필드, URL 고유성, 기준 데이터와의 URL·식별 필드 정확 일치를 따로 측정합니다.

@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 
+from agent.config import get_settings
 from agent.utils.logger import logger
 from agent.vision.screen_signature import hamming_distance, perceptual_hash
 
 
 def reasoning_screen_guard_enabled() -> bool:
-    raw = os.getenv("VISION_REASONING_SCREEN_GUARD", "1")
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
+    return get_settings().vision.reasoning_screen_guard
 
 
 def check_reasoning_screen_stale(state: dict[str, Any], perception: Any) -> dict[str, Any]:
@@ -37,7 +36,7 @@ def check_reasoning_screen_stale(state: dict[str, Any], perception: Any) -> dict
         logger.debug("Reasoning screen guard skipped", error=str(exc))
         return {"checked": False, "stale": False, "reason": "capture_failed"}
 
-    max_distance = max(0, int(os.getenv("VISION_REASONING_STALE_PHASH_MAX_DISTANCE", "10")))
+    max_distance = get_settings().vision.reasoning_stale_phash_max_distance
     stale = distance is not None and distance > max_distance
     result = {
         "checked": True,

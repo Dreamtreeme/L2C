@@ -101,6 +101,7 @@ class WorkerSubmission(BaseModel):
     is_finished: bool = False
     hit_recursion_limit: bool = False
     collected_count: int = 0
+    observed_job_ids: List[int] = Field(default_factory=list)
     target_count: int = 0
     persisted_count: int = 0
     feedback_saved: int = 0

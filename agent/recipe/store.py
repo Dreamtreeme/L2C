@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.recipe.page_context import normalize_page_role, page_role_family
+from agent.recipe.payload_sanitizer import strip_replay_runtime_fields
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.utils.model_dump import dump_model
 from shared.schema.recipe_schema import RecipeStep, SiteRecipe
@@ -110,6 +111,13 @@ class RecipeStore:
                 for step in steps
             ):
                 conn.execute("DELETE FROM recipes WHERE recipe_key=?", (row["recipe_key"],))
+                continue
+            cleaned_steps = strip_replay_runtime_fields(steps)
+            if cleaned_steps != steps:
+                conn.execute(
+                    "UPDATE recipes SET steps_json=? WHERE recipe_key=?",
+                    (json.dumps(cleaned_steps, ensure_ascii=False), row["recipe_key"]),
+                )
 
     @staticmethod
     def _dump_json(payload: Any) -> str:
@@ -165,7 +173,11 @@ class RecipeStore:
         """같은 ROI 레시피 키의 행동 묶음을 저장하거나 갱신한다."""
 
         steps = list(step_or_steps if isinstance(step_or_steps, list) else [step_or_steps])
-        steps = [step for step in steps if isinstance(step, dict)]
+        steps = [
+            strip_replay_runtime_fields(step)
+            for step in steps
+            if isinstance(step, dict)
+        ]
         if not steps:
             return False
         if not all(self._target_step_has_new_required_fields(step) for step in steps):

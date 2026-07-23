@@ -129,7 +129,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model",
-        default=os.getenv("COMMANDER_MODEL", "gemini-3.5-flash"),
+        default=os.getenv("COMMANDER_MODEL", "gemini-3.6-flash"),
     )
     parser.add_argument("--date", default=datetime.now().date().isoformat())
     parser.add_argument("--scenario", default="")

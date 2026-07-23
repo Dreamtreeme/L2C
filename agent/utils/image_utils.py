@@ -1,7 +1,7 @@
 """
 이미지 처리 유틸리티.
-PIL 이미지 리사이즈 → JPEG 압축 → Base64 인코딩 파이프라인을
-nodes.py(reasoning_node)와 perception.py(analyze_ui) 양쪽에서 공유합니다.
+PIL 이미지 리사이즈 -> JPEG 압축 -> Base64 인코딩 파이프라인을
+worker_reasoning.py와 perception.py에서 공유합니다.
 """
 
 from __future__ import annotations

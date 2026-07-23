@@ -1,3 +1,14 @@
+---
+title: "검색 의미 사전"
+type: reference
+area: search
+status: active
+updated: 2026-07-23
+tags:
+  - l2c
+  - docs/search
+---
+
 # 검색 의미 사전
 
 ## 목적
@@ -17,7 +28,7 @@ O*NET 세부 직업은 SOC 코드의 대분류를 검토된 로컬 직무군에 
 ## 적재와 재색인
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\import_search_taxonomy.py --download-onet
+.\.venv-app\Scripts\python.exe scripts\import_search_taxonomy.py --download-onet
 ```
 
 원본 ZIP이 이미 있으면 `--download-onet`을 생략한다. 적재가 끝나면 기존 공고도 현재 사전으로 다시 연결한다.
@@ -57,16 +68,16 @@ O*NET 세부 직업은 SOC 코드의 대분류를 검토된 로컬 직무군에 
 
 ```powershell
 # 검토 대기 후보
-.\.venv\Scripts\python.exe scripts\review_search_taxonomy.py list
+.\.venv-app\Scripts\python.exe scripts\review_search_taxonomy.py list
 
 # 기존 개념의 별칭으로 승인
-.\.venv\Scripts\python.exe scripts\review_search_taxonomy.py alias 12 l2c:skill:swiftui
+.\.venv-app\Scripts\python.exe scripts\review_search_taxonomy.py alias 12 l2c:skill:swiftui
 
 # 새 개념으로 승인
-.\.venv\Scripts\python.exe scripts\review_search_taxonomy.py new 13 "새 기술명" --alias "다른 표기"
+.\.venv-app\Scripts\python.exe scripts\review_search_taxonomy.py new 13 "새 기술명" --alias "다른 표기"
 
 # 검색 단위가 아닌 노이즈 거절
-.\.venv\Scripts\python.exe scripts\review_search_taxonomy.py reject 14 --note "제품 설명 문장"
+.\.venv-app\Scripts\python.exe scripts\review_search_taxonomy.py reject 14 --note "제품 설명 문장"
 ```
 
 기술 후보를 승인하면 해당 후보가 관찰된 공고만 즉시 다시 색인한다. 의미 질문에서 사용자가 직무를 확인하면 그 표현을 별칭으로 승인하고 기존 공고 전체를 다시 색인한다. 새 사전 버전을 적재할 때 기존 후보가 활성 별칭 하나와 정확히 일치하면 자동으로 해소한다. 둘 이상의 개념과 겹치거나 사전에 없는 후보는 계속 검토 대상으로 남는다. 거절된 표현은 관찰 횟수만 누적되고 활성 검색 사전에 들어가지 않는다.

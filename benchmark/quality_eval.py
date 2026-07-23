@@ -159,17 +159,30 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
     target = max(0, int(payload.get("target_count") or 0))
     collected = max(0, int(payload.get("item_count") or payload.get("collected_count") or 0))
     persisted = max(0, int(payload.get("persisted_count") or 0))
+    validation = payload.get("persistence_validation") or {}
+    persisted_ids = {
+        int(item["job_id"])
+        for item in validation.get("persisted_items", [])
+        if isinstance(item, dict)
+        and str(item.get("job_id") or "").isdigit()
+        and int(item["job_id"]) > 0
+    }
+    observed_ids = {
+        int(job_id)
+        for job_id in (payload.get("observed_job_ids") or [])
+        if str(job_id).isdigit() and int(job_id) > 0
+    }
+    unidentified_persisted = max(0, persisted - len(persisted_ids))
+    resolved = len(persisted_ids | observed_ids) + unidentified_persisted
     accepted = (payload.get("review") or {}).get("decision") == "accept"
-    target_met = (
-        collected >= target and persisted >= target
-        if target
-        else collected > 0 and persisted > 0
-    )
+    target_met = resolved >= target if target else resolved > 0
     return {
         "target_count": target,
         "collected_count": collected,
         "persisted_count": persisted,
-        "target_fulfillment": round(min(1.0, collected / target), 6) if target else None,
+        "observed_existing_count": len(observed_ids),
+        "resolved_count": resolved,
+        "target_fulfillment": round(min(1.0, resolved / target), 6) if target else None,
         "persistence_rate": round(min(1.0, persisted / collected), 6) if collected else 0.0,
         "accepted": accepted,
         "finished": bool(payload.get("is_finished")),

@@ -1,14 +1,29 @@
 import operator
 from typing import TypedDict, List, Dict, Any, Annotated
-from pathlib import Path
+
+from agent.graph.action_request import ActionRequest, ActionResult
+
 
 class GraphState(TypedDict, total=False):
     """
     LangGraph에서 노드 간에 전달되는 상태 스키마입니다.
     """
+    # 작업자 실행과 화면 캡처를 연결하는 식별자
+    worker_run_id: str
+    worker_attempt_index: int
+    current_capture_id: str
+    capture_sequence: int
+
     # 사용자의 원래 목표 명령
     goal: str
-    
+
+    # 최근 캡처와 OCR 관찰 결과
+    current_screenshot: str
+    capture_quality: Dict[str, Any]
+    raw_screen_signature: Dict[str, Any]
+    analysis_mode: str
+    ocr_complete: bool
+
     # 현재 화면에서 추출된 UI 요소 목록 (텍스트)
     ui_context: str
 
@@ -23,7 +38,6 @@ class GraphState(TypedDict, total=False):
 
     # 로딩/빈 화면이라 OCR과 LLM 판단을 건너뛰어야 하는지 여부
     low_information_screen: bool
-    low_information_retry_count: int
 
     # 원본 마커 데이터 (ID 매핑용)
     current_markers: List[Dict[str, Any]]
@@ -33,7 +47,7 @@ class GraphState(TypedDict, total=False):
     action_history: Annotated[List[Dict[str, Any]], operator.add]
     
     # 최근 캡처된 이미지 경로들 (디버깅/기록용)
-    recent_images: Annotated[List[Path], operator.add]
+    recent_images: Annotated[List[str], operator.add]
     
     # 최근 마킹된 이미지 경로 (SoM VLM 추론용)
     marked_image: str
@@ -53,30 +67,20 @@ class GraphState(TypedDict, total=False):
     # 현재까지 누적 수집된 채용공고 정보 (스크롤 간 정보 보존용)
     extracted_jd: Dict[str, Any]
 
-    # 가장 최근 LLM의 판단 결과 저장 (AIMessage 객체 등)
-    last_action_result: Any
+    # 다음 실행 노드가 처리할 검증된 행동 요청
+    pending_action: ActionRequest | None
 
-    # 대목표 아래 소목표 계획 목록
-    plan: List[str]
+    # 가장 최근 행동 요청의 실행 결과
+    last_action_result: ActionResult | None
 
-    # 현재 실행 중인 계획 단계 인덱스
-    current_plan_step: int
-
-    # 각 노드의 실행 시간 기록 (디버깅/성능 측정용)
-    # Annotated + operator.add 로 노드마다 append되어 누적됩니다.
-    step_durations: Annotated[List[Dict[str, Any]], operator.add]
-
-    # 마지막 action이 화면 전환/렌더링 변화를 유발했는지 여부
-    last_action_screen_changed: bool
+    # 실행 노드가 기록 노드에 넘기는 직렬화 가능한 행동 결과 묶음
+    execution_records: List[Dict[str, Any]]
 
     # [Reflex Recipe / Phase0] 비전 런 중 기록된 UI 행동/타깃 ROI 스텝. operator.add로 누적.
     recorded_steps: Annotated[List[Dict[str, Any]], operator.add]
 
     # [Feedback Loop] 행동 제안 -> 실행 -> 관찰 -> 1차 피드백 에피소드. operator.add로 누적.
     feedback_episodes: Annotated[List[Dict[str, Any]], operator.add]
-
-    # [Reflex Recipe] 직전 reflex_node가 reasoning을 우회했는지 여부
-    reflex_hit: bool
 
     # [Reflex Recipe] 직전 reflex 후보 선택/매칭/실패 원인 추적 정보
     reflex_trace: Dict[str, Any]
@@ -97,6 +101,11 @@ class GraphState(TypedDict, total=False):
     transition_status: str
     transition_outcome: str
     transition_source: str
+    transition_reason: str
+    transition_visual_change_detected: bool
+    transition_visual_change_ratio: float | None
+    ocr_required: bool
+    observed_transition: Dict[str, Any]
 
     # [Transition Contract] 행동 뒤 관찰된 OCR 화면 기록
     transition_observations: Annotated[List[Dict[str, Any]], operator.add]
@@ -105,7 +114,6 @@ class GraphState(TypedDict, total=False):
     result_card_queue: List[Dict[str, Any]]
     result_page_memory: Dict[str, Any]
     active_result_card: Dict[str, Any]
-    queue_replay_hit: bool
     queue_replay_trace: Dict[str, Any]
     result_card_selector_trace: Dict[str, Any]
 
@@ -113,11 +121,13 @@ class GraphState(TypedDict, total=False):
     result_availability: Dict[str, Any]
 
     # [Page Policy] 상세 페이지처럼 구조가 안정적인 반복 읽기 흐름에서 LLM 판단을 우회한 액션
-    page_policy_hit: bool
     page_policy_trace: Dict[str, Any]
 
     # [Detail OCR Buffer] 상세 페이지 OCR을 화면별로 누적하고 마지막에 한 번 정제한다.
     detail_ocr_buffer: Dict[str, Any]
+
+    # [Detail Source Follow-up] 본문이 부족해 원문 이동 또는 추가 공개가 필요한 상태
+    detail_followup_required: Dict[str, Any]
 
     # [HITL] Stop autonomous execution before sensitive or irreversible steps
     pending_human_approval: bool

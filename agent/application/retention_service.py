@@ -2,36 +2,32 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from agent.config import get_settings
+
 
 @dataclass(frozen=True)
 class RetentionPolicy:
     log_days: int = 30
-    artifact_days: int = 14
+    artifact_days: int = 90
     audit_days: int = 90
     job_version_days: int = 180
     keep_job_versions: int = 5
 
     @classmethod
     def from_env(cls) -> "RetentionPolicy":
-        def value(name: str, default: int) -> int:
-            try:
-                return max(1, int(os.getenv(name, str(default))))
-            except ValueError:
-                return default
-
+        settings = get_settings().retention
         return cls(
-            log_days=value("RETENTION_LOG_DAYS", 30),
-            artifact_days=value("RETENTION_ARTIFACT_DAYS", 14),
-            audit_days=value("RETENTION_AUDIT_DAYS", 90),
-            job_version_days=value("RETENTION_JOB_VERSION_DAYS", 180),
-            keep_job_versions=value("RETENTION_KEEP_JOB_VERSIONS", 5),
+            log_days=settings.log_days,
+            artifact_days=settings.artifact_days,
+            audit_days=settings.audit_days,
+            job_version_days=settings.job_version_days,
+            keep_job_versions=settings.keep_job_versions,
         )
 
 

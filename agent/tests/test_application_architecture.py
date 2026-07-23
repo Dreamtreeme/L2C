@@ -5,6 +5,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
+def _patch_start_observation(monkeypatch, capture):
+    """분할된 시작 관찰 노드를 외부 화면 없이 실행하도록 대체한다."""
+
+    monkeypatch.setattr("agent.graph.worker_observation.capture_screen_node", capture)
+    monkeypatch.setattr("agent.graph.worker_observation.analyze_screen_node", lambda state: {})
+    monkeypatch.setattr("agent.graph.worker_transition.evaluate_transition_node", lambda state: {})
+    monkeypatch.setattr("agent.graph.worker_collection.apply_observation_node", lambda state: {})
+
+
 def test_investigation_prompts_include_runtime_date_and_evidence_rules():
     from agent.prompts.investigation import (
         answer_prompt,
@@ -314,8 +323,8 @@ def test_chat_api_streams_structured_progress_without_character_delay(monkeypatc
             }
 
     monkeypatch.setattr(
-        "agent.web_server.get_chat_service",
-        lambda: FakeChatService(),
+        "agent.web_server._chat_service_for_app",
+        lambda _application: FakeChatService(),
     )
     response = TestClient(app).post("/api/chat", json={"query": "테스트 질문"})
 
@@ -416,7 +425,10 @@ def test_chat_api_resumes_from_structured_clarification(monkeypatch):
                 "metrics": {},
             }
 
-    monkeypatch.setattr("agent.web_server.get_chat_service", lambda: FakeChatService())
+    monkeypatch.setattr(
+        "agent.web_server._chat_service_for_app",
+        lambda _application: FakeChatService(),
+    )
     response = TestClient(app).post(
         "/api/chat",
         json={"query": "개발", "resume_run_id": "previous-clarification"},
@@ -425,6 +437,7 @@ def test_chat_api_resumes_from_structured_clarification(monkeypatch):
     assert response.status_code == 200
     assert "개발 공고를 찾았습니다." in response.text
     assert '"resumed_from_run_id": "previous-clarification"' in response.text
+    assert '"resume_mode": "checkpoint_resume"' in response.text
 
 
 def test_chat_api_uses_recent_conversation_context(monkeypatch):
@@ -458,7 +471,10 @@ def test_chat_api_uses_recent_conversation_context(monkeypatch):
                 "metrics": {},
             }
 
-    monkeypatch.setattr("agent.web_server.get_chat_service", lambda: FakeChatService())
+    monkeypatch.setattr(
+        "agent.web_server._chat_service_for_app",
+        lambda _application: FakeChatService(),
+    )
     response = TestClient(app).post(
         "/api/chat",
         json={
@@ -528,7 +544,7 @@ def test_worker_state_factory_returns_independent_mutable_values():
     assert second["recipe_params"] == {}
 
 
-def test_action_request_preserves_executor_tool_call_contract():
+def test_action_request_validates_executor_tool_call_contract():
     from agent.graph.action_request import ActionRequest, ToolCallRequest
 
     request = ActionRequest(
@@ -543,21 +559,72 @@ def test_action_request_preserves_executor_tool_call_contract():
         ],
     )
 
-    message = request.to_ai_message()
+    assert request.source == "card_queue"
+    assert request.summary == "next card"
+    assert request.tool_calls[0].name == "click_marker"
+    assert request.tool_calls[0].args == {
+        "marker_id": 7,
+        "target_label": "iOS 개발자",
+    }
+    assert request.tool_calls[0].id == "queue-1"
 
-    assert message.content == "[card_queue] next card"
-    assert message.tool_calls == [
-        {
-            "name": "click_marker",
-            "args": {"marker_id": 7, "target_label": "iOS 개발자"},
-            "id": "queue-1",
-            "type": "tool_call",
-        }
-    ]
+
+def test_action_request_rejects_unknown_tool_and_invalid_arguments():
+    from pydantic import ValidationError
+
+    from agent.graph.action_request import build_action_request
+
+    with pytest.raises(ValidationError, match="허용되지 않은 작업자 도구"):
+        build_action_request(
+            "llm",
+            "invalid tool",
+            [{"name": "delete_account", "args": {}, "id": "bad-tool"}],
+        )
+
+    with pytest.raises(ValidationError):
+        build_action_request(
+            "llm",
+            "missing marker",
+            [{"name": "click_marker", "args": {}, "id": "bad-args"}],
+        )
+
+
+def test_model_response_is_converted_once_to_allowed_action_request():
+    from agent.graph.action_request import action_request_from_model_response
+
+    class FakeModelResponse:
+        content = "검색 결과를 아래로 이동합니다."
+        tool_calls = [
+            {
+                "name": "scroll",
+                "args": {"direction": "down", "amount": "small"},
+            }
+        ]
+
+    request = action_request_from_model_response(
+        FakeModelResponse(),
+        allowed_tool_names=("scroll",),
+    )
+
+    assert request.source == "llm"
+    assert request.summary == "검색 결과를 아래로 이동합니다."
+    assert request.tool_calls[0].name == "scroll"
+    assert request.tool_calls[0].args == {
+        "direction": "down",
+        "amount": "small",
+    }
+    assert request.tool_calls[0].id == "llm_0"
+
+    with pytest.raises(ValueError, match="허용되지 않은 도구"):
+        action_request_from_model_response(
+            FakeModelResponse(),
+            allowed_tool_names=("click_marker",),
+        )
 
 
 def test_worker_execution_service_delegates_prepare_and_stream(monkeypatch):
     from agent.application.worker_execution_service import execute_worker_graph
+    from agent.sites import load_site_profile
 
     calls = []
     fake_app = object()
@@ -565,7 +632,7 @@ def test_worker_execution_service_delegates_prepare_and_stream(monkeypatch):
     monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: fake_app)
 
     def prepare(initial_state, site_profile):
-        calls.append(("prepare", initial_state["goal"], site_profile["entry"]["slug"]))
+        calls.append(("prepare", initial_state["goal"], site_profile.slug))
         return {**initial_state, "prepared": True}
 
     def run(app, prepared_state, recursion_limit):
@@ -574,7 +641,7 @@ def test_worker_execution_service_delegates_prepare_and_stream(monkeypatch):
 
     final_state, hit_limit = execute_worker_graph(
         {"goal": "collect"},
-        {"entry": {"slug": "wanted"}},
+        load_site_profile("wanted"),
         60,
         prepare_screen=prepare,
         run_graph=run,
@@ -652,6 +719,76 @@ def test_collection_service_forces_partial_status_when_explicit_target_is_unmet(
     assert result["missing_count"] == 1
     assert result["persisted_count"] == 1
     assert "partial collection persisted" in result["message"]
+
+
+def test_collection_service_completes_with_existing_database_jobs_only():
+    from agent.application.collection_service import (
+        CollectionOperations,
+        CollectionRequest,
+        CollectionService,
+    )
+
+    def run_worker(*args, **kwargs):
+        return {
+            "submission": {
+                "run_id": "worker-existing",
+                "collected_count": 0,
+                "observed_job_ids": [7, 8],
+                "target_count": 2,
+                "task_category": "검색",
+            },
+            "site_name": "Wanted",
+            "site_slug": "wanted",
+            "keyword": "iOS 개발자",
+            "target_count": 2,
+            "is_finished": True,
+            "hit_recursion_limit": False,
+            "observed_job_ids": [7, 8],
+        }
+
+    def persist(worker_result, review):
+        worker_result["persistence_validation"] = {
+            "submitted_count": 0,
+            "persisted_count": 0,
+            "persisted_items": [],
+            "rejected_count": 0,
+            "rejected_items": [],
+        }
+        return 0, worker_result["submission"], review, "submission-existing"
+
+    operations = CollectionOperations(
+        normalize_target_count=lambda value: int(value or 0),
+        normalize_task_category=lambda value: value or "검색",
+        review_retries=lambda: 0,
+        run_worker=run_worker,
+        review_worker=lambda submission: ({"decision": "accept"}, "submission-existing"),
+        persist_result=persist,
+        render_review_feedback=lambda review: "",
+        needs_approval=lambda **kwargs: False,
+        build_intermediate_report=lambda *args, **kwargs: {},
+        report_requires_more_collection=lambda report: False,
+        close_browser=lambda: None,
+    )
+
+    result = CollectionService(operations).collect(
+        CollectionRequest(
+            search_keyword="iOS 개발자",
+            site="wanted",
+            target_count=2,
+            search_intent_resolved=True,
+            collection_intent={
+                "search_keyword": "iOS 개발자",
+                "count_mode": "explicit",
+                "target_count": 2,
+            },
+        )
+    )
+
+    assert result["completion_status"] == "complete"
+    assert result["missing_count"] == 0
+    assert result["persisted_count"] == 0
+    assert result["observed_job_ids"] == [7, 8]
+    assert "existing database jobs confirmed" in result["message"]
 
 
 def test_collection_service_completes_when_visible_result_scope_is_exhausted():
@@ -823,19 +960,21 @@ def test_collection_service_persists_valid_partial_data_before_retry():
 
 
 def test_worker_execution_session_serializes_concurrent_requests():
-    from agent.application.worker_execution_service import worker_execution_session
+    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+
+    runtime = VisionWorkerRuntime()
 
     first_entered = threading.Event()
     release_first = threading.Event()
     second_entered = threading.Event()
 
     def first_worker():
-        with worker_execution_session():
+        with runtime.execution_session():
             first_entered.set()
             release_first.wait(timeout=2)
 
     def second_worker():
-        with worker_execution_session():
+        with runtime.execution_session():
             second_entered.set()
 
     first_thread = threading.Thread(target=first_worker)
@@ -856,7 +995,8 @@ def test_worker_execution_session_serializes_concurrent_requests():
 
 def test_worker_startup_overlaps_ocr_and_browser_before_perception(monkeypatch):
     from agent.application.worker_execution_service import prepare_worker_start_screen
-    from agent.graph import nodes
+    from agent.graph import worker_resources
+    from agent.sites import load_site_profile
 
     ocr_started = threading.Event()
     browser_opened = threading.Event()
@@ -881,9 +1021,8 @@ def test_worker_startup_overlaps_ocr_and_browser_before_perception(monkeypatch):
             browser_opened.set()
             return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
 
-    def fake_perception_node(_state, *, max_capture_attempts=None):
+    def fake_perception_node(_state):
         assert order[-1] == "ocr_ready"
-        assert max_capture_attempts == 1
         order.append("perception")
         return {
             "current_url": "https://www.wanted.co.kr",
@@ -894,13 +1033,12 @@ def test_worker_startup_overlaps_ocr_and_browser_before_perception(monkeypatch):
         }
 
     monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
-    monkeypatch.setenv("VISION_WORKER_START_OPEN_ATTEMPTS", "1")
-    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
-    monkeypatch.setattr(nodes, "perception_node", fake_perception_node)
+    monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
+    _patch_start_observation(monkeypatch, fake_perception_node)
 
     result = prepare_worker_start_screen(
         {"current_url": "", "action_history": []},
-        {"entry": {"slug": "wanted"}},
+        load_site_profile("wanted"),
     )
 
     assert order == ["ocr_started", "browser_opened", "ocr_ready", "perception"]
@@ -912,7 +1050,8 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
         OcrWorkerReadinessError,
         prepare_worker_start_screen,
     )
-    from agent.graph import nodes
+    from agent.graph import worker_resources
+    from agent.sites import load_site_profile
 
     perception_called = []
 
@@ -930,29 +1069,28 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
             return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
 
     monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
-    monkeypatch.setenv("VISION_WORKER_START_OPEN_ATTEMPTS", "1")
-    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
-    monkeypatch.setattr(
-        nodes,
-        "perception_node",
-        lambda _state, **_kwargs: perception_called.append(True) or {},
+    monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
+    _patch_start_observation(
+        monkeypatch,
+        lambda _state: perception_called.append(True) or {},
     )
 
     with pytest.raises(OcrWorkerReadinessError):
         prepare_worker_start_screen(
             {"current_url": "", "action_history": []},
-            {"entry": {"slug": "wanted"}},
+            load_site_profile("wanted"),
         )
 
     assert perception_called == []
 
 
-def test_worker_startup_reopens_after_one_blank_observation(monkeypatch):
+def test_worker_startup_opens_once_and_delegates_blank_wait_to_perception(monkeypatch):
     from agent.application.worker_execution_service import prepare_worker_start_screen
-    from agent.graph import nodes
+    from agent.graph import worker_resources
+    from agent.sites import load_site_profile
 
     browser_calls = []
-    capture_limits = []
+    perception_calls = []
 
     class FakeSomEngine:
         def ensure_ocr_worker_ready(self):
@@ -968,54 +1106,47 @@ def test_worker_startup_reopens_after_one_blank_observation(monkeypatch):
             browser_calls.append({"current_url": current_url, "site": site})
             return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
 
-    def fake_perception_node(_state, *, max_capture_attempts=None):
-        capture_limits.append(max_capture_attempts)
-        if len(capture_limits) == 1:
-            return {
-                "current_url": "https://www.wanted.co.kr",
-                "current_url_stale": True,
-                "low_information_screen": True,
-                "low_information_retry_count": 1,
-            }
+    def fake_perception_node(_state):
+        perception_calls.append(True)
         return {
             "current_url": "https://www.wanted.co.kr",
-            "current_url_stale": False,
-            "current_markers": [{"id": 1}],
-            "recent_images": ["screen.png"],
-            "low_information_screen": False,
+            "current_url_stale": True,
+            "low_information_screen": True,
         }
 
     monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
-    monkeypatch.setenv("VISION_WORKER_START_OPEN_ATTEMPTS", "2")
-    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
-    monkeypatch.setattr(nodes, "perception_node", fake_perception_node)
+    monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
+    _patch_start_observation(monkeypatch, fake_perception_node)
 
     result = prepare_worker_start_screen(
         {"current_url": "", "action_history": []},
-        {"entry": {"slug": "wanted"}},
+        load_site_profile("wanted"),
     )
 
-    assert len(browser_calls) == 2
-    assert capture_limits == [1, None]
-    assert result["low_information_screen"] is False
+    assert len(browser_calls) == 1
+    assert perception_calls == [True]
+    assert result["low_information_screen"] is True
 
 
 def test_google_model_clients_are_reused_by_configuration(monkeypatch):
     from agent.application import model_clients
+    from agent.config import clear_settings_cache
     import langchain_google_genai
 
     created = []
 
     class FakeClient:
-        def __init__(self, model, temperature):
-            self.model = model
-            self.temperature = temperature
-            created.append((model, temperature))
+        def __init__(self, **kwargs):
+            self.model = kwargs["model"]
+            self.temperature = kwargs.get("temperature")
+            created.append(kwargs)
 
         def with_structured_output(self, schema):
             return (self, schema)
 
     monkeypatch.setattr(langchain_google_genai, "ChatGoogleGenerativeAI", FakeClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    clear_settings_cache()
     model_clients.clear_model_client_cache()
     first = model_clients.get_google_chat_model("model-a", temperature=0.1)
     second = model_clients.get_google_chat_model("model-a", temperature=0.1)
@@ -1025,70 +1156,384 @@ def test_google_model_clients_are_reused_by_configuration(monkeypatch):
     assert first is second
     assert structured_first is structured_second
     assert structured_first[0] is first
-    assert created == [("model-a", 0.1)]
+    assert created == [
+        {"model": "model-a", "api_key": "test-gemini-key", "temperature": 0.1}
+    ]
     model_clients.clear_model_client_cache()
+
+
+def test_new_gemini_models_omit_deprecated_sampling_parameters(monkeypatch):
+    from agent.application import model_clients
+    from agent.config import clear_settings_cache
+    import langchain_google_genai
+
+    created = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr(langchain_google_genai, "ChatGoogleGenerativeAI", FakeClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.delenv("VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS", raising=False)
+    clear_settings_cache()
+    model_clients.clear_model_client_cache()
+
+    commander = model_clients.get_google_chat_model("gemini-3.6-flash", temperature=0.1)
+    assert commander is model_clients.get_google_chat_model(
+        "gemini-3.6-flash", temperature=0.0
+    )
+    model_clients.get_google_chat_model("gemini-3.5-flash-lite", temperature=0.0)
+
+    assert created == [
+        {
+            "model": "gemini-3.6-flash",
+            "api_key": "test-gemini-key",
+            "thinking_level": "medium",
+        },
+        {
+            "model": "gemini-3.5-flash-lite",
+            "api_key": "test-gemini-key",
+            "thinking_level": "minimal",
+            "max_tokens": 1536,
+        },
+    ]
+    model_clients.clear_model_client_cache()
+
+
+def test_new_gemini_models_strip_adapter_generated_sampling_parameters(monkeypatch):
+    from agent.application import model_clients
+    from agent.config import clear_settings_cache
+    import langchain_google_genai
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.max_tokens = kwargs.get("max_tokens")
+
+        def _build_base_generation_config(self, _stop, **_kwargs):
+            config = {
+                "candidate_count": 1,
+                "temperature": 1.0,
+                "top_k": 40,
+                "top_p": 0.95,
+                "thinking_config": {"thinking_level": "minimal"},
+            }
+            if self.max_tokens is not None:
+                config["max_output_tokens"] = self.max_tokens
+            return config
+
+    monkeypatch.setattr(langchain_google_genai, "ChatGoogleGenerativeAI", FakeClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.delenv("VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS", raising=False)
+    clear_settings_cache()
+    model_clients.clear_model_client_cache()
+
+    client = model_clients.get_google_chat_model("gemini-3.5-flash-lite")
+
+    assert client._build_base_generation_config(None) == {
+        "max_output_tokens": 1536,
+        "thinking_config": {"thinking_level": "minimal"}
+    }
+    model_clients.clear_model_client_cache()
+
+
+def test_lightweight_output_limit_supports_environment_and_explicit_override(monkeypatch):
+    from agent.application import model_clients
+    from agent.config import clear_settings_cache
+    import langchain_google_genai
+
+    created = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr(langchain_google_genai, "ChatGoogleGenerativeAI", FakeClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS", "1024")
+    clear_settings_cache()
+    model_clients.clear_model_client_cache()
+
+    model_clients.get_google_chat_model("gemini-3.5-flash-lite")
+    model_clients.get_google_chat_model(
+        "gemini-3.5-flash-lite",
+        max_output_tokens=512,
+    )
+
+    assert [item["max_tokens"] for item in created] == [1024, 512]
+    model_clients.clear_model_client_cache()
+
+
+def test_google_model_clients_cache_thinking_levels_separately(monkeypatch):
+    from agent.application import model_clients
+    from agent.config import clear_settings_cache
+    import langchain_google_genai
+
+    created = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr(langchain_google_genai, "ChatGoogleGenerativeAI", FakeClient)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    clear_settings_cache()
+    model_clients.clear_model_client_cache()
+
+    medium = model_clients.get_google_chat_model("gemini-3.6-flash")
+    low = model_clients.get_google_chat_model(
+        "gemini-3.6-flash",
+        thinking_level="low",
+    )
+
+    assert medium is not low
+    assert [item["thinking_level"] for item in created] == ["medium", "low"]
+    model_clients.clear_model_client_cache()
+
+
+def test_invoke_with_metrics_stream_returns_last_structured_value():
+    from agent.application.run_context import invoke_with_metrics
+
+    class FakeStructuredRunnable:
+        def invoke(self, _inputs, config=None):
+            raise AssertionError("스트리밍 경로에서는 invoke를 호출하면 안 됩니다.")
+
+        def stream(self, _inputs, config=None):
+            assert config and config.get("callbacks")
+            yield {"value": "partial"}
+            yield {"value": "complete"}
+
+    result = invoke_with_metrics(
+        FakeStructuredRunnable(),
+        "input",
+        "stream_test",
+        stream=True,
+    )
+
+    assert result == {"value": "complete"}
+
+
+def test_model_policy_uses_role_defaults_and_explicit_overrides(monkeypatch):
+    from agent.config import clear_settings_cache
+    from agent.application.model_policy import (
+        commander_model_name,
+        lightweight_model_name,
+        worker_reasoning_model_name,
+        worker_reasoning_thinking_level,
+    )
+
+    for env_name in (
+        "COMMANDER_MODEL",
+        "VISION_LIGHTWEIGHT_MODEL",
+        "VISION_WORKER_REASONING_MODEL",
+        "VISION_WORKER_REASONING_THINKING_LEVEL",
+        "VISION_DETAIL_FINAL_EXTRACTION_MODEL",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    assert commander_model_name() == "gemini-3.6-flash"
+    assert worker_reasoning_model_name() == "gemini-3.6-flash"
+    assert worker_reasoning_thinking_level() == "low"
+    assert lightweight_model_name() == "gemini-3.5-flash-lite"
+
+    monkeypatch.setenv("COMMANDER_MODEL", "commander-override")
+    monkeypatch.setenv("VISION_LIGHTWEIGHT_MODEL", "lightweight-override")
+    monkeypatch.setenv("VISION_DETAIL_FINAL_EXTRACTION_MODEL", "detail-override")
+    monkeypatch.setenv("VISION_WORKER_REASONING_THINKING_LEVEL", "medium")
+    clear_settings_cache()
+
+    assert worker_reasoning_model_name() == "commander-override"
+    assert worker_reasoning_thinking_level() == "medium"
+    assert lightweight_model_name() == "lightweight-override"
+    assert lightweight_model_name("VISION_DETAIL_FINAL_EXTRACTION_MODEL") == "detail-override"
 
 
 def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from agent.application import recipe_promotion_worker
     from agent.web_server import app
 
     calls = []
-    monkeypatch.setattr(
-        recipe_promotion_worker,
-        "start_recipe_promotion_worker",
-        lambda: calls.append("start"),
-    )
-    monkeypatch.setattr(
-        recipe_promotion_worker,
-        "stop_recipe_promotion_worker",
-        lambda timeout_sec=1.0: calls.append(("stop", timeout_sec)) or True,
-    )
+
+    class FakeRuntime:
+        def __init__(self, db_path):
+            calls.append(("init", db_path))
+            self.chat_service = object()
+
+        def start(self):
+            calls.append("start")
+
+        def close(self, *, promotion_timeout_sec=1.0):
+            calls.append(("close", promotion_timeout_sec))
+
+    monkeypatch.setattr("agent.web_server.ApplicationRuntime", FakeRuntime)
 
     with TestClient(app) as client:
         assert client.get("/api/contracts").status_code == 200
 
-    assert calls == ["start", ("stop", 0.5)]
+    assert calls[0][0] == "init"
+    assert calls[1:] == ["start", ("close", 0.5)]
 
 
 def test_browser_closes_by_default(monkeypatch):
     from agent.application import worker_execution_service
-    from agent.graph import nodes
+    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 
     closed = []
 
     class FakeActionTools:
+        def __init__(self, _perception):
+            pass
+
         def close_browser(self):
             closed.append(True)
             return {"status": "success"}
 
     monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
-    monkeypatch.setattr(nodes, "_action_tools", FakeActionTools())
+    runtime = VisionWorkerRuntime(
+        perception_factory=object,
+        action_tools_factory=FakeActionTools,
+    )
+    runtime.get_action_tools()
 
-    worker_execution_service.close_browser_after_run()
+    worker_execution_service.close_browser_after_run(worker_runtime=runtime)
 
     assert closed == [True]
 
 
 def test_browser_stays_open_when_explicitly_disabled(monkeypatch):
     from agent.application import worker_execution_service
-    from agent.graph import nodes
+    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 
     closed = []
 
     class FakeActionTools:
+        def __init__(self, _perception):
+            pass
+
         def close_browser(self):
             closed.append(True)
             return {"status": "success"}
 
     monkeypatch.setenv("VISION_CLOSE_BROWSER_AFTER_RUN", "0")
-    monkeypatch.setattr(nodes, "_action_tools", FakeActionTools())
+    runtime = VisionWorkerRuntime(
+        perception_factory=object,
+        action_tools_factory=FakeActionTools,
+    )
+    runtime.get_action_tools()
 
-    worker_execution_service.close_browser_after_run()
+    worker_execution_service.close_browser_after_run(worker_runtime=runtime)
 
     assert closed == []
+
+
+def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch):
+    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+
+    events = []
+
+    class FakeWorker:
+        pid = 7007
+
+        @staticmethod
+        def poll():
+            return None
+
+    class FakeSomEngine:
+        def __init__(self):
+            self._ocr_worker = FakeWorker()
+
+        def close(self):
+            events.append("ocr_closed")
+            self._ocr_worker = None
+
+    class FakePerception:
+        def __init__(self):
+            self.som_engine = FakeSomEngine()
+            self._browser_window_id = None
+
+        def close(self):
+            events.append("perception_closed")
+            self.som_engine.close()
+
+    class FakeActionTools:
+        def __init__(self, perception):
+            self.perception = perception
+
+        def close_browser(self):
+            events.append("browser_closed")
+            return {"status": "success"}
+
+    monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
+    runtime = VisionWorkerRuntime(
+        perception_factory=FakePerception,
+        action_tools_factory=FakeActionTools,
+    )
+
+    with runtime.execution_session():
+        first_perception = runtime.get_perception()
+        first_actions = runtime.get_action_tools()
+        assert runtime.ocr_worker_pid == 7007
+
+    runtime.close_browser_after_run()
+
+    with runtime.execution_session():
+        assert runtime.get_perception() is first_perception
+        assert runtime.get_action_tools() is first_actions
+        assert runtime.ocr_worker_pid == 7007
+
+    assert events == ["browser_closed"]
+
+    runtime.close()
+
+    assert events == ["browser_closed", "perception_closed", "ocr_closed"]
+
+
+def test_vision_runtime_reuses_bound_ui_model(monkeypatch):
+    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+
+    calls = []
+    bound_model = object()
+
+    class FakeModel:
+        def bind_tools(self, schemas):
+            calls.append(list(schemas))
+            return bound_model
+
+    monkeypatch.setattr(
+        "agent.application.model_clients.get_google_chat_model",
+        lambda *args, **kwargs: FakeModel(),
+    )
+    runtime = VisionWorkerRuntime()
+    schemas = {"click_marker": object()}
+
+    first_model = runtime.get_ui_model_with_tools(("click_marker",), schemas)
+    second_model = runtime.get_ui_model_with_tools(("click_marker",), schemas)
+
+    assert first_model is bound_model
+    assert second_model is bound_model
+    assert calls == [[schemas["click_marker"]]]
+
+    runtime.close()
+
+
+def test_application_runtime_keeps_vision_lazy_until_collection(monkeypatch, tmp_path):
+    from agent.runtime.application_runtime import ApplicationRuntime
+
+    monkeypatch.setenv("VISION_RECIPE_AUTO_PROMOTE", "0")
+    runtime = ApplicationRuntime(tmp_path / "runtime.db")
+
+    assert runtime.vision_runtime.is_initialized is False
+
+    runtime.start()
+
+    assert runtime.is_started is True
+    assert runtime.vision_runtime.is_initialized is False
+
+    runtime.close()
+
+    assert runtime.is_started is False
 
 
 def test_detail_extraction_prompt_prioritizes_page_text_over_ocr_hints():

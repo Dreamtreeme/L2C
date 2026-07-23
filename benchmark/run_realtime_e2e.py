@@ -58,13 +58,23 @@ def _git_revision() -> tuple[str, bool]:
 
 
 def _runtime_config() -> dict[str, str]:
+    from agent.application.model_policy import (
+        DEFAULT_COMMANDER_MODEL,
+        DEFAULT_LIGHTWEIGHT_MODEL,
+        DEFAULT_WORKER_REASONING_THINKING_LEVEL,
+    )
+
     defaults = {
-        "VISION_DETAIL_FINAL_EXTRACTION_MODEL": "",
-        "VISION_SEARCH_INTENT_MODEL": "",
-        "VISION_WORKER_REVIEW_MODEL": "",
+        "COMMANDER_MODEL": DEFAULT_COMMANDER_MODEL,
+        "VISION_LIGHTWEIGHT_MODEL": DEFAULT_LIGHTWEIGHT_MODEL,
+        "VISION_WORKER_REASONING_MODEL": DEFAULT_COMMANDER_MODEL,
+        "VISION_WORKER_REASONING_THINKING_LEVEL": DEFAULT_WORKER_REASONING_THINKING_LEVEL,
+        "VISION_DETAIL_FINAL_EXTRACTION_MODEL": DEFAULT_LIGHTWEIGHT_MODEL,
+        "VISION_SEARCH_INTENT_MODEL": DEFAULT_LIGHTWEIGHT_MODEL,
+        "VISION_WORKER_REVIEW_MODEL": DEFAULT_COMMANDER_MODEL,
+        "VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS": "1536",
         "SOM_OCR_MAX_DIM": "1152",
         "SOM_OCR_REQUEST_TIMEOUT_SEC": "20",
-        "PADDLEOCR_IR_OPTIM": "0",
         "REFLEX_ENABLED": "",
         "VISION_RECIPE_AUTO_PROMOTE": "",
         "VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT": "",
@@ -73,12 +83,24 @@ def _runtime_config() -> dict[str, str]:
         "VISION_BROWSER_WINDOW_HEIGHT": "",
         "VISION_REASONING_SCREEN_GUARD": "",
     }
-    return {key: os.getenv(key, default) for key, default in defaults.items()}
+    return {
+        key: os.getenv(key, "").strip() or default
+        for key, default in defaults.items()
+    }
 
 
 def _config_fingerprint(config: dict[str, str]) -> str:
     serialized = json.dumps(config, sort_keys=True, ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(serialized).hexdigest()[:12]
+
+
+def _apply_run_mode_environment(run_mode: str) -> None:
+    """E2E 실행 모드가 실제 Reflex 경로를 결정하게 한다."""
+
+    if run_mode == "cold":
+        os.environ["REFLEX_ENABLED"] = "0"
+    elif run_mode == "warm":
+        os.environ["REFLEX_ENABLED"] = "1"
 
 
 def main() -> int:
@@ -113,6 +135,7 @@ def main() -> int:
     if summary_path.exists():
         raise SystemExit(f"summary already exists: {summary_path}")
 
+    _apply_run_mode_environment(args.run_mode)
     commit, git_dirty = _git_revision()
     runtime_config = _runtime_config()
     config_fingerprint = _config_fingerprint(runtime_config)
@@ -135,17 +158,21 @@ def main() -> int:
         original_stderr = sys.stderr
         sys.stdout = _Tee(original_stdout, log_file)  # type: ignore[assignment]
         sys.stderr = _Tee(original_stderr, log_file)  # type: ignore[assignment]
+        vision_runtime = None
         try:
             from agent.application.run_context import run_context
             from agent.application.run_contracts import RunPhase, RunStatus
             from agent.observability.langsmith_adapter import publish_langsmith_feedback
-            from agent.tools.realtime_scraping import realtime_scraping
+            from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+            from agent.tools.realtime_scraping import build_runtime_realtime_scraping_tool
             from benchmark.e2e_observability import (
                 build_e2e_observability,
                 build_langsmith_feedback,
             )
             from benchmark.quality_eval import evaluate_collection_summary
 
+            vision_runtime = VisionWorkerRuntime()
+            collection_tool = build_runtime_realtime_scraping_tool(vision_runtime)
             events = []
             status = "failed"
             result = ""
@@ -179,7 +206,7 @@ def main() -> int:
             ) as (context, _created):
                 start = time.perf_counter()
                 try:
-                    result = realtime_scraping.invoke(
+                    result = collection_tool.invoke(
                         {
                             "site": args.site,
                             "query": args.query,
@@ -288,6 +315,8 @@ def main() -> int:
             if not summary["quality"].get("passed"):
                 return 2
         finally:
+            if vision_runtime is not None:
+                vision_runtime.close()
             sys.stdout = original_stdout
             sys.stderr = original_stderr
     return 0

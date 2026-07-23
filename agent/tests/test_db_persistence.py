@@ -192,6 +192,59 @@ def test_persistence_keeps_collected_ocr_and_screenshot_evidence(monkeypatch, tm
     assert saved["source_platform"] == "JobKorea"
 
 
+def test_persistence_separates_embedded_detail_cards_sharing_search_url(monkeypatch, tmp_path):
+    import shared.config as cfg
+    from agent.application.job_persistence_service import persist_collected_data_with_report
+    from agent.runtime.job_identity import source_card_key
+
+    db_path = tmp_path / "embedded-details.db"
+    monkeypatch.setattr(cfg, "DB_PATH", db_path)
+    search_url = "https://www.saramin.co.kr/zf_user/search?searchword=ml"
+
+    first = {
+        "jobs": [
+            {
+                "company_name": "에너자이",
+                "position": "ML Engineer/Researcher",
+                "url": search_url,
+                "requirements": ["Python"],
+                "_source_card_key": source_card_key(
+                    search_url,
+                    "(주)에너자이",
+                    "ML Engineer/Researcher",
+                ),
+            }
+        ]
+    }
+    second = {
+        "jobs": [
+            {
+                "company_name": "로민",
+                "position": "ML 머신러닝 엔지니어 전문연구요원 신규/전직 채용",
+                "url": search_url,
+                "requirements": ["머신러닝"],
+                "_source_card_key": source_card_key(
+                    search_url,
+                    "(주)로민",
+                    "ML(머신러닝) 엔지니어 (전문연구요원 신규/전직 채용)",
+                ),
+            }
+        ]
+    }
+
+    first_result = persist_collected_data_with_report(first, "머신러닝 엔지니어")
+    second_result = persist_collected_data_with_report(second, "머신러닝 엔지니어")
+
+    assert first_result["created_count"] == 1
+    assert second_result["created_count"] == 1
+    assert first_result["persisted_items"][0]["job_id"] != second_result["persisted_items"][0]["job_id"]
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute("SELECT url, company_name FROM jobs ORDER BY id").fetchall()
+    assert len(rows) == 2
+    assert all("#l2c-card=" in row[0] for row in rows)
+    assert {row[1] for row in rows} == {"에너자이", "로민"}
+
+
 def test_pre_persistence_validation_rejects_missing_identity_and_date_mismatch(monkeypatch, tmp_path):
     import shared.config as cfg
     from agent.application.job_persistence_service import persist_collected_data_with_report
@@ -224,6 +277,33 @@ def test_pre_persistence_validation_rejects_missing_identity_and_date_mismatch(m
     assert result["rejected_count"] == 2
     assert "required_field_missing:company_name" in result["rejected_items"][0]["issues"]
     assert "requested_filter_mismatch:posted_at_before_range" in result["rejected_items"][1]["issues"]
+
+
+def test_pre_persistence_validation_rejects_job_without_actual_content(monkeypatch, tmp_path):
+    import shared.config as cfg
+    from agent.application.job_persistence_service import persist_collected_data_with_report
+
+    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "content_required_jobs.db")
+    result = persist_collected_data_with_report(
+        {
+            "jobs": [
+                {
+                    "company_name": "중계회사",
+                    "position": "백엔드 개발자",
+                    "url": "https://example.com/jobs/intermediary",
+                }
+            ]
+        },
+        "백엔드 개발자",
+        collection_intent={"require_job_content": True},
+    )
+
+    assert result["persisted_count"] == 0
+    assert result["rejected_count"] == 1
+    assert (
+        "required_content_missing:main_tasks_or_requirements"
+        in result["rejected_items"][0]["issues"]
+    )
 
 
 def test_persistence_report_distinguishes_created_and_updated_jobs(monkeypatch, tmp_path):

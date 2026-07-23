@@ -5,14 +5,10 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
-
-
-if __name__ == "__main__":
-    sys.modules["torch"] = MagicMock()
 
 _DLL_DIRECTORY_HANDLES = []
-SUPPORTED_PADDLE_VERSION = "3.0.0"
+SUPPORTED_PADDLE_VERSION = "3.3.1"
+SUPPORTED_PADDLEOCR_VERSION = "3.7.0"
 
 
 def _prepend_process_path(path: Path) -> None:
@@ -29,48 +25,41 @@ def _configure_runtime_paths() -> None:
     if user_site:
         candidate_sites.append(user_site)
 
+    candidate_paths = []
+    for variable_name in ("PADDLE_CUDA_BIN_DIR", "PADDLE_CUDNN_BIN_DIR"):
+        configured = os.getenv(variable_name)
+        if configured:
+            candidate_paths.append(Path(configured))
+
     for site_dir in candidate_sites:
         nvidia_dir = Path(site_dir) / "nvidia"
-        for path in (
-            nvidia_dir / "cudnn" / "bin",
-            nvidia_dir / "cublas" / "bin",
-            nvidia_dir / "cuda_runtime" / "bin",
-            nvidia_dir / "cuda_nvrtc" / "bin",
-        ):
-            try:
-                exists = path.exists()
-            except OSError:
-                exists = False
-            if not exists:
-                continue
-            _prepend_process_path(path)
-            if hasattr(os, "add_dll_directory"):
-                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(path)))
+        candidate_paths.extend(
+            (
+                nvidia_dir / "cu13" / "bin" / "x86_64",
+                nvidia_dir / "cudnn" / "bin",
+            )
+        )
+
+    for path in candidate_paths:
+        try:
+            exists = path.exists()
+        except OSError:
+            exists = False
+        if not exists:
+            continue
+        _prepend_process_path(path)
+        if hasattr(os, "add_dll_directory"):
+            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(path)))
 
 
 def _load_paddleocr_runtime():
     _configure_runtime_paths()
     import paddle
+    import paddleocr
 
     _validate_paddle_version(paddle)
-
-    if os.getenv("PADDLEOCR_IR_OPTIM", "0").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
-        try:
-            original_switch_ir_optim = paddle.inference.Config.switch_ir_optim
-            paddle.inference.Config.switch_ir_optim = (
-                lambda self, value: original_switch_ir_optim(self, False)
-            )
-        except Exception:
-            pass
-
-    from paddleocr import PaddleOCR
-
-    return paddle, PaddleOCR
+    _validate_paddleocr_version(paddleocr)
+    return paddle, paddleocr.PaddleOCR
 
 
 def _validate_paddle_version(paddle_module: Any) -> None:
@@ -79,93 +68,101 @@ def _validate_paddle_version(paddle_module: Any) -> None:
         raise RuntimeError(
             "PaddlePaddle GPU runtime version mismatch: "
             f"installed={installed_version}, required={SUPPORTED_PADDLE_VERSION}. "
-            "Install the version declared in requirements.txt."
+            "Install the version declared in requirements-ocr.txt."
         )
 
 
-def _paddleocr_model_dirs() -> dict[str, str]:
-    base_dir = Path(os.getenv("PADDLE_OCR_BASE_DIR", str(Path.home() / ".paddleocr")))
-    whl_dir = base_dir / "whl"
-    dirs = {
-        "det_model_dir": whl_dir / "det" / "ml" / "Multilingual_PP-OCRv3_det_infer",
-        "rec_model_dir": whl_dir / "rec" / "korean" / "korean_PP-OCRv4_rec_infer",
-        "cls_model_dir": whl_dir / "cls" / "ch_ppocr_mobile_v2.0_cls_infer",
-    }
-    if all(path.exists() for path in dirs.values()):
-        return {key: str(path) for key, path in dirs.items()}
-    return {}
+def _validate_paddleocr_version(paddleocr_module: Any) -> None:
+    installed_version = str(getattr(paddleocr_module, "__version__", "") or "unknown")
+    if installed_version != SUPPORTED_PADDLEOCR_VERSION:
+        raise RuntimeError(
+            "PaddleOCR version mismatch: "
+            f"installed={installed_version}, required={SUPPORTED_PADDLEOCR_VERSION}. "
+            "Install the version declared in requirements-ocr.txt."
+        )
 
 
 def _should_use_gpu(paddle_module: Any) -> bool:
     raw = os.getenv("PADDLEOCR_USE_GPU")
     if raw is not None:
         return raw.strip().lower() not in {"0", "false", "no", "off"}
-    return (
-        paddle_module.device.is_compiled_with_cuda()
-        and paddle_module.device.cuda.device_count() > 0
-    )
+    return paddle_module.is_compiled_with_cuda() and paddle_module.device.cuda.device_count() > 0
 
 
 def build_ocr():
     paddle_module, paddle_ocr_class = _load_paddleocr_runtime()
+    os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
+    device = "gpu:0" if _should_use_gpu(paddle_module) else "cpu"
     return paddle_ocr_class(
-        use_angle_cls=False,
         lang=os.getenv("PADDLEOCR_LANG", "korean"),
-        use_gpu=_should_use_gpu(paddle_module),
-        show_log=False,
-        **_paddleocr_model_dirs(),
+        ocr_version=os.getenv("PADDLEOCR_VERSION", "PP-OCRv5"),
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        device=device,
     )
 
 
-def _looks_like_paddleocr_line(value: Any) -> bool:
-    return (
-        isinstance(value, (list, tuple))
-        and len(value) >= 2
-        and isinstance(value[0], (list, tuple))
-        and isinstance(value[1], (list, tuple))
-        and len(value[1]) >= 2
-        and isinstance(value[1][0], str)
-    )
-
-
-def _iter_paddleocr_lines(results: list) -> list:
-    if not results:
+def _as_list(value: Any) -> list:
+    if value is None:
         return []
-    first = results[0]
-    if _looks_like_paddleocr_line(first):
-        return results
-    lines = []
-    for page in results:
-        if not page:
-            continue
-        if _looks_like_paddleocr_line(page):
-            lines.append(page)
-        else:
-            lines.extend(line for line in page if _looks_like_paddleocr_line(line))
-    return lines
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return list(value)
+
+
+def _result_payload(result: Any) -> dict[str, Any]:
+    value = getattr(result, "json", result)
+    if callable(value):
+        value = value()
+    if not isinstance(value, dict):
+        raise TypeError(f"Unsupported PaddleOCR result type: {type(value).__name__}")
+    payload = value.get("res", value)
+    if not isinstance(payload, dict):
+        raise TypeError("PaddleOCR result payload must be a mapping")
+    return payload
+
+
+def _box_from_polygon(polygon: Any) -> list[float]:
+    points = _as_list(polygon)
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    return [min(xs), min(ys), max(xs), max(ys)]
 
 
 def extract_text_boxes(ocr: Any, image_path: str) -> list[dict]:
-    results = ocr.ocr(image_path, cls=False)
+    results = list(ocr.predict(image_path))
     return extract_text_boxes_from_results(results)
 
 
 def extract_text_boxes_from_results(results: list) -> list[dict]:
     extracted = []
-    for line in _iter_paddleocr_lines(results):
-        bbox, (text, confidence) = line
-        extracted.append(
-            {
-                "text": text,
-                "confidence": float(confidence),
-                "bbox": [
-                    float(bbox[0][0]),
-                    float(bbox[0][1]),
-                    float(bbox[2][0]),
-                    float(bbox[2][1]),
-                ],
-            }
-        )
+    for result in results:
+        payload = _result_payload(result)
+        texts = _as_list(payload.get("rec_texts"))
+        scores = _as_list(payload.get("rec_scores"))
+        boxes = _as_list(payload.get("rec_boxes"))
+        polygons = _as_list(payload.get("rec_polys"))
+
+        if len(texts) != len(scores):
+            raise ValueError("PaddleOCR text and score counts differ")
+        if boxes and len(boxes) != len(texts):
+            raise ValueError("PaddleOCR text and box counts differ")
+        if not boxes and len(polygons) != len(texts):
+            raise ValueError("PaddleOCR text and polygon counts differ")
+
+        for index, text in enumerate(texts):
+            if boxes:
+                bbox = [float(value) for value in boxes[index]]
+            else:
+                bbox = _box_from_polygon(polygons[index])
+            extracted.append(
+                {
+                    "text": str(text),
+                    "confidence": float(scores[index]),
+                    "bbox": bbox,
+                }
+            )
     return extracted
 
 
@@ -201,7 +198,7 @@ def worker_main() -> None:
             phase = "inference_started"
             inference_started = time.perf_counter()
             emit_worker_event(request_id, phase)
-            raw_results = ocr.ocr(image_path, cls=False)
+            raw_results = list(ocr.predict(image_path))
             inference_sec = time.perf_counter() - inference_started
             phase = "inference_completed"
             emit_worker_event(

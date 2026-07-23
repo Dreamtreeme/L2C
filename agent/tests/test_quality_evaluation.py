@@ -63,8 +63,28 @@ def test_collection_and_citation_quality_are_separate_metrics():
         expected_ids=[1, 2],
     )
 
-    assert collection["target_fulfillment"] == 1.0
+    assert collection["target_fulfillment"] == 0.5
     assert collection["persistence_rate"] == 0.5
     assert collection["passed"] is False
     assert citations["citation_validity"] == 0.5
     assert citations["expected_citation_coverage"] == 0.5
+
+
+def test_collection_quality_counts_existing_database_jobs_as_resolved():
+    from benchmark.quality_eval import evaluate_collection_summary
+
+    collection = evaluate_collection_summary(
+        {
+            "target_count": 2,
+            "item_count": 0,
+            "persisted_count": 0,
+            "observed_job_ids": [7, 8],
+            "review": {"decision": "accept"},
+            "is_finished": True,
+        }
+    )
+
+    assert collection["observed_existing_count"] == 2
+    assert collection["resolved_count"] == 2
+    assert collection["target_fulfillment"] == 1.0
+    assert collection["passed"] is True

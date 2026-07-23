@@ -4,6 +4,7 @@ FEEDBACK_EPISODES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS feedback_episodes (
     episode_id          TEXT PRIMARY KEY,
     run_id              TEXT NOT NULL,
+    review_attempt      INTEGER NOT NULL DEFAULT 0,
     run_status          TEXT,
     source              TEXT,
     site                TEXT,
@@ -21,6 +22,11 @@ FEEDBACK_EPISODES_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_feedback_run ON feedback_episodes(run_id);",
     "CREATE INDEX IF NOT EXISTS idx_feedback_site_label ON feedback_episodes(site, feedback_label);",
     "CREATE INDEX IF NOT EXISTS idx_feedback_action ON feedback_episodes(action);",
+)
+
+FEEDBACK_EPISODE_ATTEMPT_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_feedback_run_attempt "
+    "ON feedback_episodes(run_id, review_attempt);"
 )
 
 WORKER_SUBMISSIONS_TABLE_SQL = """
@@ -87,6 +93,21 @@ RECIPE_CANDIDATE_QUEUE_COLUMNS = {
     "next_review_at": "TEXT",
     "review_error": "TEXT",
 }
+
+
+def ensure_feedback_episode_schema(conn) -> None:
+    """기존 행동 피드백 테이블에 재검토 시도 구분을 추가한다."""
+
+    columns = {
+        row["name"] if hasattr(row, "keys") else row[1]
+        for row in conn.execute("PRAGMA table_info(feedback_episodes)").fetchall()
+    }
+    if "review_attempt" not in columns:
+        conn.execute(
+            "ALTER TABLE feedback_episodes "
+            "ADD COLUMN review_attempt INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.execute(FEEDBACK_EPISODE_ATTEMPT_INDEX_SQL)
 
 
 def ensure_recipe_candidate_queue_schema(conn) -> None:

@@ -1,41 +1,39 @@
-# ===== Core data/util =====
-pydantic>=2.0
-python-dotenv>=1.0.0
-Pillow>=10.0.0
-beautifulsoup4>=4.12.0
-json-repair>=0.25.0
-requests>=2.31.0
+# Python 3.13.14 / Windows x64에서 검증한 애플리케이션 런타임입니다.
 
-# ===== Classic scraping / LLM =====
-playwright>=1.40.0
-ollama>=0.3.0
+# 데이터·설정
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+Pillow==12.3.0
+beautifulsoup4==4.15.0
+json-repair==0.61.7
+requests==2.34.2
 
-# ===== API =====
-fastapi>=0.110.0
-uvicorn>=0.27.0
+# 브라우저·API
+playwright==1.61.0
+ollama==0.6.2
+fastapi==0.139.2
+uvicorn==0.51.0
 
-# ===== Tests =====
-pytest>=8.0.0
+# 화면 제어·관측
+structlog==26.1.0
+sentry-sdk==2.66.1
+mss==10.2.0
+PyAutoGUI==0.9.54
+pyperclip==1.11.0
+PyGetWindow==0.0.9
 
-# ===== Agent browser/screen control =====
-structlog>=24.0.0
-sentry-sdk>=2.0.0
-mss>=9.0.0
-PyAutoGUI>=0.9.54
-pyperclip>=1.8.2
-pygetwindow>=0.0.9
+# 에이전트 워크플로
+langgraph==1.2.9
+langgraph-checkpoint-sqlite==3.1.0
+langchain-core==1.5.0
+langchain-google-genai==4.3.1
+langsmith==0.10.9
 
-# ===== LangGraph & Gemini =====
-langgraph>=0.0.60
-langchain-core>=0.2.0
-langchain-google-genai>=1.0.6
-langsmith>=0.8.0,<0.9.0
-
-# ===== Vision / SoM / OCR =====
-ultralytics>=8.0.0
-huggingface-hub>=0.19.0
-opencv-python>=4.8.0
-numpy>=1.24.0
-# PaddleOCR 2.10 API와 검증된 PaddlePaddle GPU 3.0.0 런타임을 함께 사용한다.
-paddleocr>=2.10.0,<3.0.0
-paddlepaddle-gpu==3.0.0
+# OmniParser / YOLO
+numpy==2.5.1
+opencv-python==5.0.0.93
+huggingface-hub==1.24.0
+ultralytics==8.4.104
+torch @ https://download.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp313-cp313-win_amd64.whl
+torchvision @ https://download.pytorch.org/whl/cu130/torchvision-0.28.0%2Bcu130-cp313-cp313-win_amd64.whl

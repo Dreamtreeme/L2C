@@ -1,17 +1,17 @@
 import json
 import asyncio
-import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pathlib import Path
 
+from agent.config import get_settings
+
 from shared.db.database import Database
-from agent.application.chat_service import get_chat_service
 from agent.application.run_contracts import (
     ChatErrorPayload,
     ChatFinalPayload,
@@ -21,24 +21,31 @@ from agent.application.run_contracts import (
     new_run_id,
 )
 from agent.application.run_registry import get_run_registry
+from agent.runtime.application_runtime import ApplicationRuntime
 from agent.utils.logger import logger
 from shared.schema.investigation_schema import ClarificationAnswer
 
 
 @asynccontextmanager
-async def _application_lifespan(_app: FastAPI):
-    """사용자 요청과 독립적인 후처리 작업자의 수명주기를 관리합니다."""
+async def _application_lifespan(application: FastAPI):
+    """백엔드가 공유하는 체크포인터, 그래프, 비전 및 후처리 자원을 관리합니다."""
 
-    from agent.application.recipe_promotion_worker import (
-        start_recipe_promotion_worker,
-        stop_recipe_promotion_worker,
-    )
+    import shared.config as config
 
-    start_recipe_promotion_worker()
+    runtime = ApplicationRuntime(config.DB_PATH)
+    application.state.runtime = runtime
+    runtime.start()
     try:
         yield
     finally:
-        stop_recipe_promotion_worker(timeout_sec=0.5)
+        runtime.close(promotion_timeout_sec=0.5)
+
+
+def _chat_service_for_app(application: FastAPI):
+    runtime = getattr(application.state, "runtime", None)
+    if runtime is None:
+        raise RuntimeError("애플리케이션 런타임이 시작되지 않았습니다.")
+    return runtime.chat_service
 
 
 app = FastAPI(title="L2C Q&A API Server", lifespan=_application_lifespan)
@@ -48,17 +55,10 @@ DEFAULT_LOCAL_ORIGINS = (
     "http://localhost:8000",
 )
 cors_origins = [
-    origin.strip()
-    for origin in os.getenv("CORS_ALLOW_ORIGINS", ",".join(DEFAULT_LOCAL_ORIGINS)).split(",")
-    if origin.strip()
+    origin for origin in get_settings().browser.cors_allow_origins if origin
 ]
 allowed_hosts = [
-    host.strip()
-    for host in os.getenv(
-        "LOCAL_API_ALLOWED_HOSTS",
-        "127.0.0.1,localhost,testserver,[::1]",
-    ).split(",")
-    if host.strip()
+    host for host in get_settings().browser.local_api_allowed_hosts if host
 ]
 
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
@@ -249,7 +249,7 @@ async def apply_retention(x_l2c_operation: str = Header(default="")):
         }
     },
 )
-async def chat_endpoint(req: ChatRequest):
+async def chat_endpoint(req: ChatRequest, request: Request):
     """
     지휘자 모델(Commander)에 쿼리를 주입하고 SSE 스트리밍 답변을 전달하는 엔드포인트입니다.
     """
@@ -303,7 +303,7 @@ async def chat_endpoint(req: ChatRequest):
 
         task = asyncio.create_task(
             asyncio.to_thread(
-                get_chat_service().run,
+                _chat_service_for_app(request.app).run,
                 effective_query,
                 run_id=run_id,
                 event_sink=event_sink,
@@ -351,7 +351,13 @@ async def chat_endpoint(req: ChatRequest):
                 clarification=result.get("clarification"),
                 investigation_id=result.get("investigation_id", investigation_id),
                 resumed_from_run_id=req.resume_run_id,
-                resume_mode="restart_from_request" if req.resume_run_id else "",
+                resume_mode=(
+                    "checkpoint_resume"
+                    if investigation_id and clarification_answer is not None
+                    else "restart_from_request"
+                    if req.resume_run_id
+                    else ""
+                ),
                 conversation_id=req.conversation_id,
                 metrics=result.get("metrics", {}),
             ).model_dump(mode="json"),

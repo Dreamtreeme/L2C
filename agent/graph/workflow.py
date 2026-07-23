@@ -1,175 +1,197 @@
-import os
+"""비전 작업자의 원자 관찰-판정-선택-실행 그래프."""
 
-from langgraph.graph import StateGraph, START, END
+from __future__ import annotations
 
+from functools import wraps
+from typing import Any, Callable
+
+from langgraph.graph import END, START, StateGraph
+
+from agent.config import get_settings
+from agent.graph.worker_reasoning import reasoning_node
 from agent.graph.state import GraphState
-from agent.graph.nodes import perception_node, reflex_node, reasoning_node, action_node
+from agent.graph.worker_collection import apply_observation_node
+from agent.graph.worker_observation import analyze_screen_node, capture_screen_node
+from agent.graph.worker_recording import record_execution_node
+from agent.graph.worker_selection import select_deterministic_action_node
+from agent.graph.worker_transition import evaluate_transition_node
+from agent.graph.worker_execution import action_node
+from agent.runtime.reflex_runtime import reflex_node
+from agent.observability.graph_events import graph_step
 from agent.utils.logger import logger
 
-def should_continue(state: GraphState) -> str:
-    """다음으로 이동할 노드를 결정하는 라우팅 함수입니다."""
+
+def _reflex_enabled() -> bool:
+    return get_settings().reflex.enabled
+
+
+def _request_source(state: GraphState) -> str:
+    request = state.get("pending_action")
+    return str(getattr(request, "source", "") or "")
+
+
+def route_after_start(state: GraphState) -> str:
+    """준비된 시작 화면은 선택 단계로, 없으면 기존 LLM 시작 경로로 보낸다."""
+
+    if state.get("ocr_complete") or (
+        state.get("current_markers")
+        and state.get("current_page_role")
+        and state.get("recent_images")
+    ):
+        return "selection"
+    return "reasoning"
+
+
+def route_after_transition(state: GraphState) -> str:
+    """OCR 완료 관찰만 수집 상태에 반영하고 나머지는 바로 선택한다."""
+
+    return "collection" if state.get("ocr_complete") else "selection"
+
+
+def route_after_selection(state: GraphState) -> str:
+    """결정론적 정책, 선택적 OCR, Reflex, LLM 순서로 다음 경로를 고른다."""
+
+    if state.get("pending_action") is not None:
+        return "action"
+    if state.get("low_information_screen"):
+        return "reasoning"
+
+    if state.get("transition_status") == "pending" and state.get("ocr_complete"):
+        return "capture"
+    if not state.get("ocr_complete"):
+        return "ocr" if state.get("ocr_required") else "reasoning"
+    if state.get("detail_followup_required"):
+        return "reasoning"
+    if state.get("transition_status") == "unknown" and (
+        str(state.get("transition_source") or "").startswith("reflex")
+        or state.get("transition_source") in {"page_policy", "duplicate_job_policy"}
+        or state.get("transition_reason") in {"no_screen_change", "reflex_no_screen_change"}
+    ):
+        return "reasoning"
+    if not _reflex_enabled():
+        return "reasoning"
+    return "reflex"
+
+
+def route_after_reflex(state: GraphState) -> str:
+    """Reflex가 요청을 만들었을 때만 실행하고 나머지는 LLM으로 보낸다."""
+
+    return "action" if _request_source(state) == "reflex" else "reasoning"
+
+
+def route_after_action(state: GraphState) -> str:
+    """원자 실행 뒤 종료, 후속 정책, 새 관찰 또는 새 판단을 선택한다."""
+
     if state.get("is_finished", False):
         logger.info("Task marked as finished. Ending workflow.")
         return "end"
     if state.get("pending_human_approval", False):
         logger.info("Human approval required. Ending worker loop.")
         return "end"
-        
     if state.get("error_count", 0) >= 3:
         logger.error("Too many errors. Forcing workflow to end.")
         return "end"
-
-    if state.get("last_action_screen_changed") is False:
-        logger.info("Last action did not change the screen. Skipping perception.")
-        return "reasoning"
-
-    return "perception"
-
-
-def _reflex_enabled() -> bool:
-    return os.getenv("REFLEX_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def route_after_perception(state: GraphState) -> str:
-    """전환 계약 판정 뒤 재관찰, reflex 재생 또는 reasoning 폴백을 선택한다."""
-    if state.get("low_information_screen"):
-        retry_count = int(state.get("low_information_retry_count", 0) or 0)
-        try:
-            retry_limit = max(1, int(os.getenv("VISION_LOW_INFORMATION_MAX_CYCLES", "3")))
-        except ValueError:
-            retry_limit = 3
-        if retry_count < retry_limit:
-            logger.info(
-                "Low-information screen will be observed again without reasoning.",
-                retry_count=retry_count,
-                retry_limit=retry_limit,
-            )
-            return "perception"
-        logger.info(
-            "Low-information retry limit reached; allowing reasoning recovery.",
-            retry_count=retry_count,
-            retry_limit=retry_limit,
-        )
-        return "reasoning"
-
-    if state.get("queue_replay_hit"):
-        logger.info("Result card queue hit; executing cached next-card action.")
+    if state.get("pending_action") is not None:
         return "action"
-    if state.get("page_policy_hit"):
-        logger.info("Page policy hit; executing deterministic detail action.")
-        return "action"
-
-    transition_status = state.get("transition_status", "")
-    if transition_status == "pending":
-        logger.info("Transition still pending; observing the screen again.")
-        return "perception"
-    observations = state.get("transition_observations", []) or []
-    latest_observation = observations[-1] if observations else {}
-    if (
-        transition_status == "unknown"
-        and isinstance(latest_observation, dict)
-        and latest_observation.get("reason") in {"reflex_no_screen_change", "no_screen_change"}
-    ):
-        logger.info(
-            "Atomic action had no screen effect; falling back to reasoning.",
-            action=latest_observation.get("action", ""),
-            source=state.get("transition_source", ""),
-        )
-        return "reasoning"
-    if transition_status == "unknown" and state.get("transition_source") in {"reflex", "page_policy"}:
-        logger.info(
-            "Transition contract could not verify the screen; falling back to reasoning.",
-            source=state.get("transition_source", ""),
-        )
-        return "reasoning"
-
-    if not _reflex_enabled():
-        return "reasoning"
-
-    return "reflex"
-
-
-def route_after_reflex(state: GraphState) -> str:
-    """reflex hit이면 action_node로, miss면 reasoning_node로 보냅니다."""
-    return "action" if state.get("reflex_hit") else "reasoning"
-
-
-def route_after_start(state: GraphState) -> str:
-    """이미 관찰된 시작 화면이 있으면 첫 판단도 Reflex를 먼저 시도한다."""
-    if state.get("low_information_screen"):
-        return "perception"
-    if not _reflex_enabled():
-        return "reasoning"
-    if state.get("current_markers") and state.get("current_page_role") and state.get("recent_images"):
-        logger.info("Start screen is already observed; trying Reflex before reasoning.")
-        return "reflex"
+    if state.get("pending_transition"):
+        return "capture"
     return "reasoning"
 
 
-def build_graph():
-    """LangGraph 워크플로우를 구성하고 컴파일된 앱을 반환합니다."""
-    
-    logger.info("Building StateGraph workflow...")
-    
-    # 1. StateGraph 초기화
+def _instrument_node(name: str, node: Callable[[GraphState], dict[str, Any]]):
+    @wraps(node)
+    def observed(state: GraphState) -> dict[str, Any]:
+        with graph_step(name) as observation:
+            result = node(state)
+            request = result.get("pending_action") if isinstance(result, dict) else None
+            action_source = str(getattr(request, "source", "") or "")
+            observation.update(
+                action_source=action_source,
+                success=True,
+            )
+            if name == "ocr" and isinstance(result, dict):
+                observation["analysis_mode"] = str(result.get("analysis_mode") or "full")
+            if name == "reasoning":
+                observation["reasoning_mode"] = (
+                    "card_selection" if action_source == "card_selector" else "general"
+                )
+            return result
+
+    return observed
+
+
+def build_graph(*, worker_runtime=None):
+    """책임별 작업자 노드를 연결하고 컴파일한다."""
+
+    logger.info("Building atomic worker StateGraph")
     workflow = StateGraph(GraphState)
-    
-    # 2. 노드 추가
-    workflow.add_node("perception", perception_node)
-    workflow.add_node("reflex", reflex_node)
-    workflow.add_node("reasoning", reasoning_node)
-    workflow.add_node("action", action_node)
-    
-    # 3. 엣지 연결 (흐름 정의)
-    # 시작 화면을 이미 perception으로 준비한 worker는 첫 행동도 Reflex를 먼저 시도한다.
+    bind = worker_runtime.bind_node if worker_runtime is not None else lambda node: node
+
+    nodes = {
+        "capture": capture_screen_node,
+        "transition": evaluate_transition_node,
+        "ocr": analyze_screen_node,
+        "collection": apply_observation_node,
+        "selection": select_deterministic_action_node,
+        "reflex": reflex_node,
+        "reasoning": reasoning_node,
+        "action": action_node,
+        "recording": record_execution_node,
+    }
+    for name, node in nodes.items():
+        workflow.add_node(name, bind(_instrument_node(name, node)))
+
     workflow.add_conditional_edges(
         START,
         route_after_start,
+        {"selection": "selection", "reasoning": "reasoning"},
+    )
+    workflow.add_edge("capture", "transition")
+    workflow.add_conditional_edges(
+        "transition",
+        route_after_transition,
+        {"collection": "collection", "selection": "selection"},
+    )
+    workflow.add_edge("ocr", "transition")
+    workflow.add_edge("collection", "selection")
+    workflow.add_conditional_edges(
+        "selection",
+        route_after_selection,
         {
-            "perception": "perception",
+            "action": "action",
+            "capture": "capture",
+            "ocr": "ocr",
             "reflex": "reflex",
             "reasoning": "reasoning",
         },
     )
-    
-    # perception 완료 후 REFLEX_ENABLED일 때만 캐시 재생을 먼저 시도
-    workflow.add_conditional_edges(
-        "perception",
-        route_after_perception,
-        {
-            "action": "action",
-            "perception": "perception",
-            "reflex": "reflex",
-            "reasoning": "reasoning",
-        }
-    )
-
-    # reflex miss는 reasoning 폴백, hit는 기존 action_node 실행 경로 재사용
     workflow.add_conditional_edges(
         "reflex",
         route_after_reflex,
+        {"action": "action", "reasoning": "reasoning"},
+    )
+    workflow.add_edge("reasoning", "action")
+    workflow.add_edge("action", "recording")
+    workflow.add_conditional_edges(
+        "recording",
+        route_after_action,
         {
             "action": "action",
+            "capture": "capture",
             "reasoning": "reasoning",
-        }
+            "end": END,
+        },
     )
-    
-    # reasoning 완료 후 action으로 이동
-    workflow.add_edge("reasoning", "action")
-    
-    # action 완료 후 조건부 라우팅 (계속 진행할지 종료할지)
-    workflow.add_conditional_edges(
-        "action",
-        should_continue,
-        {
-            "perception": "perception",
-            "reasoning": "reasoning",
-            "end": END
-        }
-    )
-    
-    # 4. 그래프 컴파일
     app = workflow.compile()
-    logger.info("StateGraph compiled successfully.")
-    
+    logger.info("Atomic worker StateGraph compiled")
     return app
+
+
+__all__ = [
+    "build_graph",
+    "route_after_action",
+    "route_after_reflex",
+    "route_after_selection",
+    "route_after_start",
+    "route_after_transition",
+]

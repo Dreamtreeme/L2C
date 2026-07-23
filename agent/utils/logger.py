@@ -1,30 +1,25 @@
 import logging
-import os
 import sys
 from pathlib import Path
 
 import sentry_sdk
 import structlog
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
-def _sample_rate(name: str, default: float = 0.0) -> float:
-    try:
-        return min(1.0, max(0.0, float(os.getenv(name, str(default)))))
-    except ValueError:
-        return default
+from agent.config import get_settings
 
 
 # Sentry 초기화
-SENTRY_DSN = os.getenv("SENTRY_DSN")
+_OBSERVABILITY = get_settings().observability
+SENTRY_DSN = (
+    _OBSERVABILITY.sentry_dsn.get_secret_value()
+    if _OBSERVABILITY.sentry_dsn is not None
+    else ""
+)
 if SENTRY_DSN:
     sentry_sdk.init(
         dsn=SENTRY_DSN,
-        traces_sample_rate=_sample_rate("SENTRY_TRACES_SAMPLE_RATE"),
-        profiles_sample_rate=_sample_rate("SENTRY_PROFILES_SAMPLE_RATE"),
-        environment=os.getenv("APP_ENV", "development"),
+        traces_sample_rate=_OBSERVABILITY.sentry_traces_sample_rate,
+        profiles_sample_rate=_OBSERVABILITY.sentry_profiles_sample_rate,
+        environment=_OBSERVABILITY.app_env,
     )
 
 def setup_agent_logger():
@@ -43,8 +38,8 @@ def setup_agent_logger():
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
             structlog.dev.ConsoleRenderer(colors=bool(sys.stdout.isatty()))
-            if os.getenv("LOG_FORMAT", "").strip().lower() != "json"
-            and os.getenv("APP_ENV") != "production"
+            if _OBSERVABILITY.log_format.strip().lower() != "json"
+            and _OBSERVABILITY.app_env != "production"
             else structlog.processors.JSONRenderer()
         ],
         context_class=dict,
@@ -59,7 +54,7 @@ def setup_agent_logger():
         stream=sys.stdout,
         level=logging.INFO,
     )
-    log_target = os.getenv("LOG_TARGET")
+    log_target = _OBSERVABILITY.log_target
     if log_target:
         log_path = Path(log_target)
         log_path.parent.mkdir(parents=True, exist_ok=True)

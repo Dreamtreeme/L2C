@@ -1,0 +1,7 @@
+# 앱 환경과 분리된 Python 3.13.14 / Windows x64 OCR 작업자 런타임입니다.
+# CUDA 13 DLL은 paddle_ocr_runner.py가 작업자 시작 전에 등록합니다.
+paddlepaddle-gpu @ https://paddle-whl.bj.bcebos.com/stable/cu130/paddlepaddle-gpu/paddlepaddle_gpu-3.3.1-cp313-cp313-win_amd64.whl
+paddleocr==3.7.0
+paddlex[ocr-core]==3.7.2
+numpy==2.3.5
+opencv-contrib-python==4.10.0.84

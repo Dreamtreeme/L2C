@@ -32,7 +32,12 @@ class LLMEngine:
             self._client = ollama.Client(host=OLLAMA_HOST)
             self._ensure_model(OLLAMA_MODEL)
         else:
-            logger.info("GEMINI_API_KEY detected. LLMEngine will use Gemini 3.5 Flash.")
+            from agent.application.model_policy import lightweight_model_name
+
+            logger.info(
+                "GEMINI_API_KEY detected. LLMEngine will use %s.",
+                lightweight_model_name("CLASSIC_EXTRACTION_MODEL"),
+            )
 
     def _ensure_model(self, model_name: str):
         try:
@@ -64,14 +69,22 @@ class LLMEngine:
         prompt = EXTRACTION_PROMPT.format(text=text)
 
         if getattr(self, "use_gemini", False):
-            logger.info("[LLMEngine] 텍스트 정제 시작 (모델: gemini-3.5-flash)")
+            from agent.application.model_clients import get_google_chat_model
+            from agent.application.model_policy import lightweight_model_name
+
+            model_name = lightweight_model_name("CLASSIC_EXTRACTION_MODEL")
+            logger.info("[LLMEngine] 텍스트 정제 시작 (모델: %s)", model_name)
             t0 = time.perf_counter()
             try:
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=LLM_TEMPERATURE)
+                llm = get_google_chat_model(model_name, temperature=LLM_TEMPERATURE)
                 from agent.application.run_context import invoke_with_metrics
 
-                response = invoke_with_metrics(llm, prompt, "classic_extraction")
+                response = invoke_with_metrics(
+                    llm,
+                    prompt,
+                    "classic_extraction",
+                    stream=True,
+                )
                 output = response.content
                 if isinstance(output, list):
                     output = "\n".join(item if isinstance(item, str) else item.get("text", "") if isinstance(item, dict) else str(item) for item in output)

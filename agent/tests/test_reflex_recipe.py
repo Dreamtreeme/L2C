@@ -1,6 +1,27 @@
 import sqlite3
 
-from langchain_core.messages import AIMessage
+from agent.graph import (
+    worker_execution,
+    worker_observation,
+    worker_reasoning,
+    worker_recording,
+    worker_selection,
+    worker_transition,
+)
+from agent.graph.worker_observation_context import build_ui_context
+from agent.runtime.reflex_runtime import reflex_node
+from agent.runtime.result_card_queue import (
+    complete_active_result_card,
+    mark_result_card_active,
+    queue_replay_after_return,
+    result_card_click_matches_queue,
+)
+
+
+def _action_request(*, content="", tool_calls=None, source="llm"):
+    from agent.graph.action_request import build_action_request
+
+    return build_action_request(source, str(content or ""), list(tool_calls or []))
 
 
 def test_record_ui_step_stays_in_marker_text_space():
@@ -351,7 +372,6 @@ def test_transition_contract_waits_for_known_result_outcomes():
 def test_perception_node_records_and_resolves_pending_transition(monkeypatch, tmp_path):
     import time
     from PIL import Image
-    from agent.graph import nodes
 
     screenshot = tmp_path / "screen.png"
     Image.new("RGB", (800, 600), "white").save(screenshot)
@@ -370,14 +390,18 @@ def test_perception_node_records_and_resolves_pending_transition(monkeypatch, tm
                 "marked_image": str(screenshot),
             }
 
-    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
-    result = nodes.perception_node(
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
+    result = worker_observation.observe_screen_cycle(
         {
+            "worker_run_id": "worker-transition",
+            "worker_attempt_index": 0,
+            "capture_sequence": 7,
             "current_url": "https://www.wanted.co.kr",
             "current_url_stale": False,
             "pending_transition": {
                 "action_seq": 3,
                 "action": "press_key",
+                "from_capture_id": "worker-transition:attempt:00:capture:0007",
                 "expected_after": "검색 결과가 나타남",
                 "source": "reflex",
                 "started_at": time.time(),
@@ -400,13 +424,20 @@ def test_perception_node_records_and_resolves_pending_transition(monkeypatch, tm
     assert result["transition_outcome"] == "results_found"
     assert result["pending_transition"] == {}
     assert result["transition_observations"][0]["action_seq"] == 3
+    assert (
+        result["transition_observations"][0]["from_capture_id"]
+        == "worker-transition:attempt:00:capture:0007"
+    )
+    assert (
+        result["transition_observations"][0]["to_capture_id"]
+        == "worker-transition:attempt:00:capture:0008"
+    )
     assert "Android App 개발자" in result["transition_observations"][0]["marker_texts"]
 
 
 def test_perception_node_blocks_reflex_recipe_after_unknown_transition(monkeypatch, tmp_path):
     import time
     from PIL import Image
-    from agent.graph import nodes
 
     screenshot = tmp_path / "screen.png"
     Image.new("RGB", (800, 600), "white").save(screenshot)
@@ -421,8 +452,8 @@ def test_perception_node_blocks_reflex_recipe_after_unknown_transition(monkeypat
                 "marked_image": str(screenshot),
             }
 
-    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
-    result = nodes.perception_node(
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
+    result = worker_observation.observe_screen_cycle(
         {
             "current_url": "https://www.wanted.co.kr",
             "current_url_stale": False,
@@ -450,7 +481,6 @@ def test_perception_node_blocks_reflex_recipe_after_unknown_transition(monkeypat
 def test_perception_node_blocks_reflex_click_when_screen_does_not_change(monkeypatch, tmp_path):
     import time
     from PIL import Image
-    from agent.graph import nodes
 
     screenshot = tmp_path / "screen.png"
     Image.new("RGB", (800, 600), "white").save(screenshot)
@@ -462,13 +492,13 @@ def test_perception_node_blocks_reflex_click_when_screen_does_not_change(monkeyp
         def analyze_ui(self, _path):
             raise AssertionError("pHash no-effect precheck should skip OCR")
 
-    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
     monkeypatch.setattr(
-        nodes,
-        "_raw_screen_phash_signature",
+        worker_observation,
+        "raw_screen_phash_signature",
         lambda _image_path: {"phash": "0" * 16, "size": [800, 600]},
     )
-    result = nodes.perception_node(
+    result = worker_observation.observe_screen_cycle(
         {
             "current_url": "https://www.wanted.co.kr/search?query=ios",
             "current_url_stale": False,
@@ -506,7 +536,6 @@ def test_perception_node_blocks_reflex_click_when_screen_does_not_change(monkeyp
 def test_perception_node_accepts_tab_visual_change_when_ocr_cue_is_pending(monkeypatch, tmp_path):
     import time
     from PIL import Image
-    from agent.graph import nodes
 
     screenshot = tmp_path / "screen.png"
     Image.new("RGB", (800, 600), "white").save(screenshot)
@@ -521,9 +550,9 @@ def test_perception_node_accepts_tab_visual_change_when_ocr_cue_is_pending(monke
                 "marked_image": str(screenshot),
             }
 
-    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
 
-    result = nodes.perception_node(
+    result = worker_observation.observe_screen_cycle(
         {
             "current_url": "https://www.wanted.co.kr/search?query=ios",
             "current_url_stale": False,
@@ -557,7 +586,6 @@ def test_perception_node_accepts_tab_visual_change_when_ocr_cue_is_pending(monke
 def test_perception_node_accepts_ready_cue_when_pixels_changed_but_phash_is_same(monkeypatch, tmp_path):
     import time
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
 
     before = tmp_path / "before.png"
     screenshot = tmp_path / "screen.png"
@@ -576,13 +604,13 @@ def test_perception_node_accepts_ready_cue_when_pixels_changed_but_phash_is_same
                 "marked_image": str(screenshot),
             }
 
-    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
     monkeypatch.setattr(
-        nodes,
-        "_raw_screen_phash_signature",
+        worker_observation,
+        "raw_screen_phash_signature",
         lambda _image_path: {"phash": "0" * 16, "size": [800, 600]},
     )
-    result = nodes.perception_node(
+    result = worker_observation.observe_screen_cycle(
         {
             "current_url": "https://www.wanted.co.kr/search?query=ios",
             "current_url_stale": False,
@@ -615,7 +643,6 @@ def test_perception_node_accepts_ready_cue_when_pixels_changed_but_phash_is_same
 
 
 def test_set_result_card_queue_stores_visible_card_ratios():
-    from agent.graph import nodes
 
     state = {
         "current_markers": [
@@ -633,12 +660,10 @@ def test_set_result_card_queue_stores_visible_card_ratios():
         "extracted_jd": {},
     }
 
-    result, _jd, _plan, _step = nodes._dispatch_state(
+    result, _jd = worker_execution._dispatch_state(
         "set_result_card_queue",
         {"cards": [{"marker_id": 10, "title": "iOS 개발자", "company": "보이저엑스"}]},
         {},
-        [],
-        0,
         current_url="https://www.wanted.co.kr/search?query=ios",
         state=state,
     )
@@ -652,7 +677,6 @@ def test_set_result_card_queue_stores_visible_card_ratios():
 
 
 def test_set_result_card_queue_accepts_title_fallback():
-    from agent.graph import nodes
 
     state = {
         "current_markers": [
@@ -671,7 +695,7 @@ def test_set_result_card_queue_accepts_title_fallback():
         "extracted_jd": {},
     }
 
-    result, _jd, _plan, _step = nodes._dispatch_state(
+    result, _jd = worker_execution._dispatch_state(
         "set_result_card_queue",
         {
             "cards": 4,
@@ -679,8 +703,6 @@ def test_set_result_card_queue_accepts_title_fallback():
             "companies": ["보이저엑스", "샘플"],
         },
         {},
-        [],
-        0,
         current_url="https://www.wanted.co.kr/search?query=ios",
         state=state,
     )
@@ -695,7 +717,6 @@ def test_set_result_card_queue_accepts_title_fallback():
 
 
 def test_set_result_card_queue_skips_title_without_visible_marker():
-    from agent.graph import nodes
 
     state = {
         "current_markers": [
@@ -710,12 +731,10 @@ def test_set_result_card_queue_skips_title_without_visible_marker():
         "extracted_jd": {},
     }
 
-    result, _jd, _plan, _step = nodes._dispatch_state(
+    result, _jd = worker_execution._dispatch_state(
         "set_result_card_queue",
         {"cards": 1, "titles": ["화면에 없는 공고"]},
         {},
-        [],
-        0,
         current_url="https://www.wanted.co.kr/search?query=ios",
         state=state,
     )
@@ -725,8 +744,130 @@ def test_set_result_card_queue_skips_title_without_visible_marker():
     assert result["_result_card_queue"] == []
 
 
+def test_existing_result_cards_match_exact_company_title_within_site(tmp_path):
+    import sqlite3
+
+    from agent.runtime.duplicate_job_policy import mark_existing_result_cards
+
+    db_path = tmp_path / "jobs.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY,
+                company_name TEXT,
+                position TEXT,
+                url TEXT,
+                source_platform TEXT
+            )
+            """
+        )
+        connection.executemany(
+            "INSERT INTO jobs VALUES (?, ?, ?, ?, ?)",
+            [
+                (7, "에너자이", "ML Engineer Researcher", "https://www.saramin.co.kr/zf_user/search", "Saramin"),
+                (8, "(주)에너자이", "ML Engineer/Researcher", "https://www.jobkorea.co.kr/Recruit/GI_Read/1", "JobKorea"),
+            ],
+        )
+
+    queue, traces = mark_existing_result_cards(
+        [
+            {
+                "queue_id": "card-1",
+                "status": "pending",
+                "company": "(주)에너자이",
+                "title": "ML Engineer/Researcher",
+            },
+            {
+                "queue_id": "card-2",
+                "status": "pending",
+                "company": "다른 회사",
+                "title": "ML Engineer/Researcher",
+            },
+            {
+                "queue_id": "card-3",
+                "status": "pending",
+                "company": "",
+                "title": "ML Engineer/Researcher",
+            },
+        ],
+        "https://www.saramin.co.kr/zf_user/search?searchword=ml",
+        db_path=db_path,
+    )
+
+    assert queue[0]["status"] == "skipped"
+    assert queue[0]["job_id"] == 7
+    assert queue[1]["status"] == "pending"
+    assert queue[2]["status"] == "pending"
+    assert traces == [
+        {
+            "queue_id": "card-1",
+            "company": "(주)에너자이",
+            "title": "ML Engineer/Researcher",
+            "job_id": 7,
+        }
+    ]
+
+
+def test_action_node_finishes_when_selected_card_already_exists(monkeypatch):
+
+    monkeypatch.setattr(
+        worker_execution,
+        "_mark_existing_result_cards",
+        lambda queue, _url: (
+            [{**queue[0], "status": "skipped", "job_id": 91}],
+            [{"queue_id": queue[0]["queue_id"], "job_id": 91}],
+        ),
+    )
+
+    result = worker_execution.action_node(
+        {
+            "goal": "사람인 머신러닝 엔지니어 공고 1개",
+            "current_markers": [
+                {
+                    "id": 10,
+                    "bbox": [100, 200, 400, 240],
+                    "text": "ML Engineer/Researcher",
+                }
+            ],
+            "current_url": "https://www.saramin.co.kr/zf_user/search?searchword=ml",
+            "current_url_stale": False,
+            "current_page_role": "search",
+            "screen_signature": {"phash": "0" * 16, "size": [1000, 1000]},
+            "recipe_params": {"target_count": 1, "count_mode": "explicit"},
+            "extracted_jd": {},
+            "is_finished": False,
+            "collected_data": [],
+            "error_count": 0,
+            "recorded_steps": [],
+            "pending_action": _action_request(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "set_result_card_queue",
+                        "args": {
+                            "cards": [
+                                {
+                                    "marker_id": 10,
+                                    "title": "ML Engineer/Researcher",
+                                    "company": "(주)에너자이",
+                                }
+                            ]
+                        },
+                        "id": "queue-existing",
+                    }
+                ],
+            ),
+        }
+    )
+
+    assert result["is_finished"] is True
+    assert result["result_card_queue"][0]["status"] == "skipped"
+    assert result["result_card_queue"][0]["job_id"] == 91
+    assert result["action_history"][0]["auto_finished"] is True
+
+
 def test_card_queue_replay_after_go_back_uses_cached_bbox():
-    from agent.graph import nodes
 
     state = {
         "result_card_queue": [
@@ -754,7 +895,7 @@ def test_card_queue_replay_after_go_back_uses_cached_bbox():
         },
     }
 
-    msg, markers, trace = nodes._queue_replay_after_return(
+    msg, markers, trace = queue_replay_after_return(
         state,
         {"action": "go_back"},
         "https://www.wanted.co.kr/search?query=ios",
@@ -765,13 +906,12 @@ def test_card_queue_replay_after_go_back_uses_cached_bbox():
     assert msg is not None
     assert trace["hit"] is True
     call = msg.tool_calls[0]
-    assert call["name"] == "click_marker"
-    assert call["args"]["queue_id"] == "card-2"
+    assert call.name == "click_marker"
+    assert call.metadata["queue_id"] == "card-2"
     assert markers[0]["bbox"] == [300, 400, 500, 450]
 
 
 def test_card_queue_replay_waits_until_active_card_is_done():
-    from agent.graph import nodes
 
     state = {
         "active_result_card": {"queue_id": "card-1", "status": "active", "title": "첫번째 iOS 개발자"},
@@ -789,7 +929,7 @@ def test_card_queue_replay_waits_until_active_card_is_done():
         },
     }
 
-    msg, _markers, trace = nodes._queue_replay_after_return(
+    msg, _markers, trace = queue_replay_after_return(
         state,
         {"action": "go_back"},
         "https://www.wanted.co.kr/search?query=ios",
@@ -802,15 +942,14 @@ def test_card_queue_replay_waits_until_active_card_is_done():
 
 
 def test_card_queue_marks_active_and_done():
-    from agent.graph import nodes
 
     queue = [{"queue_id": "card-1", "status": "pending", "title": "A"}]
 
-    queue, active = nodes._mark_result_card_active(queue, {"queue_id": "card-1"})
+    queue, active = mark_result_card_active(queue, {"queue_id": "card-1"})
     assert queue[0]["status"] == "active"
     assert active["queue_id"] == "card-1"
 
-    queue, active = nodes._complete_active_result_card(queue, active)
+    queue, active = complete_active_result_card(queue, active)
     assert queue[0]["status"] == "done"
     assert active == {}
 
@@ -850,7 +989,6 @@ def test_existing_job_url_trace_checks_current_run_and_database(tmp_path, monkey
 def test_perception_skips_existing_active_job_before_ocr(monkeypatch, tmp_path):
     from PIL import Image
 
-    from agent.graph import nodes
 
     screenshot = tmp_path / "detail.png"
     Image.new("RGB", (800, 600), "white").save(screenshot)
@@ -867,20 +1005,20 @@ def test_perception_skips_existing_active_job_before_ocr(monkeypatch, tmp_path):
         def analyze_ui(self, _path):
             raise AssertionError("중복 상세에서는 전체 OCR을 실행하면 안 됩니다.")
 
-    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
     monkeypatch.setattr(
-        nodes,
-        "_existing_job_url_trace",
+        worker_selection,
+        "existing_job_url_trace",
         lambda _url, _extracted: {"matched": True, "source": "database", "job_id": 7},
     )
     monkeypatch.setattr(
-        nodes,
-        "_raw_screen_phash_signature",
+        worker_observation,
+        "raw_screen_phash_signature",
         lambda _path: {"phash": "a" * 16, "size": [800, 600]},
     )
-    monkeypatch.setattr(nodes, "_transition_has_visual_change", lambda *_args: (True, 0.5))
+    monkeypatch.setattr(worker_transition, "transition_has_visual_change", lambda *_args: (True, 0.5))
 
-    result = nodes.perception_node(
+    result = worker_observation.observe_screen_cycle(
         {
             "current_url": "https://www.wanted.co.kr/search?query=ai",
             "current_url_stale": True,
@@ -894,19 +1032,18 @@ def test_perception_skips_existing_active_job_before_ocr(monkeypatch, tmp_path):
         }
     )
 
-    assert result["page_policy_hit"] is True
+    assert result["pending_action"].source == "duplicate_job_policy"
     assert result["page_policy_trace"]["policy"] == "skip_existing_job_detail"
-    assert result["step_durations"][0]["ocr_skipped"] is True
+    assert result["ocr_complete"] is False
     assert result["result_card_queue"][0]["status"] == "skipped"
     assert result["result_card_queue"][0]["job_id"] == 7
     assert result["active_result_card"] == {}
-    assert result["last_action_result"].tool_calls[0]["name"] == "go_back"
+    assert result["pending_action"].tool_calls[0].name == "go_back"
 
 
 def test_perception_finishes_when_last_visible_card_is_existing(monkeypatch, tmp_path):
     from PIL import Image
 
-    from agent.graph import nodes
 
     screenshot = tmp_path / "last-duplicate.png"
     Image.new("RGB", (800, 600), "white").save(screenshot)
@@ -923,20 +1060,20 @@ def test_perception_finishes_when_last_visible_card_is_existing(monkeypatch, tmp
         def analyze_ui(self, _path):
             raise AssertionError("마지막 중복 상세에서는 전체 OCR을 실행하면 안 됩니다.")
 
-    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
     monkeypatch.setattr(
-        nodes,
-        "_existing_job_url_trace",
+        worker_selection,
+        "existing_job_url_trace",
         lambda _url, _extracted: {"matched": True, "source": "database", "job_id": 7},
     )
     monkeypatch.setattr(
-        nodes,
-        "_raw_screen_phash_signature",
+        worker_observation,
+        "raw_screen_phash_signature",
         lambda _path: {"phash": "a" * 16, "size": [800, 600]},
     )
-    monkeypatch.setattr(nodes, "_transition_has_visual_change", lambda *_args: (True, 0.5))
+    monkeypatch.setattr(worker_transition, "transition_has_visual_change", lambda *_args: (True, 0.5))
 
-    result = nodes.perception_node(
+    result = worker_observation.observe_screen_cycle(
         {
             "current_url": "https://www.wanted.co.kr/search?query=ai",
             "current_url_stale": True,
@@ -952,14 +1089,13 @@ def test_perception_finishes_when_last_visible_card_is_existing(monkeypatch, tmp
 
     assert result["page_policy_trace"]["policy"] == "finish_existing_job_queue"
     assert result["result_card_queue"][0]["status"] == "skipped"
-    assert result["last_action_result"].tool_calls[0]["name"] == "finish_task"
-    assert result["last_action_result"].tool_calls[0]["args"]["result"]
+    assert result["pending_action"].tool_calls[0].name == "finish_task"
+    assert result["pending_action"].tool_calls[0].args["result"]
 
 
 def test_perception_replays_next_card_after_go_back_without_ocr(monkeypatch, tmp_path):
     from PIL import Image
 
-    from agent.graph import nodes
 
     screenshot = tmp_path / "returned-list.png"
     Image.new("RGB", (800, 600), "white").save(screenshot)
@@ -976,15 +1112,15 @@ def test_perception_replays_next_card_after_go_back_without_ocr(monkeypatch, tmp
         def analyze_ui(self, _path):
             raise AssertionError("pHash가 일치한 목록 복귀에서는 전체 OCR을 실행하면 안 됩니다.")
 
-    monkeypatch.setattr(nodes, "_get_perception", lambda: FakePerception())
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
     monkeypatch.setattr(
-        nodes,
-        "_raw_screen_phash_signature",
+        worker_observation,
+        "raw_screen_phash_signature",
         lambda _path: {"phash": "0" * 16, "size": [800, 600]},
     )
-    monkeypatch.setattr(nodes, "_transition_has_visual_change", lambda *_args: (True, 0.5))
+    monkeypatch.setattr(worker_transition, "transition_has_visual_change", lambda *_args: (True, 0.5))
 
-    result = nodes.perception_node(
+    result = worker_observation.observe_screen_cycle(
         {
             "current_url": "https://www.wanted.co.kr/wd/1",
             "current_url_stale": True,
@@ -1016,10 +1152,10 @@ def test_perception_replays_next_card_after_go_back_without_ocr(monkeypatch, tmp
         }
     )
 
-    assert result["queue_replay_hit"] is True
-    assert result["step_durations"][0]["ocr_skipped"] is True
-    assert result["step_durations"][0]["reason"] == "queue_return_phash_match"
-    assert result["last_action_result"].tool_calls[0]["args"]["queue_id"] == "card-2"
+    assert result["pending_action"].source == "card_queue"
+    assert result["ocr_complete"] is False
+    assert result["transition_outcome"] == "queue_return_phash_match"
+    assert result["pending_action"].tool_calls[0].metadata["queue_id"] == "card-2"
     assert result["current_markers"][0]["bbox"] == [160, 180, 400, 240]
 
 
@@ -1041,7 +1177,7 @@ def test_result_card_selector_can_refill_exhausted_queue():
     assert should_select_result_cards(state) is True
 
 
-def test_result_card_selector_refills_when_target_sized_queue_is_all_duplicates():
+def test_result_card_selector_stops_when_target_sized_queue_is_all_database_duplicates():
     from agent.runtime.result_card_selector import should_select_result_cards
 
     state = {
@@ -1049,15 +1185,82 @@ def test_result_card_selector_refills_when_target_sized_queue_is_all_duplicates(
         "recipe_params": {"target_count": 2},
         "extracted_jd": {},
         "result_card_queue": [
-            {"queue_id": "card-1", "status": "skipped", "title": "첫 번째 중복 공고"},
-            {"queue_id": "card-2", "status": "skipped", "title": "두 번째 중복 공고"},
+            {
+                "queue_id": "card-1",
+                "status": "skipped",
+                "title": "첫 번째 중복 공고",
+                "job_id": 7,
+            },
+            {
+                "queue_id": "card-2",
+                "status": "skipped",
+                "title": "두 번째 중복 공고",
+                "job_id": 8,
+            },
         ],
         "active_result_card": {},
         "current_markers": [{"id": 1, "text": "새 공고"}],
         "marked_image": "marked.png",
     }
 
-    assert should_select_result_cards(state) is True
+    assert should_select_result_cards(state) is False
+
+
+def test_perception_finishes_when_explicit_target_is_all_database_duplicates(monkeypatch, tmp_path):
+    from PIL import Image
+
+
+    screenshot = tmp_path / "explicit-last-duplicate.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+
+    class FakePerception:
+        last_capture_quality = {}
+
+        def capture_screen(self):
+            return screenshot
+
+        def get_current_url(self):
+            return "https://www.wanted.co.kr/wd/456"
+
+        def analyze_ui(self, _path):
+            raise AssertionError("목표를 채운 중복 상세에서는 전체 OCR을 실행하면 안 됩니다.")
+
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
+    monkeypatch.setattr(
+        worker_selection,
+        "existing_job_url_trace",
+        lambda _url, _extracted: {"matched": True, "source": "database", "job_id": 8},
+    )
+    monkeypatch.setattr(
+        worker_observation,
+        "raw_screen_phash_signature",
+        lambda _path: {"phash": "a" * 16, "size": [800, 600]},
+    )
+    monkeypatch.setattr(worker_transition, "transition_has_visual_change", lambda *_args: (True, 0.5))
+
+    result = worker_observation.observe_screen_cycle(
+        {
+            "current_url": "https://www.wanted.co.kr/search?query=ios",
+            "current_url_stale": True,
+            "pending_transition": {"action": "click_marker", "source": "card_queue"},
+            "active_result_card": {"queue_id": "card-2", "title": "두 번째 iOS 개발자"},
+            "result_card_queue": [
+                {
+                    "queue_id": "card-1",
+                    "status": "skipped",
+                    "title": "첫 번째 iOS 개발자",
+                    "job_id": 7,
+                },
+                {"queue_id": "card-2", "status": "active", "title": "두 번째 iOS 개발자"},
+            ],
+            "recipe_params": {"target_count": 2, "count_mode": "explicit"},
+            "extracted_jd": {},
+        }
+    )
+
+    assert result["page_policy_trace"]["policy"] == "finish_existing_job_queue"
+    assert result["result_card_queue"][1]["job_id"] == 8
+    assert result["pending_action"].tool_calls[0].name == "finish_task"
 
 
 def test_result_card_selector_does_not_refill_completed_visible_queue():
@@ -1080,7 +1283,6 @@ def test_result_card_selector_does_not_refill_completed_visible_queue():
 
 
 def test_card_queue_marks_active_when_card_click_uses_title_label():
-    from agent.graph import nodes
 
     queue = [{"queue_id": "card-1", "status": "pending", "title": "iOS 핵심 시스템 CTO 및 PM급 엔지니어"}]
     args = {
@@ -1090,8 +1292,8 @@ def test_card_queue_marks_active_when_card_click_uses_title_label():
         "target_label": "iOS 핵심 시스템 CTO 및 PM급 엔지니어",
     }
 
-    assert nodes._result_card_click_matches_queue(queue, args) is True
-    queue, active = nodes._mark_result_card_active(queue, args)
+    assert result_card_click_matches_queue(queue, args) is True
+    queue, active = mark_result_card_active(queue, args)
     assert queue[0]["status"] == "active"
     assert active["queue_id"] == "card-1"
 
@@ -1107,6 +1309,7 @@ def test_recipe_store_commits_and_reads_by_recipe_key(tmp_path):
         [
             {
                 "seq": 0,
+                "decision_capture_id": "worker-run-1:attempt:00:capture:0001",
                 "url_template": "wanted.co.kr",
                 "page_role": "home",
                 "action": "click_marker",
@@ -1123,6 +1326,7 @@ def test_recipe_store_commits_and_reads_by_recipe_key(tmp_path):
 
     assert saved == 1
     rows = store.get_by_site("wanted.co.kr")
+    assert "decision_capture_id" not in rows[0]["steps"][0]
     recipe = store.get_recipe(rows[0]["recipe_key"])
     assert recipe is not None
     assert recipe.steps[0].action == "click_marker"
@@ -1289,7 +1493,6 @@ def test_recipe_store_filters_recipe_by_site_and_task_category(tmp_path):
 
 def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
@@ -1333,7 +1536,7 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "ai 엔지니어 공고 찾아줘",
             "current_url": "https://www.wanted.co.kr",
@@ -1345,16 +1548,15 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
         }
     )
 
-    msg = result["last_action_result"]
-    assert result["reflex_hit"] is True
-    assert msg.tool_calls[0]["name"] == "type_in_marker"
-    assert msg.tool_calls[0]["args"] == {"marker_id": 7, "text": "ai 엔지니어", "page_role": "home"}
+    msg = result["pending_action"]
+    assert result["reflex_trace"]["hit"] is True
+    assert msg.tool_calls[0].name == "type_in_marker"
+    assert msg.tool_calls[0].args == {"marker_id": 7, "text": "ai 엔지니어", "page_role": "home"}
     assert len(msg.tool_calls) == 1
 
 
 def test_reflex_node_appends_enter_for_search_input_compound(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
@@ -1399,7 +1601,7 @@ def test_reflex_node_appends_enter_for_search_input_compound(monkeypatch, tmp_pa
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "ios 개발자 공고 2개",
             "current_url": "https://www.wanted.co.kr",
@@ -1411,18 +1613,17 @@ def test_reflex_node_appends_enter_for_search_input_compound(monkeypatch, tmp_pa
         }
     )
 
-    msg = result["last_action_result"]
-    assert result["reflex_hit"] is True
-    assert [call["name"] for call in msg.tool_calls] == ["type_in_marker", "press_key"]
-    assert msg.tool_calls[0]["args"]["text"] == "ios 개발자"
-    assert msg.tool_calls[1]["args"]["key"] == "enter"
-    assert msg.tool_calls[1]["args"]["_transition_source"] == "reflex_compound"
+    msg = result["pending_action"]
+    assert result["reflex_trace"]["hit"] is True
+    assert [call.name for call in msg.tool_calls] == ["type_in_marker", "press_key"]
+    assert msg.tool_calls[0].args["text"] == "ios 개발자"
+    assert msg.tool_calls[1].args["key"] == "enter"
+    assert msg.tool_calls[1].metadata["transition_source"] == "reflex_compound"
     assert result["reflex_trace"]["actions"] == ["type_in_marker", "press_key"]
 
 
 def test_reflex_node_uses_roi_signature_when_available(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
@@ -1463,7 +1664,7 @@ def test_reflex_node_uses_roi_signature_when_available(monkeypatch, tmp_path):
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "ai 엔지니어 공고 찾아줘",
             "current_url": "https://www.wanted.co.kr",
@@ -1479,17 +1680,16 @@ def test_reflex_node_uses_roi_signature_when_available(monkeypatch, tmp_path):
         }
     )
 
-    assert result["reflex_hit"] is True
-    assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 77, "page_role": "home"}
     assert result["reflex_trace"]["hit"] is True
-    call_id = result["last_action_result"].tool_calls[0]["id"]
+    assert result["pending_action"].tool_calls[0].args == {"marker_id": 77, "page_role": "home"}
+    assert result["reflex_trace"]["hit"] is True
+    call_id = result["pending_action"].tool_calls[0].id
     assert result["reflex_trace"]["tool_calls"][call_id]["match_mode"] == "roi_phash"
     assert result["reflex_trace"]["tool_calls"][call_id]["phash"]["distance"] == 0
 
 
 def test_reflex_node_rejects_page_role_mismatch(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
@@ -1526,7 +1726,7 @@ def test_reflex_node_rejects_page_role_mismatch(monkeypatch, tmp_path):
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "ai 엔지니어 공고 찾아줘",
             "current_page_role": "job_detail",
@@ -1537,12 +1737,11 @@ def test_reflex_node_rejects_page_role_mismatch(monkeypatch, tmp_path):
         }
     )
 
-    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["hit"] is False
     assert result["reflex_trace"]["last_reason"] == "page_role_mismatch"
 
 
 def test_reflex_node_rejects_recipe_from_different_url_scope(monkeypatch):
-    from agent.graph import nodes
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     class FakeStore:
@@ -1573,7 +1772,7 @@ def test_reflex_node_rejects_recipe_from_different_url_scope(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("URL 범위 검사보다 먼저 ROI를 검사함")),
     )
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "ios 개발자 공고 2개",
             "current_url": "https://www.wanted.co.kr/",
@@ -1585,7 +1784,7 @@ def test_reflex_node_rejects_recipe_from_different_url_scope(monkeypatch):
         }
     )
 
-    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["hit"] is False
     assert result["reflex_trace"]["last_reason"] == "url_scope_mismatch"
     assert result["reflex_trace"]["candidate_rejections"][0]["current_url_template"] == "wanted.co.kr/"
 
@@ -1604,7 +1803,6 @@ def test_search_button_transition_accepts_verified_visual_change():
 
 def test_reflex_node_skips_blocked_recipe_key(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
@@ -1641,7 +1839,7 @@ def test_reflex_node_skips_blocked_recipe_key(monkeypatch, tmp_path):
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "ai 엔지니어 공고 찾아줘",
             "current_page_role": "home",
@@ -1653,13 +1851,12 @@ def test_reflex_node_skips_blocked_recipe_key(monkeypatch, tmp_path):
         }
     )
 
-    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["hit"] is False
     assert result["reflex_trace"]["last_reason"] == "recipe_blocked_after_transition_failure"
 
 
 def test_reflex_node_skips_idempotent_recipe_used_on_same_url(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
@@ -1696,7 +1893,7 @@ def test_reflex_node_skips_idempotent_recipe_used_on_same_url(monkeypatch, tmp_p
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "ios 개발자 공고 2개",
             "current_url": "https://www.wanted.co.kr/search?query=ios&tab=position",
@@ -1717,12 +1914,11 @@ def test_reflex_node_skips_idempotent_recipe_used_on_same_url(monkeypatch, tmp_p
         }
     )
 
-    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["hit"] is False
     assert result["reflex_trace"]["last_reason"] == "recipe_already_used_on_page"
 
 
 def test_reflex_node_rejects_signed_step_when_roi_missing(monkeypatch):
-    from agent.graph import nodes
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     class FakeStore:
@@ -1748,7 +1944,7 @@ def test_reflex_node_rejects_signed_step_when_roi_missing(monkeypatch):
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "ai 엔지니어 공고 찾아줘",
             "current_url": "https://www.wanted.co.kr",
@@ -1763,14 +1959,13 @@ def test_reflex_node_rejects_signed_step_when_roi_missing(monkeypatch):
         }
     )
 
-    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["hit"] is False
     assert result["reflex_trace"]["reason"] == "no_candidate_passed"
     assert result["reflex_trace"]["last_reason"] == "roi_signature_missing"
 
 
 def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
     from shared.schema.skill_schema import RecipeSkillMetadata, SkillInputSlot
@@ -1819,7 +2014,7 @@ def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "find android jobs",
             "current_url": "https://www.wanted.co.kr",
@@ -1831,8 +2026,8 @@ def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
         }
     )
 
-    assert result["reflex_hit"] is True
-    assert result["last_action_result"].tool_calls[0]["args"] == {
+    assert result["reflex_trace"]["hit"] is True
+    assert result["pending_action"].tool_calls[0].args == {
         "marker_id": 7,
         "text": "android developer",
         "page_role": "home",
@@ -1842,7 +2037,6 @@ def test_reflex_node_replaces_type_input_slot(monkeypatch, tmp_path):
 
 def test_reflex_node_uses_site_candidates_without_state_lookup(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
-    from agent.graph import nodes
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
     current = tmp_path / "site-current.png"
@@ -1879,7 +2073,7 @@ def test_reflex_node_uses_site_candidates_without_state_lookup(monkeypatch, tmp_
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "android 개발자 공고 찾아줘",
             "current_page_role": "home",
@@ -1890,12 +2084,11 @@ def test_reflex_node_uses_site_candidates_without_state_lookup(monkeypatch, tmp_
         }
     )
 
-    assert result["reflex_hit"] is True
-    assert result["last_action_result"].tool_calls[0]["args"] == {"marker_id": 7, "page_role": "home"}
+    assert result["reflex_trace"]["hit"] is True
+    assert result["pending_action"].tool_calls[0].args == {"marker_id": 7, "page_role": "home"}
 
 
 def test_reflex_node_skips_recipe_when_task_category_mismatches(monkeypatch):
-    from agent.graph import nodes
 
     class FakeStore:
         def get_site_recipes(self, site, task_category=None):
@@ -1904,7 +2097,7 @@ def test_reflex_node_skips_recipe_when_task_category_mismatches(monkeypatch):
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
 
-    result = nodes.reflex_node(
+    result = reflex_node(
         {
             "goal": "android 개발자 공고 찾아줘",
             "screen_signature": {"size": [200, 200]},
@@ -1913,24 +2106,21 @@ def test_reflex_node_skips_recipe_when_task_category_mismatches(monkeypatch):
         }
     )
 
-    assert result["reflex_hit"] is False
+    assert result["reflex_trace"]["hit"] is False
     assert result["reflex_trace"]["reason"] == "no_recipe"
     assert result["reflex_trace"]["candidate_count"] == 0
 
 
 def test_action_node_commits_accumulated_recorded_steps(monkeypatch):
-    from agent.graph import nodes
-    from agent.recipe import record
-
     seen = {}
 
     class FakeTools:
         def finish_task(self, result):
             return {"status": "success", "action": "finish_task", "result": result}
 
-    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeTools())
+    monkeypatch.setattr(worker_execution, "_get_action_tools", lambda: FakeTools())
     monkeypatch.setattr(
-        record,
+        worker_recording,
         "commit_if_finished",
         lambda steps, state, current_url: seen.update(steps=steps, current_url=current_url),
     )
@@ -1947,7 +2137,7 @@ def test_action_node_commits_accumulated_recorded_steps(monkeypatch):
         }
     ]
 
-    result = nodes.action_node(
+    result = worker_execution.action_node(
         {
             "current_markers": [],
             "current_url": "https://www.wanted.co.kr",
@@ -1956,13 +2146,17 @@ def test_action_node_commits_accumulated_recorded_steps(monkeypatch):
             "is_finished": False,
             "collected_data": [],
             "error_count": 0,
-            "current_plan_step": 0,
-            "plan": [],
             "recorded_steps": prior_steps,
-            "last_action_result": AIMessage(
+            "pending_action": _action_request(
                 content="",
                 tool_calls=[{"name": "finish_task", "args": {"result": "done"}, "id": "1"}],
             ),
+        }
+    )
+    worker_recording.record_execution_node(
+        {
+            **result,
+            "recorded_steps": prior_steps,
         }
     )
 
@@ -1972,7 +2166,6 @@ def test_action_node_commits_accumulated_recorded_steps(monkeypatch):
 
 
 def test_action_node_skips_stale_reasoning_screen_click(monkeypatch):
-    from agent.graph import nodes
 
     dispatched = []
 
@@ -1981,9 +2174,9 @@ def test_action_node_skips_stale_reasoning_screen_click(monkeypatch):
             dispatched.append(bbox)
             return {"status": "success", "action": "click_marker", "result": "clicked"}
 
-    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeTools())
+    monkeypatch.setattr(worker_execution, "_get_action_tools", lambda: FakeTools())
     monkeypatch.setattr(
-        nodes,
+        worker_execution,
         "_check_current_reasoning_screen",
         lambda state: {
             "checked": True,
@@ -1994,7 +2187,7 @@ def test_action_node_skips_stale_reasoning_screen_click(monkeypatch):
         },
     )
 
-    result = nodes.action_node(
+    result = worker_execution.action_node(
         {
             "goal": "ios 개발자 공고 2개",
             "current_markers": [{"id": 7, "bbox": [500, 500, 560, 540], "text": "포지션"}],
@@ -2002,7 +2195,7 @@ def test_action_node_skips_stale_reasoning_screen_click(monkeypatch):
             "current_url_stale": False,
             "current_page_role": "search",
             "screen_signature": {"phash": "0" * 16, "size": [1000, 1000]},
-            "last_action_result": AIMessage(
+            "pending_action": _action_request(
                 content="",
                 tool_calls=[{"name": "click_marker", "args": {"marker_id": 7}, "id": "stale-click"}],
             ),
@@ -2018,15 +2211,14 @@ def test_action_node_skips_stale_reasoning_screen_click(monkeypatch):
 
 
 def test_action_node_bundles_reflex_action_as_transition_step(monkeypatch):
-    from agent.graph import nodes
 
     class FakeTools:
         def click_marker(self, bbox):
             return {"status": "success", "action": "click_marker", "result": f"clicked {bbox}"}
 
-    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeTools())
+    monkeypatch.setattr(worker_execution, "_get_action_tools", lambda: FakeTools())
 
-    result = nodes.action_node(
+    result = worker_execution.action_node(
         {
             "goal": "ios 개발자 공고 2개",
             "current_markers": [{"id": 7, "bbox": [500, 500, 560, 540], "text": "포지션"}],
@@ -2038,10 +2230,7 @@ def test_action_node_bundles_reflex_action_as_transition_step(monkeypatch):
             "is_finished": False,
             "collected_data": [],
             "error_count": 0,
-            "current_plan_step": 0,
-            "plan": [],
             "recorded_steps": [],
-            "reflex_hit": True,
             "reflex_trace": {
                 "recipe_key": "roi#tab",
                 "tool_calls": {
@@ -2058,8 +2247,9 @@ def test_action_node_bundles_reflex_action_as_transition_step(monkeypatch):
             "reflex_transition_contracts": {
                 "reflex_call": {"common_ready_cues": [{"kind": "text_any", "values": ["포지션"]}]}
             },
-            "last_action_result": AIMessage(
+            "pending_action": _action_request(
                 content="[reflex]",
+                source="reflex",
                 tool_calls=[
                     {
                         "name": "click_marker",
@@ -2081,34 +2271,47 @@ def test_action_node_bundles_reflex_action_as_transition_step(monkeypatch):
 
 
 def test_reflex_routing_respects_flag_and_validation(monkeypatch):
-    from agent.graph.workflow import route_after_perception, route_after_reflex, route_after_start
+    from agent.config import clear_settings_cache
+    from agent.graph.workflow import route_after_reflex, route_after_selection, route_after_start
 
     monkeypatch.delenv("REFLEX_ENABLED", raising=False)
-    assert route_after_perception({}) == "reflex"
-    assert route_after_start({"current_markers": [{"id": 1}], "current_page_role": "home", "recent_images": ["s.png"]}) == "reflex"
+    clear_settings_cache()
+    observed = {"ocr_complete": True}
+    assert route_after_selection(observed) == "reflex"
+    assert route_after_start(observed) == "selection"
     assert route_after_start({}) == "reasoning"
+    assert route_after_selection({"low_information_screen": True}) == "reasoning"
+    assert route_after_start({"low_information_screen": True}) == "reasoning"
 
     monkeypatch.setenv("REFLEX_ENABLED", "0")
-    assert route_after_perception({}) == "reasoning"
-    assert route_after_start({"current_markers": [{"id": 1}], "current_page_role": "home", "recent_images": ["s.png"]}) == "reasoning"
+    clear_settings_cache()
+    assert route_after_selection(observed) == "reasoning"
+    assert route_after_start(observed) == "selection"
 
     monkeypatch.setenv("REFLEX_ENABLED", "1")
-    assert route_after_perception({}) == "reflex"
-    assert route_after_perception({"transition_status": "pending"}) == "perception"
-    assert route_after_perception({"transition_status": "unknown", "transition_source": "reflex"}) == "reasoning"
-    assert route_after_perception({"transition_status": "unknown", "transition_source": "page_policy"}) == "reasoning"
-    assert route_after_perception({"transition_status": "unknown", "transition_source": "reflex_compound"}) == "reflex"
-    assert route_after_perception({"transition_status": "unknown", "transition_source": "autonomous"}) == "reflex"
-    assert route_after_perception({"transition_status": "ready"}) == "reflex"
-    assert route_after_perception({"queue_replay_hit": True}) == "action"
-    assert route_after_perception({"page_policy_hit": True}) == "action"
+    clear_settings_cache()
+    assert route_after_selection(observed) == "reflex"
+    assert route_after_selection(
+        {"ocr_complete": True, "transition_status": "pending"}
+    ) == "capture"
+    assert route_after_selection(
+        {"ocr_complete": False, "ocr_required": True}
+    ) == "ocr"
+    queued = _action_request(
+        source="card_queue",
+        tool_calls=[{"name": "click_marker", "args": {"marker_id": 1}, "id": "queue"}],
+    )
+    assert route_after_selection({"pending_action": queued}) == "action"
 
-    assert route_after_reflex({"reflex_hit": True}) == "action"
-    assert route_after_reflex({"reflex_hit": False}) == "reasoning"
+    reflex_request = _action_request(
+        source="reflex",
+        tool_calls=[{"name": "press_key", "args": {"key": "enter"}, "id": "reflex"}],
+    )
+    assert route_after_reflex({"pending_action": reflex_request}) == "action"
+    assert route_after_reflex({}) == "reasoning"
 
 
 def test_detail_ui_context_compacts_ocr_markers_into_ordered_lines(monkeypatch):
-    from agent.graph import nodes
 
     monkeypatch.setenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "1")
     markers = [
@@ -2126,7 +2329,7 @@ def test_detail_ui_context_compacts_ocr_markers_into_ordered_lines(monkeypatch):
         {"id": 31, "bbox": [820, 210, 870, 260], "text": "상호작용 가능한 요소 (button)"},
     ]
 
-    context = nodes._build_ui_context(markers, current_url="https://www.wanted.co.kr/wd/1")
+    context = build_ui_context(markers, current_url="https://www.wanted.co.kr/wd/1")
 
     assert "상세 페이지 OCR 본문" in context
     assert "식별된 텍스트 요소" not in context
@@ -2145,7 +2348,6 @@ def test_detail_ui_context_compacts_ocr_markers_into_ordered_lines(monkeypatch):
 
 
 def test_detail_ui_context_keeps_heading_lines_for_llm_judgment(monkeypatch):
-    from agent.graph import nodes
 
     monkeypatch.setenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "1")
     markers = [
@@ -2157,7 +2359,7 @@ def test_detail_ui_context_keeps_heading_lines_for_llm_judgment(monkeypatch):
         {"id": 6, "bbox": [210, 390, 320, 420], "text": "장비지원"},
     ]
 
-    context = nodes._build_ui_context(markers, current_url="https://www.wanted.co.kr/wd/1")
+    context = build_ui_context(markers, current_url="https://www.wanted.co.kr/wd/1")
 
     assert "[기술스택]" not in context
     assert "[태그/혜택]" not in context
@@ -2168,7 +2370,6 @@ def test_detail_ui_context_keeps_heading_lines_for_llm_judgment(monkeypatch):
 
 
 def test_non_detail_ui_context_keeps_raw_marker_list(monkeypatch):
-    from agent.graph import nodes
 
     monkeypatch.setenv("VISION_DETAIL_SECTION_MIN_TEXT_MARKERS", "1")
     markers = [
@@ -2176,7 +2377,7 @@ def test_non_detail_ui_context_keeps_raw_marker_list(monkeypatch):
         {"id": 2, "bbox": [100, 260, 220, 290], "text": "iOS 개발자"},
     ]
 
-    context = nodes._build_ui_context(markers, current_url="https://www.wanted.co.kr/search?query=ios")
+    context = build_ui_context(markers, current_url="https://www.wanted.co.kr/search?query=ios")
 
     assert "상세 페이지 OCR 섹션 요약" not in context
     assert "식별된 텍스트 요소" in context
@@ -2186,7 +2387,7 @@ def test_non_detail_ui_context_keeps_raw_marker_list(monkeypatch):
 def test_detail_lightweight_marked_image_draws_action_candidates(tmp_path, monkeypatch):
     from PIL import Image
 
-    from agent.graph import nodes
+    from agent.runtime.detail_runtime import build_detail_lightweight_marked_image
 
     monkeypatch.setenv("VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED", "1")
     image_path = tmp_path / "screen_detail.png"
@@ -2196,7 +2397,7 @@ def test_detail_lightweight_marked_image_draws_action_candidates(tmp_path, monke
         {"id": 30, "bbox": [100, 270, 260, 310], "text": "상세 정보 더 보기"},
     ]
 
-    output_path = nodes._build_detail_lightweight_marked_image(
+    output_path = build_detail_lightweight_marked_image(
         image_path,
         markers,
         "https://www.wanted.co.kr/wd/1",
@@ -2210,13 +2411,13 @@ def test_detail_lightweight_marked_image_draws_action_candidates(tmp_path, monke
 def test_detail_lightweight_marked_image_skips_non_detail_page(tmp_path, monkeypatch):
     from PIL import Image
 
-    from agent.graph import nodes
+    from agent.runtime.detail_runtime import build_detail_lightweight_marked_image
 
     monkeypatch.setenv("VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED", "1")
     image_path = tmp_path / "screen_search.png"
     Image.new("RGB", (420, 360), "white").save(image_path)
 
-    output_path = nodes._build_detail_lightweight_marked_image(
+    output_path = build_detail_lightweight_marked_image(
         image_path,
         [{"id": 30, "bbox": [100, 270, 260, 310], "text": "상세 정보 더 보기"}],
         "https://www.wanted.co.kr/search?query=ios",
@@ -2226,7 +2427,7 @@ def test_detail_lightweight_marked_image_skips_non_detail_page(tmp_path, monkeyp
 
 
 def test_detail_ocr_buffer_accumulates_unique_detail_lines(monkeypatch):
-    from agent.graph import nodes
+    from agent.runtime.detail_runtime import update_detail_ocr_buffer
 
     monkeypatch.setenv("VISION_DETAIL_OCR_BUFFER_ENABLED", "1")
     markers = [
@@ -2237,13 +2438,13 @@ def test_detail_ocr_buffer_accumulates_unique_detail_lines(monkeypatch):
         {"id": 5, "bbox": [100, 370, 180, 400], "text": "Swift"},
     ]
 
-    first = nodes._update_detail_ocr_buffer(
+    first = update_detail_ocr_buffer(
         {},
         markers,
         "https://www.wanted.co.kr/wd/1",
         "screen_a.png",
     )
-    second = nodes._update_detail_ocr_buffer(
+    second = update_detail_ocr_buffer(
         first,
         markers,
         "https://www.wanted.co.kr/wd/1",
@@ -2258,11 +2459,11 @@ def test_detail_ocr_buffer_accumulates_unique_detail_lines(monkeypatch):
 
 
 def test_detail_ocr_buffer_resets_for_another_card_on_same_url(monkeypatch):
-    from agent.graph import nodes
+    from agent.runtime.detail_runtime import update_detail_ocr_buffer
 
     monkeypatch.setenv("VISION_DETAIL_OCR_BUFFER_ENABLED", "1")
     url = "https://www.rocketpunch.com/jobs"
-    first = nodes._update_detail_ocr_buffer(
+    first = update_detail_ocr_buffer(
         {},
         [{"id": 1, "bbox": [100, 220, 260, 250], "text": "첫 번째 공고 업무"}],
         url,
@@ -2270,7 +2471,7 @@ def test_detail_ocr_buffer_resets_for_another_card_on_same_url(monkeypatch):
         page_role="side_panel_detail",
         detail_key="card-a",
     )
-    second = nodes._update_detail_ocr_buffer(
+    second = update_detail_ocr_buffer(
         first,
         [{"id": 2, "bbox": [100, 220, 260, 250], "text": "두 번째 공고 업무"}],
         url,
@@ -2285,7 +2486,6 @@ def test_detail_ocr_buffer_resets_for_another_card_on_same_url(monkeypatch):
 
 
 def test_detail_ocr_buffer_context_guides_finish_detail_reading(monkeypatch):
-    from agent.graph import nodes
 
     monkeypatch.setenv("VISION_DETAIL_OCR_BUFFER_ENABLED", "1")
     state = {
@@ -2300,158 +2500,17 @@ def test_detail_ocr_buffer_context_guides_finish_detail_reading(monkeypatch):
         }
     }
 
-    context = nodes._compact_detail_ocr_buffer_context(state, "https://www.wanted.co.kr/wd/1")
+    context = worker_reasoning._compact_detail_ocr_buffer_context(state, "https://www.wanted.co.kr/wd/1")
 
     assert "상세 OCR 누적 상태" in context
     assert "finish_detail_reading" in context
     assert "중간 DB 추출" in context
 
 
-def test_detail_page_policy_scrolls_until_reading_limit(monkeypatch):
-    from agent.graph import nodes
-
-    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
-    monkeypatch.setenv("VISION_DETAIL_POLICY_MIN_SCREENS", "3")
-    monkeypatch.setenv("VISION_DETAIL_POLICY_MAX_SCREENS", "4")
-    buffer = {
-        "url": "https://www.wanted.co.kr/wd/1",
-        "lines": [{"text": "주요업무 iOS 개발"}],
-        "stats": {
-            "screen_count": 2,
-            "added_lines_last_screen": 12,
-            "duplicate_lines_last_screen": 0,
-        },
-    }
-
-    msg, trace = nodes._detail_page_policy_message(
-        "https://www.wanted.co.kr/wd/1",
-        [{"id": 1, "bbox": [100, 200, 200, 230], "text": "주요업무"}],
-        buffer,
-    )
-
-    assert trace["policy"] == "detail_scroll"
-    assert msg.tool_calls[0]["name"] == "scroll"
-    assert msg.tool_calls[0]["args"]["_transition_source"] == "page_policy"
-
-
-def test_detail_page_policy_does_not_click_unrelated_company_more_button(monkeypatch):
-    from agent.graph import nodes
-
-    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
-    url = "https://www.jobkorea.co.kr/Recruit/GI_Read/49450447"
-    buffer = {
-        "url": url,
-        "lines": [{"text": "자격요건 Python"}],
-        "stats": {
-            "screen_count": 3,
-            "added_lines_last_screen": 12,
-            "duplicate_lines_last_screen": 0,
-        },
-    }
-
-    msg, trace = nodes._detail_page_policy_message(
-        url,
-        [{"id": 83, "bbox": [100, 700, 280, 735], "text": "기업정보 더보기"}],
-        buffer,
-        page_role="job_detail",
-    )
-
-    assert trace["policy"] == "detail_scroll"
-    assert msg.tool_calls[0]["name"] == "scroll"
-
-
-def test_detail_page_policy_attempts_declared_reveal_only_once(monkeypatch):
-    from agent.graph import nodes
-
-    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
-    url = "https://www.wanted.co.kr/wd/1"
-    buffer = {
-        "url": url,
-        "lines": [{"text": "자격요건 Swift"}],
-        "stats": {
-            "screen_count": 2,
-            "added_lines_last_screen": 12,
-            "duplicate_lines_last_screen": 0,
-        },
-    }
-    markers = [{"id": 30, "bbox": [100, 700, 290, 735], "text": "상세 정보 더 보기"}]
-
-    first_msg, first_trace = nodes._detail_page_policy_message(
-        url,
-        markers,
-        buffer,
-        page_role="job_detail",
-    )
-    second_msg, second_trace = nodes._detail_page_policy_message(
-        url,
-        markers,
-        buffer,
-        page_role="job_detail",
-    )
-
-    assert first_trace["policy"] == "detail_reveal"
-    assert first_msg.tool_calls[0]["name"] == "click_marker"
-    assert second_trace["policy"] == "detail_scroll"
-    assert second_msg.tool_calls[0]["name"] == "scroll"
-
-
-def test_detail_page_policy_requires_exact_declared_reveal_label(monkeypatch):
-    from agent.graph import nodes
-
-    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
-    url = "https://www.wanted.co.kr/wd/1"
-    buffer = {
-        "url": url,
-        "lines": [{"text": "자격요건 Swift"}],
-        "stats": {
-            "screen_count": 2,
-            "added_lines_last_screen": 12,
-            "duplicate_lines_last_screen": 0,
-        },
-    }
-
-    msg, trace = nodes._detail_page_policy_message(
-        url,
-        [{"id": 30, "bbox": [100, 700, 330, 735], "text": "기업 상세 정보 더 보기"}],
-        buffer,
-        page_role="job_detail",
-    )
-
-    assert trace["policy"] == "detail_scroll"
-    assert msg.tool_calls[0]["name"] == "scroll"
-
-
-def test_detail_page_policy_finishes_at_reading_limit(monkeypatch):
-    from agent.graph import nodes
-
-    monkeypatch.setenv("VISION_DETAIL_PAGE_POLICY_ENABLED", "1")
-    monkeypatch.setenv("VISION_DETAIL_POLICY_MAX_SCREENS", "4")
-    buffer = {
-        "url": "https://www.wanted.co.kr/wd/1",
-        "lines": [{"text": "자격요건 Swift"} for _ in range(100)],
-        "stats": {
-            "screen_count": 4,
-            "added_lines_last_screen": 20,
-            "duplicate_lines_last_screen": 10,
-        },
-    }
-
-    msg, trace = nodes._detail_page_policy_message(
-        "https://www.wanted.co.kr/wd/1",
-        [{"id": 1, "bbox": [100, 200, 200, 230], "text": "자격요건"}],
-        buffer,
-    )
-
-    assert trace["policy"] == "detail_finish"
-    assert msg.tool_calls[0]["name"] == "finish_detail_reading"
-    assert msg.tool_calls[0]["args"]["detail_complete"] is True
-
-
 def test_finish_detail_reading_merges_buffer_extraction_and_clears_buffer(monkeypatch):
-    from agent.graph import nodes
 
     monkeypatch.setattr(
-        nodes,
+        worker_execution,
         "_extract_job_from_detail_ocr_buffer",
         lambda state, current_url: {
             "company_name": "보이저엑스",
@@ -2461,12 +2520,10 @@ def test_finish_detail_reading_merges_buffer_extraction_and_clears_buffer(monkey
         },
     )
 
-    result, current_jd, plan, step = nodes._dispatch_state(
+    result, current_jd = worker_execution._dispatch_state(
         "finish_detail_reading",
         {"page_role": "job_detail", "detail_complete": True},
         {},
-        [],
-        0,
         current_url="https://www.wanted.co.kr/wd/1",
         state={
             "detail_ocr_buffer": {
@@ -2479,8 +2536,74 @@ def test_finish_detail_reading_merges_buffer_extraction_and_clears_buffer(monkey
     assert result["status"] == "success"
     assert result["_detail_ocr_buffer"] == {}
     assert current_jd["공고목록"][0]["position"] == "iOS 개발자"
-    assert plan == []
-    assert step == 0
+
+
+def test_finish_detail_reading_keeps_buffer_when_actual_job_content_is_missing(monkeypatch):
+
+    url = "https://example.com/jobs/intermediary"
+    buffer = {
+        "url": url,
+        "lines": [
+            {"text": "중계회사"},
+            {"text": "백엔드 개발자"},
+            {"text": "원문 공고로 이동"},
+        ],
+    }
+    monkeypatch.setattr(
+        worker_execution,
+        "_extract_job_from_detail_ocr_buffer",
+        lambda _state, current_url: {
+            "company_name": "중계회사",
+            "position": "백엔드 개발자",
+            "url": current_url,
+        },
+    )
+
+    result, current_jd = worker_execution._dispatch_state(
+        "finish_detail_reading",
+        {"page_role": "job_detail", "detail_complete": True},
+        {},
+        current_url=url,
+        state={"detail_ocr_buffer": buffer},
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "detail_content_incomplete"
+    assert result["_detail_ocr_buffer"] == buffer
+    assert result["_detail_followup_required"]["url"] == url
+    assert current_jd == {}
+
+
+def test_detail_followup_routes_to_reasoning_before_reflex():
+    from agent.graph.workflow import route_after_selection
+
+    result = route_after_selection(
+        {
+            "detail_followup_required": {
+                "url": "https://example.com/jobs/intermediary",
+                "reason": "detail_content_incomplete",
+            }
+        }
+    )
+
+    assert result == "reasoning"
+
+
+def test_detail_followup_waits_for_required_ocr_before_reasoning():
+    from agent.graph.workflow import route_after_selection
+
+    result = route_after_selection(
+        {
+            "ocr_complete": False,
+            "ocr_required": True,
+            "detail_followup_required": {
+                "url": "https://example.com/jobs/intermediary",
+                "reason": "detail_content_incomplete",
+            },
+        }
+    )
+
+    assert result == "ocr"
 
 
 def test_marker_ordinal_ignores_browser_chrome_and_uses_region():
@@ -2525,7 +2648,6 @@ def test_record_ui_step_preserves_llm_selected_card_title():
 
 
 def test_feedback_episode_records_parameter_candidate_and_observation():
-    from langchain_core.messages import AIMessage
     from agent.recipe.feedback import record_action_episode
 
     episodes = []
@@ -2544,7 +2666,7 @@ def test_feedback_episode_records_parameter_candidate_and_observation():
     record_action_episode(
         episodes,
         state,
-        AIMessage(content="검색어를 입력한다"),
+        _action_request(content="검색어를 입력한다"),
         "type_in_marker",
         {
             "marker_id": 1,
@@ -2572,7 +2694,6 @@ def test_feedback_episode_records_parameter_candidate_and_observation():
 
 
 def test_feedback_episode_does_not_infer_site_slot_from_open_url():
-    from langchain_core.messages import AIMessage
     from agent.recipe.feedback import record_action_episode
 
     episodes = []
@@ -2585,7 +2706,7 @@ def test_feedback_episode_does_not_infer_site_slot_from_open_url():
     record_action_episode(
         episodes,
         state,
-        AIMessage(content="open the site home page"),
+        _action_request(content="open the site home page"),
         "open_browser",
         {
             "url": "https://www.wanted.co.kr",
@@ -2615,7 +2736,11 @@ def _sample_feedback_episode(seq=0):
             "parameter_candidates": [{"slot_candidate": "query", "value": "AI 엔지니어", "confidence": 0.45}],
         },
         "observation": {
-            "before": {"state_key": "state-home", "url": "https://www.wanted.co.kr"},
+            "before": {
+                "state_key": "state-home",
+                "capture_id": "worker-run:attempt:00:capture:0001",
+                "url": "https://www.wanted.co.kr",
+            },
             "after": {"screen_changed": True},
             "result": {"status": "success", "action": "type_in_marker"},
         },
@@ -2627,18 +2752,43 @@ def test_feedback_store_commits_and_reads_recent(tmp_path):
     from agent.recipe.feedback_store import FeedbackStore
 
     store = FeedbackStore(tmp_path / "feedback.db")
-    saved = store.commit_episodes([_sample_feedback_episode()], run_id="run-1", run_status="finished", source="test")
+    saved = store.commit_episodes(
+        [_sample_feedback_episode()],
+        run_id="run-1",
+        run_status="finished",
+        source="test",
+        review_attempt=0,
+    )
+    retry_saved = store.commit_episodes(
+        [_sample_feedback_episode()],
+        run_id="run-1",
+        run_status="finished",
+        source="test",
+        review_attempt=1,
+    )
 
     assert saved == 1
+    assert retry_saved == 1
     rows = store.list_recent(limit=5)
-    assert len(rows) == 1
+    assert len(rows) == 2
     assert rows[0]["run_id"] == "run-1"
+    assert {row["review_attempt"] for row in rows} == {0, 1}
+    assert {
+        row["episode_id"] for row in rows
+    } == {
+        "run-1:attempt:00:action:0000",
+        "run-1:attempt:01:action:0000",
+    }
     assert rows[0]["run_status"] == "finished"
     assert rows[0]["site"] == "wanted.co.kr"
     assert rows[0]["action"] == "type_in_marker"
     assert rows[0]["feedback_label"] == "partial"
     assert "page_state_key" not in rows[0]["payload"]
     assert "state_key" not in rows[0]["payload"]["observation"]["before"]
+    assert (
+        rows[0]["payload"]["observation"]["before"]["capture_id"]
+        == "worker-run:attempt:00:capture:0001"
+    )
     assert rows[0]["payload"]["proposal"]["parameter_candidates"][0]["slot_candidate"] == "query"
 
 
@@ -2660,6 +2810,7 @@ def test_database_initializes_feedback_episode_table(tmp_path):
     assert "worker_submissions" in tables
     assert "recipe_candidates" in tables
     assert "episode_id" in columns
+    assert "review_attempt" in columns
     assert "feedback_label" in columns
     assert "submission_id" in submission_columns
     assert "review_decision" in submission_columns
@@ -2671,6 +2822,47 @@ def test_database_initializes_feedback_episode_table(tmp_path):
     assert "next_review_at" in candidate_columns
     assert "review_error" in candidate_columns
     assert "metadata_json" in recipe_columns
+
+
+def test_database_migrates_feedback_episode_review_attempt(tmp_path):
+    from shared.db.database import Database
+
+    db_path = tmp_path / "legacy-feedback.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE feedback_episodes (
+            episode_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            run_status TEXT,
+            source TEXT,
+            site TEXT,
+            goal TEXT,
+            action TEXT,
+            feedback_label TEXT,
+            feedback_reason TEXT,
+            feedback_confidence REAL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    Database(db_path)
+
+    conn = sqlite3.connect(db_path)
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(feedback_episodes)")
+    }
+    indexes = {
+        row[1] for row in conn.execute("PRAGMA index_list(feedback_episodes)")
+    }
+    conn.close()
+
+    assert "review_attempt" in columns
+    assert "idx_feedback_run_attempt" in indexes
 
 
 def test_database_migrates_existing_recipe_candidate_review_queue(tmp_path):
@@ -2722,21 +2914,36 @@ def test_realtime_scraping_commits_feedback_episodes_with_run_status(monkeypatch
     seen = {}
 
     class FakeStore:
-        def commit_episodes(self, episodes, run_id=None, run_status="", source=""):
+        def commit_episodes(
+            self,
+            episodes,
+            run_id=None,
+            run_status="",
+            source="",
+            review_attempt=0,
+        ):
             seen["episodes"] = episodes
             seen["run_id"] = run_id
             seen["run_status"] = run_status
             seen["source"] = source
+            seen["review_attempt"] = review_attempt
             return len(episodes)
 
     monkeypatch.setattr("agent.recipe.feedback_store.FeedbackStore", lambda: FakeStore())
 
-    saved = _commit_feedback_episodes({"feedback_episodes": [_sample_feedback_episode()]}, True, False, run_id="worker-run-1")
+    saved = _commit_feedback_episodes(
+        {"feedback_episodes": [_sample_feedback_episode()]},
+        True,
+        False,
+        run_id="worker-run-1",
+        review_attempt=2,
+    )
 
     assert saved == 1
     assert seen["run_id"] == "worker-run-1"
     assert seen["run_status"] == "recursion_limit"
     assert seen["source"] == "realtime_scraping"
+    assert seen["review_attempt"] == 2
 
 
 def test_worker_submission_shape_review_requests_revision():
@@ -2760,6 +2967,38 @@ def test_worker_submission_shape_review_requests_revision():
     assert review["decision"] == "revise"
     assert review["recipe_candidate"] is False
     assert "extracted_summary" in review["feedback_to_worker"]
+
+
+def test_worker_submission_accepts_existing_database_job_evidence(monkeypatch):
+    from agent.recipe.reviewer import build_worker_submission, review_worker_submission
+
+    monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "off")
+    monkeypatch.setenv("VISION_WORKER_REVIEW_MODE", "shape")
+    submission = build_worker_submission(
+        {
+            "goal": "collect two iOS jobs",
+            "current_url": "https://www.wanted.co.kr/wd/2",
+            "is_finished": True,
+            "extracted_jd": {},
+            "result_card_queue": [
+                {"queue_id": "card-1", "status": "skipped", "job_id": 7},
+                {"queue_id": "card-2", "status": "skipped", "job_id": 8},
+            ],
+            "recorded_steps": [],
+            "feedback_episodes": [],
+        },
+        site="wanted",
+        keyword="iOS 개발자",
+        run_status="finished",
+        target_count=2,
+    )
+
+    review = review_worker_submission(submission)
+
+    assert submission["observed_job_ids"] == [7, 8]
+    assert submission["collected_count"] == 0
+    assert review["decision"] == "accept"
+    assert review["recipe_candidate"] is False
 
 
 def test_worker_submission_review_accepts_structured_data(monkeypatch):
@@ -2942,18 +3181,17 @@ def test_worker_submission_report_summary_uses_llm(monkeypatch):
                 ]
             )
 
-    class FakeLLM:
-        def __init__(self, model="", temperature=0.0):
-            self.model = model
-            self.temperature = temperature
-
-        def with_structured_output(self, schema):
-            assert schema is reviewer.ReportJobSummary
-            return FakeStructuredLLM()
+    def fake_structured_model(model, schema, **_kwargs):
+        assert model == "fake-summary-model"
+        assert schema is reviewer.ReportJobSummary
+        return FakeStructuredLLM()
 
     monkeypatch.setenv("VISION_WORKER_SUMMARY_MODE", "llm")
     monkeypatch.setenv("VISION_WORKER_SUMMARY_MODEL", "fake-summary-model")
-    monkeypatch.setattr("langchain_google_genai.ChatGoogleGenerativeAI", FakeLLM)
+    monkeypatch.setattr(
+        "agent.application.model_clients.get_structured_google_model",
+        fake_structured_model,
+    )
 
     submission = build_worker_submission(
         {
@@ -3035,6 +3273,7 @@ def test_recipe_candidate_store_commits_reviewed_candidate(tmp_path):
         "recorded_steps": [
             {
                 "seq": 0,
+                "decision_capture_id": "worker-run-1:attempt:00:capture:0001",
                 "state_key": "state-a",
                 "screen_signature": {"phash": "1" * 16},
                 "action": "click_marker",
@@ -3044,6 +3283,8 @@ def test_recipe_candidate_store_commits_reviewed_candidate(tmp_path):
         "transition_observations": [
             {
                 "action_seq": 0,
+                "from_capture_id": "worker-run-1:attempt:00:capture:0001",
+                "to_capture_id": "worker-run-1:attempt:00:capture:0002",
                 "status": "unknown",
                 "marker_texts": ["AI Engineer", "주요업무"],
             }
@@ -3061,10 +3302,18 @@ def test_recipe_candidate_store_commits_reviewed_candidate(tmp_path):
     assert rows[0]["site"] == "wanted"
     assert "state_key" not in rows[0]["steps"][0]
     assert "screen_signature" not in rows[0]["steps"][0]
+    assert (
+        rows[0]["steps"][0]["decision_capture_id"]
+        == "worker-run-1:attempt:00:capture:0001"
+    )
     assert "reflex_state_key" not in rows[0]["payload"]
     assert "screen_signature" not in rows[0]["payload"]
     assert "state_key" not in rows[0]["payload"]["recorded_steps"][0]
     assert "screen_signature" not in rows[0]["payload"]["recorded_steps"][0]
+    assert (
+        rows[0]["payload"]["transition_observations"][0]["from_capture_id"]
+        == "worker-run-1:attempt:00:capture:0001"
+    )
     assert rows[0]["payload"]["keyword"] == "ai engineer"
     assert rows[0]["review"]["recipe_candidate"] is True
 
@@ -4030,7 +4279,7 @@ def test_card_queue_replay_accepts_close_current_tab_return():
 
     assert message is not None
     assert trace["hit"] is True
-    assert message.tool_calls[0]["args"]["queue_id"] == "card-2"
+    assert message.tool_calls[0].metadata["queue_id"] == "card-2"
     assert markers[0]["bbox"] == [160, 180, 400, 240]
 
 
@@ -4053,9 +4302,9 @@ def test_autonomous_tab_action_no_effect_is_detected_by_phash():
 
 
 def test_autonomous_no_effect_routes_directly_to_reasoning():
-    from agent.graph.workflow import route_after_perception
+    from agent.graph.workflow import route_after_selection
 
-    route = route_after_perception(
+    route = route_after_selection(
         {
             "transition_status": "unknown",
             "transition_source": "autonomous",

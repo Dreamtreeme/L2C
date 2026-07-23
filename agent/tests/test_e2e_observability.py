@@ -92,6 +92,22 @@ def test_failed_ocr_step_is_terminal_failure_stage():
     assert result["terminal_failure_code"] == "ocr_timeout"
 
 
+def test_replay_hits_use_graph_action_sources_only():
+    result = build_e2e_observability(
+        _summary(
+            steps=[
+                {"component": "graph:reflex", "action_source": "reflex"},
+                {"component": "graph:selection", "action_source": "card_queue"},
+                {"component": "graph:reflex", "hit": True},
+                {"component": "graph:perception", "queue_replay_hit": True},
+            ]
+        )
+    )
+
+    assert result["reflex_hits"] == 1
+    assert result["queue_replay_hits"] == 1
+
+
 def test_langsmith_feedback_contains_numeric_and_category_values():
     observability = build_e2e_observability(_summary())
     feedback = build_langsmith_feedback(observability)

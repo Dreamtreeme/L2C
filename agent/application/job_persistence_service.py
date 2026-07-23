@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any
 
+from agent.config import get_settings
 from agent.runtime.job_collection import job_list_value
 from agent.utils.model_dump import dump_model
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def normalization_mode() -> str:
-    mode = os.getenv("VISION_JD_NORMALIZATION_MODE", "deterministic").strip().lower()
+    mode = get_settings().recipe.jd_normalization_mode.strip().lower()
     return mode if mode in {"deterministic", "llm", "off"} else "deterministic"
 
 
@@ -34,10 +34,9 @@ def normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dic
         from agent.application.model_clients import get_structured_google_model
         from shared.schema.jd_schema import JobPosting
 
-        model_name = os.getenv(
-            "VISION_JD_NORMALIZATION_MODEL",
-            os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"),
-        )
+        from agent.application.model_policy import lightweight_model_name
+
+        model_name = lightweight_model_name("VISION_JD_NORMALIZATION_MODEL")
         llm = get_structured_google_model(model_name, JobPosting, temperature=0.0)
         messages = [
             SystemMessage(
@@ -59,7 +58,12 @@ def normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dic
         from agent.application.run_context import invoke_with_metrics
 
         normalized = dump_model(
-            invoke_with_metrics(llm, messages, "job_normalization")
+            invoke_with_metrics(
+                llm,
+                messages,
+                "job_normalization",
+                stream=True,
+            )
         )
         raw_url = job.get("url") or job.get("URL") or job.get("공고url")
         if raw_url and not normalized.get("url"):
@@ -77,10 +81,17 @@ def normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dic
 def _job_validation_issues(job_posting: Any, collection_intent: dict[str, Any]) -> list[str]:
     """저장에 필요한 사실과 요청 조건을 검증하되 의미 유사도는 추측하지 않는다."""
 
+    from agent.runtime.job_content import has_meaningful_job_content
+
     issues: list[str] = []
     for field in ("url", "company_name", "position"):
         if not str(getattr(job_posting, field, None) or "").strip():
             issues.append(f"required_field_missing:{field}")
+    if (
+        collection_intent.get("require_job_content") is True
+        and not has_meaningful_job_content(job_posting)
+    ):
+        issues.append("required_content_missing:main_tasks_or_requirements")
 
     filters = collection_intent.get("filters") if isinstance(collection_intent, dict) else {}
     filters = filters if isinstance(filters, dict) else {}
@@ -120,6 +131,8 @@ def persist_collected_data_with_report(
 
     from agent.utils.preprocessor import Preprocessor
     from agent.application.search_taxonomy_service import SearchTaxonomyService
+    from agent.runtime.job_identity import url_with_source_card_key
+    from agent.runtime.site_context import looks_like_job_detail_url
     from shared.config import DB_PATH
     from shared.db.database import Database
 
@@ -156,6 +169,13 @@ def persist_collected_data_with_report(
             continue
 
         try:
+            card_key = str(
+                normalized_job.get("_source_card_key")
+                or job.get("_source_card_key")
+                or ""
+            ).strip()
+            if card_key and not looks_like_job_detail_url(str(url)):
+                url = url_with_source_card_key(str(url), card_key)
             normalized_job["url"] = str(url).strip()
             raw_ocr_text = str(normalized_job.get("raw_ocr_text") or "").strip() or None
             job_posting = Preprocessor.process_raw_jd(

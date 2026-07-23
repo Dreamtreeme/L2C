@@ -1,3 +1,14 @@
+---
+title: "트러블슈팅 및 교훈"
+type: retrospective
+area: project
+status: historical
+updated: 2026-07-23
+tags:
+  - l2c
+  - docs/history
+---
+
 # 트러블슈팅 및 교훈 (Lessons Learned & Pitfalls)
 
 본 문서는 L2C 프로젝트 개발 과정에서 직면했던 기술적 문제들과 이를 해결하며 얻은 교훈, 그리고 향후 유사 에이전트 시스템 설계 시 주의해야 할 함정(Pitfalls)들을 정리한 문서입니다.
@@ -49,14 +60,15 @@
 ## 4. 무거운 런타임 초기화와 가벼운 QA 경로의 결합 문제
 
 ### 🚨 문제 상황
-SQLite 질의와 웹 Q&A 서버는 비전 수집을 수행하지 않는데도 `agent.graph.nodes` import 시점에 `PerceptionEngine`과 `ActionTools`가 즉시 생성되었습니다. 이 때문에 단순 서버 기동이나 테스트도 YOLO 모델, mss 화면 캡처, GUI 자동화 의존성에 영향을 받았습니다.
+SQLite 질의와 웹 Q&A 서버는 비전 수집을 수행하지 않는데도 당시 단일 작업자 노드 모듈 import 시점에 `PerceptionEngine`과 `ActionTools`가 즉시 생성되었습니다. 이 때문에 단순 서버 기동이나 테스트도 YOLO 모델, mss 화면 캡처, GUI 자동화 의존성에 영향을 받았습니다.
 
 ### 💡 원인 분석
 브라우저 제어 노드와 QA 지휘자 노드가 같은 모듈에 있고, 모듈 전역 싱글톤으로 비전 엔진과 LLM 도구 바인딩을 초기화한 것이 원인이었습니다. 전역 싱글톤은 반복 호출 성능에는 유리하지만, import side effect가 커져 실행 경로 간 격리가 무너집니다.
 
 ### 🛠️ 해결 및 교훈
-*   `nodes.py`의 비전 엔진, 물리 조작 도구, Gemini 도구 바인딩을 `_get_*()` 헬퍼 기반 lazy initialization으로 변경했습니다.
-*   QA 서버는 필요한 순간에 QA LLM만 초기화하고, 실시간 수집 도구가 호출될 때만 비전 그래프가 비전 런타임을 준비합니다.
+*   초기 대응은 비전 엔진과 물리 조작 도구를 `_get_*()` 헬퍼로 지연 초기화하는 것이었습니다.
+*   현재는 `ApplicationRuntime`과 `VisionWorkerRuntime`이 자원 수명을 소유하고, 작업자 코드는 책임별 `worker_*` 모듈로 분리되었습니다.
+*   QA 서버는 필요한 순간에 QA LLM만 초기화하고, 실시간 수집 도구가 호출될 때만 비전 런타임을 준비합니다.
 *   **교훈**: 에이전트 시스템은 "평상시 질의 경로"와 "무거운 복구/수집 경로"를 런타임 레벨에서도 분리해야 합니다. 성능 최적화용 싱글톤은 import-time singleton이 아니라 demand-time singleton으로 두는 편이 안전합니다.
 
 ---

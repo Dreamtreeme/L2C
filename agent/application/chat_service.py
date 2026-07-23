@@ -41,6 +41,15 @@ class ChatService:
             self._investigation_workflow = InvestigationWorkflow(db_path=config.DB_PATH)
         return self._investigation_workflow
 
+    def close(self) -> None:
+        """서비스가 소유한 조사 체크포인트 연결을 닫는다."""
+
+        workflow = self._investigation_workflow
+        self._investigation_workflow = None
+        close = getattr(workflow, "close", None)
+        if callable(close):
+            close()
+
     @staticmethod
     def _result(
         answer: str,
@@ -61,7 +70,6 @@ class ChatService:
             "last_action_result": answer,
             "is_finished": status in {RunStatus.COMPLETED, RunStatus.FAILED},
             "duration_sec": duration,
-            "step_durations": [{"node": "investigation_workflow", "duration": duration}],
             "metrics": metrics,
             "llm_usage": metrics.get("llm", {}),
         }
@@ -92,7 +100,11 @@ class ChatService:
             metadata={
                 "conversation_id": conversation_id,
                 "investigation_id": investigation_id,
-                "resume_mode": bool(investigation_id and clarification_answer),
+                "resume_mode": (
+                    "checkpoint_resume"
+                    if investigation_id and clarification_answer
+                    else ""
+                ),
             },
             tags=["chat-request"],
         ) as (context, _created):
@@ -182,14 +194,7 @@ class ChatService:
         )
 
 
-_chat_service: ChatService | None = None
-
-
-def get_chat_service() -> ChatService:
-    global _chat_service
-    if _chat_service is None:
-        _chat_service = ChatService()
-    return _chat_service
-
-
-__all__ = ["ChatService", "get_chat_service", "validate_citations"]
+__all__ = [
+    "ChatService",
+    "validate_citations",
+]

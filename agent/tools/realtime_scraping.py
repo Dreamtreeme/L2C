@@ -1,10 +1,12 @@
 import json
 import logging
-import os
+from functools import partial
 from typing import Any
 from urllib.parse import quote_plus
 
 from langchain_core.tools import tool
+from agent.config import get_settings
+from agent.sites.profile import SiteProfile
 from agent.application.job_persistence_service import (
     normalize_job_for_persistence as _normalize_job_for_persistence,
     persist_collected_data_with_report as _persist_collected_data_with_report,
@@ -14,7 +16,6 @@ from agent.application.worker_execution_service import (
     execute_worker_graph as _execute_worker_graph,
     prepare_worker_start_screen as _prepare_worker_start_screen,
     run_graph_with_last_state as _run_graph_with_last_state,
-    worker_execution_session,
     worker_preopen_enabled as _worker_preopen_enabled,
     worker_start_url as _worker_start_url,
 )
@@ -29,24 +30,7 @@ from shared.schema.collection_intent import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_RECURSION_LIMIT = 60
-
-
 SearchIntent = CollectionIntent
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
 
 
 def _normalize_target_count(value: Any) -> int:
@@ -59,7 +43,7 @@ def _normalize_target_count(value: Any) -> int:
 
 
 def _suggested_recursion_limit(current_limit: int) -> int:
-    increment = max(1, _env_int("VISION_AGENT_RECURSION_LIMIT_INCREMENT", current_limit))
+    increment = get_settings().vision.recursion_limit_increment
     return current_limit + increment
 
 
@@ -69,32 +53,29 @@ def _default_site_slug() -> str:
     sites = list_supported_sites()
     if not sites:
         raise ValueError("No enabled site profiles are configured")
-    return sites[0]["slug"]
+    return sites[0].slug
 
 
-def _load_collection_profile(site: str | None) -> dict:
+def _load_collection_profile(site: str | None) -> SiteProfile:
     from agent.sites import load_site_profile
 
     return load_site_profile(site or _default_site_slug())
 
 
 def _join_manual_items(items) -> str:
-    if not isinstance(items, list):
+    if not isinstance(items, (list, tuple)):
         return ""
     return "; ".join(str(item) for item in items if item)
 
 
-def _profile_site_terms(profile: dict) -> list[str]:
-    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
-    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
+def _profile_site_terms(profile: SiteProfile) -> list[str]:
     terms = [
-        entry.get("slug"),
-        entry.get("display_name"),
-        manual.get("site"),
-        manual.get("display_name"),
+        profile.slug,
+        profile.display_name,
     ]
-    terms.extend(entry.get("domains", []) or [])
-    base_url = entry.get("base_url") or manual.get("base_url")
+    terms.extend(profile.aliases)
+    terms.extend(profile.domains)
+    base_url = profile.base_url
     if base_url:
         terms.append(str(base_url).replace("https://", "").replace("http://", "").strip("/"))
     cleaned = {str(term).strip() for term in terms if str(term or "").strip()}
@@ -102,11 +83,11 @@ def _profile_site_terms(profile: dict) -> list[str]:
 
 
 def _search_intent_mode() -> str:
-    mode = os.getenv("VISION_SEARCH_INTENT_MODE", "llm").strip().lower()
+    mode = get_settings().vision.search_intent_mode.strip().lower()
     return mode if mode in {"llm", "off"} else "llm"
 
 
-def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
+def _extract_search_intent(raw_query: str, profile: SiteProfile) -> dict[str, Any]:
     """사용자 요청에서 작업자에게 전달할 전체 수집 조건을 추출한다."""
     original = str(raw_query or "").strip()
     if not original:
@@ -124,9 +105,9 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
         from agent.application.model_clients import get_structured_google_model
         from shared.config import BASE_DIR  # noqa: F401 - .env 로드를 보장한다.
 
-        entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
-        manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-        model_name = os.getenv("VISION_SEARCH_INTENT_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
+        from agent.application.model_policy import lightweight_model_name
+
+        model_name = lightweight_model_name("VISION_SEARCH_INTENT_MODEL")
         llm = get_structured_google_model(model_name, CollectionIntent, temperature=0.0)
         messages = [
             SystemMessage(
@@ -145,9 +126,9 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
                 content=json.dumps(
                     {
                         "user_request": original,
-                        "site": entry.get("slug") or manual.get("site"),
+                        "site": profile.slug,
                         "site_terms": _profile_site_terms(profile),
-                        "default_query_target": manual.get("default_query_target", ""),
+                        "default_query_target": profile.default_query_target,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -156,8 +137,15 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
         ]
         from agent.application.run_context import invoke_with_metrics
 
-        data = dump_model(invoke_with_metrics(llm, messages, "search_intent"))
-        entry_site = str(entry.get("slug") or manual.get("site") or "")
+        data = dump_model(
+            invoke_with_metrics(
+                llm,
+                messages,
+                "search_intent",
+                stream=True,
+            )
+        )
+        entry_site = profile.slug
         intent = dump_model(
             normalize_collection_intent(
                 data,
@@ -177,12 +165,11 @@ def _extract_search_intent(raw_query: str, profile: dict) -> dict[str, Any]:
         return intent
 
 
-def _build_direct_search_url(search_keyword: str, profile: dict) -> str:
-    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-    navigation = manual.get("navigation_policy", {}) if isinstance(manual, dict) else {}
-    if navigation.get("allow_direct_search_url") is False:
+def _build_direct_search_url(search_keyword: str, profile: SiteProfile) -> str:
+    navigation = profile.navigation_policy
+    if not navigation.allow_direct_search_url:
         return ""
-    template = str(navigation.get("search_url_template") or "").strip()
+    template = navigation.search_url_template.strip()
     if not search_keyword or not template:
         return ""
     encoded = quote_plus(search_keyword)
@@ -233,23 +220,21 @@ def _task_context_section(task_context: dict[str, Any] | None) -> str:
 
 def _build_site_goal(
     search_keyword: str,
-    profile: dict,
+    profile: SiteProfile,
     direct_search_url: str = "",
     target_count: int = 0,
     task_context: dict[str, Any] | None = None,
     collection_intent: dict[str, Any] | None = None,
 ) -> str:
-    entry = profile["entry"]
-    manual = profile["manual"]
-    site_name = entry.get("display_name") or entry.get("slug")
-    base_url = entry.get("base_url") or manual.get("base_url")
-    required_fields = _join_manual_items(manual.get("collection_policy", {}).get("required_fields", []))
-    safe_reflex = _join_manual_items(manual.get("reflex_policy", {}).get("safe_actions", []))
-    unsafe_reflex = _join_manual_items(manual.get("reflex_policy", {}).get("unsafe_actions", []))
-    site_skill = profile.get("skill", "").strip()
-    navigation = manual.get("navigation_policy", {}) if isinstance(manual, dict) else {}
-    start_url = str(navigation.get("start_url") or base_url or "").strip()
-    search_entry = str(navigation.get("search_entry") or "").strip()
+    site_name = profile.display_name or profile.slug
+    base_url = profile.base_url
+    required_fields = _join_manual_items(profile.collection_policy.required_fields)
+    safe_reflex = _join_manual_items(profile.reflex_policy.safe_actions)
+    unsafe_reflex = _join_manual_items(profile.reflex_policy.unsafe_actions)
+    site_skill = profile.guidance.strip()
+    navigation = profile.navigation_policy
+    start_url = str(navigation.start_url or base_url or "").strip()
+    search_entry = navigation.search_entry.strip()
     navigation_section = ""
     direct_search_section = ""
     if direct_search_url:
@@ -269,7 +254,7 @@ def _build_site_goal(
         )
     intent = normalize_collection_intent(
         collection_intent,
-        site=str(entry.get("slug") or ""),
+        site=profile.slug,
         search_keyword=search_keyword,
         target_count=target_count,
     )
@@ -327,7 +312,13 @@ def _build_site_goal(
 
 
 
-def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_finished: bool, run_id: str = "") -> int:
+def _commit_feedback_episodes(
+    final_state: dict,
+    hit_recursion_limit: bool,
+    is_finished: bool,
+    run_id: str = "",
+    review_attempt: int = 0,
+) -> int:
     """Persist feedback episodes for later Critic/Recipe Memory promotion. Best-effort."""
     episodes = list(final_state.get("feedback_episodes", []) or [])
     if not episodes:
@@ -341,6 +332,7 @@ def _commit_feedback_episodes(final_state: dict, hit_recursion_limit: bool, is_f
             run_id=run_id or None,
             run_status=run_status,
             source="realtime_scraping",
+            review_attempt=review_attempt,
         )
         logger.info(
             "[realtime_scraping] Feedback episodes committed: episodes=%s, saved=%s, status=%s",
@@ -364,10 +356,7 @@ def _worker_run_status(hit_recursion_limit: bool, is_finished: bool) -> str:
 
 
 def _worker_review_retries() -> int:
-    try:
-        return max(0, int(os.getenv("VISION_WORKER_REVIEW_RETRIES", "0")))
-    except ValueError:
-        return 0
+    return get_settings().recipe.worker_review_retries
 
 
 def needs_human_limit_approval(
@@ -377,7 +366,7 @@ def needs_human_limit_approval(
     persisted_count: int,
     target_count: int = 0,
 ) -> bool:
-    if not _env_bool("VISION_HITL_ON_RECURSION_LIMIT", True):
+    if not get_settings().vision.hitl_on_recursion_limit:
         return False
     persisted = int(persisted_count or 0)
     target = int(target_count or 0)
@@ -418,9 +407,6 @@ def build_limit_intermediate_report(
     summary = submission.get("extracted_summary") if isinstance(submission, dict) else {}
     if not isinstance(summary, dict):
         summary = {}
-    plan = list(final_state.get("plan", []) or [])
-    current_step = int(final_state.get("current_plan_step", 0) or 0)
-    remaining_plan = plan[current_step: current_step + 4] if plan else []
     suggested_limit = _suggested_recursion_limit(current_limit)
     target = int(target_count or submission.get("target_count") or worker_result.get("target_count") or 0)
     persisted = int(persisted_count or 0)
@@ -435,9 +421,6 @@ def build_limit_intermediate_report(
         "remaining_collection_count": max(0, target - persisted) if target > 0 else 0,
         "collection_complete": bool(target > 0 and persisted >= target),
         "current_url": str(summary.get("current_url") or final_state.get("current_url") or ""),
-        "current_plan_step": current_step,
-        "total_plan_steps": len(plan),
-        "remaining_plan_preview": [str(item) for item in remaining_plan],
         "jobs": _job_report_items(submission),
         "question": f"현재 recursion limit {current_limit}에 도달했습니다. limit을 {suggested_limit}로 늘려 계속 진행할까요?",
     }
@@ -466,10 +449,19 @@ def _append_review_feedback(goal: str, review_feedback: str | None) -> str:
     )
 
 
-def _initial_worker_state(goal: str) -> dict:
+def _initial_worker_state(
+    goal: str,
+    *,
+    run_id: str = "",
+    attempt_index: int = 0,
+) -> dict:
     from agent.graph.state_factory import create_worker_state
 
-    return create_worker_state(goal)
+    return create_worker_state(
+        goal,
+        worker_run_id=run_id,
+        worker_attempt_index=attempt_index,
+    )
 
 
 
@@ -485,14 +477,14 @@ def run_worker_once(
     run_id: str | None = None,
     task_context: dict[str, Any] | None = None,
     collection_intent: dict[str, Any] | None = None,
+    worker_runtime: Any = None,
 ) -> dict:
     """Run one child vision worker attempt and return an unreviewed submission payload."""
     from agent.recipe.reviewer import build_worker_submission, new_worker_run_id
 
     site_profile = _load_collection_profile(site)
-    site_entry = site_profile["entry"]
-    site_slug = site_entry.get("slug") or site or "unknown"
-    site_name = site_entry.get("display_name") or site_slug
+    site_slug = site_profile.slug or site or "unknown"
+    site_name = site_profile.display_name or site_slug
     run_id = run_id or new_worker_run_id()
     raw_search_keyword = search_keyword
     requested_target_count = _normalize_target_count(target_count)
@@ -537,7 +529,11 @@ def run_worker_once(
         ),
         review_feedback,
     )
-    initial_state = _initial_worker_state(goal)
+    initial_state = _initial_worker_state(
+        goal,
+        run_id=run_id,
+        attempt_index=review_attempt,
+    )
     initial_state["recipe_params"] = {
         "query": search_keyword,
         "keyword": search_keyword,
@@ -553,22 +549,33 @@ def run_worker_once(
         site_slug,
         review_attempt,
     )
-    recursion_limit = int(os.getenv("VISION_AGENT_RECURSION_LIMIT", str(DEFAULT_RECURSION_LIMIT)))
+    recursion_limit = get_settings().vision.recursion_limit
     final_state, hit_recursion_limit = _execute_worker_graph(
         initial_state,
         site_profile,
         recursion_limit,
-        prepare_screen=_prepare_worker_start_screen,
+        worker_runtime=worker_runtime,
+        prepare_screen=(
+            _prepare_worker_start_screen
+            if worker_runtime is None
+            else lambda state, profile: _prepare_worker_start_screen(
+                state,
+                profile,
+                worker_runtime=worker_runtime,
+            )
+        ),
         run_graph=_run_graph_with_last_state,
     )
-    from agent.application.run_context import record_graph_state_metrics
-
-    record_graph_state_metrics(final_state)
-
     extracted = final_state.get("extracted_jd", {}) or {}
     is_finished = bool(final_state.get("is_finished", False))
     run_status = _worker_run_status(hit_recursion_limit, is_finished)
-    feedback_saved = _commit_feedback_episodes(final_state, hit_recursion_limit, is_finished, run_id=run_id)
+    feedback_saved = _commit_feedback_episodes(
+        final_state,
+        hit_recursion_limit,
+        is_finished,
+        run_id=run_id,
+        review_attempt=review_attempt,
+    )
     submission = build_worker_submission(
         final_state,
         site=site_slug,
@@ -582,15 +589,7 @@ def run_worker_once(
         target_count=target_count,
         task_category=task_category,
     )
-    observed_job_ids = sorted(
-        {
-            int(item["job_id"])
-            for item in (final_state.get("result_card_queue", []) or [])
-            if isinstance(item, dict)
-            and item.get("status") == "skipped"
-            and item.get("job_id") is not None
-        }
-    )
+    observed_job_ids = list(submission.get("observed_job_ids") or [])
 
     return {
         "submission": submission,
@@ -638,7 +637,7 @@ def commit_worker_review(
 
 
 def _recipe_learning_mode() -> str:
-    mode = os.getenv("VISION_RECIPE_LEARNING_MODE", "record").strip().lower()
+    mode = get_settings().recipe.learning_mode.strip().lower()
     # worker 실행 중에는 후보 저장까지만 한다. review/promote는 별도 후처리 도구에서 수행한다.
     return mode if mode in {"off", "record"} else "record"
 
@@ -793,6 +792,7 @@ def _run_realtime_scraping(
     purpose: str = "collect",
     analysis_goal: str = "",
     original_query: str = "",
+    worker_runtime: Any = None,
 ) -> str:
     """
     Run the child vision worker, review its structured submission, and persist only accepted data.
@@ -822,14 +822,17 @@ def _run_realtime_scraping(
         normalize_target_count=_normalize_target_count,
         normalize_task_category=normalize_task_category,
         review_retries=_worker_review_retries,
-        run_worker=run_worker_once,
+        run_worker=partial(run_worker_once, worker_runtime=worker_runtime),
         review_worker=commit_worker_review,
         persist_result=persist_accepted_worker_result,
         render_review_feedback=render_review_feedback,
         needs_approval=needs_human_limit_approval,
         build_intermediate_report=build_limit_intermediate_report,
         report_requires_more_collection=limit_report_requires_more_collection,
-        close_browser=_close_browser_after_run,
+        close_browser=partial(
+            _close_browser_after_run,
+            worker_runtime=worker_runtime,
+        ),
     )
     collection_intent = normalize_collection_intent(
         {
@@ -866,6 +869,54 @@ def _run_realtime_scraping(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
+def _invoke_realtime_scraping(
+    worker_runtime: Any,
+    arguments: dict[str, Any],
+) -> str:
+    """주어진 비전 런타임 안에서 수집 도구 한 번을 실행한다."""
+    from agent.application.run_context import emit_run_event, run_context
+    from agent.application.run_contracts import RunPhase, RunStatus
+    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+
+    owned_runtime = worker_runtime is None
+    runtime = worker_runtime or VisionWorkerRuntime()
+    context_query = arguments.get("query") or " ".join(
+        part
+        for part in (arguments.get("company"), arguments.get("tech_stack"))
+        if part
+    )
+    try:
+        with run_context(query=context_query, prefix="collection") as (context, created):
+            with runtime.execution_session():
+                result_text = _run_realtime_scraping(
+                    **arguments,
+                    search_intent_resolved=(
+                        _normalize_target_count(arguments.get("target_count")) > 0
+                    ),
+                    worker_runtime=runtime,
+                )
+            if not created:
+                return result_text
+
+            try:
+                payload = json.loads(result_text)
+            except (TypeError, json.JSONDecodeError):
+                payload = {"message": str(result_text)}
+            payload["run_id"] = context.run_id
+            payload["metrics"] = context.snapshot()
+            failed = str(payload.get("message") or "").startswith("collection error")
+            emit_run_event(
+                "run_failed" if failed else "run_completed",
+                RunPhase.FAILED if failed else RunPhase.COMPLETED,
+                "수집 작업이 실패했습니다." if failed else "수집 작업을 완료했습니다.",
+                status=RunStatus.FAILED if failed else RunStatus.COMPLETED,
+            )
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+    finally:
+        if owned_runtime:
+            runtime.close()
+
+
 @tool
 def realtime_scraping(
     company: str = None,
@@ -890,50 +941,47 @@ def realtime_scraping(
 ) -> str:
     """구조화된 요청에 따라 비전 작업자로 공고를 수집하고 승인된 결과만 저장한다."""
 
-    from agent.application.run_context import emit_run_event, run_context
-    from agent.application.run_contracts import RunPhase, RunStatus
-
-    context_query = query or " ".join(
-        part for part in (company, tech_stack) if part
+    return _invoke_realtime_scraping(
+        None,
+        {
+            "company": company,
+            "tech_stack": tech_stack,
+            "site": site,
+            "query": query,
+            "target_count": target_count,
+            "task_category": task_category,
+            "review_feedback": review_feedback,
+            "review_attempt": review_attempt,
+            "count_mode": count_mode,
+            "posted_date_expression": posted_date_expression,
+            "posted_from": posted_from,
+            "posted_to": posted_to,
+            "experience": experience,
+            "location": location,
+            "employment_type": employment_type,
+            "freshness_required": freshness_required,
+            "purpose": purpose,
+            "analysis_goal": analysis_goal,
+            "original_query": original_query,
+        },
     )
-    with run_context(query=context_query, prefix="collection") as (context, created):
-        with worker_execution_session():
-            result_text = _run_realtime_scraping(
-                company=company,
-                tech_stack=tech_stack,
-                site=site,
-                query=query,
-                target_count=target_count,
-                task_category=task_category,
-                search_intent_resolved=_normalize_target_count(target_count) > 0,
-                review_feedback=review_feedback,
-                review_attempt=review_attempt,
-                count_mode=count_mode,
-                posted_date_expression=posted_date_expression,
-                posted_from=posted_from,
-                posted_to=posted_to,
-                experience=experience,
-                location=location,
-                employment_type=employment_type,
-                freshness_required=freshness_required,
-                purpose=purpose,
-                analysis_goal=analysis_goal,
-                original_query=original_query,
-            )
-        if not created:
-            return result_text
 
-        try:
-            payload = json.loads(result_text)
-        except (TypeError, json.JSONDecodeError):
-            payload = {"message": str(result_text)}
-        payload["run_id"] = context.run_id
-        payload["metrics"] = context.snapshot()
-        failed = str(payload.get("message") or "").startswith("collection error")
-        emit_run_event(
-            "run_failed" if failed else "run_completed",
-            RunPhase.FAILED if failed else RunPhase.COMPLETED,
-            "수집 작업이 실패했습니다." if failed else "수집 작업을 완료했습니다.",
-            status=RunStatus.FAILED if failed else RunStatus.COMPLETED,
-        )
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+class RuntimeRealtimeScrapingTool:
+    """ApplicationRuntime의 비전 자원을 재사용하는 수집 도구 어댑터."""
+
+    name = realtime_scraping.name
+    description = realtime_scraping.description
+    args_schema = realtime_scraping.args_schema
+
+    def __init__(self, worker_runtime: Any):
+        self.worker_runtime = worker_runtime
+
+    def invoke(self, arguments: dict[str, Any]) -> str:
+        return _invoke_realtime_scraping(self.worker_runtime, dict(arguments))
+
+
+def build_runtime_realtime_scraping_tool(
+    worker_runtime: Any,
+) -> RuntimeRealtimeScrapingTool:
+    return RuntimeRealtimeScrapingTool(worker_runtime)

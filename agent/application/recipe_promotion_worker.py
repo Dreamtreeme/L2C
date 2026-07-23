@@ -2,27 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import threading
 from pathlib import Path
 from typing import Any
 
+from agent.config import get_settings
 from agent.recipe.candidate_store import RecipeCandidateStore
 from agent.utils.logger import logger
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return max(0.0, float(os.getenv(name, str(default))))
-    except ValueError:
-        return default
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except ValueError:
-        return default
 
 
 class RecipePromotionWorker:
@@ -37,18 +23,19 @@ class RecipePromotionWorker:
         max_attempts: int | None = None,
     ) -> None:
         self.db_path = Path(db_path) if db_path is not None else None
+        settings = get_settings().recipe
         self.poll_interval_sec = (
-            _env_float("VISION_RECIPE_PROMOTION_POLL_SEC", 1.0)
+            settings.promotion_poll_sec
             if poll_interval_sec is None
             else max(0.01, float(poll_interval_sec))
         )
         self.retry_delay_sec = (
-            _env_float("VISION_RECIPE_PROMOTION_RETRY_DELAY_SEC", 30.0)
+            settings.promotion_retry_delay_sec
             if retry_delay_sec is None
             else max(0.0, float(retry_delay_sec))
         )
         self.max_attempts = (
-            _env_int("VISION_RECIPE_PROMOTION_MAX_ATTEMPTS", 3)
+            settings.promotion_max_attempts
             if max_attempts is None
             else max(1, int(max_attempts))
         )
@@ -135,38 +122,6 @@ class RecipePromotionWorker:
                 self._stop_event.wait(self.poll_interval_sec)
 
 
-_DEFAULT_WORKER_LOCK = threading.Lock()
-_DEFAULT_WORKER: RecipePromotionWorker | None = None
-
-
-def start_recipe_promotion_worker(
-    db_path: str | Path | None = None,
-) -> RecipePromotionWorker | None:
-    """자동승격이 켜진 백엔드에서 장기 실행 작업자를 시작한다."""
-
-    from agent.application.recipe_promotion_service import auto_promotion_enabled
-
-    if not auto_promotion_enabled():
-        return None
-    global _DEFAULT_WORKER
-    with _DEFAULT_WORKER_LOCK:
-        if _DEFAULT_WORKER is None:
-            _DEFAULT_WORKER = RecipePromotionWorker(db_path)
-        _DEFAULT_WORKER.start()
-        return _DEFAULT_WORKER
-
-
-def stop_recipe_promotion_worker(timeout_sec: float = 1.0) -> bool:
-    global _DEFAULT_WORKER
-    with _DEFAULT_WORKER_LOCK:
-        worker = _DEFAULT_WORKER
-    if worker is None:
-        return True
-    return worker.stop(timeout_sec=timeout_sec)
-
-
 __all__ = [
     "RecipePromotionWorker",
-    "start_recipe_promotion_worker",
-    "stop_recipe_promotion_worker",
 ]

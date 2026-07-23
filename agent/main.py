@@ -1,11 +1,11 @@
 import sys
 import os
 
-# Add project root to sys.path to allow execution from outside or inside the folder
+# 프로젝트 안팎에서 실행해도 루트 패키지를 찾을 수 있게 합니다.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.application.chat_service import get_chat_service
 from agent.application.run_contracts import new_run_id
+from agent.runtime.application_runtime import ApplicationRuntime
 
 def main():
     if len(sys.argv) < 2:
@@ -17,7 +17,7 @@ def main():
         print("질문이 비어 있습니다.")
         sys.exit(1)
         
-    # Reconfigure stdout/stderr to utf-8 for Windows compatibility and avoiding encoding issues
+    # Windows 콘솔에서 한국어 출력이 깨지지 않게 UTF-8을 사용합니다.
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
     
@@ -27,8 +27,11 @@ def main():
     print("==========================================\n")
     
     try:
+        import shared.config as config
+
         run_id = new_run_id("cli")
-        result = get_chat_service().run(query, run_id=run_id)
+        with ApplicationRuntime(config.DB_PATH) as runtime:
+            result = runtime.chat_service.run(query, run_id=run_id)
         final_answer = str(result.get("last_action_result") or "")
         
         print("\n==========================================")

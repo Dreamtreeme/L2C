@@ -6,8 +6,16 @@ import pytest
 from pathlib import Path
 
 from shared.db.database import Database
+from agent.graph import worker_execution, worker_observation, worker_recording
 
 TEST_DB_PATH = Path("data/test_qa_jobs.db")
+
+
+def _action_request(*, content="", tool_calls=None):
+    from agent.graph.action_request import build_action_request
+
+    return build_action_request("llm", str(content or ""), list(tool_calls or []))
+
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_test_db(tmp_path_factory):
@@ -86,8 +94,8 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
     # 비전 에이전트 그래프를 모킹: stream 시 수집된 JD 데이터를 반환하는 가짜 앱 생성
     class FakeGraphApp:
         def stream(self, state, config=None, stream_mode=None):
-            assert config["recursion_limit"] == 60
-            assert stream_mode == "values"
+            assert config["recursion_limit"] == 180
+            assert stream_mode == ["values", "custom"]
             assert "사람인" in state["goal"]
             assert "테스트컴퍼니" in state["goal"]
             assert "원티드(" not in state["goal"]
@@ -109,7 +117,8 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
                 },
             }
 
-    def mock_build_graph():
+    def mock_build_graph(*, worker_runtime=None):
+        assert worker_runtime is not None
         return FakeGraphApp()
 
     monkeypatch.setattr("agent.graph.workflow.build_graph", mock_build_graph)
@@ -136,8 +145,6 @@ def test_realtime_scraping_tool(setup_test_db, monkeypatch):
 
 
 def test_realtime_scraping_closes_browser_after_run_by_default(setup_test_db, monkeypatch):
-    import agent.graph.nodes as nodes
-
     monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
     monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "off")
     monkeypatch.setenv("VISION_JD_NORMALIZATION_MODE", "off")
@@ -145,17 +152,22 @@ def test_realtime_scraping_closes_browser_after_run_by_default(setup_test_db, mo
 
     closed = []
 
-    class FakeActionTools:
-        def close_browser(self):
-            closed.append("close_browser")
-            return {"status": "success", "action": "close_browser", "result": {"closed": True}}
-
     class FakeGraphApp:
         def stream(self, state, config=None, stream_mode=None):
             yield {**state, "is_finished": True, "extracted_jd": {}}
 
-    monkeypatch.setattr(nodes, "_action_tools", FakeActionTools(), raising=False)
-    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeGraphApp())
+    def close_browser(runtime):
+        closed.append("close_browser")
+        return True
+
+    monkeypatch.setattr(
+        "agent.runtime.vision_worker_runtime.VisionWorkerRuntime.close_browser_after_run",
+        close_browser,
+    )
+    monkeypatch.setattr(
+        "agent.graph.workflow.build_graph",
+        lambda *, worker_runtime=None: FakeGraphApp(),
+    )
 
     from agent.tools.realtime_scraping import realtime_scraping
 
@@ -244,7 +256,7 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
 
     class FakeGraphApp:
         def stream(self, state, config=None, stream_mode=None):
-            assert config["recursion_limit"] == 60
+            assert config["recursion_limit"] == 180
             yield state
             yield {
                 **state,
@@ -293,7 +305,8 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
             }
             raise GraphRecursionError("test recursion limit")
 
-    def mock_build_graph():
+    def mock_build_graph(*, worker_runtime=None):
+        assert worker_runtime is not None
         return FakeGraphApp()
 
     monkeypatch.setattr("agent.graph.workflow.build_graph", mock_build_graph)
@@ -305,8 +318,8 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     assert payload["review"]["decision"] == "accept"
     assert payload["hit_recursion_limit"] is True
     assert payload["needs_human_approval"] is True
-    assert payload["intermediate_report"]["current_recursion_limit"] == 60
-    assert payload["intermediate_report"]["suggested_recursion_limit"] == 120
+    assert payload["intermediate_report"]["current_recursion_limit"] == 180
+    assert payload["intermediate_report"]["suggested_recursion_limit"] == 270
     assert "approval" in payload["message"]
     assert payload["persisted_count"] == 1
     conn = sqlite3.connect(TEST_DB_PATH)
@@ -334,8 +347,6 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     assert all("state_key" not in step for step in candidate_steps)
 
 def test_url_stale_flag_for_actions(monkeypatch):
-    from langchain_core.messages import AIMessage
-    from agent.graph import nodes
 
     def fake_dispatch_ui(action_name, args, get_bbox):
         if action_name == "scroll":
@@ -344,7 +355,7 @@ def test_url_stale_flag_for_actions(monkeypatch):
             return {"status": "success", "action": "click_marker", "result": "ok"}
         raise AssertionError(action_name)
 
-    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+    monkeypatch.setattr(worker_execution, "_dispatch_ui", fake_dispatch_ui)
 
     base_state = {
         "current_markers": [{"id": 1, "bbox": [100, 100, 140, 140]}],
@@ -354,29 +365,25 @@ def test_url_stale_flag_for_actions(monkeypatch):
         "is_finished": False,
         "collected_data": [],
         "error_count": 0,
-        "current_plan_step": 0,
-        "plan": [],
     }
 
     scroll_state = {
         **base_state,
-        "last_action_result": AIMessage(content="", tool_calls=[{"name": "scroll", "args": {"direction": "down"}, "id": "1"}]),
+        "pending_action": _action_request(content="", tool_calls=[{"name": "scroll", "args": {"direction": "down"}, "id": "1"}]),
     }
-    assert nodes.action_node(scroll_state)["current_url_stale"] is False
+    assert worker_execution.action_node(scroll_state)["current_url_stale"] is False
 
     click_state = {
         **base_state,
-        "last_action_result": AIMessage(content="", tool_calls=[{"name": "click_marker", "args": {"marker_id": 1}, "id": "1"}]),
+        "pending_action": _action_request(content="", tool_calls=[{"name": "click_marker", "args": {"marker_id": 1}, "id": "1"}]),
     }
-    click_result = nodes.action_node(click_state)
+    click_result = worker_execution.action_node(click_state)
     assert click_result["current_url_stale"] is True
 
 
 def test_update_extracted_info_skips_wanted_job_without_detail_url():
-    from langchain_core.messages import AIMessage
-    from agent.graph import nodes
 
-    result = nodes.action_node({
+    result = worker_execution.action_node({
         "current_markers": [],
         "current_url": "https://www.wanted.co.kr/search?query=android&tab=position",
         "current_url_stale": False,
@@ -385,9 +392,7 @@ def test_update_extracted_info_skips_wanted_job_without_detail_url():
         "is_finished": False,
         "collected_data": [],
         "error_count": 0,
-        "current_plan_step": 0,
-        "plan": [],
-        "last_action_result": AIMessage(
+        "pending_action": _action_request(
             content="",
             tool_calls=[
                 {
@@ -416,18 +421,17 @@ def test_update_extracted_info_skips_wanted_job_without_detail_url():
     assert action["status"] == "skipped"
     assert action["reason"] == "job_update_requires_detail_url"
     assert result["extracted_jd"] == {}
-    episode = result["feedback_episodes"][0]
+    recorded = worker_recording.record_execution_node(result)
+    episode = recorded["feedback_episodes"][0]
     assert episode["feedback"]["label"] == "no_effect"
     assert episode["feedback"]["reason"] == "job_update_requires_detail_url"
 
 
 def test_update_extracted_info_auto_finishes_when_target_count_reached(monkeypatch):
-    from langchain_core.messages import AIMessage
-    from agent.graph import nodes
 
     monkeypatch.delenv("VISION_AUTO_FINISH_ON_TARGET", raising=False)
 
-    result = nodes.action_node({
+    result = worker_execution.action_node({
         "current_markers": [],
         "current_url": "https://www.wanted.co.kr/wd/12345",
         "current_url_stale": False,
@@ -437,9 +441,7 @@ def test_update_extracted_info_auto_finishes_when_target_count_reached(monkeypat
         "is_finished": False,
         "collected_data": [],
         "error_count": 0,
-        "current_plan_step": 0,
-        "plan": [],
-        "last_action_result": AIMessage(
+        "pending_action": _action_request(
             content="",
             tool_calls=[
                 {
@@ -473,15 +475,13 @@ def test_update_extracted_info_auto_finishes_when_target_count_reached(monkeypat
 
 
 def test_update_extracted_info_does_not_auto_scroll_when_detail_incomplete(monkeypatch):
-    from langchain_core.messages import AIMessage
-    from agent.graph import nodes
 
     def fail_dispatch(*_args, **_kwargs):
         raise AssertionError("detail_complete=false must not trigger executor-side UI action")
 
-    monkeypatch.setattr(nodes, "_dispatch_ui", fail_dispatch)
+    monkeypatch.setattr(worker_execution, "_dispatch_ui", fail_dispatch)
 
-    result = nodes.action_node({
+    result = worker_execution.action_node({
         "current_markers": [],
         "current_url": "https://www.wanted.co.kr/wd/12345",
         "current_url_stale": False,
@@ -491,9 +491,7 @@ def test_update_extracted_info_does_not_auto_scroll_when_detail_incomplete(monke
         "is_finished": False,
         "collected_data": [],
         "error_count": 0,
-        "current_plan_step": 0,
-        "plan": [],
-        "last_action_result": AIMessage(
+        "pending_action": _action_request(
             content="",
             tool_calls=[
                 {
@@ -523,14 +521,12 @@ def test_update_extracted_info_does_not_auto_scroll_when_detail_incomplete(monke
 
     assert [action["action"] for action in result["action_history"]] == ["update_extracted_info"]
     assert "detail_policy" not in result["action_history"][0]
-    assert result["last_action_screen_changed"] is False
+    assert result["last_action_result"].screen_changed is False
     assert result["pending_transition"] == {}
     assert result["current_markers"] == []
 
 
 def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targets(monkeypatch):
-    from langchain_core.messages import AIMessage
-    from agent.graph import nodes
 
     calls = []
 
@@ -539,9 +535,9 @@ def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targ
         assert action_name == "go_back"
         return {"status": "success", "action": "go_back", "result": "ok"}
 
-    monkeypatch.setattr(nodes, "_dispatch_ui", fake_dispatch_ui)
+    monkeypatch.setattr(worker_execution, "_dispatch_ui", fake_dispatch_ui)
 
-    result = nodes.action_node({
+    result = worker_execution.action_node({
         "current_markers": [],
         "current_url": "https://www.wanted.co.kr/wd/12345",
         "current_url_stale": False,
@@ -551,9 +547,7 @@ def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targ
         "is_finished": False,
         "collected_data": [],
         "error_count": 0,
-        "current_plan_step": 0,
-        "plan": [],
-        "last_action_result": AIMessage(
+        "pending_action": _action_request(
             content="",
             tool_calls=[
                 {
@@ -582,24 +576,33 @@ def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targ
         ),
     })
 
-    assert [action["action"] for action in result["action_history"]] == ["update_extracted_info", "go_back"]
+    assert [action["action"] for action in result["action_history"]] == ["update_extracted_info"]
     assert result["action_history"][0]["detail_policy"] == "detail_complete"
-    assert result["action_history"][1]["policy_action"] is True
-    assert result["last_action_screen_changed"] is True
-    assert result["current_url_stale"] is True
+    assert result["pending_action"].source == "page_policy"
+    assert result["last_action_result"].screen_changed is False
+
+    followup = worker_execution.action_node({
+        **result,
+        "current_url": "https://www.wanted.co.kr/wd/12345",
+        "current_url_stale": False,
+        "current_markers": [],
+    })
+
+    assert [action["action"] for action in followup["action_history"]] == ["go_back"]
+    assert followup["action_history"][0]["action_source"] == "page_policy"
+    assert followup["last_action_result"].screen_changed is True
+    assert followup["current_url_stale"] is True
     assert calls[0][0] == "go_back"
 
 
 def test_action_node_blocks_sensitive_ui_action_before_dispatch(monkeypatch):
-    from langchain_core.messages import AIMessage
-    from agent.graph import nodes
 
     def fail_dispatch(*args, **kwargs):
         raise AssertionError("sensitive action must not be dispatched")
 
-    monkeypatch.setattr(nodes, "_dispatch_ui", fail_dispatch)
+    monkeypatch.setattr(worker_execution, "_dispatch_ui", fail_dispatch)
 
-    result = nodes.action_node({
+    result = worker_execution.action_node({
         "current_markers": [{"id": 7, "text": "가입 신청", "bbox": [0, 0, 100, 20]}],
         "current_url": "https://bank.example/product",
         "current_url_stale": False,
@@ -609,9 +612,7 @@ def test_action_node_blocks_sensitive_ui_action_before_dispatch(monkeypatch):
         "is_finished": False,
         "collected_data": [],
         "error_count": 0,
-        "current_plan_step": 0,
-        "plan": [],
-        "last_action_result": AIMessage(
+        "pending_action": _action_request(
             content="",
             tool_calls=[
                 {
@@ -636,7 +637,6 @@ def test_action_node_blocks_sensitive_ui_action_before_dispatch(monkeypatch):
 
 def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
     from PIL import Image
-    from agent.graph import nodes
 
     image_path = tmp_path / "screen.png"
     Image.new("RGB", (200, 200), "white").save(image_path)
@@ -656,9 +656,9 @@ def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
             return "https://www.wanted.co.kr/wd/101"
 
     fake_perception = FakePerception()
-    monkeypatch.setattr(nodes, "_get_perception", lambda: fake_perception)
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: fake_perception)
 
-    fresh_result = nodes.perception_node({
+    fresh_result = worker_observation.observe_screen_cycle({
         "current_url": "https://www.wanted.co.kr/wd/100",
         "current_url_stale": False,
     })
@@ -668,7 +668,7 @@ def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
     assert fresh_result["screen_signature"]["size"] == [200, 200]
     assert len(fresh_result["screen_signature"]["phash"]) == 16
 
-    stale_result = nodes.perception_node({
+    stale_result = worker_observation.observe_screen_cycle({
         "current_url": "https://www.wanted.co.kr/wd/100",
         "current_url_stale": True,
     })
@@ -676,9 +676,84 @@ def test_perception_node_uses_cached_url_when_fresh(monkeypatch, tmp_path):
     assert stale_result["current_url"] == "https://www.wanted.co.kr/wd/101"
     assert stale_result["current_url_stale"] is False
 
+    pending_result = worker_observation.observe_screen_cycle({
+        "current_url": "https://www.wanted.co.kr/wd/100",
+        "current_url_stale": False,
+        "pending_transition": {
+            "action": "click_marker",
+            "before_url": "https://www.wanted.co.kr/wd/100",
+        },
+    })
+    assert fake_perception.url_reads == 2
+    assert pending_result["current_url"] == "https://www.wanted.co.kr/wd/101"
+
+
+def test_perception_node_keeps_url_stale_when_address_read_fails(monkeypatch, tmp_path):
+    from PIL import Image
+
+    image_path = tmp_path / "screen.png"
+    Image.new("RGB", (200, 200), "white").save(image_path)
+
+    class FakePerception:
+        def capture_screen(self):
+            return image_path
+
+        def analyze_ui(self, _image_path):
+            return {"markers": [], "marked_image": str(image_path)}
+
+        def get_current_url(self):
+            return ""
+
+    monkeypatch.setattr(worker_observation, "_perception_engine", lambda: FakePerception())
+
+    result = worker_observation.observe_screen_cycle(
+        {
+            "current_url": "https://www.rocketpunch.com/",
+            "current_url_stale": True,
+        }
+    )
+
+    assert result["current_url"] == "https://www.rocketpunch.com/"
+    assert result["current_url_stale"] is True
+
+
+def test_update_extracted_info_is_rejected_while_detail_buffer_is_active():
+
+    url = "https://www.wanted.co.kr/wd/12345"
+    result, extracted = worker_execution._dispatch_state(
+        "update_extracted_info",
+        {
+            "data_json": json.dumps(
+                {
+                    "공고목록": [
+                        {
+                            "company_name": "Acme",
+                            "position": "iOS Engineer",
+                            "url": url,
+                            "main_tasks": ["Build app"],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        },
+        {},
+        current_url=url,
+        state={
+            "detail_ocr_buffer": {
+                "url": url,
+                "lines": [{"text": "주요업무 앱 개발"}],
+            }
+        },
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "detail_buffer_requires_finish"
+    assert extracted == {}
+
 
 def test_ui_context_limits_marker_prompt(monkeypatch):
-    from agent.graph.nodes import _build_ui_context
+    from agent.graph.worker_observation_context import build_ui_context
 
     monkeypatch.setenv("VISION_UI_TEXT_MARKER_LIMIT", "2")
     monkeypatch.setenv("VISION_UI_ICON_MARKER_LIMIT", "1")
@@ -690,7 +765,7 @@ def test_ui_context_limits_marker_prompt(monkeypatch):
         {"id": 5, "text": "상호작용 가능한 요소 (icon)", "bbox": [0, 50, 10, 60]},
     ]
 
-    ui_context = _build_ui_context(markers)
+    ui_context = build_ui_context(markers)
 
     assert "[id: 1] 검색" in ui_context
     assert "[id: 2] 회사명" in ui_context

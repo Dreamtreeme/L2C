@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
+from agent.config import get_settings
 from agent.recipe.candidate_store import RecipeCandidateStore
 from agent.utils.logger import logger
 
 
 def auto_promotion_enabled() -> bool:
-    raw = os.getenv("VISION_RECIPE_AUTO_PROMOTE", "1")
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
+    return get_settings().recipe.auto_promote
 
 
 def schedule_recipe_candidate_promotion(

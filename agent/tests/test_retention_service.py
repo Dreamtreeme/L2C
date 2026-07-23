@@ -3,6 +3,14 @@ import sqlite3
 from datetime import datetime, timedelta
 
 
+def test_retention_defaults_keep_screen_artifacts_as_long_as_audit_history():
+    from agent.application.retention_service import RetentionPolicy
+
+    policy = RetentionPolicy()
+
+    assert policy.artifact_days == policy.audit_days == 90
+
+
 def test_operations_api_previews_and_requires_confirmation_header(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
 

@@ -6,6 +6,7 @@ import os
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
+from agent.config import get_settings
 from agent.graph.state import GraphState
 from agent.utils.logger import logger
 
@@ -27,6 +28,86 @@ def raw_screen_phash_signature(image_path: str | os.PathLike) -> dict[str, Any]:
         return {"algorithm": "phash-dct64-v1", "phash": "", "size": [0, 0]}
 
 
+def detect_two_screen_transition_cycle(
+    observations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """최근 전환 화면이 A-B-A-B로 반복됐는지 pHash로 확인한다."""
+
+    recent = [
+        item
+        for item in observations or []
+        if isinstance(item, dict) and str(item.get("screenshot") or "")
+    ][-4:]
+    if len(recent) < 4:
+        return {"detected": False}
+
+    signatures = [
+        raw_screen_phash_signature(str(item.get("screenshot") or ""))
+        for item in recent
+    ]
+    hashes = [str(item.get("phash") or "") for item in signatures]
+    sizes = [tuple(item.get("size") or []) for item in signatures]
+    if not all(hashes) or len(set(sizes)) != 1:
+        return {"detected": False}
+
+    try:
+        from agent.vision.screen_signature import hamming_distance
+
+        same_a = hamming_distance(hashes[0], hashes[2])
+        same_b = hamming_distance(hashes[1], hashes[3])
+        adjacent = [
+            hamming_distance(hashes[index], hashes[index + 1])
+            for index in range(3)
+        ]
+    except Exception as exc:
+        logger.debug("transition cycle pHash check skipped", error=str(exc))
+        return {"detected": False}
+
+    max_distance = get_settings().reflex.transition_cycle_phash_max_distance
+    detected = bool(
+        same_a is not None
+        and same_b is not None
+        and same_a <= max_distance
+        and same_b <= max_distance
+        and all(distance is not None and distance > max_distance for distance in adjacent)
+    )
+    if not detected:
+        return {"detected": False}
+
+    action_cycle: list[str] = []
+    for observation in recent[:2]:
+        action = str(observation.get("action") or "")
+        step = observation.get("step") if isinstance(observation.get("step"), dict) else {}
+        args = step.get("args") if isinstance(step.get("args"), dict) else {}
+        detail = str(args.get("key") or args.get("target_component") or "")
+        action_cycle.append(f"{action}:{detail}" if detail else action)
+    return {
+        "detected": True,
+        "action_cycle": action_cycle,
+        "same_screen_distances": [same_a, same_b],
+        "adjacent_screen_distances": adjacent,
+    }
+
+
+def latest_no_effect_transition(state: GraphState) -> dict[str, Any]:
+    """현재 화면에서 효과가 없다고 확인된 가장 최근 물리 행동을 반환한다."""
+
+    observations = state.get("transition_observations", []) or []
+    if not observations:
+        return {}
+    latest = observations[-1]
+    if not isinstance(latest, dict) or latest.get("status") != "unknown":
+        return {}
+    if latest.get("reason") not in {"reflex_no_screen_change", "no_screen_change"}:
+        return {}
+    recent_images = state.get("recent_images", []) or []
+    latest_screen = str(recent_images[-1]) if recent_images else ""
+    observed_screen = str(latest.get("screenshot") or "")
+    if latest_screen and observed_screen and latest_screen != observed_screen:
+        return {}
+    return latest
+
+
 def transition_visual_change_ratio(
     pending_transition: dict[str, Any],
     current_image_path: str | os.PathLike,
@@ -44,7 +125,7 @@ def transition_visual_change_ratio(
             before = before_image.convert("L").resize(target_size)
             current = current_image.convert("L").resize(target_size)
             histogram = ImageChops.difference(before, current).histogram()
-        intensity_threshold = int(os.getenv("REFLEX_VISUAL_CHANGE_PIXEL_THRESHOLD", "8"))
+        intensity_threshold = get_settings().reflex.visual_change_pixel_threshold
         intensity_threshold = min(255, max(0, intensity_threshold))
         changed_pixels = sum(histogram[intensity_threshold + 1 :])
         return changed_pixels / float(target_size[0] * target_size[1])
@@ -60,10 +141,7 @@ def transition_has_visual_change(
     """전체 pHash가 둔감한 부분 화면 전환을 전후 스크린샷으로 보완한다."""
 
     ratio = transition_visual_change_ratio(pending_transition, current_image_path)
-    try:
-        minimum_ratio = float(os.getenv("REFLEX_VISUAL_CHANGE_MIN_RATIO", "0.03"))
-    except ValueError:
-        minimum_ratio = 0.03
+    minimum_ratio = get_settings().reflex.visual_change_min_ratio
     return ratio is not None and ratio >= max(0.0, minimum_ratio), ratio
 
 
@@ -102,10 +180,7 @@ def transition_no_effect_by_phash(
     except Exception as exc:
         logger.debug("transition phash no-effect check skipped", error=str(exc))
         return False, None
-    try:
-        max_distance = int(os.getenv("REFLEX_NO_EFFECT_PHASH_MAX_DISTANCE", "2"))
-    except ValueError:
-        max_distance = 2
+    max_distance = get_settings().reflex.no_effect_phash_max_distance
     return distance is not None and distance <= max_distance, distance
 
 
@@ -120,10 +195,7 @@ def transition_phash_distance(
     before_phash = str(pending_transition.get("before_phash") or "")
     current_phash = str(screen_signature.get("phash") or "")
     same_url = bool(before_url and current_url and before_url == current_url)
-    try:
-        max_distance = int(os.getenv("REFLEX_NO_EFFECT_PHASH_MAX_DISTANCE", "2"))
-    except ValueError:
-        max_distance = 2
+    max_distance = get_settings().reflex.no_effect_phash_max_distance
     if not same_url or not before_phash or not current_phash:
         return same_url, None, max_distance
     try:
@@ -136,11 +208,7 @@ def transition_phash_distance(
 
 
 def visual_change_sufficient_components() -> set[str]:
-    raw = os.getenv(
-        "REFLEX_VISUAL_CHANGE_SUFFICIENT_COMPONENTS",
-        "tab_button,search_button,expand_detail_button,reveal_button,details_toggle",
-    )
-    return {item.strip().casefold() for item in raw.split(",") if item.strip()}
+    return set(get_settings().reflex.visual_change_sufficient_components)
 
 
 def transition_accepts_visual_change(pending_transition: dict[str, Any]) -> bool:
@@ -163,16 +231,11 @@ def transition_accepts_visual_change(pending_transition: dict[str, Any]) -> bool
 
 
 def idempotent_control_components() -> set[str]:
-    raw = os.getenv(
-        "REFLEX_IDEMPOTENT_CONTROL_COMPONENTS",
-        "tab_button,search_button,expand_detail_button,reveal_button,details_toggle,result_filter,result_filter_input",
-    )
-    return {item.strip().casefold() for item in raw.split(",") if item.strip()}
+    return set(get_settings().reflex.idempotent_control_components)
 
 
 def idempotent_page_scope_ignored_query_keys() -> set[str]:
-    raw = os.getenv("REFLEX_IDEMPOTENT_SCOPE_IGNORED_QUERY_KEYS", "tab")
-    return {item.strip().casefold() for item in raw.split(",") if item.strip()}
+    return set(get_settings().reflex.idempotent_scope_ignored_query_keys)
 
 
 def idempotent_page_scope(url: str) -> tuple[str, str, tuple[tuple[str, str], ...]]:
@@ -244,6 +307,7 @@ def build_transition_observation(
     markers: list[dict[str, Any]],
     screenshot: str,
     marked_image: str,
+    to_capture_id: str = "",
     phash_distance: int | None = None,
     visual_change_ratio: float | None = None,
     ocr_skipped: bool = False,
@@ -253,6 +317,8 @@ def build_transition_observation(
     return {
         "action_seq": pending_transition.get("action_seq"),
         "action": pending_transition.get("action", ""),
+        "from_capture_id": str(pending_transition.get("from_capture_id") or ""),
+        "to_capture_id": str(to_capture_id or ""),
         "step": dict(pending_transition.get("step", {}) or {}),
         "expected_after": pending_transition.get("expected_after", ""),
         "source": transition_source,
@@ -274,9 +340,11 @@ def build_transition_observation(
 
 __all__ = [
     "build_transition_observation",
+    "detect_two_screen_transition_cycle",
     "idempotent_control_components",
     "idempotent_page_scope",
     "idempotent_page_scope_ignored_query_keys",
+    "latest_no_effect_transition",
     "raw_screen_phash_signature",
     "same_idempotent_page_scope",
     "transition_accepts_visual_change",

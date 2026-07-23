@@ -8,9 +8,9 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Callable
 
+from agent.config import get_settings
 from agent.recipe.page_context import infer_page_role_from_url_and_texts, normalize_page_role
 from agent.recipe.promotion_policy import compact_step_evidence_verdicts, evaluate_candidate_step_evidence
 from agent.recipe.task_category import normalize_task_category
@@ -22,10 +22,7 @@ CriticFn = Callable[[dict[str, Any]], dict[str, Any] | RecipeCandidateReview]
 
 
 def _critic_evidence_text_limit() -> int:
-    try:
-        return max(1, int(os.getenv("VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT", "60")))
-    except ValueError:
-        return 60
+    return get_settings().recipe.critic_evidence_text_limit
 
 
 def _target_action_seqs(steps: list[dict[str, Any]]) -> set[int]:
@@ -230,14 +227,13 @@ def build_candidate_review_payload(candidate: dict[str, Any], allow_promotion: b
 def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    model_name = os.getenv("VISION_RECIPE_CRITIC_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
-    try:
-        request_timeout = max(
-            1.0,
-            float(os.getenv("VISION_RECIPE_CRITIC_TIMEOUT_SEC", "30")),
-        )
-    except ValueError:
-        request_timeout = 30.0
+    from agent.application.model_policy import commander_model_name
+
+    model_name = commander_model_name(
+        "VISION_RECIPE_CRITIC_MODEL",
+        "VISION_WORKER_REVIEW_MODEL",
+    )
+    request_timeout = get_settings().recipe.critic_timeout_sec
     promotion_policy = str(payload.get("promotion_policy") or "")
     from agent.application.model_clients import get_structured_google_model
 

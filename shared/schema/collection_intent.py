@@ -48,6 +48,10 @@ class CollectionIntent(BaseModel):
     target_count: int = Field(default=0, ge=0, le=100)
     filters: JobSearchFilters = Field(default_factory=JobSearchFilters)
     freshness_required: bool = Field(default=False, description="최신 공고 확인이 필요한지 여부")
+    require_job_content: bool = Field(
+        default=True,
+        description="주요업무 또는 자격요건이 확인된 공고만 완전 수집으로 인정할지 여부",
+    )
     purpose: CollectionPurpose = CollectionPurpose.COLLECT
     analysis_goal: str = Field(default="", description="비교·트렌드 등 수집 이후 분석 목적")
 

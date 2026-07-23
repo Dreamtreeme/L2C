@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-import os
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import nullcontext
 from contextvars import copy_context
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 from langgraph.errors import GraphRecursionError
 
+from agent.config import get_settings
 from agent.application.run_context import emit_run_event, measure_step
 from agent.application.run_contracts import RunPhase
+from agent.observability.graph_events import forward_graph_event
 from agent.utils.logger import logger
-
-_WORKER_EXECUTION_LOCK = threading.RLock()
-
 
 class OcrWorkerReadinessError(RuntimeError):
     """첫 화면 로직 전에 OCR 작업자를 준비하지 못한 경우."""
@@ -92,14 +89,6 @@ def _open_browser_while_ocr_starts(
     return result
 
 
-@contextmanager
-def worker_execution_session() -> Iterator[None]:
-    """브라우저·Perception·OCR 작업자가 한 번에 한 요청만 처리하게 한다."""
-
-    with _WORKER_EXECUTION_LOCK:
-        yield
-
-
 def run_graph_with_last_state(
     app: Any,
     initial_state: dict,
@@ -109,16 +98,27 @@ def run_graph_with_last_state(
 
     last_state = initial_state
     try:
-        for state in app.stream(
+        for item in app.stream(
             initial_state,
             config={"recursion_limit": recursion_limit},
-            stream_mode="values",
+            stream_mode=["values", "custom"],
         ):
             from agent.application.run_context import raise_if_cancelled
 
             raise_if_cancelled()
-            if isinstance(state, dict):
-                last_state = state
+            if (
+                isinstance(item, tuple)
+                and len(item) == 2
+                and item[0] in {"values", "custom"}
+            ):
+                mode, payload = item
+                if mode == "custom":
+                    forward_graph_event(payload)
+                elif isinstance(payload, dict):
+                    last_state = payload
+            elif isinstance(item, dict):
+                # 테스트 대역과 이전 LangGraph의 단일 모드 출력도 허용한다.
+                last_state = item
         return last_state, False
     except GraphRecursionError as exc:
         logger.warning(
@@ -129,14 +129,11 @@ def run_graph_with_last_state(
 
 
 def worker_preopen_enabled() -> bool:
-    raw = os.getenv("VISION_WORKER_PREOPEN_BROWSER", "1")
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return get_settings().browser.worker_preopen_browser
 
 
-def worker_start_url(profile: dict) -> str:
-    entry = profile.get("entry", {}) if isinstance(profile, dict) else {}
-    manual = profile.get("manual", {}) if isinstance(profile, dict) else {}
-    site = str(entry.get("slug") or manual.get("site") or "").strip()
+def worker_start_url(profile) -> str:
+    site = str(getattr(profile, "slug", "") or "").strip()
     if not site:
         return ""
 
@@ -145,7 +142,12 @@ def worker_start_url(profile: dict) -> str:
     return get_official_site_url(site)
 
 
-def prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dict:
+def prepare_worker_start_screen(
+    initial_state: dict,
+    site_profile,
+    *,
+    worker_runtime: Any = None,
+) -> dict:
     """사이트 홈을 물리 입력으로 열고 첫 OCR 관찰 상태를 준비한다."""
 
     start_url = worker_start_url(site_profile)
@@ -153,39 +155,32 @@ def prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dict
         return initial_state
 
     try:
-        from agent.graph.nodes import _get_action_tools, perception_node, prepare_reasoning_models
+        from agent.graph.worker_resources import get_action_tools, prepare_reasoning_models
+        from agent.graph.worker_collection import apply_observation_node
+        from agent.graph.worker_observation import analyze_screen_node, capture_screen_node
+        from agent.graph.worker_transition import evaluate_transition_node
 
-        action_tools = _get_action_tools()
-        site_slug = str((site_profile.get("entry") or {}).get("slug") or "").strip()
-        try:
-            open_attempts = max(
-                1,
-                int(os.getenv("VISION_WORKER_START_OPEN_ATTEMPTS", "2")),
+        runtime_context = (
+            worker_runtime.activate()
+            if worker_runtime is not None
+            else nullcontext()
+        )
+        with runtime_context:
+            action_tools = get_action_tools()
+            site_slug = str(site_profile.slug or "").strip()
+            action_history = []
+            observation_state = {
+                **initial_state,
+                "current_url": start_url,
+                "current_url_stale": True,
+                "pending_transition": {},
+            }
+            result = _open_browser_while_ocr_starts(
+                action_tools,
+                site_slug=site_slug,
+                current_url=str(initial_state.get("current_url") or ""),
+                prepare_reasoning_models=prepare_reasoning_models,
             )
-        except ValueError:
-            open_attempts = 2
-
-        action_history = []
-        observation_state = {
-            **initial_state,
-            "current_url": start_url,
-            "current_url_stale": True,
-            "pending_transition": {},
-        }
-        observation = {}
-        for open_attempt in range(1, open_attempts + 1):
-            if open_attempt == 1:
-                result = _open_browser_while_ocr_starts(
-                    action_tools,
-                    site_slug=site_slug,
-                    current_url=str(initial_state.get("current_url") or ""),
-                    prepare_reasoning_models=prepare_reasoning_models,
-                )
-            else:
-                result = action_tools.open_browser(
-                    site=site_slug,
-                    current_url=observation_state.get("current_url", ""),
-                )
             action_history.append(
                 {
                     "action": "open_browser",
@@ -195,34 +190,28 @@ def prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dict
                     "screen_change_expected": True,
                 }
             )
-            observation = perception_node(
-                {
-                    **observation_state,
-                    "action_history": action_history,
-                },
-                max_capture_attempts=1 if open_attempt == 1 else None,
-            )
-            if not observation.get("low_information_screen"):
-                break
-            if open_attempt >= open_attempts:
-                break
-            logger.info(
-                "Worker start screen is still loading; reopening official site",
-                site=site_slug,
-                start_url=start_url,
-                open_attempt=open_attempt,
-                open_attempts=open_attempts,
-            )
-            observation_state.update(observation)
-            observation_state["current_url"] = start_url
-            observation_state["current_url_stale"] = True
+            observed_state = {
+                **observation_state,
+                "action_history": action_history,
+            }
+            captured = capture_screen_node(observed_state)
+            observed_state.update(captured)
+            transition = evaluate_transition_node(observed_state)
+            observed_state.update(transition)
+            if not observed_state.get("low_information_screen"):
+                analyzed = analyze_screen_node(observed_state)
+                observed_state.update(analyzed)
+                transition = evaluate_transition_node(observed_state)
+                observed_state.update(transition)
+                collected = apply_observation_node(observed_state)
+                observed_state.update(collected)
+            observation = observed_state
 
         prepared = dict(initial_state)
         prepared.update(observation)
         prepared["current_url"] = observation.get("current_url") or start_url
         prepared["current_url_stale"] = bool(observation.get("current_url_stale", False))
         prepared["action_history"] = action_history
-        prepared["last_action_screen_changed"] = False
         logger.info("Worker start screen prepared", start_url=start_url)
         return prepared
     except OcrWorkerReadinessError as exc:
@@ -241,27 +230,35 @@ def prepare_worker_start_screen(initial_state: dict, site_profile: dict) -> dict
 
 def execute_worker_graph(
     initial_state: dict,
-    site_profile: dict,
+    site_profile,
     recursion_limit: int,
     *,
+    worker_runtime: Any = None,
     prepare_screen: Callable[[dict, dict], dict] | None = None,
     run_graph: Callable[[Any, dict, int], tuple[dict, bool]] | None = None,
 ) -> tuple[dict, bool]:
     """그래프 구성, 시작 화면 준비, 실행을 하나의 작업자 경계로 묶는다."""
 
-    from agent.graph.workflow import build_graph
+    if worker_runtime is None:
+        from agent.graph.workflow import build_graph
 
-    app = build_graph()
+        app = build_graph()
+    else:
+        app = worker_runtime.get_graph()
     emit_run_event(
         "worker_preparing_screen",
         RunPhase.COLLECTION,
         "브라우저 시작 화면을 준비하고 있습니다.",
     )
     with measure_step("worker_prepare_screen"):
-        prepared_state = (prepare_screen or prepare_worker_start_screen)(
-            initial_state,
-            site_profile,
-        )
+        if prepare_screen is not None:
+            prepared_state = prepare_screen(initial_state, site_profile)
+        else:
+            prepared_state = prepare_worker_start_screen(
+                initial_state,
+                site_profile,
+                worker_runtime=worker_runtime,
+            )
     emit_run_event(
         "worker_graph_started",
         RunPhase.COLLECTION,
@@ -275,26 +272,17 @@ def execute_worker_graph(
         )
 
 
-def close_browser_after_run() -> None:
+def close_browser_after_run(*, worker_runtime: Any = None) -> None:
     """설정에 따라 작업 종료 후 브라우저 창만 닫고 OCR 작업자는 유지한다."""
 
-    if os.getenv("VISION_CLOSE_BROWSER_AFTER_RUN", "1").strip().lower() in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }:
-        logger.info("Browser cleanup disabled")
-        return
     try:
-        from agent.graph import nodes
+        if worker_runtime is None:
+            from agent.runtime.vision_worker_runtime import (
+                current_vision_worker_runtime,
+            )
 
-        action_tools = getattr(nodes, "_action_tools", None)
-        if action_tools is None:
-            logger.info("Browser cleanup skipped", reason="action_tools_not_initialized")
-            return
-        result = action_tools.close_browser()
-        logger.info("Browser cleanup completed", result=result)
+            worker_runtime = current_vision_worker_runtime()
+        worker_runtime.close_browser_after_run()
     except Exception as exc:
         logger.debug("Browser cleanup skipped", error=str(exc))
 
@@ -305,7 +293,6 @@ __all__ = [
     "OcrWorkerReadinessError",
     "prepare_worker_start_screen",
     "run_graph_with_last_state",
-    "worker_execution_session",
     "worker_preopen_enabled",
     "worker_start_url",
 ]

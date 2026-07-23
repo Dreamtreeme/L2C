@@ -82,13 +82,14 @@ def build_e2e_observability(summary: dict[str, Any]) -> dict[str, Any]:
     reflex_hits = sum(
         1
         for item in steps
-        if item.get("component") == "graph:reflex" and item.get("hit") is True
+        if item.get("component") == "graph:reflex"
+        and item.get("action_source") == "reflex"
     )
     queue_replay_hits = sum(
         1
         for item in steps
-        if item.get("component") == "graph:perception"
-        and item.get("queue_replay_hit") is True
+        if item.get("component") == "graph:selection"
+        and item.get("action_source") == "card_queue"
     )
     reasoning_calls = sum(
         1 for item in llm_calls if item.get("component") == "vision_reasoning"

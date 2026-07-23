@@ -33,6 +33,7 @@ class type_in_marker(BaseModel):
         ),
     )
     text: str = Field(..., description="입력할 텍스트")
+    target_label: Optional[str] = Field(None, description="입력 영역의 보이는 라벨(target_label)")
     slot_name: Optional[str] = Field(None, description="실행마다 바뀌는 입력 슬롯 이름(slot_name)")
     target_role: Optional[str] = Field(None, description="목표 기준 대상 역할(target_role)")
     target_component: Optional[str] = Field(None, description="화면 구성요소(target_component)")
@@ -141,7 +142,13 @@ class finish_detail_reading(BaseModel):
     """누적한 상세 페이지 OCR을 한 번 정제하여 수집 상태에 병합합니다."""
 
     reason: Optional[str] = Field(None, description="상세 페이지 읽기를 종료하는 이유(reason)")
-    detail_complete: Optional[bool] = Field(True, description="상세 공고 본문 정보가 충분히 수집되었는지 여부(detail_complete).")
+    detail_complete: Optional[bool] = Field(
+        True,
+        description=(
+            "주요업무 또는 자격요건을 포함한 실제 상세 공고 본문이 충분히 수집되었는지 여부. "
+            "회사명과 제목만 있는 중계 페이지에서는 true로 두지 않는다."
+        ),
+    )
     expected_after: Optional[str] = Field(None, description="정제 후 정상이라면 다음에 기대되는 상태(expected_after)")
     page_role: Optional[str] = Field("job_detail", description="Current page role.")
     risk_level: Optional[str] = Field("safe_read", description="safe_read, safe_navigation, or sensitive.")
@@ -156,13 +163,6 @@ class go_back(BaseModel):
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
-
-
-class update_plan_progress(BaseModel):
-    """현재 계획 단계를 업데이트하거나 계획을 수정합니다."""
-
-    current_step: int = Field(..., description="수행 중인 계획 단계 인덱스 (0-indexed)")
-    plan: Optional[List[str]] = Field(None, description="수정된 계획 단계 목록 (필요한 경우)")
 
 
 class set_result_card_queue(BaseModel):
@@ -202,7 +202,28 @@ class finish_task(BaseModel):
     result: str = Field(..., description="최종 완료 요약 또는 결과 데이터")
 
 
+ACTION_TOOL_SCHEMAS = {
+    schema.__name__: schema
+    for schema in (
+        click_marker,
+        type_in_marker,
+        scroll,
+        press_key,
+        open_browser,
+        close_browser,
+        close_current_tab,
+        update_extracted_info,
+        finish_detail_reading,
+        go_back,
+        set_result_card_queue,
+        switch_tab,
+        finish_task,
+    )
+}
+
+
 __all__ = [
+    "ACTION_TOOL_SCHEMAS",
     "click_marker",
     "close_browser",
     "close_current_tab",
@@ -216,5 +237,4 @@ __all__ = [
     "switch_tab",
     "type_in_marker",
     "update_extracted_info",
-    "update_plan_progress",
 ]

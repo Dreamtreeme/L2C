@@ -68,10 +68,10 @@ def image_data_url(images: list[Image.Image]) -> str:
 
 
 def run_gemini(images: list[Image.Image], model_name: str, repeats: int) -> dict:
+    from agent.application.model_clients import get_google_chat_model
     from langchain_core.messages import HumanMessage
-    from langchain_google_genai import ChatGoogleGenerativeAI
 
-    llm = ChatGoogleGenerativeAI(model=model_name, temperature=0)
+    llm = get_google_chat_model(model_name)
     message = HumanMessage(content=[
         {"type": "text", "text": "세 아이콘을 왼쪽부터 짧게 설명하세요. JSON 배열만 반환하세요."},
         {"type": "image_url", "image_url": {"url": image_data_url(images)}},
@@ -98,8 +98,8 @@ def main() -> None:
     images = crops(args.image)
     results = {
         "florence": run_florence(images, Path("models/omniparser/icon_caption"), args.repeats),
-        "gemini-3.1-flash-lite": run_gemini(images, "gemini-3.1-flash-lite", args.repeats),
-        "gemini-3.5-flash": run_gemini(images, "gemini-3.5-flash", args.repeats),
+        "gemini-3.5-flash-lite": run_gemini(images, "gemini-3.5-flash-lite", args.repeats),
+        "gemini-3.6-flash": run_gemini(images, "gemini-3.6-flash", args.repeats),
     }
     print(json.dumps(results, ensure_ascii=False, indent=2))
 

@@ -2,10 +2,10 @@ def test_site_registry_lists_existing_profiles():
     from agent.sites import list_supported_sites
 
     sites = list_supported_sites()
-    slugs = {site["slug"] for site in sites}
+    slugs = {site.slug for site in sites}
 
     assert {"wanted", "jobkorea", "saramin", "worknet", "rocketpunch"}.issubset(slugs)
-    assert all(site["runner"] == "vision_react" for site in sites)
+    assert all(site.runner == "vision_react" for site in sites)
 
 
 def test_official_site_urls_resolve_from_slug_name_and_domain():
@@ -35,9 +35,10 @@ def test_open_browser_uses_requested_site_official_url(monkeypatch):
     monkeypatch.setattr(action_tools, "_bound_browser_window_exists", lambda: False)
     monkeypatch.setattr(
         action_tools,
-        "_open_url_after_window_ready",
+        "_open_url_in_new_window",
         lambda url: opened.append(url) or {"opened": True, "url": url},
     )
+    monkeypatch.setattr(action_tools, "_reset_browser_zoom", lambda: None)
 
     result = action_tools.open_browser(site="saramin")
 
@@ -47,7 +48,7 @@ def test_open_browser_uses_requested_site_official_url(monkeypatch):
 
 def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch):
     from agent.application.worker_execution_service import prepare_worker_start_screen
-    from agent.graph import nodes
+    from agent.graph import worker_resources
     from agent.sites import load_site_profile
 
     calls = []
@@ -72,17 +73,32 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
             }
 
     monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
-    monkeypatch.setattr(nodes, "_get_action_tools", lambda: FakeActionTools())
-    monkeypatch.setattr(nodes, "prepare_reasoning_models", lambda: reasoning_warmed.append(True))
+    monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
     monkeypatch.setattr(
-        nodes,
-        "perception_node",
-        lambda state, **_kwargs: {
+        worker_resources,
+        "prepare_reasoning_models",
+        lambda: reasoning_warmed.append(True),
+    )
+    monkeypatch.setattr(
+        "agent.graph.worker_observation.capture_screen_node",
+        lambda state: {
             "current_url": "https://www.jobkorea.co.kr",
             "current_url_stale": False,
-            "current_markers": [{"id": 1}],
             "recent_images": ["screen.png"],
+            "low_information_screen": False,
         },
+    )
+    monkeypatch.setattr(
+        "agent.graph.worker_observation.analyze_screen_node",
+        lambda state: {"current_markers": [{"id": 1}]},
+    )
+    monkeypatch.setattr(
+        "agent.graph.worker_transition.evaluate_transition_node",
+        lambda state: {},
+    )
+    monkeypatch.setattr(
+        "agent.graph.worker_collection.apply_observation_node",
+        lambda state: {},
     )
 
     result = prepare_worker_start_screen(
@@ -100,46 +116,42 @@ def test_site_registry_profile_files_exist():
     from agent.sites import list_supported_sites
     from agent.sites.loader import SITES_DIR
 
-    for entry in list_supported_sites(enabled_only=False):
-        for key in ("manual_path", "skill_path", "tools_path"):
-            path = SITES_DIR / entry[key]
-            assert path.exists(), f"missing {key} for {entry['slug']}: {path}"
+    for profile in list_supported_sites(enabled_only=False):
+        path = SITES_DIR / profile.slug / "profile.json"
+        assert path.exists(), f"missing profile.json for {profile.slug}: {path}"
 
 
-def test_load_site_profile_returns_manual_skill_and_tools():
+def test_load_site_profile_returns_typed_contract():
     from agent.sites import load_site_profile
 
     profile = load_site_profile("wanted.co.kr")
 
-    assert profile["entry"]["slug"] == "wanted"
-    assert profile["manual"]["site"] == "wanted"
-    assert "원티드" in profile["skill"]
-    assert "click_marker" in profile["tools"]["allowed_tools"]
-    assert "finish_detail_reading" in profile["tools"]["allowed_tools"]
-    assert "set_result_card_queue" in profile["tools"]["allowed_tools"]
-    assert profile["manual"]["reflex_policy"]["reason_after_hit"] is True
+    assert profile.slug == "wanted"
+    assert "원티드" in profile.guidance
+    assert "click_marker" in profile.tools.allowed_tools
+    assert "finish_detail_reading" in profile.tools.allowed_tools
+    assert "set_result_card_queue" in profile.tools.allowed_tools
+    assert profile.reflex_policy.reason_after_hit is True
 
 
-def test_all_site_manuals_define_reflex_boundaries():
+def test_all_site_profiles_define_reflex_boundaries():
     from agent.sites import list_supported_sites, load_site_profile
 
-    for entry in list_supported_sites():
-        manual = load_site_profile(entry["slug"])["manual"]
-        assert manual["reflex_policy"]["safe_actions"]
-        assert manual["reflex_policy"]["unsafe_actions"]
-        assert "stable_controls" not in manual
-        assert "common_flow" not in manual
+    for profile in list_supported_sites():
+        loaded = load_site_profile(profile.slug)
+        assert loaded.reflex_policy.safe_actions
+        assert loaded.reflex_policy.unsafe_actions
 
 
-def test_all_site_manuals_define_role_scoped_guidance():
+def test_all_site_profiles_define_role_scoped_guidance():
     from agent.sites import list_supported_sites, load_site_profile
 
-    for entry in list_supported_sites():
-        guidance = load_site_profile(entry["slug"])["manual"]["page_guidance"]
-        assert guidance["home"]["instructions"]
-        assert guidance["search"]["instructions"]
-        assert guidance["job_detail"]["instructions"]
-        assert guidance["job_detail"]["reading_targets"]
+    for profile in list_supported_sites():
+        guidance = load_site_profile(profile.slug).page_guidance
+        assert guidance["home"].instructions
+        assert guidance["search"].instructions
+        assert guidance["job_detail"].instructions
+        assert guidance["job_detail"].reading_targets
 
 
 def test_jobkorea_detail_role_uses_declared_url_signal():
@@ -149,6 +161,30 @@ def test_jobkorea_detail_role_uses_declared_url_signal():
 
     assert looks_like_job_detail_url(url) is True
     assert infer_site_page_role(url, []) == "job_detail"
+
+
+def test_work24_detail_role_uses_declared_url_signal():
+    from agent.runtime.site_context import infer_site_page_role, looks_like_job_detail_url
+
+    url = (
+        "https://www.work24.go.kr/wk/a/b/1500/empDetailAuthView.do"
+        "?wantedAuthNo=51078967&infoTypeCd=CJK"
+    )
+
+    assert looks_like_job_detail_url(url) is True
+    assert infer_site_page_role(url, []) == "job_detail"
+
+
+def test_work24_redirected_home_uses_declared_url_signal():
+    from agent.runtime.site_context import infer_site_page_role
+
+    assert infer_site_page_role("https://www.work24.go.kr/cm/main.do", []) == "home"
+
+
+def test_saramin_redirected_home_uses_declared_url_signal():
+    from agent.runtime.site_context import infer_site_page_role
+
+    assert infer_site_page_role("https://www.saramin.co.kr/zf_user/", []) == "home"
 
 
 def test_unregistered_site_does_not_use_generic_job_url_heuristic():
@@ -168,6 +204,50 @@ def test_detail_context_does_not_require_a_detail_url_pattern():
         "https://www.work24.go.kr/search",
         marker_texts=["모집요강", "직무내용", "근무조건"],
     ) is True
+
+
+def test_rocketpunch_jobs_list_uses_job_search_guidance_without_hiding_side_panel():
+    from agent.runtime.site_context import infer_site_page_role, site_runtime_guidance
+
+    url = "https://www.rocketpunch.com/jobs"
+    list_markers = ["키워드", "직군", "숙련도", "기업 규모", "근무 방식"]
+
+    home_guidance = site_runtime_guidance("https://www.rocketpunch.com", "home")
+    assert "사이드바의 '채용' 메뉴" in home_guidance
+    assert infer_site_page_role(url, list_markers) == "search"
+    guidance = site_runtime_guidance(url, "search")
+    assert "페이지 중앙 채용 검색 영역" in guidance
+    assert "왼쪽 사이드바" in guidance
+    assert infer_site_page_role(
+        url,
+        list_markers + ["주요업무", "자격요건", "채용 상세"],
+    ) == "job_detail"
+
+
+def test_result_card_selector_receives_current_site_guidance(monkeypatch, tmp_path):
+    from agent.runtime import result_card_selector
+
+    image_path = tmp_path / "screen.png"
+    image_path.write_bytes(b"not-used")
+    monkeypatch.setattr(
+        result_card_selector,
+        "image_to_base64_jpeg",
+        lambda *_args, **_kwargs: "image",
+    )
+
+    messages = result_card_selector._selection_messages(
+        {
+            "current_url": "https://www.rocketpunch.com/jobs",
+            "current_page_role": "search",
+            "current_markers": [{"id": 1, "type": "text", "text": "키워드"}],
+            "marked_image": str(image_path),
+            "recipe_params": {"query": "백엔드 개발자", "target_count": 1},
+        },
+        1,
+    )
+
+    assert "기업명, 직무명, 기술 스택, 담당 업무" in messages[0].content
+    assert "관심 주제, 공고, 사람, 기업" in messages[0].content
 
 
 def test_runtime_guidance_contains_only_current_site_and_role():
@@ -240,7 +320,7 @@ def test_commander_site_tools_expose_classic_sites():
     assert all(site["classic_adapter"] == site["slug"] for site in sites)
 
 
-def test_commander_site_profile_tool_returns_manual_skill_and_tools():
+def test_commander_site_profile_tool_returns_single_profile():
     import json
     from agent.tools.site_registry import get_collection_site_profile
 
@@ -249,9 +329,9 @@ def test_commander_site_profile_tool_returns_manual_skill_and_tools():
 
     assert data["site"]["slug"] == "jobkorea"
     assert data["site"]["classic_adapter"] == "jobkorea"
-    assert data["manual"]["site"] == "jobkorea"
-    assert "click_marker" in data["tools"]["allowed_tools"]
-    assert "잡코리아" in data["skill"]
+    assert data["profile"]["slug"] == "jobkorea"
+    assert "click_marker" in data["profile"]["tools"]["allowed_tools"]
+    assert "잡코리아" in data["profile"]["guidance"]
 
 
 def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
@@ -304,19 +384,21 @@ def test_realtime_scraping_direct_search_url_encodes_keyword():
 
     from agent.tools.realtime_scraping import _build_direct_search_url, _build_site_goal
 
-    profile = {
-        "entry": {"slug": "sample", "display_name": "Sample", "base_url": "https://example.com"},
-        "manual": {
+    from agent.sites import load_site_profile
+    from agent.sites.profile import NavigationPolicy
+
+    profile = load_site_profile("wanted").model_copy(
+        update={
+            "slug": "sample",
+            "display_name": "Sample",
+            "domains": ("example.com",),
             "base_url": "https://example.com",
-            "navigation_policy": {
-                "search_url_template": "https://example.com/search?query={query}&tab=position",
-            },
-            "collection_policy": {"required_fields": []},
-            "reflex_policy": {"safe_actions": [], "unsafe_actions": []},
-        },
-        "tools": {"allowed_tools": []},
-        "prompt": "",
-    }
+            "navigation_policy": NavigationPolicy(
+                allow_direct_search_url=True,
+                search_url_template="https://example.com/search?query={query}&tab=position",
+            ),
+        }
+    )
     keyword = "AI \uc751\uc6a9 \uc5d4\uc9c0\ub2c8\uc5b4"
     url = _build_direct_search_url(keyword, profile)
     parsed = urlparse(url)

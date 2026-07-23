@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from typing import Any, Iterator, Sequence
 
+from agent.config import get_settings
 from agent.utils.logger import logger
-
-
-_FALSE_VALUES = {"", "0", "false", "no", "off"}
 
 
 def langsmith_tracing_enabled() -> bool:
@@ -24,12 +21,11 @@ def langsmith_tracing_enabled() -> bool:
 
 
 def langsmith_project_name() -> str:
-    return os.getenv("LANGSMITH_PROJECT", "l2c-local").strip() or "l2c-local"
+    return get_settings().observability.langsmith_project.strip() or "l2c-local"
 
 
 def _feedback_enabled() -> bool:
-    value = os.getenv("L2C_LANGSMITH_E2E_FEEDBACK", "1").strip().lower()
-    return value not in _FALSE_VALUES
+    return get_settings().observability.langsmith_e2e_feedback
 
 
 @contextmanager
@@ -148,10 +144,7 @@ def publish_langsmith_feedback(
                 kwargs["comment"] = str(item["comment"])
             client.create_feedback(**kwargs)
             published += 1
-        try:
-            timeout = max(0.1, float(os.getenv("LANGSMITH_FLUSH_TIMEOUT_SEC", "5")))
-        except ValueError:
-            timeout = 5.0
+        timeout = get_settings().observability.langsmith_flush_timeout_sec
         client.flush(timeout=timeout)
         return {"status": "published", "reason": "", "published": published}
     except Exception as exc:

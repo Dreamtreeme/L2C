@@ -8,7 +8,6 @@ kept out of this module.
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from collections import Counter
 from datetime import datetime
@@ -16,6 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from agent.config import get_settings
 from agent.recipe.text_utils import site_of
 from agent.recipe.task_category import normalize_task_category
 from agent.utils.job_fields import JOB_FIELD_ALIASES, deterministic_report_item, first_present, summary_text
@@ -73,7 +73,7 @@ def _semantic_job_evidence(jobs: list[dict[str, Any]], limit: int = 20) -> list[
 
 
 def _report_summary_mode() -> str:
-    mode = os.getenv("VISION_WORKER_SUMMARY_MODE", "deterministic").strip().lower()
+    mode = get_settings().recipe.worker_summary_mode.strip().lower()
     return mode if mode in {"deterministic", "llm", "off"} else "deterministic"
 
 
@@ -88,7 +88,9 @@ def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[s
         }
         for idx, job in enumerate(jobs[:limit])
     ]
-    model_name = os.getenv("VISION_WORKER_SUMMARY_MODEL", os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash"))
+    from agent.application.model_policy import lightweight_model_name
+
+    model_name = lightweight_model_name("VISION_WORKER_SUMMARY_MODEL")
     from agent.application.model_clients import get_structured_google_model
 
     llm = get_structured_google_model(model_name, ReportJobSummary, temperature=0.0)
@@ -105,7 +107,12 @@ def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[s
     ]
     from agent.application.run_context import invoke_with_metrics
 
-    response = invoke_with_metrics(llm, messages, "worker_summary")
+    response = invoke_with_metrics(
+        llm,
+        messages,
+        "worker_summary",
+        stream=True,
+    )
     summary = dump_model(response)
     out: list[dict[str, Any]] = []
     for idx, item in enumerate(summary.get("jobs") or []):
@@ -167,9 +174,20 @@ def build_worker_submission(
     recorded_steps = list(final_state.get("recorded_steps", []) or [])
     feedback_episodes = list(final_state.get("feedback_episodes", []) or [])
     transition_observations = list(final_state.get("transition_observations", []) or [])
+    observed_job_ids = sorted(
+        {
+            int(item["job_id"])
+            for item in (final_state.get("result_card_queue", []) or [])
+            if isinstance(item, dict)
+            and item.get("status") == "skipped"
+            and str(item.get("job_id") or "").isdigit()
+            and int(item["job_id"]) > 0
+        }
+    )
     extracted_summary = {
         "has_data": bool(jobs),
         "job_count": len(jobs),
+        "observed_job_count": len(observed_job_ids),
         "jobs": report_jobs,
         "summary_source": report_source,
         "summary_error": report_error,
@@ -200,6 +218,7 @@ def build_worker_submission(
         is_finished=bool(final_state.get("is_finished", False)),
         hit_recursion_limit=bool(hit_recursion_limit),
         collected_count=len(jobs),
+        observed_job_ids=observed_job_ids,
         target_count=int(target_count or 0),
         persisted_count=int(persisted_count or 0),
         feedback_saved=int(feedback_saved or 0),
@@ -226,7 +245,10 @@ def validate_submission_shape(submission: dict[str, Any]) -> list[dict[str, Any]
         add("goal", "missing worker goal")
     if not submission.get("site"):
         add("site", "missing site identifier", "warning")
-    if int(submission.get("collected_count") or 0) <= 0:
+    if (
+        int(submission.get("collected_count") or 0) <= 0
+        and not submission.get("observed_job_ids")
+    ):
         add("extracted_summary", "worker did not submit any collected job data")
 
     recorded_steps = submission.get("recorded_steps") or []
@@ -366,6 +388,7 @@ def build_worker_review_payload(
             "is_finished": bool(submission.get("is_finished", False)),
             "hit_recursion_limit": bool(submission.get("hit_recursion_limit", False)),
             "collected_count": int(submission.get("collected_count") or 0),
+            "observed_job_ids": list(submission.get("observed_job_ids") or [])[:20],
             "persisted_count": int(submission.get("persisted_count") or 0),
             "result_availability": dict(summary.get("result_availability") or {}),
             "action_count": int(summary.get("action_count") or len(steps)),
@@ -391,7 +414,9 @@ def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallba
     from langchain_core.messages import HumanMessage, SystemMessage
     from agent.application.model_clients import get_structured_google_model
 
-    model_name = os.getenv("VISION_WORKER_REVIEW_MODEL", "gemini-3.5-flash")
+    from agent.application.model_policy import commander_model_name
+
+    model_name = commander_model_name("VISION_WORKER_REVIEW_MODEL")
     llm = get_structured_google_model(model_name, CommanderReview, temperature=0.0)
     compact = build_worker_review_payload(submission, issues)
     messages = [
@@ -436,7 +461,7 @@ def review_worker_submission(submission: dict[str, Any]) -> dict[str, Any]:
     fallback = shape_review(submission, issues)
     if fallback.get("decision") != "accept":
         return fallback
-    mode = os.getenv("VISION_WORKER_REVIEW_MODE", "shape").strip().lower()
+    mode = get_settings().recipe.worker_review_mode.strip().lower()
     if mode != "llm":
         return fallback
     try:

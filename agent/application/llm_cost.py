@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
+
+from agent.config import get_settings
 
 
 DEFAULT_PRICING_PATH = Path(__file__).resolve().parents[2] / "config" / "model_pricing.json"
@@ -22,7 +23,7 @@ def _non_negative_float(value: Any) -> float | None:
 def load_model_pricing(path: str | Path | None = None) -> tuple[dict[str, Any], str]:
     """가격표를 읽는다. 파일이 없거나 잘못됐으면 비용을 임의 추정하지 않는다."""
 
-    configured = path or os.getenv("LLM_PRICING_FILE") or DEFAULT_PRICING_PATH
+    configured = path or get_settings().paths.llm_pricing_file or DEFAULT_PRICING_PATH
     pricing_path = Path(configured).expanduser()
     if not pricing_path.is_absolute():
         pricing_path = Path.cwd() / pricing_path

@@ -38,13 +38,13 @@
 * **해결**:
   1. Ollama 호출 파라미터에서 `"format": "json"` 옵션을 해제하여 모델의 생성 자유도를 보장하되, 출력 텍스트 내 마크다운 코드블록 안에 JSON 데이터를 안전하게 담도록 프롬프트를 조정함.
   2. 단순 정규식 파서 대신 문자열 내 중괄호 `{`와 `}`의 열고 닫힘을 스택(Stack)으로 계측하여 온전한 JSON 객체만 발라내는 **Stack-based Parser**를 `perception.py`에 이식함.
-  3. [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)에 동일 액션 연속 반복 3회 감지 시 에이전트를 안전하게 중단 및 탈출시키는 **Loop Detection & Recursion Limit** 로직을 적용함.
+  3. 당시 단일 그래프 노드 모듈에 동일 액션 연속 반복 감지와 재귀 한도 처리를 적용했다. 현재는 `agent/graph/worker_execution.py`와 전환 정책 모듈로 분리되어 있다.
 
 ### [관련 참조 리소스]
 * **Ollama 포맷 재현 테스트 코드**: [run_ollama_format_test.py](file:///c:/Users/psg/Desktop/L2C/scratch/run_ollama_format_test.py)
 * **Ollama 원시 JSON 붕괴 로그**: [raw_ollama_resp.json](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/raw_ollama_resp.json)
 * **스택 기반 파서 디버깅 스크립트**: [debug_ollama_output.py](file:///C:/Users/psg/.gemini/antigravity/brain/2176c489-6bf5-40ce-aa85-7bc5c6eb6b97/scratch/debug_ollama_output.py)
-* **루프 방지가 탑재된 그래프 노드**: [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)
+* **현재 실행·전환 모듈**: `agent/graph/worker_execution.py`, `agent/graph/worker_transition.py`
 
 ---
 
@@ -185,7 +185,7 @@ Windows에서는 `paddle`을 먼저 import하면 `torch`가 `shm.dll` 로딩 중
 
 ### [관련 참조 리소스]
 * **대기 정밀도 변경 모듈**: [wait_stable.py](file:///c:/Users/psg/Desktop/L2C/agent/utils/wait_stable.py)
-* **프롬프트 토큰 축약 적용 노드**: [nodes.py](file:///c:/Users/psg/Desktop/L2C/agent/graph/nodes.py)
+* **현재 프롬프트 추론 모듈**: `agent/graph/worker_reasoning.py`
 * **지휘자 프롬프트**: [commander.py](file:///c:/Users/psg/Desktop/L2C/agent/prompts/commander.py)
 
 ---
@@ -193,15 +193,16 @@ Windows에서는 `paddle`을 먼저 import하면 `torch`가 `shm.dll` 로딩 중
 ## 10. QA 서버 import 시 비전 엔진까지 초기화되는 문제
 
 ### [현상]
-웹 Q&A 서버(`agent/web_server.py`)와 SQLite 질의 테스트는 화면 인식이나 물리 브라우저 제어가 필요하지 않은데도, `agent.graph.nodes`를 import하는 순간 `PerceptionEngine()`과 `ActionTools()`가 전역 싱글톤으로 생성되었습니다. 이로 인해 서버 시작 경로가 YOLO 모델, mss 캡처 장치, PyAutoGUI, OmniParser 가중치 상태에 종속되었습니다.
+웹 Q&A 서버(`agent/web_server.py`)와 SQLite 질의 테스트는 화면 인식이나 물리 브라우저 제어가 필요하지 않은데도, 당시 단일 작업자 노드 모듈을 import하는 순간 `PerceptionEngine()`과 `ActionTools()`가 전역 싱글톤으로 생성되었습니다. 이로 인해 서버 시작 경로가 YOLO 모델, mss 캡처 장치, PyAutoGUI, OmniParser 가중치 상태에 종속되었습니다.
 
 ### [원인 분석]
-Phase 3 이후 성능 최적화를 위해 도구와 LLM 클라이언트를 모듈 전역에서 재사용하도록 만들었지만, QA 지휘자와 비전 실행자가 같은 `nodes.py` 안에 공존하면서 import side effect가 커졌습니다. 특히 Phase 7의 SQLite Q&A 경로는 비전 엔진이 필요하지 않으므로 이 결합은 불필요한 장애면이었습니다.
+Phase 3 이후 성능 최적화를 위해 도구와 LLM 클라이언트를 모듈 전역에서 재사용하도록 만들었지만, QA 지휘자와 비전 실행자가 같은 파일에 공존하면서 import side effect가 커졌습니다. 특히 Phase 7의 SQLite Q&A 경로는 비전 엔진이 필요하지 않으므로 이 결합은 불필요한 장애면이었습니다.
 
 ### [해결 조치]
-1. `PerceptionEngine`, `ActionTools`, 브라우저 자동화용 Gemini 도구 바인딩, QA용 Gemini 도구 바인딩을 `_get_*()` 헬퍼로 지연 초기화했습니다.
-2. `agent/main.py`와 `realtime_scraping.py`의 초기 `GraphState`에 `step_durations`를 명시하여 상태 스키마 누락 가능성을 줄였습니다.
-3. Windows/WSL 혼합 환경에서 줄끝 변경만으로 대형 diff가 생기지 않도록 `.gitattributes`에 LF 정책을 추가했습니다.
+1. 처음에는 `PerceptionEngine`, `ActionTools`, 모델 바인딩을 `_get_*()` 헬퍼로 지연 초기화해 import 부작용을 줄였습니다.
+2. 이후 `ApplicationRuntime`과 `VisionWorkerRuntime`이 자원 생성·재사용·종료를 소유하도록 대체했고, 단일 `nodes.py`는 책임별 `worker_*` 모듈로 분리한 뒤 삭제했습니다.
+3. 단계 시간은 그래프 상태의 `step_durations`에서 제거하고 `RunContext` 구조화 이벤트만 사용하도록 단일화했습니다.
+4. Windows/WSL 혼합 환경에서 줄끝 변경만으로 대형 diff가 생기지 않도록 `.gitattributes`에 LF 정책을 추가했습니다.
 
 ### [검증]
 * `python.exe -m pytest agent/tests -q` 결과: `6 passed`
@@ -902,3 +903,58 @@ DB 저장
 - E2E는 승격 완료를 기다리지 않고 실행 종료 시점의 후보 상태만 기록한다.
 
 잡코리아 1건 검증에서 수집 실행은 `44.57초`, 전체 셸 실행은 `46.4초`에 종료됐다. 후보는 `pending_review`로 남았고 이전의 추가 90초 대기는 발생하지 않았다.
+
+---
+
+## 19. 시작 시 빈 화면을 반복 캡처하고 같은 주소를 다시 여는 문제
+
+### [문제]
+
+사람인 첫 E2E에서 주소창에는 공식 URL이 입력됐지만 본문이 빈 상태로 오래 머물렀다. 시작 화면 준비, 화면 인식, LangGraph가 각각 재시도를 소유해 같은 로딩 화면을 반복 캡처했고 `open_browser`도 세 번 실행됐다. 이후 Chrome이 `ERR_CONNECTION_TIMED_OUT`을 표시했고, LLM이 새로고침한 뒤 정상 홈이 열렸다.
+
+### [원인]
+
+- 새 창을 `about:blank`로 먼저 연 뒤 주소창 물리 입력으로 다시 이동했다.
+- 첫 빈 화면을 약 2초 만에 실패로 보고 진행 중인 URL 요청을 다시 시작했다.
+- 한 번의 화면 인식 내부 재캡처와 그래프 수준 재관찰이 중복됐다.
+- 빈 화면 재캡처마다 새 스크린샷 파일을 만들어 같은 장면이 누적됐다.
+
+### [해결]
+
+- Chrome 새 창에 사이트 공식 URL을 직접 전달한다.
+- 브라우저는 한 번만 열고, 로딩 중에는 같은 URL로 재이동하지 않는다.
+- 빈 화면 대기는 `PerceptionEngine`의 시간 기반 대기 한 곳에서 처리한다.
+- 시작 서비스와 LangGraph의 별도 빈 화면 반복 횟수 상태를 제거한다.
+- 대기 중 캡처는 같은 파일을 덮어쓰고 최종 화면만 보존한다.
+- 정상 콘텐츠나 실제 오류 화면이 나타나면 즉시 OCR·reasoning 경로로 넘긴다.
+
+같은 사람인 검색어 재검증에서 공식 URL 실행은 `3회 → 1회`, low-information 로그는 `18회 → 0회`가 됐다. 정상 홈 첫 캡처 시점은 요청 시작 후 약 `36.5초 → 6.3초`로 줄었다. 전체 실행시간은 별도의 PaddleOCR timeout 3회 때문에 `165.91초`였으므로 시작 화면 개선과 OCR outlier는 분리해 평가해야 한다.
+
+---
+
+## 20. Python 3.13과 PaddleOCR 3.x 전환
+
+### [문제]
+
+기존 환경은 Python 3.10, PaddleOCR 2.10 API, PaddlePaddle 3.0, PyTorch를 한 `.venv`에 함께 설치했다. 같은 `cv2` 모듈을 제공하는 OpenCV 배포판도 세 종류가 공존했다. 그 결과 Paddle 작업자에서 Torch를 `MagicMock`으로 바꾸고, import 순서와 CUDA DLL 경로를 맞추는 우회가 운영 코드에 남아 있었다.
+
+### [검증]
+
+- Python 3.10의 지원 종료 시점과 Windows GPU 휠 범위를 비교해 Python 3.13.14를 선택했다.
+- Paddle 3.2.0 cu118은 철회된 cuDNN 의존성 경고가 있어 제외했다.
+- Paddle 3.3.1 cu126은 컴파일 cuDNN 9.9와 설치 cuDNN 9.5가 다르다는 실행 경고가 있어 제외했다.
+- Paddle 3.3.1 cu130은 CUDA 13.0과 cuDNN 9.13이 일치했고, 공식 휠 내부 DLL 디렉터리를 등록한 뒤 한국어 OCR을 정상 처리했다.
+- PaddleOCR 3.7의 한국어 모델은 `PP-OCRv5`로 명시하고 `predict()`의 구조화 결과를 사용했다.
+
+### [해결]
+
+- `.venv-app`: PyTorch, Ultralytics, OmniParser, LangGraph, FastAPI
+- `.venv-ocr`: PaddlePaddle, PaddleOCR, PaddleX
+- 앱은 `.venv-ocr`의 Python으로 OCR 작업자를 한 번 시작해 작업 끝까지 재사용한다.
+- 2.x 배열 파서, Torch 가짜 모듈, Paddle IR monkey patch, 앱 프로세스의 Paddle DLL 탐색 코드를 삭제했다.
+- 앱과 OCR 환경에 OpenCV 배포판을 하나씩만 설치했다.
+- `scripts/check_runtime_compat.py`가 Python, 패키지, OpenCV, CUDA, cuDNN 버전을 실행 전에 검사한다.
+
+### [결과]
+
+사람인 스크린샷에서 113개 OCR 상자를 반환했다. 프로젝트 기본 환경의 첫 OCR 요청은 1.63초, 같은 작업자의 두 번째 요청은 0.59초였고 작업자 재시작은 없었다. Python 3.13에서 에이전트 테스트 379개가 통과했다. 자세한 버전표와 공식 근거는 `docs/runtime_compatibility.md`에 남겼다.

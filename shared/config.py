@@ -5,36 +5,37 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from agent.config import get_settings
+from agent.config.settings import BASE_DIR
 
-from dotenv import load_dotenv
-
-load_dotenv()
+_SETTINGS = get_settings()
 
 # ── 프로젝트 경로 ──────────────────────────────────────────
-BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = BASE_DIR / os.getenv("DB_PATH", "data/jobs.db")
-JSON_DIR = BASE_DIR / os.getenv("JSON_OUTPUT_DIR", "data/json")
-LOGS_DIR = BASE_DIR / os.getenv("LOG_DIR", "logs")
-SCREENSHOT_DIR = BASE_DIR / os.getenv("SCREENSHOT_DIR", "data/screenshots")
+DB_PATH = _SETTINGS.paths.db_path
+JSON_DIR = _SETTINGS.paths.json_dir
+LOGS_DIR = _SETTINGS.paths.log_dir
+SCREENSHOT_DIR = _SETTINGS.paths.screenshot_dir
 
 for d in (JSON_DIR, LOGS_DIR, SCREENSHOT_DIR, DB_PATH.parent):
     d.mkdir(parents=True, exist_ok=True)
 
 # ── 캡처 파라미터 (Playwright) ──────────────────────────────────────────
-PLAYWRIGHT_HEADLESS = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
-PLAYWRIGHT_TIMEOUT_MS = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "30000"))
-CHROME_WINDOW_WIDTH = int(os.getenv("CHROME_WINDOW_WIDTH", "1024"))
-CHROME_WINDOW_HEIGHT = int(os.getenv("CHROME_WINDOW_HEIGHT", "768"))
-PAGE_LOAD_WAIT_SEC = float(os.getenv("PAGE_LOAD_WAIT_SEC", "4"))
+PLAYWRIGHT_HEADLESS = _SETTINGS.browser.playwright_headless
+PLAYWRIGHT_TIMEOUT_MS = _SETTINGS.browser.playwright_timeout_ms
+CHROME_WINDOW_WIDTH = _SETTINGS.browser.chrome_window_width
+CHROME_WINDOW_HEIGHT = _SETTINGS.browser.chrome_window_height
+PAGE_LOAD_WAIT_SEC = _SETTINGS.browser.page_load_wait_sec
 
 # ── LLM (Ollama) ───────────────────────────────────────────
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b") # 성능 향상을 위해 모델 크기 증가
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-WORKNET_API_KEY = os.getenv("WORKNET_API_KEY", "") # 워크넷 오픈 API 인증키
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
-LLM_NUM_PREDICT = int(os.getenv("LLM_NUM_PREDICT", "2048"))
+OLLAMA_MODEL = _SETTINGS.models.ollama_model
+OLLAMA_HOST = _SETTINGS.models.ollama_host
+WORKNET_API_KEY = (
+    _SETTINGS.models.worknet_api_key.get_secret_value()
+    if _SETTINGS.models.worknet_api_key is not None
+    else ""
+)
+LLM_TEMPERATURE = _SETTINGS.models.llm_temperature
+LLM_NUM_PREDICT = _SETTINGS.models.ollama_num_predict
 
 # ── LLM 프롬프트 ───────────────────────────────────────────
 EXTRACTION_PROMPT = """당신은 채용공고 텍스트 정제 전문가입니다.
@@ -68,4 +69,3 @@ EXTRACTION_PROMPT = """당신은 채용공고 텍스트 정제 전문가입니�
 
 [채용공고 전문]:
 {text}"""
-
