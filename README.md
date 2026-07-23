@@ -292,7 +292,6 @@ L2C/
 | 지휘자 모델 | Gemini 3.6 Flash |
 | 비전 판단 모델 | Gemini 3.6 Flash |
 | 경량 구조화 모델 | Gemini 3.5 Flash Lite |
-| VLM 캡셔닝 폴백 | Qwen2.5-VL (Ollama) |
 | 실행자 텍스트 모델 | Qwen (Ollama) |
 | 검색 방식 | 검색 의미 사전 + 구조화 SQLite 근거 검사 |
 | 궤적 트래킹 | LangSmith |
@@ -311,13 +310,12 @@ L2C/
 git clone https://github.com/Dreamtreeme/L2C.git
 cd L2C
 
-# 환경 설정
-Copy-Item .env.example .env
-.\scripts\setup_runtime.ps1
+# Windows 원클릭 설치
+.\setup.cmd
+
+# setup.cmd가 만든 .env에 GEMINI_API_KEY를 설정
 .\.venv-app\Scripts\Activate.ps1
 
-# Gemini 기반 지휘자/QA 사용 시 .env에 GEMINI_API_KEY를 설정
-# 기본값 SKIP_VLM_CAPTION=true 로 VLM 캡셔닝 단계를 우회
 # 분할된 비전 작업자 그래프는 VISION_AGENT_RECURSION_LIMIT=180 기본값으로 실행
 
 # Classic 방식 — URL 직접 입력
@@ -348,7 +346,9 @@ python -m benchmark.run_realtime_e2e --site wanted --query "ios 개발자 공고
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 ```
 
-설치 스크립트는 Python 3.13을 사용해 `.venv-app`과 `.venv-ocr`을 따로 만듭니다. OmniParser/PyTorch와 PaddleOCR/PaddlePaddle의 CUDA 런타임을 분리하므로 한 프로세스 안에서 DLL과 import 순서를 맞추는 우회 코드가 필요하지 않습니다. 설치 뒤 `scripts/check_runtime_compat.py`가 패키지 버전, OpenCV 중복 설치, GPU 연산을 검사합니다.
+`setup.cmd`는 디스크와 NVIDIA GPU를 먼저 검사하고, Python 3.13.14가 없으면 공식 python.org 설치 파일을 받아 SHA-256을 검증한 뒤 설치합니다. 이후 `.venv-app`과 `.venv-ocr`을 만들고 Chromium과 OmniParser·PaddleOCR 모델을 내려받은 뒤 실제 GPU 연산까지 검사합니다. NVIDIA 드라이버는 하드웨어와 재부팅이 관련되므로 자동 설치하지 않습니다.
+
+OmniParser/PyTorch와 PaddleOCR/PaddlePaddle의 CUDA 런타임은 서로 다른 환경에 둡니다. 따라서 한 프로세스 안에서 DLL과 import 순서를 맞추는 우회 코드가 필요하지 않습니다. 설치 항목을 선택적으로 생략해야 하는 개발 환경에서는 `scripts/setup_runtime.ps1`을 직접 사용할 수 있습니다.
 
 고정 버전의 선택 근거와 GPU 실측 결과는 [`docs/runtime_compatibility.md`](./docs/runtime_compatibility.md)에 정리했습니다.
 

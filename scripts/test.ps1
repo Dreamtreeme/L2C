@@ -12,11 +12,8 @@ if (-not $PytestArgs -or $PytestArgs.Count -eq 0) {
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $AppPython = Join-Path $RepoRoot '.venv-app\Scripts\python.exe'
-$LegacyPython = Join-Path $RepoRoot '.venv\Scripts\python.exe'
 if (Test-Path $AppPython) {
     $Python = $AppPython
-} elseif (Test-Path $LegacyPython) {
-    $Python = $LegacyPython
 } else {
     $Python = 'py'
     $PytestArgs = @('-3.13', '-m', 'pytest') + $PytestArgs

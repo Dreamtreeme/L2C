@@ -1,12 +1,25 @@
 param(
     [string]$PythonPath = "",
-    [switch]$SkipBrowserInstall
+    [switch]$SkipBrowserInstall,
+    [switch]$SkipAssetDownload
 )
 
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\use_utf8.ps1"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+function Invoke-CheckedCommand {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList
+    )
+
+    & $FilePath @ArgumentList
+    if ($LASTEXITCODE -ne 0) {
+        throw "명령 실행에 실패했습니다: $FilePath $($ArgumentList -join ' ')"
+    }
+}
 
 if (-not $PythonPath) {
     $DefaultPython = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python313\python.exe'
@@ -32,11 +45,11 @@ function Install-Environment {
         [string]$RequirementsPath
     )
 
-    & $PythonPath -m venv $EnvironmentPath
+    Invoke-CheckedCommand $PythonPath @('-m', 'venv', $EnvironmentPath)
     $EnvironmentPython = Join-Path $EnvironmentPath 'Scripts\python.exe'
-    & $EnvironmentPython -m pip install --upgrade pip
-    & $EnvironmentPython -m pip install -r $RequirementsPath
-    & $EnvironmentPython -m pip check
+    Invoke-CheckedCommand $EnvironmentPython @('-m', 'pip', 'install', '--upgrade', 'pip')
+    Invoke-CheckedCommand $EnvironmentPython @('-m', 'pip', 'install', '-r', $RequirementsPath)
+    Invoke-CheckedCommand $EnvironmentPython @('-m', 'pip', 'check')
 }
 
 $AppEnvironment = Join-Path $RepoRoot '.venv-app'
@@ -49,11 +62,18 @@ $AppPython = Join-Path $AppEnvironment 'Scripts\python.exe'
 $OcrPython = Join-Path $OcrEnvironment 'Scripts\python.exe'
 
 if (-not $SkipBrowserInstall) {
-    & $AppPython -m playwright install chromium
+    Invoke-CheckedCommand $AppPython @('-m', 'playwright', 'install', 'chromium')
 }
 
-& $AppPython (Join-Path $RepoRoot 'scripts\check_runtime_compat.py') --profile app
-& $OcrPython (Join-Path $RepoRoot 'scripts\check_runtime_compat.py') --profile ocr
+$CompatibilityScript = Join-Path $RepoRoot 'scripts\check_runtime_compat.py'
+Invoke-CheckedCommand $AppPython @($CompatibilityScript, '--profile', 'app')
+Invoke-CheckedCommand $OcrPython @($CompatibilityScript, '--profile', 'ocr')
+
+if (-not $SkipAssetDownload) {
+    $AssetScript = Join-Path $RepoRoot 'scripts\prepare_runtime_assets.py'
+    Invoke-CheckedCommand $AppPython @($AssetScript, '--component', 'omniparser')
+    Invoke-CheckedCommand $OcrPython @($AssetScript, '--component', 'paddleocr')
+}
 
 Write-Host "Python $PythonVersion 런타임 구성이 완료됐습니다."
 Write-Host "앱: $AppPython"

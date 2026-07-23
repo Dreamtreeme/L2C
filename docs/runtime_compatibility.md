@@ -82,10 +82,12 @@ LangGraph 설치 기준은 [공식 설치 문서](https://docs.langchain.com/oss
 ## 설치와 검사
 
 ```powershell
-.\scripts\setup_runtime.ps1
+.\setup.cmd
 .\.venv-app\Scripts\python.exe scripts\check_runtime_compat.py --profile app
 .\.venv-ocr\Scripts\python.exe scripts\check_runtime_compat.py --profile ocr
 .\scripts\test.cmd agent\tests -q
 ```
 
-`requirements.txt`는 앱, `requirements-ocr.txt`는 OCR 작업자, `requirements-dev.txt`는 테스트와 모델 벤치마크 의존성을 소유한다.
+`setup.cmd`는 공식 SHA-256을 검증한 Python 3.13.14 설치, 앱·OCR 환경 구성, Chromium과 모델 다운로드, GPU 호환성 검사를 순서대로 실행한다. NVIDIA 드라이버만 자동 설치 대상에서 제외한다. 설치 전 동작만 확인하려면 `setup.cmd -DryRun`을 사용한다.
+
+`requirements.txt`는 앱, `requirements-ocr.txt`는 독립 OCR 작업자, `requirements-dev.txt`는 테스트와 모델 벤치마크 의존성을 소유한다.
