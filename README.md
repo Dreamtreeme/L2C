@@ -356,7 +356,7 @@ OmniParser/PyTorch와 PaddleOCR/PaddlePaddle의 CUDA 런타임은 서로 다른 
 
 기본 보존 기간은 로그 30일, 화면 산출물과 감사 이력 90일, 공고 변경 이력 180일입니다. 공고별 최신 변경 이력은 기간과 관계없이 5개를 남기며, `RETENTION_*` 환경변수로 기준을 조정할 수 있습니다.
 
-E2E 요약은 `run_id`, 실행시간, 실패 단계, 단계별 시간, 모델별 토큰, 선택적 비용 추정, 수집 품질을 한 파일에 기록합니다. LangSmith를 활성화하면 같은 실행의 trace와 결정론적 feedback도 함께 전송합니다. 설정과 대시보드 기준은 [`docs/e2e_observability.md`](./docs/e2e_observability.md)를 참고하세요. 모델 단가는 `config/model_pricing.example.json` 형식을 참고해 별도 파일로 관리하고 `LLM_PRICING_FILE`에 지정합니다. 가격표가 없으면 부정확한 비용을 만들지 않고 토큰 원시값만 보존합니다.
+E2E 요약은 `run_id`, 실행시간, 실패 단계, 단계별 시간, 모델별 토큰, 비용 추정, 수집 품질을 한 파일에 기록합니다. LangSmith를 활성화하면 같은 실행의 trace와 결정론적 feedback도 함께 전송합니다. 설정과 대시보드 기준은 [`docs/e2e_observability.md`](./docs/e2e_observability.md)를 참고하세요. 기본 모델 단가는 [`config/model_pricing.json`](./config/model_pricing.json)에서 관리하며, 별도 가격표가 필요할 때만 `LLM_PRICING_FILE`로 덮어씁니다. 가격이 등록되지 않은 모델은 비용을 추정하지 않고 토큰 원시값과 `unpriced_models`에 남깁니다.
 
 Windows Python을 WSL/Git Bash에서 직접 호출해 한글이나 이모지가 깨지는 경우에는 `python -X utf8 -m ...` 형태로 실행하세요.
 
