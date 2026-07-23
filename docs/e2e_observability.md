@@ -65,9 +65,32 @@ python -m benchmark.run_realtime_e2e `
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 ```
 
+### 자율탐색과 반복탐색 회귀
+
+`benchmark.run_regression_matrix`는 격리 DB에서 같은 작업의 `cold`와 `warm`을 순서대로 실행합니다.
+
+```powershell
+python -m benchmark.run_regression_matrix `
+  --scenario wanted-ios-cold `
+  --scenario wanted-ios-warm
+```
+
+`cold` 수집 프로세스에서는 자동승격을 끕니다. 수집이 끝나면 부모 프로세스가 실제 서비스와 같은 `RecipePromotionWorker`를 사용해 해당 후보만 재시도하며 검토합니다. 프로세스 종료, 저장 품질, 목표 수, 실제 레시피 승격을 모두 통과한 경우에만 짝이 되는 `warm`을 실행합니다. 하나라도 실패하면 `warm`은 `paired_cold_promotion_failed`로 건너뛰므로, 승격되지 않은 실행을 반복탐색 성능으로 잘못 집계하지 않습니다.
+
+수집과 승격 비용은 다음 필드로 분리합니다.
+
+| 범위 | 시간·토큰·비용 필드 |
+|---|---|
+| 수집 실행 | `execution_time_sec`, `total_tokens`, `estimated_cost` |
+| Critic 승격 | `promotion_time_sec`, `promotion_total_tokens`, `promotion_estimated_cost` |
+| 전체 cold 작업 | `workflow_total_tokens`, `workflow_estimated_cost` |
+
+Critic 호출은 별도 실행 문맥과 LangSmith trace를 사용합니다. 재시도가 발생하면 모든 시도의 시간, 토큰, 비용을 합산하며, 단가를 알 수 없는 모델은 기존 원칙대로 비용을 임의 추정하지 않습니다.
+
 ## Trace 구조
 
 - `l2c.e2e`: 한 E2E 실행의 root trace
+- `l2c.recipe-promotion`: 후보별 Critic 검토와 재시도 trace
 - `worker_prepare_screen`, `worker_graph`, `worker_review`, `job_persistence`: 수집 생명주기
 - `ocr_request`: 실제 PaddleOCR worker 요청과 timeout
 - LangGraph 노드와 LLM 호출: 판단 흐름과 모델 토큰

@@ -163,19 +163,31 @@ def _candidate_task_category(candidate: dict[str, Any]) -> str:
     return normalize_task_category(worker_submission.get("task_category") or evidence.get("task_category") or "")
 
 
+def _promotion_policy(allow_promotion: bool) -> str:
+    if allow_promotion:
+        return (
+            "Active recipe promotion is enabled for this review only if the candidate is reusable. "
+            "Set promote_to_active_recipe=true only when fixed/parameterized steps are safe to replay. "
+            "The code will still activate only ROI-verifiable click/type target actions."
+        )
+    return (
+        "Active recipe promotion is disabled in this review, so promote_to_active_recipe is only "
+        "a recommendation signal."
+    )
+
+
+def _serialize_candidate_review_payload(payload: dict[str, Any]) -> str:
+    """구조를 유지하면서 전송에 불필요한 JSON 공백을 제거한다."""
+
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def build_candidate_review_payload(candidate: dict[str, Any], allow_promotion: bool = False) -> dict[str, Any]:
     """후보 증거(candidate evidence)를 의미 판단 없이 비평가(Critic)에게 전달한다."""
     worker_submission = dict(candidate.get("payload", {}) or {})
     steps = [step for step in candidate.get("steps", []) or [] if isinstance(step, dict)]
     target_seqs = _target_action_seqs(steps)
     task_category = _candidate_task_category(candidate)
-    promotion_policy = (
-        "Active recipe promotion is enabled for this review only if the candidate is reusable. "
-        "Set promote_to_active_recipe=true only when fixed/parameterized steps are safe to replay. "
-        "The code will still activate only ROI-verifiable click/type target actions."
-        if allow_promotion
-        else "Active recipe promotion is disabled in this review, so promote_to_active_recipe is only a recommendation signal."
-    )
     return {
         "candidate_id": candidate.get("candidate_id", "") or "",
         "status": candidate.get("status", "") or "",
@@ -191,36 +203,6 @@ def build_candidate_review_payload(candidate: dict[str, Any], allow_promotion: b
         "worker_execution": _compact_worker_execution(worker_submission),
         "commander_review": dict(candidate.get("review", {}) or {}),
         "promotion_enabled": allow_promotion,
-        "promotion_policy": promotion_policy,
-        "review_task": (
-            "Decide whether this candidate is reusable Reflex recipe evidence. "
-            f"{promotion_policy} "
-            "Use the worker evidence, skill metadata evidence, and commander review. If accepted, fill "
-            "skill_metadata with task_category, when_to_use, inputs, step_intents, verification, and fallback conditions. "
-            "Preserve the supplied task_category instead of inventing a different category unless the evidence clearly contradicts it. "
-            "For every recorded step, set step_intents.replay_mode to fixed, parameterized, or reasoning. "
-            "Judge each recorded action independently; an overall successful run does not prove that every click was correct. "
-            "Treat deterministic_step_validation entries with eligible=false as blocked by code; never classify those steps as reusable. "
-            "Compare each step with feedback_evidence and the transition_observation having the same seq/action_seq. "
-            "If a click was a no-op, opened an unrelated page, or has no post-action evidence supporting expected_after, "
-            "mark that step as reasoning instead of fixed/parameterized. "
-            "Preserve or assign page_role for every fixed/parameterized replay step; active replay requires page_role plus ROI. "
-            "Use fixed only when the same UI operation is valid across runs. Use parameterized when only a named "
-            "runtime slot changes. Use reasoning for choices that depend on the current screen, current result set, "
-            "visited items, or remaining target count. A job-card title selected from search results must be "
-            "reasoning unless its current runtime title is supplied through an explicit slot; never replay a job "
-            "title observed in the exploration run as if it were a stable control. "
-            "Choosing which filter category to open and deciding when to apply filters depend on the current request "
-            "and selected filter state, so keep those steps as reasoning unless an explicit runtime slot or condition "
-            "fully determines the choice. A parameterized filter input must name a required runtime slot; never fall "
-            "back to the exploration run's filter text when that slot is absent. "
-            "Also assign OCR-verifiable transition_contracts to the recorded action seq values. Build contracts "
-            "only from observed transition evidence: common cues identify the completed page, outcomes distinguish "
-            "known normal branches such as results_found/results_empty, and loading cues only describe observed "
-            "intermediate screens. Generic header text visible both before and after an action is not a valid ready cue. "
-            "Do not invent an unseen outcome. "
-            "Return revise/reject with feedback when the candidate needs another worker run or should not be reused."
-        ),
     }
 
 
@@ -234,7 +216,7 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
         "VISION_WORKER_REVIEW_MODEL",
     )
     request_timeout = get_settings().recipe.critic_timeout_sec
-    promotion_policy = str(payload.get("promotion_policy") or "")
+    promotion_policy = _promotion_policy(bool(payload.get("promotion_enabled")))
     from agent.application.model_clients import get_structured_google_model
 
     llm = get_structured_google_model(
@@ -267,7 +249,7 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
                 "Generic headers visible before and after the action are not ready cues. Use only outcomes supported by observations."
             )
         ),
-        HumanMessage(content=json.dumps(payload, ensure_ascii=False, indent=2)),
+        HumanMessage(content=_serialize_candidate_review_payload(payload)),
     ]
     from agent.application.run_context import invoke_with_metrics
 

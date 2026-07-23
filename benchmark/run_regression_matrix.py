@@ -114,6 +114,8 @@ def _scenario_environment(
     env = dict(os.environ)
     if db_path is not None:
         env["DB_PATH"] = str(db_path)
+    # 승격 시간은 수집 실행과 분리하고 부모 프로세스의 승격 작업자로 측정한다.
+    env["VISION_RECIPE_AUTO_PROMOTE"] = "0"
     run_mode = str(scenario.get("run_mode") or "unspecified")
     if run_mode == "cold":
         env["REFLEX_ENABLED"] = "0"
@@ -140,6 +142,30 @@ def _clear_jobs_for_warm_run(db_path: Path) -> int:
     return removed_count
 
 
+def _scenario_workload_key(scenario: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "site": str(scenario.get("site") or "").strip().casefold(),
+            "query": str(scenario.get("query") or "").strip().casefold(),
+            "target_count": max(0, int(scenario.get("target_count") or 0)),
+            "count_mode": str(scenario.get("count_mode") or "unspecified"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _paired_cold_failed(
+    scenario: dict[str, Any],
+    cold_contracts: dict[str, bool],
+) -> bool:
+    return (
+        str(scenario.get("run_mode") or "") == "warm"
+        and cold_contracts.get(_scenario_workload_key(scenario)) is False
+    )
+
+
 def _promote_cold_candidate(
     payload: dict[str, Any],
     *,
@@ -152,19 +178,47 @@ def _promote_cold_candidate(
     if not candidate_id:
         return {"candidate_id": "", "promoted": False, "reason": "candidate_id_missing"}
 
-    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.application.recipe_promotion_worker import RecipePromotionWorker
 
-    review = review_and_apply_candidate(
-        candidate_id,
-        db_path=db_path,
-        mode="promote",
-        raise_on_critic_error=True,
-    )
-    promotion = dict(review.get("promotion") or {})
+    worker = RecipePromotionWorker(db_path, retry_delay_sec=0)
+    outcome = worker.process_candidate_until_settled(candidate_id, enqueue=True)
+    validation = dict(outcome.get("validation") or {})
+    review = dict(validation.get("review") or {})
+    promotion = dict(validation.get("promotion") or {})
     return {
         "candidate_id": candidate_id,
         "decision": str(review.get("decision") or ""),
+        "review_status": str(outcome.get("review_status") or ""),
+        "review_attempts": int(outcome.get("review_attempts") or 0),
+        "review_error": str(outcome.get("review_error") or ""),
+        "review_metrics": dict(outcome.get("review_metrics") or {}),
+        "reason": "" if promotion.get("promoted") else "candidate_not_promoted",
         **promotion,
+    }
+
+
+def _attach_promotion_metrics(
+    metric_summary: dict[str, Any],
+    promotion: dict[str, Any],
+) -> dict[str, Any]:
+    review_metrics = dict(promotion.get("review_metrics") or {})
+    collection_cost = metric_summary.get("estimated_cost")
+    promotion_cost = review_metrics.get("estimated_cost")
+    numeric_costs = [
+        float(value)
+        for value in (collection_cost, promotion_cost)
+        if value is not None
+    ]
+    return {
+        **metric_summary,
+        "promotion_time_sec": float(review_metrics.get("duration_sec") or 0.0),
+        "promotion_total_tokens": int(review_metrics.get("total_tokens") or 0),
+        "promotion_estimated_cost": promotion_cost,
+        "workflow_total_tokens": (
+            int(metric_summary.get("total_tokens") or 0)
+            + int(review_metrics.get("total_tokens") or 0)
+        ),
+        "workflow_estimated_cost": round(sum(numeric_costs), 10) if numeric_costs else None,
     }
 
 
@@ -207,8 +261,32 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=False)
     results = []
     exit_code = 0
+    cold_contracts: dict[str, bool] = {}
     for scenario, command in zip(scenarios, commands):
         run_mode = str(scenario.get("run_mode") or "unspecified")
+        workload_key = _scenario_workload_key(scenario)
+        if _paired_cold_failed(scenario, cold_contracts):
+            skipped_metrics = _attach_promotion_metrics(
+                _metric_summary({"status": "skipped"}),
+                {},
+            )
+            results.append(
+                {
+                    "scenario": scenario,
+                    "process_exit_code": None,
+                    "summary_path": str(Path(command[-1])),
+                    "metrics": skipped_metrics,
+                    "promotion": {},
+                    "warm_reset_count": 0,
+                    "mode_contract_passed": False,
+                    "skipped_reason": "paired_cold_promotion_failed",
+                }
+            )
+            exit_code = 1
+            if args.fail_fast:
+                break
+            continue
+
         warm_reset_count = (
             _clear_jobs_for_warm_run(db_path)
             if run_mode == "warm"
@@ -240,7 +318,7 @@ def main() -> int:
                     "reason": "promotion_failed",
                     "error": str(exc)[:300],
                 }
-        metric_summary = _metric_summary(payload)
+        metric_summary = _attach_promotion_metrics(_metric_summary(payload), promotion)
         mode_contract_passed = True
         if run_mode == "cold":
             target_count = max(0, int(scenario.get("target_count") or 0))
@@ -254,6 +332,12 @@ def main() -> int:
                 metric_summary["persisted_count"] >= target_count
                 and metric_summary["reflex_count"] > 0
             )
+        if run_mode == "cold":
+            cold_contracts[workload_key] = bool(
+                completed.returncode == 0
+                and metric_summary["quality_passed"]
+                and mode_contract_passed
+            )
 
         results.append(
             {
@@ -264,9 +348,14 @@ def main() -> int:
                 "promotion": promotion,
                 "warm_reset_count": warm_reset_count,
                 "mode_contract_passed": mode_contract_passed,
+                "skipped_reason": "",
             }
         )
-        if completed.returncode != 0:
+        if (
+            completed.returncode != 0
+            or not metric_summary["quality_passed"]
+            or not mode_contract_passed
+        ):
             exit_code = 1
             if args.fail_fast:
                 break

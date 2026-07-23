@@ -139,19 +139,27 @@ class RecipeCandidateStore(SQLiteStore):
     def claim_next_review(self) -> dict[str, Any] | None:
         """가장 오래 대기한 후보 하나를 원자적으로 선점한다."""
 
+        return self.claim_review()
+
+    def claim_review(self, candidate_id: str | None = None) -> dict[str, Any] | None:
+        """대기열의 다음 후보 또는 명시한 후보를 원자적으로 선점한다."""
+
         now = datetime.now().isoformat(timespec="seconds")
+        candidate_filter = "AND candidate_id=?" if candidate_id else ""
+        select_params: tuple[Any, ...] = (now, candidate_id) if candidate_id else (now,)
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                """
+                f"""
                 SELECT candidate_id
                 FROM recipe_candidates
                 WHERE status='pending_review'
                   AND (next_review_at IS NULL OR next_review_at <= ?)
+                  {candidate_filter}
                 ORDER BY created_at ASC, candidate_id ASC
                 LIMIT 1
                 """,
-                (now,),
+                select_params,
             ).fetchone()
             if row is None:
                 return None

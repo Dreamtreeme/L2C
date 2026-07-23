@@ -2,9 +2,13 @@ from benchmark.run_realtime_e2e import _apply_run_mode_environment
 import sqlite3
 
 from benchmark.run_regression_matrix import (
+    _attach_promotion_metrics,
     _clear_jobs_for_warm_run,
     _metric_summary,
+    _paired_cold_failed,
+    _promote_cold_candidate,
     _scenario_environment,
+    _scenario_workload_key,
 )
 
 
@@ -61,6 +65,7 @@ def test_scenario_environment_uses_isolated_database(tmp_path) -> None:
     environment = _scenario_environment({"run_mode": "cold"}, db_path=db_path)
 
     assert environment["DB_PATH"] == str(db_path)
+    assert environment["VISION_RECIPE_AUTO_PROMOTE"] == "0"
 
 
 def test_warm_reset_keeps_recipes_and_removes_jobs(tmp_path) -> None:
@@ -76,3 +81,137 @@ def test_warm_reset_keeps_recipes_and_removes_jobs(tmp_path) -> None:
     with sqlite3.connect(db_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 1
+
+
+def test_scenario_workload_key_matches_cold_and_warm() -> None:
+    cold = {
+        "site": "Wanted",
+        "query": " iOS 개발자 ",
+        "target_count": 2,
+        "count_mode": "explicit",
+        "run_mode": "cold",
+    }
+    warm = {
+        **cold,
+        "site": "wanted",
+        "query": "iOS 개발자",
+        "run_mode": "warm",
+    }
+
+    assert _scenario_workload_key(cold) == _scenario_workload_key(warm)
+    assert _paired_cold_failed(warm, {_scenario_workload_key(cold): False}) is True
+    assert _paired_cold_failed(warm, {_scenario_workload_key(cold): True}) is False
+    assert _paired_cold_failed(cold, {_scenario_workload_key(cold): False}) is False
+
+
+def test_promotion_metrics_are_added_to_collection_metrics() -> None:
+    review_metrics = {
+        "attempt_count": 2,
+        "duration_sec": 42.0,
+        "input_tokens": 180,
+        "output_tokens": 20,
+        "total_tokens": 200,
+        "estimated_cost": 0.003,
+    }
+    combined = _attach_promotion_metrics(
+        {"total_tokens": 500, "estimated_cost": 0.01},
+        {"review_metrics": review_metrics},
+    )
+
+    assert review_metrics["attempt_count"] == 2
+    assert review_metrics["duration_sec"] == 42.0
+    assert review_metrics["total_tokens"] == 200
+    assert review_metrics["estimated_cost"] == 0.003
+    assert combined["workflow_total_tokens"] == 700
+    assert combined["workflow_estimated_cost"] == 0.013
+
+
+def test_cold_promotion_uses_worker_retry_and_persists_attempts(tmp_path, monkeypatch) -> None:
+    from agent.recipe import candidate_reviewer
+    from agent.recipe.candidate_store import RecipeCandidateStore
+
+    db_path = tmp_path / "regression.db"
+    store = RecipeCandidateStore(db_path)
+    other_candidate_id = store.commit_candidate(
+        {
+            "run_id": "other-run",
+            "site": "saramin",
+            "goal": "다른 후보",
+            "keyword": "백엔드",
+            "recorded_steps": [{"seq": 0, "action": "click_marker"}],
+        },
+        review={
+            "decision": "accept",
+            "recipe_candidate": True,
+            "confidence": 0.8,
+        },
+        submission_id="other-run:0",
+    )
+    assert store.enqueue_review(other_candidate_id) is True
+    candidate_id = store.commit_candidate(
+        {
+            "run_id": "cold-run",
+            "site": "wanted",
+            "goal": "iOS 개발자 공고 수집",
+            "keyword": "iOS 개발자",
+            "recorded_steps": [
+                {
+                    "seq": 0,
+                    "action": "type_in_marker",
+                    "page_role": "home",
+                    "roi_signature": {"phash": "0" * 16},
+                    "target": {"text": "검색"},
+                }
+            ],
+        },
+        review={
+            "decision": "accept",
+            "recipe_candidate": True,
+            "confidence": 0.8,
+        },
+        submission_id="cold-run:0",
+    )
+    calls = []
+
+    def review(value, db_path=None, mode="review", raise_on_critic_error=False):
+        calls.append(value)
+        if len(calls) == 1:
+            raise TimeoutError("critic timeout")
+        promotion = {
+            "enabled": True,
+            "promoted": True,
+            "saved_count": 1,
+            "promoted_step_count": 1,
+            "skipped_steps": [],
+        }
+        RecipeCandidateStore(db_path).update_status(
+            value,
+            "accepted",
+            validation={
+                "review": {"decision": "accept"},
+                "promotion": promotion,
+            },
+        )
+        return {
+            "decision": "accept",
+            "promotion": promotion,
+        }
+
+    monkeypatch.setattr(candidate_reviewer, "review_and_apply_candidate", review)
+
+    result = _promote_cold_candidate(
+        {"result": {"submission_id": candidate_id}},
+        db_path=db_path,
+    )
+    candidate = store.get_candidate(candidate_id)
+    other_candidate = store.get_candidate(other_candidate_id)
+
+    assert calls == [candidate_id, candidate_id]
+    assert result["promoted"] is True
+    assert result["review_status"] == "accepted"
+    assert result["review_attempts"] == 2
+    assert result["review_metrics"]["attempt_count"] == 2
+    assert candidate["review_attempts"] == 2
+    assert candidate["review_error"] == ""
+    assert other_candidate["status"] == "pending_review"
+    assert other_candidate["review_attempts"] == 0

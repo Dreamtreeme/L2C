@@ -3393,7 +3393,10 @@ def test_recipe_candidate_status_update_records_llm_validation(tmp_path):
 
 
 def test_candidate_reviewer_records_review_without_active_promotion(tmp_path):
-    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_reviewer import (
+        _serialize_candidate_review_payload,
+        review_and_apply_candidate,
+    )
     from agent.recipe.candidate_store import RecipeCandidateStore
     from agent.recipe.store import RecipeStore
 
@@ -3452,7 +3455,10 @@ def test_candidate_reviewer_records_review_without_active_promotion(tmp_path):
     assert "worker_submission" not in seen["payload"]
     assert seen["payload"]["worker_execution"] == {"extracted_summary": {}}
     assert seen["payload"]["feedback_evidence"][0]["before_marker_texts"] == ["채용", "검색", "AI Engineer"]
-    assert "overall successful run does not prove" in seen["payload"]["review_task"]
+    assert seen["payload"]["promotion_enabled"] is False
+    assert "promotion_policy" not in seen["payload"]
+    assert "review_task" not in seen["payload"]
+    assert "\n" not in _serialize_candidate_review_payload(seen["payload"])
     assert seen["payload"]["transition_observations"][0]["action_seq"] == 0
     assert review["decision"] == "accept"
     assert candidate["status"] == "accepted"
