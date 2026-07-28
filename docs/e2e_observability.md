@@ -79,6 +79,8 @@ python -m benchmark.audit_e2e_history logs `
 코드 상태를 완전히 재현할 수 없으므로 최종 성능 기준이 아니라 개발 중 회귀와
 트러블슈팅 증거로 분리합니다. 표본이 작은 그룹에는 p95를 붙이지 않고 성공
 건수와 실행시간 최소·중앙·최대값을 그대로 표시합니다.
+현재 분류 결과는 [`benchmark/e2e_history_audit.md`](../benchmark/e2e_history_audit.md)에
+보관합니다.
 
 ### 자율탐색과 반복탐색 회귀
 

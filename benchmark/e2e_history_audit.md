@@ -1,13 +1,13 @@
 # E2E 실행 기록 감사
 
-- 생성 시각: `2026-07-28T18:00:09.438186+09:00`
-- 탐색한 summary: `143`개
-- 수집 E2E 기록: `92`개
-- 기준 커밋 후보(clean): `14`개
+- 생성 시각: `2026-07-28T18:16:27.620174+09:00`
+- 탐색한 summary: `150`개
+- 수집 E2E 기록: `97`개
+- 기준 커밋 후보(clean): `19`개
 - 개발 중 기록(dirty): `78`개
 - 식별자 불완전: `0`개
 - 비교 가능한 반복 그룹: `17`개
-- 수집 E2E가 아닌 summary: `51`개
+- 수집 E2E가 아닌 summary: `53`개
 
 ## 해석 기준
 
@@ -20,6 +20,9 @@
 
 | 분류 | 커밋 | 설정 | 시나리오 | 모드 | 성공/전체 | 실행시간 최소/중앙/최대(초) | 토큰 중앙 | 비용 중앙($) | Reflex 중앙 |
 |---|---|---|---|---|---:|---:|---:|---:|---:|
+| release | `6ae20a6b` | `62880d31ed47` | jobkorea-backend-cold | cold | 0/1 | 41.27/41.27/41.27 | 63421 | 0.1010 | 0.0 |
+| release | `98c1b936` | `62880d31ed47` | jobkorea-backend-cold | cold | 1/1 | 37.59/37.59/37.59 | 41423 | 0.0605 | 0.0 |
+| release | `98c1b936` | `a9448dbeb474` | jobkorea-backend-warm | warm | 1/1 | 83.93/83.93/83.93 | 84221 | 0.1278 | 2.0 |
 | release | `005e0e15` | `62880d31ed47` | jobkorea_backend1_generality | cold | 1/1 | 48.73/48.73/48.73 | 50861 | 0.0757 | 0.0 |
 | release | `dc4eda11` | `63e95ccaade5` | saramin-ai-cold | cold | 1/1 | 38.72/38.72/38.72 | 44766 | 0.0653 | 0.0 |
 | release | `dc4eda11` | `68e2c6611000` | saramin-ai-warm | warm | 1/1 | 32.11/32.11/32.11 | 50644 | 0.0757 | 0.0 |
@@ -29,7 +32,9 @@
 | release | `88a5288e` | `62880d31ed47` | capturefix-wanted-ios2-cold | cold | 1/1 | 78.96/78.96/78.96 | 98639 | 0.1473 | 0.0 |
 | release | `7408d08e` | `a9448dbeb474` | wanted-data-engineer2-parameterized | warm | 1/1 | 79.35/79.35/79.35 | 94280 | 0.1395 | 3.0 |
 | release | `dc4eda11` | `63e95ccaade5` | wanted-ios-cold | cold | 1/1 | 60.62/60.62/60.62 | 86169 | 0.1274 | 0.0 |
+| release | `6ae20a6b` | `62880d31ed47` | wanted-ios-cold | cold | 1/1 | 74.82/74.82/74.82 | 88196 | 0.1330 | 0.0 |
 | release | `dc4eda11` | `68e2c6611000` | wanted-ios-warm | warm | 1/1 | 53.39/53.39/53.39 | 74766 | 0.1129 | 0.0 |
+| release | `6ae20a6b` | `a9448dbeb474` | wanted-ios-warm | warm | 1/1 | 61.73/61.73/61.73 | 63700 | 0.0945 | 3.0 |
 | release | `7408d08e` | `a9448dbeb474` | wanted-ios1-count | warm | 1/1 | 43.47/43.47/43.47 | 33008 | 0.0459 | 4.0 |
 | release | `005e0e15` | `62880d31ed47` | work24_data1_generality | cold | 1/1 | 83.12/83.12/83.12 | 125499 | 0.1924 | 0.0 |
 | release | `dc4eda11` | `63e95ccaade5` | worknet-data-cold | cold | 1/1 | 61.36/61.36/61.36 | 102935 | 0.1572 | 0.0 |
