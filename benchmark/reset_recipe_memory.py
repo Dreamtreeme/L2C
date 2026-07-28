@@ -9,7 +9,13 @@ from datetime import datetime
 from pathlib import Path
 
 
-TABLES = ("recipes", "recipe_candidates", "feedback_episodes", "worker_submissions")
+TABLES = (
+    "recipe_sources",
+    "recipes",
+    "recipe_candidates",
+    "feedback_episodes",
+    "worker_submissions",
+)
 
 
 def main() -> None:

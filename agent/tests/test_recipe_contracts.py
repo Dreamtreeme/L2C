@@ -321,10 +321,10 @@ def test_recipe_store_scopes_by_site_and_task_category(tmp_path):
     assert store.get_site_recipes("saramin", task_category="검색") == []
 
 
-def test_recipe_store_groups_input_and_submit_click(tmp_path):
+def test_recipe_store_saves_input_and_submit_as_one_path(tmp_path):
     from agent.recipe.store import RecipeStore
 
-    store = RecipeStore(tmp_path / "action-set.db")
+    store = RecipeStore(tmp_path / "recipe-path.db")
     saved = store.commit_recipe(
         "saramin",
         "검색",
@@ -363,7 +363,7 @@ def test_recipe_store_groups_input_and_submit_click(tmp_path):
     ] == ["type_in_marker", "click_marker"]
 
 
-def test_recipe_store_does_not_group_actions_from_different_pages(tmp_path):
+def test_recipe_store_keeps_cross_page_steps_in_one_path(tmp_path):
     from agent.recipe.store import RecipeStore
 
     store = RecipeStore(tmp_path / "separate-actions.db")
@@ -397,9 +397,131 @@ def test_recipe_store_does_not_group_actions_from_different_pages(tmp_path):
 
     recipes = store.get_by_site("saramin")
 
-    assert saved == 2
+    assert saved == 1
+    assert len(recipes) == 1
+    assert len(recipes[0]["steps"]) == 2
+
+
+def test_recipe_store_preserves_two_paths_with_overlapping_steps(tmp_path):
+    from agent.recipe.store import RecipeStore
+
+    def click_step(seq: int, label: str) -> dict:
+        return {
+            "seq": seq,
+            "url_template": "example.com/search",
+            "page_role": "search_results",
+            "action": "click_marker",
+            "replay_mode": "fixed",
+            "component": f"control_{label.casefold()}",
+            "target": {"text": label},
+            "roi_signature": {"phash": str(seq) * 16},
+        }
+
+    store = RecipeStore(tmp_path / "branch-paths.db")
+    first_path = [
+        click_step(1, "A"),
+        click_step(2, "B"),
+        click_step(3, "C"),
+    ]
+    second_path = [
+        click_step(1, "A"),
+        click_step(2, "D"),
+        click_step(3, "C"),
+    ]
+
+    assert store.replace_recipe_paths(
+        "example",
+        "탐색",
+        [first_path],
+        metadata={"task_category": "사이트 탐색"},
+        candidate_id="candidate-abc",
+    ) == 1
+    assert store.replace_recipe_paths(
+        "example",
+        "탐색",
+        [second_path],
+        metadata={"task_category": "사이트 탐색"},
+        candidate_id="candidate-adc",
+    ) == 1
+
+    recipes = store.get_by_site("example")
     assert len(recipes) == 2
-    assert all(len(recipe["steps"]) == 1 for recipe in recipes)
+    assert {
+        tuple(step["target"]["text"] for step in recipe["steps"])
+        for recipe in recipes
+    } == {("A", "B", "C"), ("A", "D", "C")}
+
+
+def test_replacing_one_candidate_keeps_shared_path_evidence(tmp_path):
+    from agent.recipe.store import RecipeStore
+
+    def path(middle: str) -> list[dict]:
+        return [
+            {
+                "seq": seq,
+                "page_role": "search_results",
+                "action": "click_marker",
+                "replay_mode": "fixed",
+                "component": f"control_{label.casefold()}",
+                "target": {"text": label},
+                "roi_signature": {"phash": str(seq) * 16},
+            }
+            for seq, label in enumerate(["A", middle, "C"], start=1)
+        ]
+
+    store = RecipeStore(tmp_path / "shared-evidence.db")
+    for candidate_id in ("candidate-one", "candidate-two"):
+        assert store.replace_recipe_paths(
+            "example",
+            "탐색",
+            [path("B")],
+            metadata={"task_category": "사이트 탐색"},
+            candidate_id=candidate_id,
+        ) == 1
+
+    shared = store.get_by_site("example")
+    assert len(shared) == 1
+    assert shared[0]["success_count"] == 2
+    assert shared[0]["source_count"] == 2
+
+    assert store.replace_recipe_paths(
+        "example",
+        "탐색",
+        [path("D")],
+        metadata={"task_category": "사이트 탐색"},
+        candidate_id="candidate-two",
+    ) == 1
+
+    recipes = store.get_by_site("example")
+    assert len(recipes) == 2
+    assert {
+        tuple(step["target"]["text"] for step in recipe["steps"]): (
+            recipe["success_count"],
+            recipe["source_count"],
+        )
+        for recipe in recipes
+    } == {
+        ("A", "B", "C"): (1, 1),
+        ("A", "D", "C"): (1, 1),
+    }
+
+
+def test_stable_recipe_paths_split_at_unapproved_sequence_gap():
+    from agent.recipe.replay_actions import split_stable_replay_paths
+
+    steps = [
+        {"seq": 1, "action": "click_marker"},
+        {"seq": 2, "action": "press_key"},
+        {"seq": 4, "action": "click_marker"},
+        {"seq": 5, "action": "go_back"},
+    ]
+
+    paths = split_stable_replay_paths(steps)
+
+    assert [
+        [step["seq"] for step in path]
+        for path in paths
+    ] == [[1, 2], [4, 5]]
 
 
 def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
@@ -474,7 +596,7 @@ def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
     assert len(result["pending_action"].tool_calls) == 1
 
 
-def test_reflex_replays_input_and_submit_as_one_action_set(
+def test_reflex_replays_selected_recipe_path_in_order(
     monkeypatch,
     tmp_path,
 ):
@@ -483,12 +605,12 @@ def test_reflex_replays_input_and_submit_as_one_action_set(
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
-    input_screen = tmp_path / "action-set-input.png"
+    input_screen = tmp_path / "recipe-path-input.png"
     input_image = Image.new("RGB", (240, 120), "white")
     input_draw = ImageDraw.Draw(input_image)
     input_draw.rectangle([10, 10, 130, 40], fill="black")
     input_image.save(input_screen)
-    submit_screen = tmp_path / "action-set-submit.png"
+    submit_screen = tmp_path / "recipe-path-submit.png"
     submit_image = Image.new("RGB", (240, 120), "white")
     submit_draw = ImageDraw.Draw(submit_image)
     submit_draw.rectangle([160, 10, 220, 40], fill="gray")
@@ -551,6 +673,23 @@ def test_reflex_replays_input_and_submit_as_one_action_set(
                                     "center_ratio": [0.7917, 0.2083],
                                 },
                             ),
+                            RecipeStep(
+                                seq=3,
+                                action="press_key",
+                                page_role="home",
+                                url_template="saramin.co.kr/zf_user/",
+                                replay_mode="fixed",
+                                param={"key": "enter"},
+                                expected_after="검색 결과가 표시된다.",
+                                transition_contract={
+                                    "common_ready_cues": [
+                                        {
+                                            "kind": "text_any",
+                                            "values": ["검색 결과"],
+                                        }
+                                    ]
+                                },
+                            ),
                         ],
                     ),
                 )
@@ -583,14 +722,14 @@ def test_reflex_replays_input_and_submit_as_one_action_set(
     )
 
     assert first["reflex_trace"]["hit"] is True
-    assert first["pending_action"].summary == "cached action set step"
+    assert first["pending_action"].summary == "cached recipe path step"
     assert len(first["pending_action"].tool_calls) == 1
     assert first["pending_action"].tool_calls[0].name == "type_in_marker"
     assert (
         first["pending_action"].tool_calls[0].args["text"]
         == "AI 엔지니어"
     )
-    assert first["reflex_action_set"]["next_step_index"] == 1
+    assert first["active_reflex_recipe"]["next_step_index"] == 1
 
     second = reflex_node(
         {
@@ -611,7 +750,7 @@ def test_reflex_replays_input_and_submit_as_one_action_set(
                 "task_category": "검색",
                 "query": "AI 엔지니어",
             },
-            "reflex_action_set": first["reflex_action_set"],
+            "active_reflex_recipe": first["active_reflex_recipe"],
         }
     )
 
@@ -619,10 +758,32 @@ def test_reflex_replays_input_and_submit_as_one_action_set(
     assert len(second["pending_action"].tool_calls) == 1
     assert second["pending_action"].tool_calls[0].name == "click_marker"
     assert second["pending_action"].tool_calls[0].args["marker_id"] == 8
-    assert second["reflex_action_set"]["next_step_index"] == 2
+    assert second["active_reflex_recipe"]["next_step_index"] == 2
+
+    third = reflex_node(
+        {
+            "goal": "AI 엔지니어 공고",
+            "current_url": "https://www.saramin.co.kr/zf_user/",
+            "current_page_role": "home",
+            "screen_signature": {"size": [240, 120]},
+            "recent_images": [submit_screen],
+            "current_markers": [],
+            "recipe_params": {
+                "site": "saramin",
+                "task_category": "검색",
+                "query": "AI 엔지니어",
+            },
+            "active_reflex_recipe": second["active_reflex_recipe"],
+        }
+    )
+
+    assert third["reflex_trace"]["hit"] is True
+    assert third["pending_action"].tool_calls[0].name == "press_key"
+    assert third["pending_action"].tool_calls[0].args["key"] == "enter"
+    assert third["active_reflex_recipe"]["next_step_index"] == 3
 
 
-def test_reflex_action_set_is_cleared_only_after_final_transition():
+def test_active_reflex_recipe_is_cleared_only_after_final_transition():
     base_state = {
         "ocr_complete": True,
         "current_url": "https://www.saramin.co.kr/zf_user/search",
@@ -653,28 +814,28 @@ def test_reflex_action_set_is_cleared_only_after_final_transition():
     intermediate = worker_transition.transition_node(
         {
             **base_state,
-            "reflex_action_set": {
+            "active_reflex_recipe": {
                 "recipe_key": "recipe-search-set",
-                "next_step_index": 1,
-                "step_count": 2,
+                "next_step_index": 2,
+                "step_count": 3,
             },
         }
     )
     completed = worker_transition.transition_node(
         {
             **base_state,
-            "reflex_action_set": {
+            "active_reflex_recipe": {
                 "recipe_key": "recipe-search-set",
-                "next_step_index": 2,
-                "step_count": 2,
+                "next_step_index": 3,
+                "step_count": 3,
             },
         }
     )
 
     assert intermediate["transition_result"]["status"] == "ready"
-    assert intermediate["reflex_action_set"]["next_step_index"] == 1
+    assert intermediate["active_reflex_recipe"]["next_step_index"] == 2
     assert completed["transition_result"]["status"] == "ready"
-    assert completed["reflex_action_set"] == {}
+    assert completed["active_reflex_recipe"] == {}
 
 
 def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
@@ -948,6 +1109,89 @@ def test_candidate_promotion_keeps_only_safe_roi_target(tmp_path):
     assert review["promotion"]["promoted_step_count"] == 1
     assert len(recipes) == 1
     assert recipes[0]["steps"][0]["action"] == "click_marker"
+
+
+def test_candidate_promotion_saves_consecutive_steps_as_one_path(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+
+    submission = _candidate_submission()
+    submission["recorded_steps"].append(
+        {
+            "seq": 1,
+            "page_role": "search_results",
+            "action": "click_marker",
+            "component": "filter_button",
+            "target": {"text": "직무 필터"},
+            "roi_signature": {
+                "phash": "1" * 16,
+                "crop_rect_ratio": [0.1, 0.1, 0.4, 0.3],
+            },
+        }
+    )
+    submission["transition_records"].append(
+        {
+            "action_seq": 1,
+            "status": "ready",
+            "marker_texts": ["직무 선택"],
+        }
+    )
+    submission["feedback_episodes"].append(
+        {
+            "seq": 1,
+            "proposal": {
+                "action": "click_marker",
+                "args": {"page_role": "search_results"},
+                "component_candidate": "filter_button",
+            },
+            "feedback": {"label": "success"},
+            "observation": {
+                "before": {"marker_texts": ["직무 필터"]},
+            },
+        }
+    )
+    db_path = tmp_path / "path-promotion.db"
+    candidate_id = RecipeCandidateStore(db_path).commit_candidate(
+        submission,
+        review={"decision": "accept", "recipe_candidate": True},
+        source="test",
+        submission_id="worker-path:0",
+    )
+
+    result = review_and_apply_candidate(
+        candidate_id,
+        db_path=db_path,
+        mode="promote",
+        critic=lambda _payload: {
+            "decision": "accept",
+            "reasons": ["두 단계가 모두 검증됨"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "site": "wanted",
+                "task_category": "검색",
+                "step_intents": [
+                    {
+                        "seq": 0,
+                        "action": "click_marker",
+                        "replay_mode": "fixed",
+                    },
+                    {
+                        "seq": 1,
+                        "action": "click_marker",
+                        "replay_mode": "fixed",
+                    },
+                ],
+            },
+            "confidence": 0.9,
+        },
+    )
+
+    recipes = RecipeStore(db_path).get_by_site("wanted")
+    assert result["promotion"]["promoted_path_count"] == 1
+    assert len(recipes) == 1
+    assert [step["seq"] for step in recipes[0]["steps"]] == [0, 1]
 
 
 def test_contextual_followup_is_promoted_and_selected(tmp_path):

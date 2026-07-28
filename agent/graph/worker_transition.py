@@ -24,24 +24,24 @@ def _blocked_recipe_keys(state: GraphState) -> list[str]:
     ]
 
 
-def _reflex_action_set_after_transition(
+def _active_reflex_recipe_after_transition(
     state: GraphState,
     *,
     source: str,
     status: str,
 ) -> dict[str, Any]:
-    """중간 성공은 유지하고 마지막 성공이나 실패는 행동 세트를 정리한다."""
+    """중간 성공은 유지하고 마지막 성공이나 실패는 활성 경로를 정리한다."""
 
-    action_set = dict(state.get("reflex_action_set", {}) or {})
-    if not action_set or source != "reflex":
-        return action_set
+    active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
+    if not active_recipe or source != "reflex":
+        return active_recipe
     if status == "unknown":
         return {}
-    next_step_index = int(action_set.get("next_step_index") or 0)
-    step_count = int(action_set.get("step_count") or 0)
+    next_step_index = int(active_recipe.get("next_step_index") or 0)
+    step_count = int(active_recipe.get("step_count") or 0)
     if status == "ready" and step_count > 0 and next_step_index >= step_count:
         return {}
-    return action_set
+    return active_recipe
 
 
 def _reused_observation(
@@ -243,7 +243,7 @@ def transition_node(state: GraphState) -> dict[str, Any]:
             ),
             "transition_records": [record],
             "transition_probe_unchanged": False,
-            "reflex_action_set": _reflex_action_set_after_transition(
+            "active_reflex_recipe": _active_reflex_recipe_after_transition(
                 state,
                 source=str(request.get("source") or ""),
                 status="unknown",
@@ -302,7 +302,7 @@ def transition_node(state: GraphState) -> dict[str, Any]:
                 ),
                 "transition_records": [record],
                 "reflex_blocked_recipe_keys": blocked_keys,
-                "reflex_action_set": _reflex_action_set_after_transition(
+                "active_reflex_recipe": _active_reflex_recipe_after_transition(
                     state,
                     source=source,
                     status="unknown",
@@ -413,7 +413,7 @@ def transition_node(state: GraphState) -> dict[str, Any]:
         ),
         "transition_records": [record],
         "reflex_blocked_recipe_keys": blocked_keys,
-        "reflex_action_set": _reflex_action_set_after_transition(
+        "active_reflex_recipe": _active_reflex_recipe_after_transition(
             state,
             source=source,
             status=status,

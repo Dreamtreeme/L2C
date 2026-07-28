@@ -60,9 +60,9 @@ def test_action_request_rejects_multiple_calls_from_every_source():
     with pytest.raises(ValueError):
         build_action_request(
             "reflex",
-            "행동 세트도 현재 단계 하나만 요청해야 함",
+            "레시피 경로도 현재 단계 하나만 요청해야 함",
             calls,
-            metadata={"execution_unit": "transition_action_set"},
+            metadata={"execution_unit": "stable_recipe_path"},
         )
 
 
@@ -93,7 +93,7 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     assert route_after_reflex({}) == "reasoning"
 
 
-def test_active_reflex_action_set_keeps_selection_for_reflex(monkeypatch):
+def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
     from agent.graph import worker_selection
 
     monkeypatch.setenv("REFLEX_ENABLED", "1")
@@ -101,7 +101,7 @@ def test_active_reflex_action_set_keeps_selection_for_reflex(monkeypatch):
         worker_selection,
         "select_followup_after_transition",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("행동 세트 중간에 후속 전략을 조회하면 안 됩니다.")
+            AssertionError("활성 레시피 중간에 후속 전략을 조회하면 안 됩니다.")
         ),
     )
 
@@ -112,7 +112,7 @@ def test_active_reflex_action_set_keeps_selection_for_reflex(monkeypatch):
                 "status": "ready",
                 "action": "type_in_marker",
             },
-            "reflex_action_set": {
+            "active_reflex_recipe": {
                 "recipe_key": "recipe-search-set",
                 "next_step_index": 1,
                 "step_count": 2,
@@ -127,7 +127,7 @@ def test_active_reflex_action_set_keeps_selection_for_reflex(monkeypatch):
                 **result,
                 "ocr_complete": True,
                 "transition_result": {"status": "ready"},
-                "reflex_action_set": {
+                "active_reflex_recipe": {
                     "recipe_key": "recipe-search-set",
                     "next_step_index": 1,
                     "step_count": 2,

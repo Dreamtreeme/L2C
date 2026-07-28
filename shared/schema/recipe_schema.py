@@ -108,7 +108,7 @@ class FollowupActionStrategy(BaseModel):
 
 
 class SiteRecipe(BaseModel):
-    """특정 사이트와 목표에서 재사용할 원자 행동 또는 전환 행동 세트."""
+    """특정 사이트와 목표에서 순서대로 재사용할 안정 행동 경로."""
 
     site: str = Field(..., description="사이트 식별자(site)")
     goal: str = Field("", description="학습 당시 사용자 목표(goal)")

@@ -211,11 +211,12 @@ def _fallback_review(reason: str) -> dict[str, Any]:
 def _promotion_policy(allow_promotion: bool) -> str:
     if allow_promotion:
         return (
-            "Active recipe promotion is evaluated per step, not for the trajectory as one indivisible path. "
-            "Set promote_to_active_recipe=true when at least one fixed/parameterized step is independently "
-            "safe to replay, even if the same successful trajectory also contains mistakes, recovery actions, or "
-            "reasoning-only steps. Classify every unsafe step as reasoning; the code will activate only the safe, "
-            "ROI-verifiable click/type steps and transition-verified contextual follow-up actions. "
+            "Evaluate each action's replay safety independently, then preserve consecutive approved actions as one "
+            "ordered stable recipe path. Set promote_to_active_recipe=true when at least one fixed/parameterized "
+            "path can be replayed safely. Classify every unsafe, abandoned, recovery, or state-dependent action as "
+            "reasoning; such an action becomes a hard path boundary and code must never stitch approved actions "
+            "across it. The code activates ROI-verifiable click/type steps and transition-verified contextual "
+            "actions in their recorded order. "
             "Set promote_to_active_recipe=false only when no step is safe "
             "for active replay. Do not maximize the number of promoted steps. A screen change alone is not success. "
             "A step is reusable only when its expected result was achieved and it belongs to the causal path that "

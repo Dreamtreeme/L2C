@@ -6,6 +6,10 @@ from typing import Any
 
 from agent.config import get_settings
 from agent.recipe.page_context import normalize_page_role
+from agent.recipe.replay_actions import (
+    CONTEXTUAL_REPLAY_ACTIONS,
+    TARGET_REPLAY_ACTIONS,
+)
 from agent.recipe.text_utils import normalize_text
 from agent.vision.marker_geometry import marker_bbox, marker_center
 
@@ -89,14 +93,23 @@ def _target_semantic_label(target: Any) -> str:
 
 
 def is_replayable_step(step: Any) -> bool:
-    """저장된 대상 행동이 ROI 재생에 필요한 정보를 갖췄는지 확인한다."""
+    """저장된 경로 단계가 결정론적 재생 계약을 갖췄는지 확인한다."""
 
     if _step_get(step, "replay_mode", "reasoning") == "reasoning":
         return False
     action = _step_get(step, "action")
-    if action not in {"click_marker", "type_in_marker"}:
-        return False
     if not normalize_page_role(_step_get(step, "page_role", "")):
+        return False
+    if action in CONTEXTUAL_REPLAY_ACTIONS:
+        param = _step_get(step, "param", {})
+        if not isinstance(param, dict):
+            return False
+        if action == "press_key" and not param.get("key"):
+            return False
+        if action == "switch_tab" and not param.get("direction"):
+            return False
+        return bool(_step_get(step, "transition_contract"))
+    if action not in TARGET_REPLAY_ACTIONS:
         return False
     target = _step_get(step, "target")
     return bool(normalize_text(_target_get(target, "text", "")) or _target_semantic_label(target))

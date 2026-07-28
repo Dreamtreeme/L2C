@@ -102,7 +102,7 @@ def selection_node(state: GraphState) -> dict[str, Any]:
             }
         return {}
 
-    if state.get("reflex_action_set"):
+    if state.get("active_reflex_recipe"):
         return {
             "followup_action_trace": {},
             "job_card_replay_trace": {},

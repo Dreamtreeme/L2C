@@ -91,6 +91,17 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 CREATE INDEX IF NOT EXISTS idx_recipes_site ON recipes(site);
 
+CREATE TABLE IF NOT EXISTS recipe_sources (
+    recipe_key   TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (recipe_key, candidate_id),
+    FOREIGN KEY (recipe_key) REFERENCES recipes(recipe_key) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_recipe_sources_candidate
+ON recipe_sources(candidate_id);
+
 {REFLEX_MEMORY_SCHEMA}
 {SEARCH_TAXONOMY_SCHEMA}
 """

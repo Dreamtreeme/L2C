@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.recipe.page_context import normalize_page_role
-
-
 TARGET_REPLAY_ACTIONS = frozenset(
     {
         "click_marker",
@@ -38,10 +35,10 @@ def _step_sequence(step: dict[str, Any]) -> int:
         return 0
 
 
-def group_replay_action_sets(
+def split_stable_replay_paths(
     steps: list[dict[str, Any]],
 ) -> list[list[dict[str, Any]]]:
-    """같은 화면의 입력과 즉시 이어지는 클릭을 하나의 전환 단위로 묶는다."""
+    """연속해서 승인된 단계를 순서가 보존된 안정 경로로 나눈다."""
 
     ordered = [
         dict(step)
@@ -50,28 +47,26 @@ def group_replay_action_sets(
             key=_step_sequence,
         )
     ]
-    groups: list[list[dict[str, Any]]] = []
-    index = 0
-    while index < len(ordered):
-        current = ordered[index]
-        following = ordered[index + 1] if index + 1 < len(ordered) else None
-        if (
-            following is not None
-            and str(current.get("action") or "") == "type_in_marker"
-            and str(following.get("action") or "") == "click_marker"
-            and _step_sequence(following)
-            == _step_sequence(current) + 1
-            and normalize_page_role(current.get("page_role"))
-            == normalize_page_role(following.get("page_role"))
-            and str(current.get("url_template") or "")
-            == str(following.get("url_template") or "")
-        ):
-            groups.append([current, following])
-            index += 2
-            continue
-        groups.append([current])
-        index += 1
-    return groups
+    paths: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+
+    def finish_current() -> None:
+        nonlocal current
+        while current and str(current[0].get("action") or "") not in TARGET_REPLAY_ACTIONS:
+            current.pop(0)
+        if current:
+            paths.append(current)
+        current = []
+
+    previous_seq: int | None = None
+    for step in ordered:
+        seq = _step_sequence(step)
+        if current and previous_seq is not None and seq != previous_seq + 1:
+            finish_current()
+        current.append(step)
+        previous_seq = seq
+    finish_current()
+    return paths
 
 
 __all__ = [
@@ -79,5 +74,5 @@ __all__ = [
     "RECORDED_REPLAY_ACTIONS",
     "REVIEWABLE_REPLAY_ACTIONS",
     "TARGET_REPLAY_ACTIONS",
-    "group_replay_action_sets",
+    "split_stable_replay_paths",
 ]

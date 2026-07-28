@@ -11,7 +11,7 @@ tags:
 
 # L2C 반사 레시피(Reflex Recipe) 구현 기준
 
-> 네이밍 기준은 `docs/naming_conventions.md`를 따른다. 새 코드의 active recipe는 `state_key`가 아니라 `recipe_key`, `site`, `task_category`, `page_role`, `roi_signature` 기준으로 동작한다.
+> 네이밍 기준은 `docs/naming_conventions.md`를 따른다. 새 코드의 active recipe는 `state_key`가 아니라 전체 안정 경로의 `recipe_key`, `site`, `task_category`와 현재 단계의 `page_role`, `roi_signature` 기준으로 동작한다.
 
 ## 목표
 
@@ -38,9 +38,10 @@ tags:
 
 ## Active Recipe 기준
 
-활성 레시피는 다음 조건을 만족하는 클릭/입력 단계를 저장한다. 입력만으로는
-화면 전환이 일어나지 않고 바로 다음 제출 클릭까지 실행해야 전환되는 경우에는
-두 단계를 하나의 `transition_action_set`으로 저장한다.
+활성 레시피는 한 성공 실행에서 연속해서 검증된 단계를 순서가 보존된
+`stable_recipe_path` 하나로 저장한다. 첫 단계는 반드시 ROI로 다시 찾을 수 있는
+클릭/입력이어야 한다. 이후에는 ROI 클릭/입력과 전환 계약이 있는 키 입력·뒤로가기·
+탭 전환을 같은 경로에 포함할 수 있다.
 
 - `site`: 사이트 식별자.
 - `task_category`: 검색, 로그인, 결제, 사이트 탐색 같은 작업 분류.
@@ -49,20 +50,32 @@ tags:
 - `target.center_ratio` 또는 `target.bbox_ratio`: 현재 OCR marker 재탐색용 비율 좌표.
 - `replay_mode`: Critic이 `fixed` 또는 `parameterized`로 승인한 단계.
 
+추론 단계, 실패 단계, 폐기한 분기, 검증되지 않은 행동은 경로의 경계다. 앞뒤에
+승인된 단계가 있더라도 그 경계를 건너 하나의 경로로 합치지 않는다. 경로 키는
+전체 단계의 순서와 의미를 포함하므로 `A-B-C`와 `A-D-C`는 별도 레시피다.
+새 후보를 승격할 때도 단계가 겹친다는 이유로 다른 후보의 경로를 삭제하지 않는다.
+동일한 전체 경로를 여러 후보가 검증한 경우 레시피 행은 합치고
+`recipe_sources`에 후보별 근거를 따로 연결한다.
+
 `state_key`, 전체 화면 pHash, Jaccard anchor 유사도는 active replay의 기본 조회 기준이 아니다.
+
+전체 경로 키는 `path4#` 버전을 사용한다. 이전 원자 단계 키와 실행 의미가 달라
+기존 활성 행은 마이그레이션 때 폐기하지만 `recipe_candidates`는 보존한다.
+기존 승인 후보를 다시 쓰려면 `benchmark/rebuild_active_recipes.py --apply`로 현재
+승격 정책을 재적용한다.
 
 ## Replay 순서
 
 1. `perception_node`가 OCR/SoM marker와 현재 스크린샷을 만든다.
 2. 현재 URL/OCR 텍스트에서 `current_page_role`을 보수적으로 분류한다.
-3. `RecipeStore.get_site_recipes(site, task_category)`로 후보를 가져온다.
-4. 각 후보 step에 대해 `page_role`이 현재 화면과 맞는지 확인한다.
-5. 저장된 `roi_signature.crop_rect_ratio`로 현재 스크린샷의 같은 ROI를 crop하고 pHash 거리를 검사한다.
-6. ROI가 맞으면 저장된 target 비율에 가까운 현재 OCR marker를 찾는다.
-7. 단일 행동이면 `click_marker` 또는 `type_in_marker` 호출 하나를 만든다.
-8. 같은 화면에서 연속으로 성공한 `type_in_marker -> click_marker`이면 첫 단계 ROI만 검증하고 실행한 뒤 `reflex_action_set`에 다음 단계 번호를 저장한다.
-9. 다음 캡처와 OCR에서 중간 전환 계약과 다음 단계 ROI를 검증하고, LLM 호출 없이 같은 세트의 다음 행동을 실행한다.
-10. 마지막 단계가 성공하면 행동 세트 상태를 지운다. 중간 전환이나 다음 ROI가 실패하면 세트를 지우고 reasoning으로 폴백하며 같은 run 안에서 해당 `recipe_key`를 차단한다.
+3. `RecipeStore.get_site_recipes(site, task_category)`로 전체 경로 후보를 가져온다.
+4. 각 경로의 첫 단계 `page_role`, URL 범위, ROI pHash를 현재 화면과 비교한다.
+5. ROI가 맞으면 저장된 target 비율에 가까운 현재 OCR marker를 찾는다.
+6. 첫 단계가 통과한 경로 하나를 선택하고 `active_reflex_recipe`에 경로 키와 다음 단계 번호를 저장한다.
+7. 현재 캡처에서 검증한 물리 행동 하나만 `ActionRequest`로 실행한다.
+8. 다음 캡처에서 직전 전환 계약과 현재 경로 단계의 화면 조건을 검증한다.
+9. 조건이 맞으면 후보를 다시 고르지 않고 같은 경로의 다음 행동을 실행한다. ROI 대상 행동은 매 단계 ROI와 현재 marker를 다시 검사하고, 좌표 없는 행동은 앞선 경로 문맥과 전환 계약을 사용한다.
+10. 마지막 단계가 성공하면 활성 경로 상태를 지운다. 중간 전환이나 다음 단계 검증이 실패하면 경로 전체를 폐기하고 reasoning으로 폴백하며 같은 run 안에서 해당 `recipe_key`를 차단한다.
 
 ## 승격 정책
 
@@ -74,10 +87,10 @@ Critic은 의미 판단을 담당한다. 코드는 후보를 포장하고 필수
 
 공고 제목 클릭은 기본적으로 `reasoning`이다. 검색 열기, 검색어 입력, 검색 제출처럼 반복 증거가 있는 컨트롤만 active recipe 후보가 된다. 상세 펼치기 자동 클릭은 현재 사이트 `page_guidance.reveal_controls`에 선언된 OCR 라벨과 정확히 일치할 때만 허용한다.
 
-LLM이 한 번에 여러 행동을 생성하는 것은 허용하지 않는다. 행동 세트는 승격된
-기록에서 같은 `page_role`과 `url_template`을 가진 연속 입력·제출 단계에만
-결정론적으로 적용한다. `ActionRequest`는 행동 세트에서도 현재 캡처로 검증한
-도구 호출 하나만 담는다.
+LLM이 한 번에 여러 행동을 생성하는 것은 허용하지 않는다. 전체 경로를 저장하는
+것과 여러 행동을 검증 없이 한꺼번에 실행하는 것은 다르다. `ActionRequest`는
+항상 현재 캡처로 검증한 도구 호출 하나만 담고, 경로의 다음 단계는 행동 후 새
+캡처와 전환 판정을 거쳐 실행한다.
 
 ## 실패 처리
 

@@ -33,11 +33,11 @@ tags:
 | `active_recipe` | 경험 기반 탐색에서 실제 재생 가능한 활성 레시피 |
 | `recipe_step` | 레시피 안의 단일 행동 단계 |
 | `replay_step` | Critic이 fixed/parameterized로 승인한 재생 단계 |
-| `transition_action_set` | 입력처럼 단독으로 전환을 만들지 못하는 준비 행동과 제출 행동을 묶은 Reflex 실행 단위 |
-| `reflex_action_set` | 현재 실행 중인 행동 세트의 레시피 키, 다음 단계 번호, 전체 단계 수를 보관하는 작업 상태 |
+| `stable_recipe_path` | 한 성공 실행에서 연속 검증된 행동의 순서가 보존된 Reflex 저장·실행 단위 |
+| `active_reflex_recipe` | 한 번 선택한 안정 경로의 레시피 키, 다음 단계 번호, 전체 단계 수를 보관하는 작업 상태 |
 | `task_category` | 검색, 로그인, 결제, 사이트 탐색 같은 작업 카테고리 |
 | `page_role` | home, search, job_detail, popup처럼 replay 적용 범위를 나누는 화면 역할 |
-| `recipe_key` | active recipe row의 DB 식별자. `site`, `task_category`, `page_role`, ROI/target 정보로 계산 |
+| `recipe_key` | active recipe row의 DB 식별자. `site`, `task_category`와 전체 단계의 순서·의미로 계산 |
 | `recipe_params` | 반복 실행 시 주입되는 런타임 입력값 |
 | `screen_signature` | 현재 전체 화면 관찰 서명. 기본 replay 판단용 이름으로 쓰지 않는다 |
 | `roi_signature` | 타깃 주변 crop의 pHash 서명. active replay 판단의 기준 |

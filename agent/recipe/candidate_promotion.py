@@ -12,6 +12,7 @@ from agent.recipe.promotion_policy import (
 from agent.recipe.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
+    split_stable_replay_paths,
 )
 from agent.recipe.task_category import (
     normalize_task_category,
@@ -304,6 +305,7 @@ def _followup_strategy(
     if action == "switch_tab" and not param.get("direction"):
         return None
     return {
+        "_source_seq": seq,
         "site": str(candidate.get("site") or ""),
         "task_category": task_category_from_candidate(candidate),
         "trigger": trigger,
@@ -444,8 +446,9 @@ def _promotable_followup_strategies(
     list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
+    list[dict[str, Any]],
 ]:
-    """좌표 없는 행동은 직전 성공 문맥과 전환 계약이 모두 있을 때만 승격한다."""
+    """좌표 없는 행동의 경로 단계와 독립 후속 전략을 함께 만든다."""
 
     intents = _step_intent_map(review)
     contracts = _transition_contract_map(review)
@@ -457,6 +460,7 @@ def _promotable_followup_strategies(
         page_roles,
     )
     replay_strategies: list[dict[str, Any]] = []
+    replay_steps: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
 
     for raw_step in source_steps:
@@ -548,8 +552,9 @@ def _promotable_followup_strategies(
             )
             continue
         replay_strategies.append(strategy)
+        replay_steps.append(step)
 
-    return source_strategies, replay_strategies, skipped
+    return source_strategies, replay_strategies, replay_steps, skipped
 
 
 def apply_candidate_promotion(
@@ -566,7 +571,7 @@ def apply_candidate_promotion(
     ]
     page_roles = _page_role_map_from_candidate(candidate)
     evidence_verdicts = evaluate_candidate_step_evidence(candidate)
-    replay_steps, skipped_steps = _promotable_replay_steps(
+    target_replay_steps, skipped_steps = _promotable_replay_steps(
         source_steps,
         review,
         page_roles=page_roles,
@@ -575,6 +580,7 @@ def apply_candidate_promotion(
     (
         source_followups,
         replay_followups,
+        contextual_replay_steps,
         skipped_followups,
     ) = _promotable_followup_strategies(
         candidate,
@@ -585,26 +591,47 @@ def apply_candidate_promotion(
     )
     store = RecipeStore(db_path)
     site = candidate.get("site", "") or ""
-    roi_saved_count = store.replace_recipe_steps(
+    replay_paths = split_stable_replay_paths(
+        [*target_replay_steps, *contextual_replay_steps]
+    )
+    path_step_seqs = {
+        int(step["seq"])
+        for path in replay_paths
+        for step in path
+        if str(step.get("seq", "")).lstrip("-").isdigit()
+    }
+    standalone_followups = [
+        strategy
+        for strategy in replay_followups
+        if (
+            not str(strategy.get("_source_seq", "")).lstrip("-").isdigit()
+            or int(strategy["_source_seq"]) not in path_step_seqs
+        )
+    ]
+    path_saved_count = store.replace_recipe_paths(
         site,
         candidate.get("goal", "") or "",
-        source_steps,
-        replay_steps,
+        replay_paths,
         metadata=dict(review.get("skill_metadata") or {}),
+        candidate_id=str(candidate.get("candidate_id") or ""),
     )
     followup_saved_count = store.replace_followup_strategies(
         site,
         source_followups,
-        replay_followups,
+        standalone_followups,
     )
-    saved_count = roi_saved_count + followup_saved_count
+    saved_count = path_saved_count + followup_saved_count
     return {
         "enabled": True,
         "promoted": saved_count > 0,
         "saved_count": saved_count,
-        "promoted_step_count": len(replay_steps) + len(replay_followups),
-        "promoted_roi_step_count": len(replay_steps),
-        "promoted_followup_count": len(replay_followups),
+        "promoted_step_count": (
+            sum(len(path) for path in replay_paths)
+            + len(standalone_followups)
+        ),
+        "promoted_path_count": path_saved_count,
+        "promoted_roi_step_count": len(target_replay_steps),
+        "promoted_followup_count": len(standalone_followups),
         "skipped_steps": [*skipped_steps, *skipped_followups],
     }
 

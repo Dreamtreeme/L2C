@@ -1,4 +1,4 @@
-"""ROI 서명이 일치하는 Reflex Recipe를 구조화된 행동 요청으로 재생한다."""
+"""첫 ROI가 일치하는 안정 Recipe 경로를 끝까지 순서대로 재생한다."""
 
 from __future__ import annotations
 
@@ -7,6 +7,10 @@ from typing import Any
 
 from agent.graph.action_request import build_action_request
 from agent.graph.state import GraphState
+from agent.recipe.replay_actions import (
+    CONTEXTUAL_REPLAY_ACTIONS,
+    TARGET_REPLAY_ACTIONS,
+)
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
 from agent.utils.logger import logger
@@ -36,7 +40,7 @@ def _reflex_trace_args(step: dict) -> dict:
 
 
 def _reflex_action_args(step: dict, marker_id: int | None, params: dict | None = None) -> dict | None:
-    """저장된 RecipeStep을 action 도구 인자로 변환한다."""
+    """저장된 경로 단계를 물리 action 도구 인자로 변환한다."""
 
     action = step.get("action")
     param = dict(step.get("param") or {})
@@ -65,6 +69,36 @@ def _reflex_action_args(step: dict, marker_id: int | None, params: dict | None =
         if slot_name:
             args["slot_name"] = slot_name
         return args
+    if action in CONTEXTUAL_REPLAY_ACTIONS:
+        allowed_param_keys = {
+            "press_key": {"key"},
+            "go_back": set(),
+            "close_current_tab": set(),
+            "switch_tab": {"direction"},
+        }[action]
+        args = {
+            key: value
+            for key, value in param.items()
+            if key in allowed_param_keys and value not in (None, "")
+        }
+        if action == "press_key" and not args.get("key"):
+            return None
+        if action == "switch_tab" and not args.get("direction"):
+            return None
+        args.update(
+            {
+                key: value
+                for key, value in trace_args.items()
+                if key in {"reason", "page_role", "expected_after"}
+            }
+        )
+        args.update(
+            {
+                "risk_level": "safe_navigation",
+                "needs_user_confirmation": False,
+            }
+        )
+        return args
     return None
 
 
@@ -92,19 +126,19 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
     def miss(_elapsed: float, reason: str = "", trace: dict | None = None) -> dict[str, Any]:
         reflex_trace = dict(trace or {})
         reflex_trace.update({"hit": False, "reason": reason or reflex_trace.get("reason", "")})
-        active_set = dict(state.get("reflex_action_set", {}) or {})
+        active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
         blocked_keys = [
             str(key)
             for key in (state.get("reflex_blocked_recipe_keys") or [])
             if str(key)
         ]
-        active_recipe_key = str(active_set.get("recipe_key") or "")
+        active_recipe_key = str(active_recipe.get("recipe_key") or "")
         if active_recipe_key and active_recipe_key not in blocked_keys:
             blocked_keys.append(active_recipe_key)
         return {
             "reflex_trace": reflex_trace,
             "reflex_transition_contracts": {},
-            "reflex_action_set": {},
+            "active_reflex_recipe": {},
             "reflex_blocked_recipe_keys": blocked_keys,
         }
 
@@ -134,7 +168,6 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             state,
             str(state.get("current_url") or ""),
         )
-        blocked_recipe_keys = transition_failed_recipe_keys | already_used_recipe_keys
         recipe_candidates = (
             RecipeStore().get_site_recipes(
                 site,
@@ -143,8 +176,8 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             if site
             else []
         )
-        active_set = dict(state.get("reflex_action_set", {}) or {})
-        active_recipe_key = str(active_set.get("recipe_key") or "")
+        active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
+        active_recipe_key = str(active_recipe.get("recipe_key") or "")
         if active_recipe_key:
             recipe_candidates = [
                 item
@@ -202,7 +235,13 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             candidate_rejections.append(item)
 
         for recipe_key, recipe in recipe_candidates:
-            if recipe_key in blocked_recipe_keys:
+            if (
+                recipe_key in transition_failed_recipe_keys
+                or (
+                    not active_recipe_key
+                    and recipe_key in already_used_recipe_keys
+                )
+            ):
                 rejected_count += 1
                 reason = (
                     "recipe_blocked_after_transition_failure"
@@ -222,7 +261,7 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
 
             step_count = len(recipe.steps)
             step_index = (
-                int(active_set.get("next_step_index") or 0)
+                int(active_recipe.get("next_step_index") or 0)
                 if recipe_key == active_recipe_key
                 else 0
             )
@@ -230,7 +269,7 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
                 rejected_count += 1
                 record_rejection(
                     recipe_key,
-                    "action_set_step_out_of_range",
+                    "recipe_step_out_of_range",
                 )
                 continue
 
@@ -271,38 +310,59 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
                     record_rejection(recipe_key, "page_role_mismatch", step_trace)
                     candidate_valid = False
                     break
-                if action not in {"click_marker", "type_in_marker"}:
-                    record_rejection(recipe_key, "non_roi_action", step_trace)
-                    candidate_valid = False
-                    break
-
-                marker_id, phash_result = match_step_by_screen_signature(
-                    step,
-                    dict(state.get("screen_signature", {}) or {}),
-                    markers,
-                    current_image_path=current_image_path,
-                )
-                step_trace["phash"] = phash_result
-                step_trace["match_mode"] = phash_result.get("mode") or "roi_phash"
-                if marker_id is None:
+                if (
+                    action in CONTEXTUAL_REPLAY_ACTIONS
+                    and not active_recipe_key
+                ):
                     record_rejection(
                         recipe_key,
-                        phash_result.get("reason", "phash_check_failed"),
+                        "recipe_must_start_with_roi",
                         step_trace,
                     )
                     candidate_valid = False
                     break
-                if action == "type_in_marker":
-                    target_rejection = text_input_target_rejection(markers, marker_id)
-                    if target_rejection:
+                marker_id = None
+                if action in TARGET_REPLAY_ACTIONS:
+                    marker_id, phash_result = match_step_by_screen_signature(
+                        step,
+                        dict(state.get("screen_signature", {}) or {}),
+                        markers,
+                        current_image_path=current_image_path,
+                    )
+                    step_trace["phash"] = phash_result
+                    step_trace["match_mode"] = (
+                        phash_result.get("mode") or "roi_phash"
+                    )
+                    if marker_id is None:
                         record_rejection(
                             recipe_key,
-                            str(target_rejection.get("reason") or "invalid_text_input_target"),
+                            phash_result.get(
+                                "reason",
+                                "phash_check_failed",
+                            ),
                             step_trace,
                         )
                         candidate_valid = False
                         break
-                step_trace["marker_id"] = marker_id
+                    if action == "type_in_marker":
+                        target_rejection = text_input_target_rejection(
+                            markers,
+                            marker_id,
+                        )
+                        if target_rejection:
+                            record_rejection(
+                                recipe_key,
+                                str(
+                                    target_rejection.get("reason")
+                                    or "invalid_text_input_target"
+                                ),
+                                step_trace,
+                            )
+                            candidate_valid = False
+                            break
+                    step_trace["marker_id"] = marker_id
+                else:
+                    step_trace["match_mode"] = "active_recipe_context"
                 args = _reflex_action_args(step, marker_id, params=params)
                 if args is None:
                     record_rejection(recipe_key, "args_build_failed", step_trace)
@@ -355,7 +415,7 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
         selected_trace = tool_call_traces[selected_call["id"]]
         step_index = int(selected_trace.get("step_index") or 0)
         step_count = len(recipe.steps)
-        action_set_state = (
+        active_recipe_state = (
             {
                 "recipe_key": recipe_key,
                 "next_step_index": step_index + 1,
@@ -370,29 +430,21 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
         )
         request = build_action_request(
             "reflex",
-            (
-                "cached action set step"
-                if step_count > 1
-                else "cached atomic action"
-            ),
+            "cached recipe path step",
             tool_calls,
-            metadata=(
-                {
-                    "execution_unit": "transition_action_set",
-                    "recipe_key": recipe_key,
-                    "step_index": step_index,
-                    "step_count": step_count,
-                }
-                if step_count > 1
-                else None
-            ),
+            metadata={
+                "execution_unit": "stable_recipe_path",
+                "recipe_key": recipe_key,
+                "step_index": step_index,
+                "step_count": step_count,
+            },
         )
         elapsed = time.perf_counter() - started
         logger.info(
             "Reflex hit",
             recipe_key=recipe_key[:24],
             actions=[call["name"] for call in tool_calls],
-            action_set_step=(
+            recipe_step=(
                 f"{step_index + 1}/{step_count}"
                 if step_count > 1
                 else ""
@@ -412,10 +464,10 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             "task_category": requested_task_category,
             "actions": [call["name"] for call in tool_calls],
             "tool_calls": tool_call_traces,
-            "action_set_step_index": (
+            "recipe_step_index": (
                 step_index if step_count > 1 else None
             ),
-            "action_set_step_count": (
+            "recipe_step_count": (
                 step_count if step_count > 1 else None
             ),
         }
@@ -423,7 +475,7 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             "pending_action": request,
             "reflex_trace": reflex_trace,
             "reflex_transition_contracts": transition_contracts,
-            "reflex_action_set": action_set_state,
+            "active_reflex_recipe": active_recipe_state,
         }
     except Exception as exc:
         elapsed = time.perf_counter() - started
