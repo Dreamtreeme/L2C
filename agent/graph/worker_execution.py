@@ -42,9 +42,7 @@ from agent.utils.logger import logger
 from agent.graph.worker_execution_policy import (
     action_target_metadata as _action_target_metadata,
     auto_finish_on_target_enabled as _auto_finish_on_target_enabled,
-    chain_boundary_reached as _chain_boundary_reached,
     compact_action_args as _compact_action_args,
-    is_allowed_same_screen_ui_chain as _is_allowed_same_screen_ui_chain,
     is_detail_update as _is_detail_update,
     merge_extracted_info as _merge_extracted_info,
     repeats_no_effect_target as _repeats_no_effect_target,
@@ -269,12 +267,12 @@ def _dispatch_state(
 
 
 def action_node(state: GraphState) -> Dict[str, Any]:
-    """Reasoning Node가 선택한 도구(들)를 순차적으로 실행(Action Chaining)합니다."""
+    """현재 캡처를 근거로 선택된 원자 행동 하나를 실행합니다."""
     from agent.application.run_context import raise_if_cancelled
 
     raise_if_cancelled()
     started_monotonic = time.perf_counter()
-    logger.info("Executing Action Node (with potential Action Chaining)")
+    logger.info("Executing Action Node")
 
     execution_records: list[dict[str, Any]] = []
 
@@ -350,8 +348,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     detail_followup_required = dict(state.get("detail_followup_required", {}) or {})
     detail_return_pending = dict(state.get("detail_return_pending", {}) or {})
     screen_changed    = False
-    chain_boundary    = False
-    previous_ui_action: str | None = None
     pending_transition: dict[str, Any] = {}
     next_pending_action: ActionRequest | None = None
     reflex_transition_contracts = dict(state.get("reflex_transition_contracts", {}) or {})
@@ -617,7 +613,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     STATE_ACTIONS = {"update_extracted_info", "finish_detail_reading", "set_result_card_queue"}
     RETURN_ACTIONS = {"go_back", "close_current_tab", "switch_tab"}
 
-    for idx, tool_call in enumerate(action_request.tool_calls):
+    for tool_call in action_request.tool_calls:
         action_name = tool_call.name
         args = dict(tool_call.args)
         call_metadata = dict(tool_call.metadata)
@@ -630,7 +626,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         logger.info(
             "Executing requested tool",
             source=action_request.source,
-            chain_position=f"{idx + 1}/{len(action_request.tool_calls)}",
             action=action_name,
             args=compact_args,
         )
@@ -663,17 +658,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         "상세 수집이 이미 완료되었습니다. 같은 공고를 더 읽지 말고 "
                         "검색 결과 화면으로 복귀해야 합니다."
                     ),
-                    step_start,
-                )
-                break
-            if chain_boundary:
-                append_guard_result(
-                    action_name,
-                    args,
-                    before_snapshot,
-                    "skipped",
-                    "chain_boundary_after_screen_change",
-                    "Skipped chained tool after a screen-changing action; next observation is required.",
                     step_start,
                 )
                 break
@@ -746,18 +730,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         )
                         break
 
-                if previous_ui_action and not _is_allowed_same_screen_ui_chain(previous_ui_action, action_name):
-                    append_guard_result(
-                        action_name,
-                        args,
-                        before_snapshot,
-                        "skipped",
-                        "unsafe_ui_action_chain",
-                        f"Skipped unsafe UI chain: {previous_ui_action} -> {action_name}",
-                        step_start,
-                    )
-                    break
-
                 if action_name == "open_browser":
                     result = _dispatch_ui(action_name, args, get_bbox, current_url=current_url)
                 else:
@@ -773,7 +745,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                 else:
                     current_url_stale = current_url_stale or action_name in URL_STALE_ACTIONS
                 screen_changed = screen_changed or action_changed_screen
-                previous_ui_action = action_name
                 if action_changed_screen:
                     contract = reflex_transition_contracts.get(tool_call.id)
                     transition_source = (
@@ -793,8 +764,6 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         transition_source,
                         tool_call.id,
                     )
-                if action_changed_screen and _chain_boundary_reached(action_name):
-                    chain_boundary = True
                 if (
                     result.get("status") == "success"
                     and action_name == "click_marker"
@@ -1051,10 +1020,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
             break  # 에러 발생 시 체인 중단
 
     total_elapsed = time.perf_counter() - started_monotonic
-    logger.info(
-        "Action Node completed all chained tools",
-        duration_sec=round(total_elapsed, 6),
-    )
+    logger.info("Action Node completed", duration_sec=round(total_elapsed, 6))
 
     statuses = [str(item.get("status") or "") for item in new_actions]
     if statuses and all(status == "success" for status in statuses):

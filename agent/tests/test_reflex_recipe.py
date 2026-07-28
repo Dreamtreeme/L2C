@@ -1609,6 +1609,46 @@ def test_reflex_node_builds_action_tool_call(monkeypatch, tmp_path):
     assert len(msg.tool_calls) == 1
 
 
+def test_reflex_node_rejects_non_atomic_recipe(monkeypatch):
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    class FakeStore:
+        def get_site_recipes(self, site, task_category=None):
+            step = RecipeStep(
+                seq=0,
+                action="click_marker",
+                page_role="home",
+                replay_mode="fixed",
+            )
+            return [
+                (
+                    "legacy-multi-step",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="goal",
+                        steps=[step, step.model_copy(update={"seq": 1})],
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = reflex_node(
+        {
+            "goal": "iOS 개발자 공고",
+            "current_url": "https://www.wanted.co.kr",
+            "current_page_role": "home",
+            "current_markers": [],
+            "recipe_params": {"site": "wanted", "query": "iOS 개발자"},
+        }
+    )
+
+    assert "pending_action" not in result
+    assert result["reflex_trace"]["hit"] is False
+    assert result["reflex_trace"]["reason"] == "no_candidate_passed"
+    assert result["reflex_trace"]["reject_reasons"] == {"non_atomic_recipe": 1}
+
+
 def test_reflex_node_does_not_synthesize_enter_after_search_input(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
     from agent.vision.screen_signature import compute_target_roi_signature

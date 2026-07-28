@@ -203,25 +203,20 @@ class RecipeStore:
         self,
         site: str,
         goal: str,
-        step_or_steps,
+        step: dict,
         metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
     ) -> bool:
-        """같은 ROI 레시피 키의 행동 묶음을 저장하거나 갱신한다."""
+        """같은 ROI 레시피 키의 원자 행동을 저장하거나 갱신한다."""
 
-        steps = list(step_or_steps if isinstance(step_or_steps, list) else [step_or_steps])
-        steps = [
-            strip_replay_runtime_fields(step)
-            for step in steps
-            if isinstance(step, dict)
-        ]
-        if not steps:
+        if not isinstance(step, dict):
             return False
-        if not all(self._step_has_required_replay_fields(step) for step in steps):
+        replay_step = strip_replay_runtime_fields(step)
+        if not self._step_has_required_replay_fields(replay_step):
             return False
-        recipe_key = self._recipe_key_for_step(site, steps[0], metadata=metadata)
+        recipe_key = self._recipe_key_for_step(site, replay_step, metadata=metadata)
 
         now = datetime.now().isoformat(timespec="seconds")
-        steps_payload = json.dumps(steps, ensure_ascii=False)
+        steps_payload = json.dumps([replay_step], ensure_ascii=False)
         metadata_payload = self._dump_json(self._metadata_dict(metadata))
         with self._conn() as conn:
             row = conn.execute("SELECT 1 FROM recipes WHERE recipe_key=?", (recipe_key,)).fetchone()

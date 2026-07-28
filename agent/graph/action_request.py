@@ -46,11 +46,11 @@ class ToolCallRequest(BaseModel):
 
 
 class ActionRequest(BaseModel):
-    """LLM 여부와 무관하게 실행할 도구 호출 묶음."""
+    """현재 화면 캡처를 근거로 실행할 원자 도구 호출."""
 
     source: str
     summary: str = ""
-    tool_calls: list[ToolCallRequest] = Field(default_factory=list)
+    tool_calls: list[ToolCallRequest] = Field(default_factory=list, max_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("source")
@@ -96,7 +96,7 @@ def build_action_request(
     metadata: dict[str, Any] | None = None,
     allowed_tool_names: Sequence[str] | None = None,
 ) -> ActionRequest:
-    """정책 또는 모델의 도구 호출을 검증된 행동 요청으로 만든다."""
+    """정책 또는 모델의 단일 도구 호출을 검증된 행동 요청으로 만든다."""
 
     calls: list[ToolCallRequest] = []
     for index, call in enumerate(tool_calls):

@@ -284,32 +284,10 @@ def repeats_no_effect_target(
     return action_name in {"go_back", "close_current_tab", "close_browser"}
 
 
-def chain_boundary_reached(action_name: str) -> bool:
-    return action_name in {
-        "click_marker",
-        "scroll",
-        "press_key",
-        "open_browser",
-        "close_browser",
-        "close_current_tab",
-        "switch_tab",
-        "go_back",
-    }
-
-
-def is_allowed_same_screen_ui_chain(
-    previous_ui_action: str | None,
-    action_name: str,
-) -> bool:
-    return previous_ui_action == "type_in_marker" and action_name == "press_key"
-
-
 __all__ = [
     "action_target_metadata",
     "auto_finish_on_target_enabled",
-    "chain_boundary_reached",
     "compact_action_args",
-    "is_allowed_same_screen_ui_chain",
     "is_detail_update",
     "merge_extracted_info",
     "repeats_no_effect_target",

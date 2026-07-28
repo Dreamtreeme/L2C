@@ -195,6 +195,10 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                 rejected_count += 1
                 record_rejection(recipe_key, "missing_required_inputs")
                 continue
+            if len(recipe.steps) != 1:
+                rejected_count += 1
+                record_rejection(recipe_key, "non_atomic_recipe")
+                continue
 
             tool_calls = []
             transition_contracts: dict[str, dict] = {}
@@ -302,7 +306,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
         recipe_key, recipe, tool_calls, transition_contracts, tool_call_traces = selected
         request = build_action_request(
             "reflex",
-            f"cached {len(tool_calls)} action(s)",
+            "cached atomic action",
             tool_calls,
         )
         elapsed = time.perf_counter() - started

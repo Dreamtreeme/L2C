@@ -612,6 +612,24 @@ def test_action_request_rejects_unknown_tool_and_invalid_arguments():
             [{"name": "click_marker", "args": {}, "id": "bad-args"}],
         )
 
+    with pytest.raises(ValidationError, match="at most 1 item"):
+        build_action_request(
+            "llm",
+            "multiple actions from one capture",
+            [
+                {
+                    "name": "type_in_marker",
+                    "args": {"marker_id": 1, "text": "iOS 개발자"},
+                    "id": "type",
+                },
+                {
+                    "name": "press_key",
+                    "args": {"key": "enter"},
+                    "id": "enter",
+                },
+            ],
+        )
+
 
 def test_model_response_is_converted_once_to_allowed_action_request():
     from agent.graph.action_request import action_request_from_model_response

@@ -153,7 +153,7 @@ def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, A
     status = result.get("status", "")
     reason = result.get("reason", "") or ""
     if status == "skipped":
-        if reason in {"same_state_repeat_blocked", "unsafe_ui_action_chain", "chain_boundary_after_screen_change"}:
+        if reason == "same_state_repeat_blocked":
             return ActionFeedback(label="loop_risk", reason=reason, confidence=0.85)
         return ActionFeedback(label="no_effect", reason=reason or "skipped", confidence=0.7)
     if status == "error":

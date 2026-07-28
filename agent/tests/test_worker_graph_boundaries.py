@@ -82,7 +82,7 @@ def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
     )
 
 
-def test_execution_stops_at_first_screen_change_and_recording_is_separate(monkeypatch):
+def test_atomic_execution_and_recording_are_separate(monkeypatch):
     calls: list[str] = []
 
     def fake_dispatch(action_name, args, get_bbox, current_url=""):
@@ -95,11 +95,6 @@ def test_execution_stops_at_first_screen_change_and_recording_is_separate(monkey
         "llm",
         [
             {"name": "click_marker", "args": {"marker_id": 1}, "id": "click"},
-            {
-                "name": "update_extracted_info",
-                "args": {"data_json": '{"메모":"새 화면"}'},
-                "id": "stale-state-update",
-            },
         ],
     )
     result = worker_execution.action_node(
@@ -121,7 +116,7 @@ def test_execution_stops_at_first_screen_change_and_recording_is_separate(monkey
     )
 
     assert calls == ["click_marker"]
-    assert [item["status"] for item in result["action_history"]] == ["success", "skipped"]
+    assert [item["status"] for item in result["action_history"]] == ["success"]
     assert result["pending_transition"]["action"] == "click_marker"
     assert (
         result["pending_transition"]["from_capture_id"]
@@ -143,7 +138,7 @@ def test_execution_stops_at_first_screen_change_and_recording_is_separate(monkey
         recorded["feedback_episodes"][0]["observation"]["before"]["capture_id"]
         == "worker-test:capture:0003"
     )
-    assert len(recorded["feedback_episodes"]) == 2
+    assert len(recorded["feedback_episodes"]) == 1
 
 
 def test_graph_custom_event_is_shared_by_metrics_and_sse():

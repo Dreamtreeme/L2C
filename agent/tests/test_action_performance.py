@@ -257,11 +257,6 @@ def test_action_node_uses_action_history_seq_for_recorded_steps(monkeypatch):
         "pending_action": _action_request(
             content="",
             tool_calls=[
-                {
-                    "name": "update_extracted_info",
-                    "args": {"data_json": '{"메모":"목록 확인"}'},
-                    "id": "1",
-                },
                 {"name": "click_marker", "args": {"marker_id": 1, "reason": "open first result"}, "id": "2"},
             ],
         ),
@@ -273,8 +268,8 @@ def test_action_node_uses_action_history_seq_for_recorded_steps(monkeypatch):
             "recorded_steps": [{"seq": 0, "action": "open_browser"}],
         }
     )
-    assert [episode["seq"] for episode in recorded["feedback_episodes"]] == [2, 3]
-    assert recorded["recorded_steps"][0]["seq"] == 3
+    assert [episode["seq"] for episode in recorded["feedback_episodes"]] == [2]
+    assert recorded["recorded_steps"][0]["seq"] == 2
     assert recorded["recorded_steps"][0]["intent"] == "open first result"
 
 
@@ -373,86 +368,6 @@ def test_action_node_does_not_block_repeated_action_by_state_key(monkeypatch):
     assert result["current_url_stale"] is True
 
 
-def test_action_node_stops_ui_chain_after_screen_boundary_action(monkeypatch):
-
-    calls = []
-
-    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
-        calls.append((action_name, dict(args)))
-        get_bbox(args["marker_id"])
-        return {"status": "success", "action": action_name, "result": "ok"}
-
-    monkeypatch.setattr(worker_execution, "_dispatch_ui", fake_dispatch_ui)
-
-    result = worker_execution.action_node({
-        "current_markers": [
-            {"id": 1, "bbox": [10, 20, 110, 80], "text": "first"},
-            {"id": 2, "bbox": [10, 100, 110, 160], "text": "second"},
-        ],
-        "current_url": "https://www.wanted.co.kr/search?query=data",
-        "current_url_stale": False,
-        "reflex_state_key": "state-results",
-        "extracted_jd": {},
-        "is_finished": False,
-        "collected_data": [],
-        "error_count": 0,
-        "pending_action": _action_request(
-            content="",
-            tool_calls=[
-                {"name": "click_marker", "args": {"marker_id": 1}, "id": "1"},
-                {"name": "click_marker", "args": {"marker_id": 2}, "id": "2"},
-            ],
-        ),
-    })
-
-    assert calls == [("click_marker", {"marker_id": 1})]
-    assert result["action_history"][0]["status"] == "success"
-    assert result["action_history"][1]["status"] == "skipped"
-    assert result["action_history"][1]["reason"] == "chain_boundary_after_screen_change"
-    assert result["last_action_result"].screen_changed is True
-
-
-def test_action_node_allows_type_then_enter_chain(monkeypatch):
-
-    calls = []
-
-    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
-        calls.append(action_name)
-        if action_name == "type_in_marker":
-            assert get_bbox(args["marker_id"]) == [10, 20, 110, 80]
-        return {"status": "success", "action": action_name, "result": "ok"}
-
-    monkeypatch.setattr(worker_execution, "_dispatch_ui", fake_dispatch_ui)
-
-    result = worker_execution.action_node({
-        "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "검색"}],
-        "current_url": "https://www.wanted.co.kr",
-        "current_url_stale": False,
-        "extracted_jd": {},
-        "is_finished": False,
-        "collected_data": [],
-        "error_count": 0,
-        "pending_action": _action_request(
-            content="",
-            tool_calls=[
-                {"name": "type_in_marker", "args": {"marker_id": 1, "text": "데이터 분석가"}, "id": "1"},
-                {
-                    "name": "press_key",
-                    "args": {"key": "enter"},
-                    "id": "2",
-                    "metadata": {"transition_source": "autonomous"},
-                },
-            ],
-        ),
-    })
-
-    assert calls == ["type_in_marker", "press_key"]
-    assert [a["status"] for a in result["action_history"]] == ["success", "success"]
-    assert result["action_history"][1]["args"] == {"key": "enter"}
-    assert result["pending_transition"]["source"] == "autonomous"
-    assert result["last_action_result"].screen_changed is True
-
-
 def test_text_input_target_guard_rejects_close_icon_and_accepts_input_container():
     from agent.runtime.action_validation import text_input_target_rejection
 
@@ -494,17 +409,16 @@ def test_action_node_rejects_type_on_compact_icon_before_physical_input(monkeypa
             "is_finished": False,
             "collected_data": [],
             "error_count": 0,
-            "pending_action": _action_request(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "type_in_marker",
-                        "args": {"marker_id": 0, "text": "ios 개발자", "target_role": "search_input"},
-                        "id": "1",
-                    },
-                    {"name": "press_key", "args": {"key": "enter"}, "id": "2"},
-                ],
-            ),
+                "pending_action": _action_request(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "type_in_marker",
+                            "args": {"marker_id": 0, "text": "ios 개발자", "target_role": "search_input"},
+                            "id": "1",
+                        }
+                    ],
+                ),
         }
     )
 
@@ -1014,45 +928,6 @@ def test_action_node_allows_same_text_when_marker_id_changes_without_state_key_g
     assert result["error_count"] == 0
     assert result["last_action_result"].screen_changed is True
     assert result["current_url_stale"] is True
-
-def test_action_node_stops_before_state_update_after_screen_boundary(monkeypatch):
-
-    calls = []
-
-    def fake_dispatch_ui(action_name, args, get_bbox, current_url=""):
-        calls.append(action_name)
-        get_bbox(args["marker_id"])
-        return {"status": "success", "action": action_name, "result": "ok"}
-
-    monkeypatch.setattr(worker_execution, "_dispatch_ui", fake_dispatch_ui)
-
-    result = worker_execution.action_node({
-        "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "Senior iOS Developer"}],
-        "current_url": "https://www.wanted.co.kr/search?query=iOS",
-        "current_url_stale": False,
-        "reflex_state_key": "state-list",
-        "extracted_jd": {},
-        "is_finished": False,
-        "collected_data": [],
-        "error_count": 0,
-        "pending_action": _action_request(
-            content="",
-            tool_calls=[
-                {"name": "click_marker", "args": {"marker_id": 1}, "id": "1"},
-                {
-                    "name": "update_extracted_info",
-                    "args": {"data_json": '{"메모":"새 화면 정보"}'},
-                    "id": "2",
-                },
-            ],
-        ),
-    })
-
-    assert calls == ["click_marker"]
-    assert [action["status"] for action in result["action_history"]] == ["success", "skipped"]
-    assert result["action_history"][1]["reason"] == "chain_boundary_after_screen_change"
-    assert result["extracted_jd"] == {}
-
 
 def test_close_browser_closes_visible_browser_window(monkeypatch):
     from agent.tools import actions

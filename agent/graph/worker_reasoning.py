@@ -124,7 +124,6 @@ def _recent_forbidden_actions(action_history: list[dict], limit: int = 6) -> lis
         reason = action.get("reason", "") or ""
         forbidden_reason = ""
         if reason in {
-            "unsafe_ui_action_chain",
             "same_screen_no_effect_action_blocked",
             IMPLAUSIBLE_TEXT_INPUT_TARGET,
         }:
