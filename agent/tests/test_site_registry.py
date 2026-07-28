@@ -226,6 +226,21 @@ def test_rocketpunch_jobs_list_uses_job_search_guidance_without_hiding_side_pane
     ) == "job_detail"
 
 
+def test_rocketpunch_selected_job_query_identifies_side_panel_detail():
+    from agent.runtime.site_context import (
+        infer_site_page_role,
+        looks_like_job_detail_url,
+    )
+
+    url = (
+        "https://www.rocketpunch.com/jobs"
+        "?keyword=백엔드+개발자&selectedJobId=159079"
+    )
+
+    assert looks_like_job_detail_url(url) is True
+    assert infer_site_page_role(url, ["주요업무"]) == "job_detail"
+
+
 def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path):
     from agent.runtime import job_card_selector
 
