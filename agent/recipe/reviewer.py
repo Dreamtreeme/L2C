@@ -161,11 +161,13 @@ def build_worker_submission(
     report_jobs, report_source, report_error = _report_job_summary(jobs)
     recorded_steps = list(final_state.get("recorded_steps", []) or [])
     feedback_episodes = list(final_state.get("feedback_episodes", []) or [])
-    transition_observations = list(final_state.get("transition_observations", []) or [])
+    transition_records = list(
+        final_state.get("transition_records", []) or []
+    )
     observed_job_ids = sorted(
         {
             int(item["job_id"])
-            for item in (final_state.get("result_card_queue", []) or [])
+            for item in (final_state.get("job_card_queue", []) or [])
             if isinstance(item, dict)
             and item.get("status") == "skipped"
             and str(item.get("job_id") or "").isdigit()
@@ -181,7 +183,7 @@ def build_worker_submission(
         "summary_error": report_error,
         "current_url": current_url,
         "action_count": len(final_state.get("action_history", []) or []),
-        "result_availability": dict(final_state.get("result_availability", {}) or {}),
+        "job_results_availability": dict(final_state.get("job_results_availability", {}) or {}),
     }
     from agent.recipe.skill_metadata import build_skill_metadata_evidence
 
@@ -212,7 +214,7 @@ def build_worker_submission(
         feedback_saved=int(feedback_saved or 0),
         recorded_steps=recorded_steps,
         feedback_episodes=feedback_episodes,
-        transition_observations=transition_observations,
+        transition_records=transition_records,
         skill_metadata_evidence=skill_metadata_evidence,
         collection_intent=dict(recipe_params.get("collection_intent") or {}),
         semantic_evidence=_semantic_job_evidence(jobs),
@@ -320,7 +322,7 @@ def build_worker_review_payload(
     ]
     transitions = [
         item
-        for item in (submission.get("transition_observations") or [])
+        for item in (submission.get("transition_records") or [])
         if isinstance(item, dict)
     ]
     steps = [
@@ -378,7 +380,7 @@ def build_worker_review_payload(
             "collected_count": int(submission.get("collected_count") or 0),
             "observed_job_ids": list(submission.get("observed_job_ids") or [])[:20],
             "persisted_count": int(submission.get("persisted_count") or 0),
-            "result_availability": dict(summary.get("result_availability") or {}),
+            "job_results_availability": dict(summary.get("job_results_availability") or {}),
             "action_count": int(summary.get("action_count") or len(steps)),
             "action_counts": dict(action_counts),
             "feedback_counts": dict(feedback_counts),

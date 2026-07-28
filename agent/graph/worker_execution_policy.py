@@ -8,16 +8,14 @@ from typing import Any
 from agent.config import get_settings
 from agent.graph.state import GraphState
 from agent.runtime.job_collection import JOB_LIST_KEYS, job_list_value
-from agent.runtime.result_card_queue import (
-    marker_by_id,
-    queue_card_label,
-    result_card_entries_from_args,
+from agent.runtime.job_card_queue import (
+    job_card_label,
+    job_card_entries_from_args,
 )
 from agent.runtime.site_context import (
     looks_like_job_detail_url,
     persistence_policy_for_url,
 )
-from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox
 
 
 def _has_job_url(job: dict[str, Any]) -> bool:
@@ -183,9 +181,9 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
             "detail_complete": args.get("detail_complete", True),
             "reason": _clip_text(args.get("reason", ""), 120),
         }
-    if action_name == "set_result_card_queue":
-        cards = result_card_entries_from_args(args)
-        titles = [queue_card_label(card) for card in cards]
+    if action_name == "set_job_card_queue":
+        cards = job_card_entries_from_args(args)
+        titles = [job_card_label(card) for card in cards]
         return {
             "cards": len(cards),
             "titles": [title for title in titles if title][:5],
@@ -210,41 +208,6 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
         "fields": sorted({str(field) for field in fields}),
         "payload_chars": len(args.get("data_json", "")),
     }
-
-
-def action_target_metadata(
-    state: GraphState,
-    action_name: str,
-    args: dict[str, Any],
-) -> dict[str, Any] | None:
-    if action_name not in {"click_marker", "type_in_marker", "scroll"} or args.get(
-        "marker_id"
-    ) is None:
-        return None
-    marker = marker_by_id(state.get("current_markers", []), args.get("marker_id"))
-    if not marker:
-        return {"marker_id": args.get("marker_id"), "missing": True}
-    bbox = marker.get("bbox", [])
-    center = None
-    if isinstance(bbox, list) and len(bbox) == 4:
-        center = [(bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2]
-    metadata = {
-        "marker_id": marker.get("id"),
-        "text": marker.get("text", ""),
-        "bbox": bbox,
-        "center": center,
-    }
-    size = dict(state.get("screen_signature", {}) or {}).get("size") or []
-    if isinstance(size, list) and len(size) == 2 and isinstance(bbox, list) and len(bbox) == 4:
-        try:
-            metadata["bbox_ratio"] = bbox_to_ratio(bbox, size)
-            metadata["center_ratio"] = center_ratio_from_bbox(bbox, size)
-        except Exception:
-            pass
-    target_label = args.get("target_label") or args.get("semantic_label")
-    if target_label:
-        metadata["target_label"] = target_label
-    return metadata
 
 
 def state_snapshot_for_action(state: GraphState, current_url: str) -> dict[str, Any]:
@@ -285,7 +248,6 @@ def repeats_no_effect_target(
 
 
 __all__ = [
-    "action_target_metadata",
     "auto_finish_on_target_enabled",
     "compact_action_args",
     "is_detail_update",

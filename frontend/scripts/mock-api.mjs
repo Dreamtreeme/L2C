@@ -252,7 +252,7 @@ const server = createServer(async (request, response) => {
             duration_sec: 0.6 + index * 0.41,
             action_source:
               event.phase === "collection"
-                ? "result_card_queue"
+                ? "job_card_queue"
                 : event.phase === "review"
                   ? "reflex"
                   : "commander",

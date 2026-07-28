@@ -246,14 +246,14 @@ def clear_detail_extraction_model_cache() -> None:
     _detail_extraction_llm_key = None
 
 
-def extract_job_from_detail_ocr_buffer(state: dict, current_url: str) -> dict[str, Any]:
+def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[str, Any]:
     """상태의 OCR 버퍼를 공고 한 건으로 정제하고 카드 메타데이터를 보완한다."""
 
-    buffer = dict(state.get("detail_ocr_buffer", {}) or {})
+    buffer = dict(state.get("job_detail_buffer", {}) or {})
     ocr_text = detail_buffer_text(buffer)
     if not ocr_text.strip():
         return {}
-    active_card = dict(state.get("active_result_card", {}) or {})
+    active_card = dict(state.get("active_job_card", {}) or {})
     messages = [
         SystemMessage(
             content=(
@@ -328,6 +328,6 @@ __all__ = [
     "OllamaDetailExtractionLLM",
     "OpenAIDetailExtractionLLM",
     "detail_extraction_model_spec",
-    "extract_job_from_detail_ocr_buffer",
+    "extract_job_from_job_detail_buffer",
     "get_detail_extraction_llm",
 ]

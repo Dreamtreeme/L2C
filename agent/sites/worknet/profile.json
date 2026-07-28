@@ -34,7 +34,7 @@
     "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "근무지", "고용형태", "url"]
   },
   "tools": {
-    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
     "tool_rules": {"click_marker": "표 행의 직무명과 회사를 함께 확인한 뒤 선택한다."}
   },
   "guidance": "결과 행 또는 카드를 직무명, 회사명, 지역으로 식별한다. 공식 워크넷·고용24 도메인 이동은 허용하되 행 선택과 필터 해석은 현재 화면을 기준으로 판단한다."

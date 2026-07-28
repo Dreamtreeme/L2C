@@ -39,7 +39,7 @@
     "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "혜택", "url"]
   },
   "tools": {
-    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
     "tool_rules": {
       "open_browser": "처음에는 공식 홈 주소만 연다.",
       "click_marker": "보이는 마커만 클릭하고 공고 카드는 직무명을 target_label로 보존한다.",

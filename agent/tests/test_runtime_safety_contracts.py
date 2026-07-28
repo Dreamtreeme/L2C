@@ -1,4 +1,4 @@
-from agent.graph import worker_execution
+from agent.graph import worker_execution, worker_execution_dispatch
 
 
 def _action_request(tool_calls):
@@ -9,14 +9,14 @@ def _action_request(tool_calls):
 
 def test_sensitive_action_requires_user_approval_before_physical_input(monkeypatch):
     monkeypatch.setattr(
-        worker_execution,
-        "_dispatch_ui",
+        worker_execution_dispatch,
+        "dispatch_ui_action",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("민감 행동을 물리 입력으로 보내면 안 됩니다.")
         ),
     )
 
-    result = worker_execution.action_node(
+    result = worker_execution.execution_node(
         {
             "current_markers": [
                 {"id": 7, "text": "가입 신청", "bbox": [0, 0, 100, 20]},

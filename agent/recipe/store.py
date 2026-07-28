@@ -19,12 +19,24 @@ from agent.recipe.page_context import normalize_page_role
 from agent.recipe.payload_sanitizer import strip_replay_runtime_fields
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.utils.model_dump import dump_model
-from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+from shared.schema.recipe_schema import (
+    FollowupActionStrategy,
+    RecipeStep,
+    SiteRecipe,
+)
 from shared.schema.skill_schema import RecipeSkillMetadata
 
 
 _RECIPE_KEY_VERSION = 3
 _RECIPE_KEY_PREFIX = "roi3#"
+_FOLLOWUP_KEY_VERSION = 1
+_FOLLOWUP_KEY_PREFIX = "followup1#"
+_FOLLOWUP_ACTIONS = {
+    "press_key",
+    "go_back",
+    "close_current_tab",
+    "switch_tab",
+}
 _INITIALIZED_DB_PATHS: set[Path] = set()
 _SCHEMA_LOCK = threading.RLock()
 
@@ -96,6 +108,27 @@ class RecipeStore:
                 "DELETE FROM recipes WHERE recipe_key NOT LIKE ?",
                 (f"{_RECIPE_KEY_PREFIX}%",),
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS followup_action_strategies (
+                    strategy_key  TEXT PRIMARY KEY,
+                    site          TEXT NOT NULL,
+                    task_category TEXT,
+                    strategy_json TEXT NOT NULL,
+                    success_count INTEGER NOT NULL DEFAULT 0,
+                    created_at    TEXT NOT NULL,
+                    updated_at    TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_followup_action_strategies_site "
+                "ON followup_action_strategies(site)"
+            )
+            conn.execute(
+                "DELETE FROM followup_action_strategies WHERE strategy_key NOT LIKE ?",
+                (f"{_FOLLOWUP_KEY_PREFIX}%",),
+            )
 
     @staticmethod
     def _step_has_required_replay_fields(step: dict[str, Any]) -> bool:
@@ -153,6 +186,64 @@ class RecipeStore:
         digest = hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
         return f"{_RECIPE_KEY_PREFIX}{digest}"
 
+    @staticmethod
+    def _followup_key_for_strategy(
+        strategy: dict[str, Any],
+    ) -> str:
+        """실행 중 변하는 값이 아닌 후속 행동 문맥으로 저장 키를 만든다."""
+
+        trigger = (
+            strategy.get("trigger")
+            if isinstance(strategy.get("trigger"), dict)
+            else {}
+        )
+        payload = {
+            "key_version": _FOLLOWUP_KEY_VERSION,
+            "site": str(strategy.get("site") or ""),
+            "task_category": normalize_task_category(
+                strategy.get("task_category")
+            ),
+            "trigger_action": str(trigger.get("action") or ""),
+            "trigger_component": str(trigger.get("component") or ""),
+            "trigger_page_role": normalize_page_role(
+                trigger.get("page_role")
+            ),
+            "page_role": normalize_page_role(strategy.get("page_role")),
+            "url_template": str(strategy.get("url_template") or ""),
+            "action": str(strategy.get("action") or ""),
+            "param": dict(strategy.get("param") or {}),
+        }
+        digest = hashlib.sha1(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        return f"{_FOLLOWUP_KEY_PREFIX}{digest}"
+
+    @staticmethod
+    def _validated_followup_strategy(
+        strategy: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not isinstance(strategy, dict):
+            return None
+        if str(strategy.get("action") or "") not in _FOLLOWUP_ACTIONS:
+            return None
+        trigger = (
+            strategy.get("trigger")
+            if isinstance(strategy.get("trigger"), dict)
+            else {}
+        )
+        if not str(trigger.get("action") or ""):
+            return None
+        if not strategy.get("transition_contract"):
+            return None
+        try:
+            return dump_model(FollowupActionStrategy(**strategy))
+        except (TypeError, ValueError):
+            return None
+
     def _upsert_recipe_steps(
         self,
         site: str,
@@ -208,14 +299,26 @@ class RecipeStore:
         return saved
 
     def clear_recipes(self, site: str | None = None) -> int:
-        """활성 레시피만 비우고 후보와 실행 증거는 보존한다."""
+        """활성 ROI 레시피와 후속 행동 전략만 비우고 후보 증거는 보존한다."""
 
         with self._conn() as conn:
             if site:
-                result = conn.execute("DELETE FROM recipes WHERE site=?", (site,))
+                recipe_result = conn.execute(
+                    "DELETE FROM recipes WHERE site=?",
+                    (site,),
+                )
+                followup_result = conn.execute(
+                    "DELETE FROM followup_action_strategies WHERE site=?",
+                    (site,),
+                )
             else:
-                result = conn.execute("DELETE FROM recipes")
-            return int(result.rowcount or 0)
+                recipe_result = conn.execute("DELETE FROM recipes")
+                followup_result = conn.execute(
+                    "DELETE FROM followup_action_strategies"
+                )
+            return int(recipe_result.rowcount or 0) + int(
+                followup_result.rowcount or 0
+            )
 
     def replace_recipe_steps(
         self,
@@ -257,6 +360,182 @@ class RecipeStore:
             item["skill_metadata"] = json.loads(item.pop("metadata_json") or "{}")
             out.append(item)
         return out
+
+    def replace_followup_strategies(
+        self,
+        site: str,
+        source_strategies: list[dict[str, Any]],
+        replay_strategies: list[dict[str, Any]],
+    ) -> int:
+        """한 후보가 만든 후속 행동 전략을 승인된 집합으로 교체한다."""
+
+        candidate_keys = sorted(
+            {
+                self._followup_key_for_strategy(strategy)
+                for strategy in [
+                    *(source_strategies or []),
+                    *(replay_strategies or []),
+                ]
+                if (
+                    isinstance(strategy, dict)
+                    and str(strategy.get("action") or "")
+                    in _FOLLOWUP_ACTIONS
+                    and isinstance(strategy.get("trigger"), dict)
+                    and str(strategy["trigger"].get("action") or "")
+                )
+            }
+        )
+        if candidate_keys:
+            placeholders = ",".join("?" for _ in candidate_keys)
+            with self._conn() as conn:
+                conn.execute(
+                    "DELETE FROM followup_action_strategies "
+                    f"WHERE site=? AND strategy_key IN ({placeholders})",
+                    (site, *candidate_keys),
+                )
+
+        saved = 0
+        now = datetime.now().isoformat(timespec="seconds")
+        for raw_strategy in replay_strategies or []:
+            strategy = self._validated_followup_strategy(raw_strategy)
+            if strategy is None:
+                continue
+            strategy_key = self._followup_key_for_strategy(strategy)
+            task_category = normalize_task_category(
+                strategy.get("task_category")
+            )
+            payload = self._dump_json(strategy)
+            with self._conn() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM followup_action_strategies "
+                    "WHERE strategy_key=?",
+                    (strategy_key,),
+                ).fetchone()
+                if row:
+                    conn.execute(
+                        "UPDATE followup_action_strategies "
+                        "SET site=?, task_category=?, strategy_json=?, "
+                        "success_count=success_count+1, updated_at=? "
+                        "WHERE strategy_key=?",
+                        (
+                            site,
+                            task_category,
+                            payload,
+                            now,
+                            strategy_key,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO followup_action_strategies "
+                        "(strategy_key, site, task_category, strategy_json, "
+                        "success_count, created_at, updated_at) "
+                        "VALUES (?,?,?,?,1,?,?)",
+                        (
+                            strategy_key,
+                            site,
+                            task_category,
+                            payload,
+                            now,
+                            now,
+                        ),
+                    )
+            saved += 1
+        return saved
+
+    def get_followup_strategy(
+        self,
+        site: str,
+        *,
+        task_category: str | None,
+        trigger_action: str,
+        trigger_component: str = "",
+        trigger_page_role: str = "",
+        page_role: str = "",
+        current_url_template: str = "",
+    ) -> tuple[str, FollowupActionStrategy] | None:
+        """현재 직전 행동 문맥과 정확히 맞는 후속 행동 전략 하나를 반환한다."""
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT strategy_key, strategy_json, success_count "
+                "FROM followup_action_strategies "
+                "WHERE site=? ORDER BY success_count DESC, updated_at DESC",
+                (site,),
+            ).fetchall()
+
+        requested_task = normalize_task_category(task_category)
+        requested_component = str(trigger_component or "").strip()
+        requested_trigger_role = normalize_page_role(trigger_page_role)
+        requested_page_role = normalize_page_role(page_role)
+        for row in rows:
+            try:
+                strategy = FollowupActionStrategy(
+                    **json.loads(row["strategy_json"] or "{}")
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not task_category_matches(
+                requested_task,
+                strategy.task_category,
+            ):
+                continue
+            if strategy.trigger.action != trigger_action:
+                continue
+            if (
+                requested_component
+                and strategy.trigger.component
+                and strategy.trigger.component != requested_component
+            ):
+                continue
+            if (
+                requested_trigger_role
+                and strategy.trigger.page_role
+                and normalize_page_role(strategy.trigger.page_role)
+                != requested_trigger_role
+            ):
+                continue
+            if (
+                requested_page_role
+                and strategy.page_role
+                and normalize_page_role(strategy.page_role)
+                != requested_page_role
+            ):
+                continue
+            if (
+                current_url_template
+                and strategy.url_template
+                and strategy.url_template != current_url_template
+            ):
+                continue
+            strategy.success_count = int(row["success_count"] or 0)
+            return str(row["strategy_key"] or ""), strategy
+        return None
+
+    def active_counts(self, site: str | None = None) -> dict[str, int]:
+        """E2E 사전조건 검사용 활성 자동화 데이터 개수를 반환한다."""
+
+        where = " WHERE site=?" if site else ""
+        params = (site,) if site else ()
+        with self._conn() as conn:
+            recipe_count = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM recipes{where}",
+                    params,
+                ).fetchone()[0]
+            )
+            followup_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM followup_action_strategies"
+                    + where,
+                    params,
+                ).fetchone()[0]
+            )
+        return {
+            "roi_recipes": recipe_count,
+            "followup_strategies": followup_count,
+            "total": recipe_count + followup_count,
+        }
 
     def get_site_recipes(self, site: str, *, task_category: str | None = None) -> list[tuple[str, SiteRecipe]]:
         """같은 사이트의 활성 레시피를 성공 횟수 순으로 반환한다."""

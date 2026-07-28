@@ -57,7 +57,7 @@ tags:
 4. 각 후보 step에 대해 `page_role`이 현재 화면과 맞는지 확인한다.
 5. 저장된 `roi_signature.crop_rect_ratio`로 현재 스크린샷의 같은 ROI를 crop하고 pHash 거리를 검사한다.
 6. ROI가 맞으면 저장된 target 비율에 가까운 현재 OCR marker를 찾는다.
-7. 통과하면 `click_marker` 또는 `type_in_marker` tool call을 만들어 `action_node`가 기존 실행 경로로 처리한다.
+7. 통과하면 `click_marker` 또는 `type_in_marker` 도구 호출을 만들어 `execution_node`가 기존 실행 경로로 처리한다.
 8. 전환 계약이 `unknown`이면 reasoning으로 폴백하고 같은 run 안에서 해당 `recipe_key`를 차단한다.
 
 ## 승격 정책

@@ -6,10 +6,13 @@ import pytest
 def _patch_start_observation(monkeypatch, capture):
     """분할된 시작 관찰 노드를 외부 화면 없이 실행하도록 대체한다."""
 
-    monkeypatch.setattr("agent.graph.worker_observation.capture_screen_node", capture)
-    monkeypatch.setattr("agent.graph.worker_observation.analyze_screen_node", lambda state: {})
-    monkeypatch.setattr("agent.graph.worker_transition.evaluate_transition_node", lambda state: {})
-    monkeypatch.setattr("agent.graph.worker_collection.apply_observation_node", lambda state: {})
+    monkeypatch.setattr("agent.graph.worker_observation.capture_node", capture)
+    monkeypatch.setattr("agent.graph.worker_observation.ocr_node", lambda state: {})
+    monkeypatch.setattr(
+        "agent.graph.worker_transition.transition_node",
+        lambda state: {},
+    )
+    monkeypatch.setattr("agent.graph.worker_collection.collection_node", lambda state: {})
 
 
 def test_citation_validation_normalizes_grouped_ids_before_validation():
@@ -397,7 +400,7 @@ def test_action_request_validates_executor_tool_call_contract():
     from agent.graph.action_request import ActionRequest, ToolCallRequest
 
     request = ActionRequest(
-        source="card_queue",
+        source="job_card_queue",
         summary="next card",
         tool_calls=[
             ToolCallRequest(
@@ -408,7 +411,7 @@ def test_action_request_validates_executor_tool_call_contract():
         ],
     )
 
-    assert request.source == "card_queue"
+    assert request.source == "job_card_queue"
     assert request.summary == "next card"
     assert request.tool_calls[0].name == "click_marker"
     assert request.tool_calls[0].args == {
@@ -566,8 +569,8 @@ def test_collection_service_completes_when_visible_result_scope_is_exhausted():
                 "target_count": 10,
                 "task_category": "검색",
                 "extracted_summary": {
-                    "result_availability": {
-                        "available_result_count": 1,
+                    "job_results_availability": {
+                        "available_job_count": 1,
                         "count_evidence": "포지션 1",
                         "count_confidence": 0.97,
                     }

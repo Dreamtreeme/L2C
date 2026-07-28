@@ -108,9 +108,9 @@ def _transition_record(
     started_at = float(pending.get("started_at") or time.time())
     return build_transition_observation(
         pending,
-        transition_status=status,
-        transition_outcome=outcome,
-        transition_source=source,
+        status=status,
+        outcome=outcome,
+        source=source,
         reason=reason,
         elapsed_sec=max(0.0, time.time() - started_at),
         attempt=attempt,
@@ -124,63 +124,133 @@ def _transition_record(
     )
 
 
-def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
+def _transition_result(
+    request: dict[str, Any],
+    *,
+    status: str,
+    outcome: str = "",
+    reason: str = "",
+    visual_change_detected: bool = False,
+    visual_change_ratio: float | None = None,
+    needs_ocr: bool = False,
+) -> dict[str, Any]:
+    """전환 요청의 식별 정보와 판정 값을 하나의 결과로 합친다."""
+
+    return {
+        **request,
+        "status": status,
+        "outcome": outcome,
+        "reason": reason,
+        "visual_change_detected": visual_change_detected,
+        "visual_change_ratio": visual_change_ratio,
+        "needs_ocr": needs_ocr,
+    }
+
+
+def transition_node(state: GraphState) -> dict[str, Any]:
     """직전 원자 행동과 현재 캡처를 비교하고 OCR 필요 여부를 결정한다."""
 
-    pending = dict(state.get("pending_transition", {}) or {})
-    observed = dict(state.get("observed_transition", {}) or pending)
+    request = dict(state.get("transition_request", {}) or {})
     low_information = bool(state.get("low_information_screen"))
     ocr_complete = bool(state.get("ocr_complete"))
 
     if low_information:
-        status = "pending" if pending else ""
-        source = str(pending.get("source") or "")
         return {
-            "observed_transition": observed,
-            "transition_status": status,
-            "transition_outcome": "",
-            "transition_source": source,
-            "transition_reason": "low_information_screen",
-            "transition_visual_change_detected": False,
-            "transition_visual_change_ratio": None,
-            "ocr_required": False,
+            "transition_result": _transition_result(
+                request,
+                status="pending" if request else "idle",
+                reason="low_information_screen",
+            ),
         }
 
-    if not pending:
+    if not request:
         return {
-            "observed_transition": {},
-            "transition_status": "",
-            "transition_outcome": "",
-            "transition_source": "",
-            "transition_reason": "no_pending_transition",
-            "transition_visual_change_detected": False,
-            "transition_visual_change_ratio": None,
-            "ocr_required": not ocr_complete,
+            "transition_result": _transition_result(
+                {},
+                status="idle",
+                reason="no_transition_request",
+                needs_ocr=not ocr_complete,
+            ),
+        }
+
+    if state.get("transition_probe_unchanged"):
+        contract = (
+            request.get("contract")
+            if isinstance(request.get("contract"), dict)
+            else {}
+        )
+        started_at = float(request.get("started_at") or time.time())
+        elapsed_sec = max(0.0, time.time() - started_at)
+        timeout_sec = float(contract.get("timeout_sec") or 12.0)
+        attempt = int(request.get("attempts") or 0) + 1
+        if elapsed_sec < timeout_sec:
+            request["attempts"] = attempt
+            wait_reason = (
+                "target_screen_not_ready"
+                if request.get("pending_target_phash")
+                else "screen_unchanged_while_waiting"
+            )
+            return {
+                "transition_request": request,
+                "transition_result": _transition_result(
+                    request,
+                    status="pending",
+                    reason=wait_reason,
+                    needs_ocr=False,
+                ),
+                "transition_probe_unchanged": False,
+            }
+
+        record = _transition_record(
+            request,
+            status="unknown",
+            outcome="",
+            source=str(request.get("source") or ""),
+            reason="transition_timeout",
+            attempt=attempt,
+            state=state,
+            phash_distance=0,
+            visual_change_ratio=0.0,
+            ocr_skipped=True,
+        )
+        return {
+            "transition_request": {},
+            "transition_result": _transition_result(
+                request,
+                status="unknown",
+                reason="transition_timeout",
+                needs_ocr=False,
+            ),
+            "transition_records": [record],
+            "transition_probe_unchanged": False,
         }
 
     image_path = str(state.get("current_screenshot") or "")
     current_url = str(state.get("current_url") or "")
     raw_signature = dict(state.get("raw_screen_signature", {}) or {})
-    visual_changed, visual_ratio = transition_has_visual_change(pending, image_path)
-    source = str(pending.get("source") or "")
+    visual_changed, visual_ratio = transition_has_visual_change(
+        request,
+        image_path,
+    )
+    source = str(request.get("source") or "")
     blocked_keys = _blocked_recipe_keys(state)
 
     if not ocr_complete:
         no_effect, phash_distance = transition_no_effect_by_phash(
-            pending,
+            request,
             current_url,
             raw_signature,
         )
         if no_effect and not visual_changed:
             reason = "reflex_no_screen_change" if source == "reflex" else "no_screen_change"
-            recipe_key = str(pending.get("recipe_key") or "")
+            recipe_key = str(request.get("recipe_key") or "")
             if source == "reflex" and recipe_key and recipe_key not in blocked_keys:
                 blocked_keys.append(recipe_key)
-            attempt = int(pending.get("attempts") or 0) + 1
-            reused_observation = _reused_observation(state, pending)
+            attempt = int(request.get("attempts") or 0) + 1
+            reused_observation = _reused_observation(state, request)
             record_state = {**state, **reused_observation}
             record = _transition_record(
-                pending,
+                request,
                 status="unknown",
                 outcome="",
                 source=source,
@@ -194,50 +264,48 @@ def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
             logger.info(
                 "Transition no-effect detected before OCR",
                 source=source,
-                action=pending.get("action", ""),
+                action=request.get("action", ""),
                 phash_distance=phash_distance,
             )
             return {
-                "observed_transition": observed,
-                "pending_transition": {},
-                "transition_status": "unknown",
-                "transition_outcome": "",
-                "transition_source": source,
-                "transition_reason": reason,
-                "transition_visual_change_detected": False,
-                "transition_visual_change_ratio": visual_ratio,
-                "ocr_required": False,
-                "transition_observations": [record],
+                "transition_request": {},
+                "transition_result": _transition_result(
+                    request,
+                    status="unknown",
+                    reason=reason,
+                    visual_change_ratio=visual_ratio,
+                ),
+                "transition_records": [record],
                 "reflex_blocked_recipe_keys": blocked_keys,
                 **reused_observation,
             }
 
         return {
-            "observed_transition": observed,
-            "transition_status": "",
-            "transition_outcome": "",
-            "transition_source": source,
-            "transition_reason": "ocr_required",
-            "transition_visual_change_detected": visual_changed,
-            "transition_visual_change_ratio": visual_ratio,
-            "ocr_required": True,
+            "transition_result": _transition_result(
+                request,
+                status="needs_ocr",
+                reason="ocr_required",
+                visual_change_detected=visual_changed,
+                visual_change_ratio=visual_ratio,
+                needs_ocr=True,
+            ),
         }
 
     from agent.recipe.transition import evaluate_transition
 
     markers = list(state.get("current_markers") or [])
-    started_at = float(pending.get("started_at") or time.time())
+    started_at = float(request.get("started_at") or time.time())
     evaluation = evaluate_transition(
-        pending.get("contract"),
+        request.get("contract"),
         markers,
-        params=dict(pending.get("params", {}) or {}),
+        params=dict(request.get("params", {}) or {}),
         elapsed_sec=max(0.0, time.time() - started_at),
     )
     status = str(evaluation.get("status") or "unknown")
     outcome = str(evaluation.get("outcome") or "")
     screen_signature = dict(state.get("screen_signature", {}) or {})
     same_url, phash_distance, no_effect_max_distance = transition_phash_distance(
-        pending,
+        request,
         current_url,
         screen_signature,
     )
@@ -257,7 +325,7 @@ def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
         status == "pending"
         and same_url
         and phash_distance is not None
-        and transition_accepts_visual_change(pending)
+        and transition_accepts_visual_change(request)
         and (phash_distance > no_effect_max_distance or visual_changed)
     ):
         status = "ready"
@@ -268,9 +336,9 @@ def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
             else "screen_change_phash_matched"
         )
 
-    attempt = int(pending.get("attempts") or 0) + 1
+    attempt = int(request.get("attempts") or 0) + 1
     record = _transition_record(
-        pending,
+        request,
         status=status,
         outcome=outcome,
         source=source,
@@ -281,14 +349,21 @@ def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
         visual_change_ratio=visual_ratio,
         ocr_skipped=False,
     )
+    evaluated_request = dict(request)
     if status == "pending":
-        pending["attempts"] = attempt
+        request["attempts"] = attempt
+        request["pending_screen_phash"] = str(
+            screen_signature.get("phash") or ""
+        )
+        request["pending_screenshot"] = str(
+            state.get("current_screenshot") or ""
+        )
     else:
         if status == "unknown" and source == "reflex":
-            recipe_key = str(pending.get("recipe_key") or "")
+            recipe_key = str(request.get("recipe_key") or "")
             if recipe_key and recipe_key not in blocked_keys:
                 blocked_keys.append(recipe_key)
-        pending = {}
+        request = {}
 
     logger.info(
         "Transition evaluated",
@@ -297,18 +372,19 @@ def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
         reason=reason,
     )
     return {
-        "observed_transition": observed,
-        "pending_transition": pending,
-        "transition_status": status,
-        "transition_outcome": outcome,
-        "transition_source": source,
-        "transition_reason": reason,
-        "transition_visual_change_detected": visual_changed,
-        "transition_visual_change_ratio": visual_ratio,
-        "ocr_required": False,
-        "transition_observations": [record],
+        "transition_request": request,
+        "transition_result": _transition_result(
+            evaluated_request,
+            status=status,
+            outcome=outcome,
+            reason=reason,
+            visual_change_detected=visual_changed,
+            visual_change_ratio=visual_ratio,
+        ),
+        "transition_records": [record],
         "reflex_blocked_recipe_keys": blocked_keys,
+        "transition_probe_unchanged": False,
     }
 
 
-__all__ = ["evaluate_transition_node"]
+__all__ = ["transition_node"]

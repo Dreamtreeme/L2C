@@ -3,7 +3,7 @@ title: "아키텍처 리팩터링 계획"
 type: plan
 area: architecture
 status: active
-updated: 2026-07-23
+updated: 2026-07-28
 tags:
   - l2c
   - docs/architecture
@@ -11,7 +11,7 @@ tags:
 
 # 아키텍처 리팩터링 계획
 
-기준일: 2026-07-23
+기준일: 2026-07-28
 
 ## 진행 현황
 
@@ -21,7 +21,7 @@ tags:
 | 1. 조사 저장·재개 | LangGraph SQLite 체크포인터와 `interrupt()` 전환 | 완료 |
 | 2. 런타임 소유권 | FastAPI `lifespan`과 `ApplicationRuntime` 통합 | 완료 |
 | 3. 행동 계약 | `AIMessage` 어댑터 제거, `ActionRequest` 통일 | 완료 |
-| 4. 작업자 그래프 분할 | 관찰·전환·선택·원자 실행 경계 분리 | 부분 완료 |
+| 4. 작업자 그래프 분할 | 관찰·전환·선택·원자 실행 경계 분리 | 완료 |
 | 5. 설정·사이트 프로필 | 타입 설정과 단일 사이트 프로필 계약 | 완료 |
 | 6. 관측 경로 | LangGraph 이벤트, SSE, 로컬 지표, LangSmith 연결 정리 | 완료 |
 | 7. 회귀 검증 | 다중 사이트 자율·반복 E2E와 기존 코드 제거 | 부분 완료 |
@@ -47,12 +47,13 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 | 사용자 확인 | `interrupt()` 중단 후 같은 `thread_id`에 `Command(resume=...)` 전달 | 완료 |
 | 작업자 상태 | 직렬화 가능한 평면 `GraphState`를 단일 계약으로 사용 | 책임별 `worker_*` 모듈이 자기 필드만 갱신하며 중첩 호환 상태는 제거 |
 | 행동 계약 | `pending_action: ActionRequest`와 `last_action_result: ActionResult`로 분리 | 완료 |
-| 노드 책임 | 관찰·전환·수집·선택·추론·실행·기록 모듈로 분리 | `worker_execution.py` 내부 도구별 상태 처리는 추가 분할 여지가 있음 |
+| 노드 책임 | 관찰·전환·수집·선택·추론·실행·기록과 실행 context·dispatch·handler를 분리 | 완료 |
 | 런타임 | `ApplicationRuntime`과 `VisionWorkerRuntime`이 자원 수명을 소유 | 완료 |
 | 계획 진행 | 장식용 작업 계획 상태와 도구 제거 | 완료 |
 | 관측 | `RunContext`와 구조화 그래프 이벤트를 단일 집계 원본으로 사용 | 완료 |
 | 설정 | 타입 설정 모듈과 외부 OCR 부트스트랩만 환경 변수를 직접 읽음 | 완료 |
 | 사이트 정보 | 사이트마다 검증된 `profile.json` 하나를 사용 | 완료 |
+| 레시피 학습 | Critic 검토와 결정론적 활성 승격을 별도 모듈로 분리 | 완료 |
 
 ## 실행 순서
 
@@ -181,19 +182,19 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - 작업자 상태에서 실행 전 명령은 `pending_action`, 실행 후 결과는 `last_action_result`로 분리했다.
 - `ActionRequest`는 출처, 설명, 검증된 `ToolCallRequest` 목록을 보유한다. 큐 식별자와 전환 출처 같은 실행 추적 정보는 도구 인자가 아닌 호출 `metadata`에 저장한다.
 - LLM 응답은 `reasoning_node`에서 한 번만 `ActionRequest`로 변환한다. 카드 선택기, 결과 카드 큐, 중복 공고 정책, Reflex도 같은 객체를 직접 만든다.
-- `action_node`는 요청 출처와 무관하게 하나의 실행 경로를 사용하고 결과를 `ActionResult`로 기록한다.
+- `execution_node`는 요청 출처와 무관하게 하나의 실행 경로를 사용하고 결과를 `ActionResult`로 기록한다.
 - `ActionRequest.to_ai_message()`, `build_action_message()`, 작업자 상태의 `AIMessage`, `hasattr(..., "tool_calls")` 호환 코드를 삭제했다.
 
 검증 결과:
 
 - `agent/runtime`과 작업자 그래프에서 `AIMessage` import가 0개임을 확인했다.
-- LLM, Reflex, 카드 큐 출처가 같은 `action_node`와 물리 디스패처를 사용하는 테스트를 추가했다.
+- LLM, Reflex, 공고 카드 큐 출처가 같은 `execution_node`와 물리 디스패처를 사용하는 테스트를 추가했다.
 - 알 수 없는 도구, 필수 인자 누락, 사이트 허용 목록 밖 도구가 실행 전에 거절되는 테스트를 추가했다.
 - 전체 `agent/tests` 386건을 통과했다.
 
 ### 4단계. 작업자 그래프와 거대 노드 분할
 
-상태: 부분 완료 (2026-07-23)
+상태: 완료 (2026-07-28)
 
 목표 흐름:
 
@@ -234,9 +235,25 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 적용 결과:
 
 - `nodes.py`를 삭제하고 `worker_observation`, `worker_transition`, `worker_collection`, `worker_selection`, `worker_reasoning`, `worker_execution`, `worker_recording`으로 소유권을 분리했다.
+- `worker_execution.py`는 실행 진입점만 남기고 상태 조립, 원자 도구 전달, 행동별 후속 처리를 각각 `worker_execution_context`, `worker_execution_dispatch`, `worker_execution_handlers`로 분리했다.
 - 중첩 상태와 평면 호환 필드를 함께 갱신하던 시도는 상태 복제와 갱신 누락을 만들기 때문에 제거했다. `create_worker_state()`가 평면 상태의 유일한 생성 지점이다.
 - 화면 변경 뒤에는 캡처와 전환 판정을 거쳐 필요한 OCR을 먼저 수행한다. 상세 후속 추론이 새 화면 OCR을 앞지르던 순서 오류도 수정했다.
-- 남은 범위는 현재 서비스가 실행하지 않는 민감 행동의 중단 후 재개와 `worker_execution.py` 내부 도구별 처리 분할이다.
+- 마커 조회와 타깃의 픽셀·비율 좌표 생성은 `vision/target_snapshot.py`로 통합하고 피드백, 실행 기록, 카드 큐에 있던 중복 구현을 제거했다.
+- 삭제된 거대 노드의 로컬 백업 파일도 제거했다. 현재 서비스가 실행하지 않는 민감 행동의 중단 후 재개는 작업자 그래프 분할 완료 조건에서 제외한다.
+
+### 지휘자 그래프 조립과 업무 노드 분리
+
+- 1,395줄이던 `investigation_workflow.py`에는 그래프 연결, 체크포인트 중단·재개, 실행 진입만 남겼다.
+- 조사 상태와 모델 계약은 `investigation_context.py`, 결정론적 근거 판정은 `investigation_evidence_policy.py`가 소유한다.
+- 요청 해석·확인 질문, 근거 검사·계획, 수집 실행, 문서 조회·답변은 각각 `investigation_*_nodes.py`로 분리했다.
+- 각 노드 묶음은 필요한 모델·서비스만 생성자로 받고, 서로를 참조하지 않는다. 최상위 workflow만 노드 묶음을 조립한다.
+
+### 레시피 검토와 승격 책임 분리
+
+- `candidate_reviewer.py`는 Critic 입력 구성, LLM 호출, 응답 계약 검사와 후보 상태 갱신만 담당한다.
+- `candidate_promotion.py`는 승인된 단계 주석, ROI 단계와 문맥 후속 전략 생성, 활성 레시피 DB 반영을 담당한다.
+- 기록·검토·승격 모듈에서 중복 정의하던 행동 종류는 `replay_actions.py`의 단일 계약을 사용한다.
+- 저장된 Critic 판정을 재적용하는 벤치마크도 검토기가 아니라 승격 모듈을 직접 호출한다.
 
 ### 5단계. 설정과 사이트 프로필을 타입 계약으로 통합
 
@@ -317,7 +334,7 @@ E2E 행렬:
 
 검증 결과:
 
-- 외부 자원을 제외한 전체 테스트 401건과 앱·OCR Python 3.13 GPU 연산 검사를 통과했다.
+- 중복·구현 세부 테스트를 정리한 뒤 유지하는 전체 단위 테스트 212건과 앱·OCR Python 3.13 GPU 연산 검사를 통과했다.
 - 원티드 cold/warm은 83.32초/58.65초, 사람인 재검증은 36.66초/34.03초, 로켓펀치는 32.71초/28.84초에 품질 기준을 통과했다.
 - 고용24는 새 화면 OCR 우선순위 수정 후 137.42초·0건·재귀 한도 도달에서 46.49초·1건·정상 종료로 회복했다.
 - 고용24 warm 최종 Reflex 재측정은 외부 Critic 504를 재시도해 승격한 뒤 공급자 월 지출 상한 429로 중단됐다. 따라서 해당 warm 성능은 아직 완료 기준으로 사용하지 않는다.

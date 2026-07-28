@@ -16,6 +16,25 @@ def normalize_task_category(value: Any) -> str:
     return normalize_text(value).casefold()
 
 
+def task_category_from_candidate(candidate: dict[str, Any]) -> str:
+    """레시피 후보가 기록한 작업 분류를 정규화해 반환한다."""
+
+    worker_submission = dict(candidate.get("payload", {}) or {})
+    evidence = (
+        worker_submission.get("skill_metadata_evidence")
+        if isinstance(
+            worker_submission.get("skill_metadata_evidence"),
+            dict,
+        )
+        else {}
+    )
+    return normalize_task_category(
+        worker_submission.get("task_category")
+        or evidence.get("task_category")
+        or ""
+    )
+
+
 def task_category_matches(requested: Any, recorded: Any) -> bool:
     """요청 카테고리가 있으면 저장된 카테고리와 정확히 맞아야 한다."""
 

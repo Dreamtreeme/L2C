@@ -40,9 +40,12 @@ tags:
 | `screen_signature` | 현재 전체 화면 관찰 서명. 기본 replay 판단용 이름으로 쓰지 않는다 |
 | `roi_signature` | 타깃 주변 crop의 pHash 서명. active replay 판단의 기준 |
 | `target_snapshot` | 특정 행동 대상의 text, bbox, ratio, label 등 관찰 스냅샷 |
-| `result_card_queue` | 검색 결과 목록에서 수집할 카드 작업 큐 |
-| `result_page_memory` | 카드 큐를 만든 검색 결과 페이지 복귀 검증용 기억 |
-| `detail_ocr_buffer` | 상세페이지 OCR 본문 누적 버퍼 |
+| `job_card_queue` | 채용 검색 결과에서 수집할 공고 카드 작업 큐 |
+| `job_results_memory` | 공고 카드 큐를 만든 검색 결과 화면의 복귀 검증용 기억 |
+| `job_detail_buffer` | 공고 상세 화면에서 누적한 OCR 본문 |
+| `transition_request` | 직전 행동이 요청한 화면 전환과 검증 조건 |
+| `transition_result` | 화면 전환 검증의 현재 결과 |
+| `transition_records` | 한 작업에서 확정된 화면 전환 결과 목록 |
 | `pending_action` | 아직 실행하지 않은 검증된 `ActionRequest` |
 | `last_action_result` | 직전에 실행한 요청의 `ActionResult`. 다음 행동을 담지 않는다 |
 | `tool_call_metadata` | 큐 ID, 전환 출처처럼 물리 도구 인자가 아닌 실행 추적값 |
@@ -114,9 +117,25 @@ tags:
 | `worker_transition.py` | 행동 전후 화면 전환 판정 |
 | `worker_collection.py` | 관찰 결과와 상세 본문 상태 반영 |
 | `worker_selection.py` | 결정론적 행동 선택 |
+| `worker_reflex.py` | 활성 레시피 ROI 검증과 재생 진입 |
 | `worker_reasoning.py` | LLM 의미 판단과 행동 계약 생성 |
-| `worker_execution.py` | 검증된 원자 행동 실행 |
+| `worker_execution.py` | 검증된 행동 요청의 실행 진입점 |
+| `worker_execution_dispatch.py` | 원자 도구와 상태 행동 실행 |
+| `worker_execution_handlers.py` | 실행 전후 정책과 후속 행동 처리 |
+| `worker_execution_context.py` | 한 행동 실행 중 변경되는 상태 조립 |
 | `worker_recording.py` | 실행 결과와 학습 증거 기록 |
+
+지휘자 조사 그래프 모듈은 `investigation_<책임>.py`를 사용한다.
+
+| 모듈 | 책임 |
+|---|---|
+| `investigation_context.py` | 조사 상태, 모델 묶음, 공통 요청 문맥 |
+| `investigation_request_nodes.py` | 사용자 요청 해석과 확인 질문 |
+| `investigation_evidence_policy.py` | 근거 판정과 수집 단계 정규화 순수 정책 |
+| `investigation_evidence_nodes.py` | 필요 근거 정의, DB 충분성 검사, 수집 계획 |
+| `investigation_collection_nodes.py` | 확정된 단일 수집 단계 실행 |
+| `investigation_answer_nodes.py` | 검증된 문서 조회와 최종 답변 |
+| `investigation_workflow.py` | 노드 연결, 체크포인트 중단·재개, 실행 진입 |
 
 ## 피해야 할 이름
 
@@ -157,8 +176,9 @@ def test_candidate_promotion_skips_non_target_action():
 
 ## 기존 코드 정리 우선순위
 
-1. `target_snapshot` 생성 로직을 공통화한다.
+1. [완료] `target_snapshot` 생성 로직을 `agent/vision/target_snapshot.py`로 공통화한다.
 2. [완료] `nodes.py`를 책임별 `worker_*` 모듈로 분리하고 원본 파일을 삭제한다.
-3. `candidate_reviewer.py`에서 promotion 로직을 `candidate_promotion.py`로 분리한다.
+3. [완료] `candidate_reviewer.py`에서 promotion 로직을 `candidate_promotion.py`로 분리한다.
 4. [완료] `RecipeStore` 조회를 `recipe_key + site + task_category + page_role + roi_signature` 기준으로 정리한다.
-5. 남은 `_dump_model`, `_bbox`, `_center` 같은 작은 중복 유틸을 공통 모듈로 옮긴다.
+5. [완료] `investigation_workflow.py`를 조립부와 요청·근거·수집·답변 노드로 분리한다.
+6. 남은 `_dump_model`, `_bbox`, `_center` 같은 작은 중복 유틸을 공통 모듈로 옮긴다.

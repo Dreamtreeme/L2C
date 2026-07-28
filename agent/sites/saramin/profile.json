@@ -33,7 +33,7 @@
     "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "근무조건", "url"]
   },
   "tools": {
-    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
     "tool_rules": {"click_marker": "배지나 추천이 아니라 공고 제목 마커를 선택한다."}
   },
   "guidance": "보이는 공고를 직무명과 회사명으로 식별한다. 배지, 추천, 광고는 공고로 취급하지 않고 실제 상세 본문에서 확인한 사실만 수집한다."

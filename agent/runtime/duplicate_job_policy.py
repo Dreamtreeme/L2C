@@ -61,7 +61,7 @@ def existing_job_url_trace(
     return {"matched": False, "reason": "url_not_found", "url": target}
 
 
-def mark_existing_result_cards(
+def mark_existing_job_cards(
     queue: list[dict[str, Any]],
     current_url: str,
     *,
@@ -117,5 +117,5 @@ def mark_existing_result_cards(
 __all__ = [
     "duplicate_detail_skip_enabled",
     "existing_job_url_trace",
-    "mark_existing_result_cards",
+    "mark_existing_job_cards",
 ]

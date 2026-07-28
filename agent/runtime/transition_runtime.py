@@ -92,7 +92,7 @@ def detect_two_screen_transition_cycle(
 def latest_no_effect_transition(state: GraphState) -> dict[str, Any]:
     """현재 화면에서 효과가 없다고 확인된 가장 최근 물리 행동을 반환한다."""
 
-    observations = state.get("transition_observations", []) or []
+    observations = state.get("transition_records", []) or []
     if not observations:
         return {}
     latest = observations[-1]
@@ -109,12 +109,14 @@ def latest_no_effect_transition(state: GraphState) -> dict[str, Any]:
 
 
 def transition_visual_change_ratio(
-    pending_transition: dict[str, Any],
+    transition_request: dict[str, Any],
     current_image_path: str | os.PathLike,
 ) -> float | None:
     """행동 전후 스크린샷의 눈에 띄는 픽셀 변화 비율을 계산한다."""
 
-    before_image_path = str(pending_transition.get("before_screenshot") or "")
+    before_image_path = str(
+        transition_request.get("before_screenshot") or ""
+    )
     if not before_image_path or not current_image_path:
         return None
     try:
@@ -135,28 +137,37 @@ def transition_visual_change_ratio(
 
 
 def transition_has_visual_change(
-    pending_transition: dict[str, Any],
+    transition_request: dict[str, Any],
     current_image_path: str | os.PathLike,
 ) -> tuple[bool, float | None]:
     """전체 pHash가 둔감한 부분 화면 전환을 전후 스크린샷으로 보완한다."""
 
-    ratio = transition_visual_change_ratio(pending_transition, current_image_path)
+    ratio = transition_visual_change_ratio(
+        transition_request,
+        current_image_path,
+    )
     minimum_ratio = get_settings().reflex.visual_change_min_ratio
     return ratio is not None and ratio >= max(0.0, minimum_ratio), ratio
 
 
 def transition_no_effect_by_phash(
-    pending_transition: dict[str, Any],
+    transition_request: dict[str, Any],
     current_url: str,
     raw_screen_signature: dict[str, Any],
 ) -> tuple[bool, int | None]:
     """OCR 전에 같은 URL과 거의 같은 pHash면 행동 효과 없음으로 판정한다."""
 
-    if not pending_transition:
+    if not transition_request:
         return False, None
-    source = str(pending_transition.get("source") or "")
-    action = str(pending_transition.get("action") or "")
-    if source not in {"reflex", "page_policy", "card_queue", "autonomous"}:
+    source = str(transition_request.get("source") or "")
+    action = str(transition_request.get("action") or "")
+    if source not in {
+        "reflex",
+        "page_policy",
+        "job_card_queue",
+        "followup_strategy",
+        "autonomous",
+    }:
         return False, None
     if action not in {
         "click_marker",
@@ -166,8 +177,8 @@ def transition_no_effect_by_phash(
         "switch_tab",
     }:
         return False, None
-    before_url = str(pending_transition.get("before_url") or "")
-    before_phash = str(pending_transition.get("before_phash") or "")
+    before_url = str(transition_request.get("before_url") or "")
+    before_phash = str(transition_request.get("before_phash") or "")
     current_phash = str(raw_screen_signature.get("phash") or "")
     if not before_url or not current_url or before_url != current_url:
         return False, None
@@ -185,14 +196,14 @@ def transition_no_effect_by_phash(
 
 
 def transition_phash_distance(
-    pending_transition: dict[str, Any],
+    transition_request: dict[str, Any],
     current_url: str,
     screen_signature: dict[str, Any],
 ) -> tuple[bool, int | None, int]:
     """같은 URL에서 전환 전후 pHash 거리를 계산한다."""
 
-    before_url = str(pending_transition.get("before_url") or "")
-    before_phash = str(pending_transition.get("before_phash") or "")
+    before_url = str(transition_request.get("before_url") or "")
+    before_phash = str(transition_request.get("before_phash") or "")
     current_phash = str(screen_signature.get("phash") or "")
     same_url = bool(before_url and current_url and before_url == current_url)
     max_distance = get_settings().reflex.no_effect_phash_max_distance
@@ -211,15 +222,17 @@ def visual_change_sufficient_components() -> set[str]:
     return set(get_settings().reflex.visual_change_sufficient_components)
 
 
-def transition_accepts_visual_change(pending_transition: dict[str, Any]) -> bool:
+def transition_accepts_visual_change(
+    transition_request: dict[str, Any],
+) -> bool:
     """일부 UI step은 OCR cue보다 pHash 변화로 성공을 판정한다."""
 
-    source = str(pending_transition.get("source") or "")
+    source = str(transition_request.get("source") or "")
     if source not in {"reflex", "page_policy"}:
         return False
-    if str(pending_transition.get("action") or "") != "click_marker":
+    if str(transition_request.get("action") or "") != "click_marker":
         return False
-    step = dict(pending_transition.get("step", {}) or {})
+    step = dict(transition_request.get("step", {}) or {})
     args = step.get("args") if isinstance(step.get("args"), dict) else {}
     labels = {
         str(step.get("component") or "").casefold(),
@@ -296,11 +309,11 @@ def transition_marker_texts(markers: list[dict[str, Any]]) -> list[str]:
 
 
 def build_transition_observation(
-    pending_transition: dict[str, Any],
+    transition_request: dict[str, Any],
     *,
-    transition_status: str,
-    transition_outcome: str,
-    transition_source: str,
+    status: str,
+    outcome: str,
+    source: str,
     reason: str,
     elapsed_sec: float,
     attempt: int,
@@ -315,18 +328,20 @@ def build_transition_observation(
     """행동 step과 관찰 결과를 한 묶음으로 만든다."""
 
     return {
-        "action_seq": pending_transition.get("action_seq"),
-        "action": pending_transition.get("action", ""),
-        "from_capture_id": str(pending_transition.get("from_capture_id") or ""),
+        "action_seq": transition_request.get("action_seq"),
+        "action": transition_request.get("action", ""),
+        "from_capture_id": str(
+            transition_request.get("from_capture_id") or ""
+        ),
         "to_capture_id": str(to_capture_id or ""),
-        "step": dict(pending_transition.get("step", {}) or {}),
-        "expected_after": pending_transition.get("expected_after", ""),
-        "source": transition_source,
-        "recipe_key": pending_transition.get("recipe_key", ""),
+        "step": dict(transition_request.get("step", {}) or {}),
+        "expected_after": transition_request.get("expected_after", ""),
+        "source": source,
+        "recipe_key": transition_request.get("recipe_key", ""),
         "attempt": attempt,
         "elapsed_sec": round(elapsed_sec, 3),
-        "status": transition_status,
-        "outcome": transition_outcome,
+        "status": status,
+        "outcome": outcome,
         "reason": reason,
         "phash_distance": phash_distance,
         "visual_change_ratio": visual_change_ratio,

@@ -1,4 +1,4 @@
-"""검색 결과 화면에서 수집할 공고 카드만 짧게 선택한다."""
+"""검색 결과 화면에서 수집할 채용공고 카드만 짧게 선택한다."""
 
 from __future__ import annotations
 
@@ -15,10 +15,10 @@ from agent.graph.state import GraphState
 from agent.recipe.page_context import normalize_page_role
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.job_collection import job_count
-from agent.runtime.result_card_queue import (
-    card_queue_enabled,
-    completed_result_card_count,
-    result_card_queue_scope_complete,
+from agent.runtime.job_card_queue import (
+    job_card_queue_enabled,
+    completed_job_card_count,
+    job_card_queue_scope_complete,
 )
 from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
@@ -27,7 +27,7 @@ from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
 
 
-class VisibleResultCard(BaseModel):
+class VisibleJobCard(BaseModel):
     """현재 화면에서 실제로 보이는 공고 카드 하나."""
 
     marker_id: int
@@ -38,10 +38,10 @@ class VisibleResultCard(BaseModel):
     )
 
 
-class ResultCardSelection(BaseModel):
+class JobCardSelection(BaseModel):
     """검색 결과 여부와 수집 순서대로 고른 카드 목록."""
 
-    is_result_list: bool = False
+    is_job_results_page: bool = False
     is_loading: bool = Field(
         False,
         description="공고 제목 대신 스켈레톤·자리표시자만 보여 결과가 아직 로딩 중인지 여부",
@@ -52,18 +52,18 @@ class ResultCardSelection(BaseModel):
     refinement_marker_id: int | None = None
     refinement_label: str = ""
     refinement_text: str = ""
-    available_result_count: int | None = Field(
+    available_job_count: int | None = Field(
         None,
         ge=0,
         description="화면의 검색 결과 탭이나 결과 요약이 명시한 전체 공고 개수",
     )
     count_evidence: str = Field("", description="전체 결과 개수를 판단한 화면의 짧은 문구")
     count_confidence: float = Field(0.0, ge=0.0, le=1.0)
-    cards: list[VisibleResultCard] = Field(default_factory=list)
+    cards: list[VisibleJobCard] = Field(default_factory=list)
 
 
-def result_card_selector_enabled() -> bool:
-    return get_settings().reflex.result_card_selector_enabled
+def job_card_selector_enabled() -> bool:
+    return get_settings().reflex.job_card_selector_enabled
 
 
 def _target_count(state: GraphState) -> int:
@@ -83,14 +83,14 @@ def _collected_count(state: GraphState) -> int:
     return job_count(state.get("extracted_jd") or {})
 
 
-def should_select_result_cards(state: GraphState) -> bool:
+def should_select_job_cards(state: GraphState) -> bool:
     """아직 큐가 없는 검색 결과 화면에만 전용 판단을 적용한다."""
 
     target_count = _target_count(state)
     collected_count = _collected_count(state)
-    queue = [item for item in (state.get("result_card_queue") or []) if isinstance(item, dict)]
+    queue = [item for item in (state.get("job_card_queue") or []) if isinstance(item, dict)]
     count_mode = _count_mode(state)
-    if result_card_queue_scope_complete(
+    if job_card_queue_scope_complete(
         queue,
         count_mode=count_mode,
         target_count=target_count,
@@ -102,13 +102,13 @@ def should_select_result_cards(state: GraphState) -> bool:
         for item in queue
     )
     return bool(
-        result_card_selector_enabled()
-        and card_queue_enabled()
+        job_card_selector_enabled()
+        and job_card_queue_enabled()
         and not latest_no_effect_transition(state)
         and normalize_page_role(state.get("current_page_role")) == "search"
         and (target_count > collected_count or needs_visible_screen)
         and (not queue or queue_exhausted)
-        and not state.get("active_result_card")
+        and not state.get("active_job_card")
         and state.get("current_markers")
         and state.get("marked_image")
     )
@@ -117,23 +117,23 @@ def should_select_result_cards(state: GraphState) -> bool:
 def _selector_model_name() -> str:
     from agent.application.model_policy import lightweight_model_name
 
-    return lightweight_model_name("VISION_RESULT_CARD_SELECTOR_MODEL")
+    return lightweight_model_name("VISION_JOB_CARD_SELECTOR_MODEL")
 
 
-def _get_result_card_selector_model() -> Any:
+def _get_job_card_selector_model() -> Any:
     from agent.application.model_clients import get_structured_google_model
 
     return get_structured_google_model(
         _selector_model_name(),
-        ResultCardSelection,
+        JobCardSelection,
         temperature=0.0,
     )
 
 
-def prepare_result_card_selector_model() -> None:
+def prepare_job_card_selector_model() -> None:
     """첫 검색 결과 판단 전에 구조화 모델을 생성해 둔다."""
 
-    _get_result_card_selector_model()
+    _get_job_card_selector_model()
 
 
 def _compact_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -201,7 +201,7 @@ def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
     instruction = (
         "현재 화면이 채용공고 검색 결과 목록인지 판단하고, 실제로 보이는 공고 중 수집할 카드를 고르십시오. "
         "공고 카드 자리에 회색 스켈레톤·자리표시자만 반복되고 실제 공고 제목이 아직 보이지 않으면 is_loading을 true로 "
-        "설정하고, is_result_list와 needs_refinement를 false로 두며 cards를 비우십시오. 로딩 중에는 검색어가 틀렸다고 "
+        "설정하고, is_job_results_page와 needs_refinement를 false로 두며 cards를 비우십시오. 로딩 중에는 검색어가 틀렸다고 "
         "판단하거나 검색 조건을 바꾸지 마십시오. "
         "사용자 검색어가 직무를 나타내면 공고 제목의 직무 정체성이 직접 일치해야 합니다. 기술 스택이나 업무 일부의 "
         "일치는 직무가 일치한 공고 사이의 순위 판단에만 사용하고, 제목이 다른 직무를 나타내는 공고를 직접 일치로 "
@@ -225,12 +225,12 @@ def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
         "각 card의 company에는 같은 카드에서 제목과 인접해 별도로 표시된 회사명만 넣으십시오. "
         "'Data Engineer(AI데이터플랫폼)'처럼 제목 괄호 안의 직무 분야나 조직명은 회사명으로 분리하지 마십시오. "
         "excluded_cards에 있는 제목과 회사의 공고는 이미 방문했으므로 cards에 다시 넣지 마십시오. "
-        "검색 결과 탭이나 결과 요약에 전체 공고 개수가 명시되어 있으면 available_result_count에 넣고, 그 판단에 사용한 "
+        "검색 결과 탭이나 결과 요약에 전체 공고 개수가 명시되어 있으면 available_job_count에 넣고, 그 판단에 사용한 "
         "화면 문구를 count_evidence에 그대로 적으십시오. 페이지 번호, 알림, 필터 선택 개수는 결과 개수로 해석하지 마십시오. "
-        "의미가 명확하지 않으면 available_result_count를 비우고 count_confidence를 낮게 두십시오. "
+        "의미가 명확하지 않으면 available_job_count를 비우고 count_confidence를 낮게 두십시오. "
         f"cards는 검색어 관련성이 높은 순서로 최대 {remaining_count}개만 반환하고, 관련성이 같을 때만 화면 위에서 아래 순서를 따르십시오. "
         "숨겨진 카드나 화면에 없는 정보는 추측하지 마십시오. 검색 결과 목록이 아니거나 확실한 공고 제목을 찾지 못하면 "
-        "is_result_list를 false로 하고 cards를 비우십시오."
+        "is_job_results_page를 false로 하고 cards를 비우십시오."
     )
     current_url = str(state.get("current_url") or "")
     site_guidance = site_runtime_guidance(
@@ -250,7 +250,7 @@ def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
                 "title": str(item.get("title") or ""),
                 "company": str(item.get("company") or ""),
             }
-            for item in (state.get("result_card_queue") or [])
+            for item in (state.get("job_card_queue") or [])
             if isinstance(item, dict)
         ],
     }
@@ -350,16 +350,16 @@ def _validated_refinement_target(
     return {"action": action, "marker_id": marker_id, "label": label, "text": text}
 
 
-def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
+def select_job_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
     """전용 VLM 결과를 카드 큐 저장과 첫 카드 클릭 요청으로 변환한다."""
 
-    if not should_select_result_cards(state):
+    if not should_select_job_cards(state):
         return None, {"attempted": False, "reason": "selector_not_applicable"}
 
     target_count = _target_count(state)
     resolved_count = max(
         _collected_count(state),
-        completed_result_card_count(list(state.get("result_card_queue") or [])),
+        completed_job_card_count(list(state.get("job_card_queue") or [])),
     )
     remaining_count = (
         target_count - resolved_count
@@ -370,14 +370,14 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
         from agent.application.run_context import invoke_with_metrics
 
         raw = invoke_with_metrics(
-            _get_result_card_selector_model(),
+            _get_job_card_selector_model(),
             _selection_messages(state, remaining_count),
-            "result_card_selection",
+            "job_card_selection",
             stream=True,
         )
         selection = dump_model(raw)
     except Exception as exc:
-        logger.warning("Result card selector failed; falling back to general reasoning", error=str(exc))
+        logger.warning("Job card selector failed; falling back to general reasoning", error=str(exc))
         return None, {
             "attempted": True,
             "reason": "selector_failed",
@@ -386,7 +386,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
 
     availability: dict[str, Any] = {}
     try:
-        available_count = int(selection.get("available_result_count"))
+        available_count = int(selection.get("available_job_count"))
         count_confidence = float(selection.get("count_confidence") or 0.0)
     except (TypeError, ValueError):
         available_count = -1
@@ -394,7 +394,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
     count_evidence = str(selection.get("count_evidence") or "").strip()[:160]
     if available_count >= 0 and count_confidence >= 0.8 and count_evidence:
         availability = {
-            "available_result_count": available_count,
+            "available_job_count": available_count,
             "count_evidence": count_evidence,
             "count_confidence": count_confidence,
         }
@@ -404,7 +404,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
             "reason": "screen_loading",
             "model": _selector_model_name(),
         }
-    if not selection.get("is_result_list"):
+    if not selection.get("is_job_results_page"):
         return None, {"attempted": True, "reason": "not_result_list", **availability}
     if selection.get("needs_refinement"):
         refinement_target = _validated_refinement_target(
@@ -418,7 +418,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
                 "marker_id": refinement_target["marker_id"],
                 "target_label": refinement_target["label"],
                 "target_role": "input" if action_name == "type_in_marker" else "filter",
-                "target_component": "result_filter_input" if action_name == "type_in_marker" else "result_filter",
+                "target_component": "job_results_filter_input" if action_name == "type_in_marker" else "job_results_filter",
                 "page_role": "search",
                 "risk_level": "safe_navigation",
                 "needs_user_confirmation": False,
@@ -433,7 +433,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
                 action_args.update(
                     {
                         "text": refinement_target["text"],
-                        "slot_name": "result_filter_query",
+                        "slot_name": "job_results_filter_query",
                     }
                 )
             request = build_action_request(
@@ -448,14 +448,14 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
                 ],
             )
             logger.info(
-                "Result card selector prepared refinement action",
+                "Job card selector prepared refinement action",
                 action=action_name,
                 marker_id=refinement_target["marker_id"],
                 label=refinement_target["label"],
             )
             return request, {
                 "attempted": True,
-                "reason": "result_refinement_action",
+                "reason": "job_results_refinement_action",
                 "refinement_reason": refinement_reason,
                 "action": action_name,
                 "marker_id": refinement_target["marker_id"],
@@ -465,7 +465,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
             }
         return None, {
             "attempted": True,
-            "reason": "result_refinement_needed",
+            "reason": "job_results_refinement_needed",
             "refinement_reason": refinement_reason,
             **availability,
         }
@@ -479,7 +479,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
             str(item.get("title") or "").strip().casefold(),
             str(item.get("company") or "").strip().casefold(),
         )
-        for item in (state.get("result_card_queue") or [])
+        for item in (state.get("job_card_queue") or [])
         if isinstance(item, dict)
     }
     cards = [
@@ -491,17 +491,17 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
         ) not in excluded
         and (str(card.get("title") or "").strip().casefold(), "") not in excluded
     ]
-    if availability and availability["available_result_count"] < len(cards):
+    if availability and availability["available_job_count"] < len(cards):
         availability = {}
     if not cards:
         return None, {"attempted": True, "reason": "no_valid_card", **availability}
 
     request = build_action_request(
         "card_selector",
-        f"selected {len(cards)} visible result card(s)",
+        f"selected {len(cards)} visible job card(s)",
         [
             {
-                "name": "set_result_card_queue",
+                "name": "set_job_card_queue",
                 "args": {
                     "cards": cards,
                     **availability,
@@ -512,7 +512,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
         ],
     )
     logger.info(
-        "Result card selector prepared queue",
+        "Job card selector prepared queue",
         card_count=len(cards),
         first_marker_id=cards[0]["marker_id"],
         first_title=cards[0]["title"],
@@ -528,10 +528,10 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
 
 
 __all__ = [
-    "ResultCardSelection",
-    "VisibleResultCard",
-    "prepare_result_card_selector_model",
-    "result_card_selector_enabled",
-    "select_result_cards",
-    "should_select_result_cards",
+    "JobCardSelection",
+    "VisibleJobCard",
+    "prepare_job_card_selector_model",
+    "job_card_selector_enabled",
+    "select_job_cards",
+    "should_select_job_cards",
 ]

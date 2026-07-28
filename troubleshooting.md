@@ -311,7 +311,7 @@ Action
 → 기존 click_marker/type_in_marker/scroll/go_back 도구로 실제 실행
 
 Observer
-→ 화면 변경 action과 다음 OCR·스크린샷을 같은 action seq의 transition_observations로 기록
+→ 화면 변경 행동과 다음 OCR·스크린샷을 같은 행동 순서의 `transition_records`로 기록
 
 Critic
 → success / partial / wrong_target / no_effect / loop_risk 로 피드백 라벨링

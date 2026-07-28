@@ -32,7 +32,7 @@
     "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "근무조건", "url"]
   },
   "tools": {
-    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
     "tool_rules": {
       "click_marker": "보이는 마커만 클릭하고 공고 제목을 target_label로 보존한다.",
       "close_current_tab": "상세가 새 탭이고 뒤로가기로 복귀할 수 없을 때 사용한다."

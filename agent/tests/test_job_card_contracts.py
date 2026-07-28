@@ -1,3 +1,5 @@
+"""채용공고 카드 선택과 재생 계약 테스트."""
+
 from pathlib import Path
 
 from agent.graph import worker_reasoning
@@ -23,8 +25,8 @@ def _state(image_path: Path) -> dict:
             },
         ],
         "recipe_params": {"query": "iOS 개발자", "target_count": 2},
-        "result_card_queue": [],
-        "active_result_card": {},
+        "job_card_queue": [],
+        "active_job_card": {},
         "extracted_jd": {},
     }
 
@@ -32,22 +34,22 @@ def _state(image_path: Path) -> dict:
 def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
     from PIL import Image
 
-    from agent.runtime import result_card_selector as selector
+    from agent.runtime import job_card_selector as selector
 
     image_path = tmp_path / "marked.jpg"
     Image.new("RGB", (200, 100), "white").save(image_path)
 
     class FakeModel:
         def invoke(self, inputs, config=None):
-            return selector.ResultCardSelection(
-                is_result_list=True,
+            return selector.JobCardSelection(
+                is_job_results_page=True,
                 cards=[
-                    selector.VisibleResultCard(
+                    selector.VisibleJobCard(
                         marker_id=10,
                         title="iOS 개발자",
                         company="회사 A",
                     ),
-                    selector.VisibleResultCard(
+                    selector.VisibleJobCard(
                         marker_id=999,
                         title="화면에 없는 공고",
                         company="회사 B",
@@ -57,21 +59,21 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         selector,
-        "_get_result_card_selector_model",
+        "_get_job_card_selector_model",
         lambda: FakeModel(),
     )
-    request, trace = selector.select_result_cards(_state(image_path))
+    request, trace = selector.select_job_cards(_state(image_path))
 
     assert trace["reason"] == "cards_selected"
     assert trace["marker_ids"] == [10]
-    assert request.tool_calls[0].name == "set_result_card_queue"
+    assert request.tool_calls[0].name == "set_job_card_queue"
     assert len(request.tool_calls[0].args["cards"]) == 1
 
 
 def test_selector_rejects_model_label_that_disagrees_with_ocr(tmp_path, monkeypatch):
     from PIL import Image
 
-    from agent.runtime import result_card_selector as selector
+    from agent.runtime import job_card_selector as selector
 
     image_path = tmp_path / "marked.jpg"
     Image.new("RGB", (200, 100), "white").save(image_path)
@@ -87,8 +89,8 @@ def test_selector_rejects_model_label_that_disagrees_with_ocr(tmp_path, monkeypa
 
     class FakeModel:
         def invoke(self, inputs, config=None):
-            return selector.ResultCardSelection(
-                is_result_list=True,
+            return selector.JobCardSelection(
+                is_job_results_page=True,
                 needs_refinement=True,
                 refinement_reason="iOS 기술 옵션을 찾습니다.",
                 refinement_action="type",
@@ -100,30 +102,30 @@ def test_selector_rejects_model_label_that_disagrees_with_ocr(tmp_path, monkeypa
 
     monkeypatch.setattr(
         selector,
-        "_get_result_card_selector_model",
+        "_get_job_card_selector_model",
         lambda: FakeModel(),
     )
-    request, trace = selector.select_result_cards(state)
+    request, trace = selector.select_job_cards(state)
 
     assert request is None
-    assert trace["reason"] == "result_refinement_needed"
+    assert trace["reason"] == "job_results_refinement_needed"
 
 
 def test_loading_result_recaptures_without_general_reasoning(tmp_path, monkeypatch):
     from PIL import Image
 
-    from agent.runtime import result_card_selector as selector
+    from agent.runtime import job_card_selector as selector
 
     image_path = tmp_path / "marked.jpg"
     Image.new("RGB", (200, 100), "white").save(image_path)
 
     class FakeModel:
         def invoke(self, inputs, config=None):
-            return selector.ResultCardSelection(is_loading=True)
+            return selector.JobCardSelection(is_loading=True)
 
     monkeypatch.setattr(
         selector,
-        "_get_result_card_selector_model",
+        "_get_job_card_selector_model",
         lambda: FakeModel(),
     )
     monkeypatch.setattr(
@@ -137,4 +139,4 @@ def test_loading_result_recaptures_without_general_reasoning(tmp_path, monkeypat
     result = worker_reasoning.reasoning_node(_state(image_path))
 
     assert result["pending_action"] is None
-    assert result["result_card_selector_trace"]["reason"] == "screen_loading"
+    assert result["job_card_selection_trace"]["reason"] == "screen_loading"

@@ -14,7 +14,8 @@ from agent.application.search_taxonomy_service import (
     DEFAULT_LOCAL_SEED,
     SearchTaxonomyService,
 )
-from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
+from agent.graph.investigation_context import InvestigationModels
+from agent.graph.investigation_workflow import InvestigationWorkflow
 from shared.db.database import Database
 from shared.schema.investigation_schema import (
     ClarificationAnswer,

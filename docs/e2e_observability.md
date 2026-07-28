@@ -150,7 +150,7 @@ python -m benchmark.profile_investigation_planner `
 - LangGraph 노드와 LLM 호출: 판단 흐름과 모델 토큰
 - 직접 호출한 OpenAI/Ollama 모델: 별도의 LLM child trace
 
-각 단계에는 `stage`, `component`, 성공 여부와 실패 코드가 붙습니다. `graph:reflex`의 `action_source=reflex`와 `graph:selection`의 `action_source=card_queue`가 각각 Reflex와 카드 큐 hit의 기준입니다. 중간 실패 후 복구된 실행은 최종 성공으로 집계하고, 실패 이력은 `recovered_failure_count`와 `internal_failure_codes`에 남깁니다.
+각 단계에는 `stage`, `component`, 성공 여부와 실패 코드가 붙습니다. `graph:reflex`의 `action_source=reflex`와 `graph:selection`의 `action_source=job_card_queue`가 각각 Reflex와 공고 카드 큐 hit의 기준입니다. 중간 실패 후 복구된 실행은 최종 성공으로 집계하고, 실패 이력은 `recovered_failure_count`와 `internal_failure_codes`에 남깁니다.
 
 ## 작업자 실행 경로 조회
 

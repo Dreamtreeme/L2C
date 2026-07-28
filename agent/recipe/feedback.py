@@ -13,7 +13,7 @@ from agent.recipe.text_utils import site_of
 from agent.runtime.job_collection import job_count
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
-from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox
+from agent.vision.target_snapshot import build_action_target_snapshot
 from shared.schema.feedback_schema import (
     ActionFeedback,
     ActionObservation,
@@ -33,7 +33,7 @@ _UI_ACTIONS = {
     "switch_tab",
     "go_back",
 }
-_STATE_ACTIONS = {"update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task"}
+_STATE_ACTIONS = {"update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task"}
 
 
 def _message_text(content: Any) -> str:
@@ -92,39 +92,6 @@ def _compact_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
             "payload_preview": _preview_value(data),
         }
     return dict(args or {})
-
-
-def _marker_by_id(markers: list[dict], marker_id: int | None) -> dict | None:
-    for marker in markers or []:
-        if isinstance(marker, dict) and marker.get("id") == marker_id:
-            return marker
-    return None
-
-
-def _target_snapshot(state: dict, action_name: str, args: dict[str, Any]) -> dict[str, Any] | None:
-    if action_name not in {"click_marker", "type_in_marker", "scroll"} or args.get("marker_id") is None:
-        return None
-    marker = _marker_by_id(state.get("current_markers", []) or [], args.get("marker_id"))
-    if not marker:
-        return {"marker_id": args.get("marker_id"), "missing": True}
-    target = {
-        "marker_id": marker.get("id"),
-        "text": marker.get("text", ""),
-        "marker_type": marker.get("type", ""),
-        "bbox": marker.get("bbox", []),
-    }
-    signature = dict(state.get("screen_signature", {}) or {})
-    size = signature.get("size") or []
-    if isinstance(size, list) and len(size) == 2:
-        try:
-            target["bbox_ratio"] = bbox_to_ratio(marker.get("bbox", []), size)
-            target["center_ratio"] = center_ratio_from_bbox(marker.get("bbox", []), size)
-        except Exception:
-            pass
-    target_label = args.get("target_label") or args.get("semantic_label")
-    if target_label:
-        target["target_label"] = target_label
-    return target
 
 
 def _parameter_candidates(action_name: str, args: dict[str, Any]) -> list[ParameterCandidate]:
@@ -190,7 +157,11 @@ def record_action_episode(
     """피드백 기록(feedback episode)을 하나 추가한다. 실패해도 실행을 막지 않는다."""
     try:
         goal = str(state.get("goal") or "")
-        target = enriched_result.get("target") or _target_snapshot(state, action_name, args)
+        target = enriched_result.get("target") or build_action_target_snapshot(
+            state,
+            action_name,
+            args,
+        )
         proposal = ActionProposal(
             action=action_name,
             args=_compact_args(action_name, args),

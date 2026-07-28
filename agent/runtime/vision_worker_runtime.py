@@ -136,9 +136,9 @@ class VisionWorkerRuntime:
 
     def prepare_reasoning_models(self, tool_schemas: Mapping[str, Any]) -> None:
         self.get_ui_model_with_tools(tuple(tool_schemas), tool_schemas)
-        from agent.runtime.result_card_selector import prepare_result_card_selector_model
+        from agent.runtime.job_card_selector import prepare_job_card_selector_model
 
-        prepare_result_card_selector_model()
+        prepare_job_card_selector_model()
 
     def get_graph(self) -> Any:
         with self._resource_lock:

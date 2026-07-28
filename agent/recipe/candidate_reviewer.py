@@ -11,26 +11,36 @@ import json
 from typing import Any, Callable
 
 from agent.config import get_settings
-from agent.recipe.page_context import normalize_page_role
-from agent.runtime.site_context import infer_site_page_role
-from agent.recipe.promotion_policy import compact_step_evidence_verdicts, evaluate_candidate_step_evidence
-from agent.recipe.task_category import normalize_task_category
+from agent.recipe.candidate_promotion import (
+    apply_candidate_promotion,
+    ensure_review_task_category,
+)
+from agent.recipe.promotion_policy import compact_step_evidence_verdicts
+from agent.recipe.replay_actions import (
+    CONTEXTUAL_REPLAY_ACTIONS,
+    REVIEWABLE_REPLAY_ACTIONS,
+)
+from agent.recipe.task_category import task_category_from_candidate
 from agent.utils.model_dump import dump_model
 from shared.schema.feedback_schema import RecipeCandidateReview
 
 
 CriticFn = Callable[[dict[str, Any]], dict[str, Any] | RecipeCandidateReview]
-_TARGET_ACTIONS = {"click_marker", "type_in_marker"}
 
 
 def _critic_evidence_text_limit() -> int:
     return get_settings().recipe.critic_evidence_text_limit
 
 
-def _target_action_specs(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _reviewable_action_specs(
+    steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for step in steps or []:
-        if not isinstance(step, dict) or step.get("action") not in _TARGET_ACTIONS:
+        if (
+            not isinstance(step, dict)
+            or step.get("action") not in REVIEWABLE_REPLAY_ACTIONS
+        ):
             continue
         try:
             seq = int(step.get("seq"))
@@ -40,11 +50,45 @@ def _target_action_specs(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return specs
 
 
-def _target_action_seqs(steps: list[dict[str, Any]]) -> set[int]:
-    return {item["seq"] for item in _target_action_specs(steps)}
+def _reviewable_action_seqs(steps: list[dict[str, Any]]) -> set[int]:
+    return {item["seq"] for item in _reviewable_action_specs(steps)}
 
 
-def _compact_transition_observations(
+def _feedback_evidence_seqs(
+    worker_submission: dict[str, Any],
+    steps: list[dict[str, Any]],
+    reviewable_seqs: set[int],
+) -> set[int]:
+    """후속 행동에는 바로 앞 행동의 성공 문맥도 Critic 증거로 포함한다."""
+
+    contextual_seqs = {
+        int(step["seq"])
+        for step in steps
+        if (
+            isinstance(step, dict)
+            and step.get("action") in CONTEXTUAL_REPLAY_ACTIONS
+            and str(step.get("seq", "")).lstrip("-").isdigit()
+        )
+    }
+    episode_seqs = sorted(
+        {
+            int(episode["seq"])
+            for episode in worker_submission.get("feedback_episodes", []) or []
+            if (
+                isinstance(episode, dict)
+                and str(episode.get("seq", "")).lstrip("-").isdigit()
+            )
+        }
+    )
+    out = set(reviewable_seqs)
+    for seq in contextual_seqs:
+        previous = [item for item in episode_seqs if item < seq]
+        if previous:
+            out.add(previous[-1])
+    return out
+
+
+def _compact_transition_records(
     worker_submission: dict[str, Any],
     target_seqs: set[int],
 ) -> list[dict[str, Any]]:
@@ -66,7 +110,7 @@ def _compact_transition_observations(
         "ocr_skipped",
         "marker_count",
     )
-    for observation in worker_submission.get("transition_observations", []) or []:
+    for observation in worker_submission.get("transition_records", []) or []:
         if not isinstance(observation, dict):
             continue
         try:
@@ -164,20 +208,15 @@ def _fallback_review(reason: str) -> dict[str, Any]:
     )
 
 
-def _candidate_task_category(candidate: dict[str, Any]) -> str:
-    worker_submission = dict(candidate.get("payload", {}) or {})
-    evidence = worker_submission.get("skill_metadata_evidence") if isinstance(worker_submission.get("skill_metadata_evidence"), dict) else {}
-    return normalize_task_category(worker_submission.get("task_category") or evidence.get("task_category") or "")
-
-
 def _promotion_policy(allow_promotion: bool) -> str:
     if allow_promotion:
         return (
             "Active recipe promotion is evaluated per step, not for the trajectory as one indivisible path. "
-            "Set promote_to_active_recipe=true when at least one fixed/parameterized target step is independently "
+            "Set promote_to_active_recipe=true when at least one fixed/parameterized step is independently "
             "safe to replay, even if the same successful trajectory also contains mistakes, recovery actions, or "
             "reasoning-only steps. Classify every unsafe step as reasoning; the code will activate only the safe, "
-            "ROI-verifiable click/type subset. Set promote_to_active_recipe=false only when no target step is safe "
+            "ROI-verifiable click/type steps and transition-verified contextual follow-up actions. "
+            "Set promote_to_active_recipe=false only when no step is safe "
             "for active replay. Do not maximize the number of promoted steps. A screen change alone is not success. "
             "A step is reusable only when its expected result was achieved and it belongs to the causal path that "
             "completed the task. If later actions abandoned that branch, reopened the start page, or used an "
@@ -199,9 +238,14 @@ def build_candidate_review_payload(candidate: dict[str, Any], allow_promotion: b
     """후보 증거(candidate evidence)를 의미 판단 없이 비평가(Critic)에게 전달한다."""
     worker_submission = dict(candidate.get("payload", {}) or {})
     steps = [step for step in candidate.get("steps", []) or [] if isinstance(step, dict)]
-    target_seqs = _target_action_seqs(steps)
-    required_step_intents = _target_action_specs(steps)
-    task_category = _candidate_task_category(candidate)
+    reviewable_seqs = _reviewable_action_seqs(steps)
+    evidence_seqs = _feedback_evidence_seqs(
+        worker_submission,
+        steps,
+        reviewable_seqs,
+    )
+    required_step_intents = _reviewable_action_specs(steps)
+    task_category = task_category_from_candidate(candidate)
     return {
         "candidate_id": candidate.get("candidate_id", "") or "",
         "status": candidate.get("status", "") or "",
@@ -210,8 +254,14 @@ def build_candidate_review_payload(candidate: dict[str, Any], allow_promotion: b
         "goal": candidate.get("goal", "") or "",
         "keyword": candidate.get("keyword", "") or "",
         "steps": steps,
-        "transition_observations": _compact_transition_observations(worker_submission, target_seqs),
-        "feedback_evidence": _compact_feedback_evidence(worker_submission, target_seqs),
+        "transition_records": _compact_transition_records(
+            worker_submission,
+            reviewable_seqs,
+        ),
+        "feedback_evidence": _compact_feedback_evidence(
+            worker_submission,
+            evidence_seqs,
+        ),
         "deterministic_step_validation": compact_step_evidence_verdicts(candidate),
         "required_step_intents": required_step_intents,
         "skill_metadata_evidence": dict(worker_submission.get("skill_metadata_evidence", {}) or {}),
@@ -252,6 +302,11 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
                 "or fallback should be verified. Every step_intent must include replay_mode, and reusable click/type steps must preserve page_role. Current search-result "
                 "card selection and target-count-dependent navigation require reasoning unless backed by an explicit "
                 "runtime slot or condition. "
+                "A press_key, go_back, close_current_tab, or switch_tab step may be fixed only as a contextual "
+                "follow-up to the immediately preceding successful action. It must have either a ready transition "
+                "record or a contract-missing record with deterministic visual-change evidence, and the review must "
+                "supply a transition contract. Never promote a global rule such as always press Enter or always go back. "
+                "Scroll remains reasoning because its distance and stopping point depend on the current screen. "
                 "required_step_intents is an output-completeness contract, not a replay recommendation. Return "
                 "exactly one skill_metadata.step_intents item for every listed seq/action. Never omit a non-reusable "
                 "step; classify it as replay_mode=reasoning. If critic_correction is present, fix every listed "
@@ -263,7 +318,8 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
                 "deterministic_step_validation first. A step with eligible=false is blocked and must be reasoning. "
                 "feedback_evidence with the transition_observation for the same seq/action_seq; classify no-op clicks, "
                 "unrelated navigation, and actions without evidence for expected_after as reasoning. "
-                "Compile transition_observations into transition_contracts keyed by recorded action seq. Use only "
+                "Compile transition_records into transition_contracts keyed by recorded action seq for every "
+                "fixed/parameterized click, type, key, back, or tab action. Use only "
                 "OCR-verifiable cues that distinguish the post-action screen from feedback_evidence.before_marker_texts. "
                 "Generic headers visible before and after the action are not ready cues. Use only outcomes supported by observations."
             )
@@ -363,224 +419,6 @@ def _status_for_review(review: dict[str, Any]) -> str:
     return "revise"
 
 
-def _step_intent_map(review: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    metadata = dict(review.get("skill_metadata") or {})
-    out: dict[int, dict[str, Any]] = {}
-    for item in metadata.get("step_intents") or []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            out[int(item.get("seq"))] = dict(item)
-        except (TypeError, ValueError):
-            continue
-    return out
-
-
-def _transition_contract_map(review: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    out: dict[int, dict[str, Any]] = {}
-    for item in review.get("transition_contracts") or []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            seq = int(item.get("seq"))
-        except (TypeError, ValueError):
-            continue
-        contract = item.get("contract")
-        if isinstance(contract, dict):
-            out[seq] = dict(contract)
-    return out
-
-
-def _ensure_review_task_category(review: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
-    task_category = _candidate_task_category(candidate)
-    if not task_category:
-        return review
-    out = dict(review)
-    metadata = dict(out.get("skill_metadata") or {})
-    if not normalize_task_category(metadata.get("task_category")):
-        metadata["task_category"] = task_category
-        out["skill_metadata"] = metadata
-    return out
-
-
-def _annotated_step(
-    step: dict[str, Any],
-    intent: dict[str, Any],
-    contract: dict[str, Any] | None,
-    page_role: str = "",
-) -> dict[str, Any]:
-    out = dict(step)
-    for key in ["intent", "target_role", "component", "expected_after", "fixed", "slot_refs"]:
-        value = intent.get(key)
-        if value not in (None, "", []):
-            out[key] = value
-    normalized_page_role = normalize_page_role(page_role or out.get("page_role") or intent.get("page_role"))
-    if normalized_page_role:
-        out["page_role"] = normalized_page_role
-    replay_mode = intent.get("replay_mode") or out.get("replay_mode") or "reasoning"
-    out["replay_mode"] = replay_mode
-    if contract:
-        out["transition_contract"] = contract
-    return out
-
-
-def _page_role_map_from_candidate(candidate: dict[str, Any]) -> dict[int, str]:
-    payload = dict(candidate.get("payload", {}) or {})
-    out: dict[int, str] = {}
-    for episode in payload.get("feedback_episodes") or []:
-        if not isinstance(episode, dict):
-            continue
-        try:
-            seq = int(episode.get("seq"))
-        except (TypeError, ValueError):
-            continue
-        proposal = episode.get("proposal") if isinstance(episode.get("proposal"), dict) else {}
-        args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
-        observation = episode.get("observation") if isinstance(episode.get("observation"), dict) else {}
-        before = observation.get("before") if isinstance(observation.get("before"), dict) else {}
-        result = (observation.get("result") or {}) if isinstance(observation, dict) else {}
-        result_args = result.get("args") if isinstance(result.get("args"), dict) else {}
-        marker_texts = before.get("marker_texts") if isinstance(before.get("marker_texts"), list) else []
-        page_role = normalize_page_role(
-            infer_site_page_role(str(before.get("url") or ""), marker_texts)
-            or args.get("page_role")
-            or result_args.get("page_role")
-        )
-        if page_role:
-            out[seq] = page_role
-    return out
-
-
-def _promotable_replay_steps(
-    source_steps: list[dict[str, Any]],
-    review: dict[str, Any],
-    page_roles: dict[int, str] | None = None,
-    evidence_verdicts: dict[int, dict[str, Any]] | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Critic이 승인한 단계 중 broad replay에 안전한 단계만 활성 레시피로 만든다."""
-    intents = _step_intent_map(review)
-    contracts = _transition_contract_map(review)
-    replay_steps: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    page_roles = dict(page_roles or {})
-    evidence_verdicts = dict(evidence_verdicts or {})
-    metadata = dict(review.get("skill_metadata") or {})
-    declared_inputs = {
-        str(item.get("name") or "").strip()
-        for item in (metadata.get("inputs") or [])
-        if isinstance(item, dict) and str(item.get("name") or "").strip()
-    }
-
-    for raw_step in source_steps or []:
-        if not isinstance(raw_step, dict):
-            continue
-        try:
-            seq = int(raw_step.get("seq"))
-        except (TypeError, ValueError):
-            skipped.append({"seq": raw_step.get("seq"), "reason": "seq_missing"})
-            continue
-        intent = intents.get(seq, {})
-        step = _annotated_step(raw_step, intent, contracts.get(seq), page_role=page_roles.get(seq, ""))
-        action = str(step.get("action") or "")
-        replay_mode = str(step.get("replay_mode") or "reasoning")
-        verdict = evidence_verdicts.get(seq, {})
-        if action in _TARGET_ACTIONS and verdict and not verdict.get("eligible", False):
-            reasons = list(verdict.get("blocking_reasons") or [])
-            skipped.append(
-                {
-                    "seq": seq,
-                    "action": action,
-                    "reason": reasons[0] if reasons else "deterministic_validation_failed",
-                    "blocking_reasons": reasons,
-                }
-            )
-            continue
-        if replay_mode not in {"fixed", "parameterized"}:
-            skipped.append({"seq": seq, "action": action, "reason": "reasoning_step"})
-            continue
-        if action in _TARGET_ACTIONS:
-            if not normalize_page_role(step.get("page_role")):
-                skipped.append({"seq": seq, "action": action, "reason": "page_role_missing"})
-                continue
-            if not step.get("roi_signature"):
-                skipped.append({"seq": seq, "action": action, "reason": "roi_signature_missing"})
-                continue
-            if action == "type_in_marker" and replay_mode == "parameterized":
-                slot_refs = [
-                    str(item).strip()
-                    for item in (step.get("slot_refs") or [])
-                    if str(item).strip()
-                ]
-                param = step.get("param") if isinstance(step.get("param"), dict) else {}
-                param_slot = str(param.get("slot_name") or param.get("slot") or "").strip()
-                if (
-                    len(slot_refs) != 1
-                    or not param_slot
-                    or param_slot != slot_refs[0]
-                    or param_slot not in declared_inputs
-                ):
-                    skipped.append(
-                        {
-                            "seq": seq,
-                            "action": action,
-                            "reason": "parameter_slot_contract_missing",
-                        }
-                    )
-                    continue
-            replay_steps.append(step)
-            continue
-        skipped.append({"seq": seq, "action": action, "reason": "non_target_action"})
-    return replay_steps, skipped
-
-
-def _apply_active_promotion(
-    candidate: dict[str, Any],
-    review: dict[str, Any],
-    db_path=None,
-) -> dict[str, Any]:
-    from agent.recipe.store import RecipeStore
-
-    source_steps = [dict(step) for step in candidate.get("steps", []) or [] if isinstance(step, dict)]
-    replay_steps, skipped_steps = _promotable_replay_steps(
-        source_steps,
-        review,
-        page_roles=_page_role_map_from_candidate(candidate),
-        evidence_verdicts=evaluate_candidate_step_evidence(candidate),
-    )
-    saved_count = 0
-    if replay_steps:
-        saved_count = RecipeStore(db_path).replace_recipe_steps(
-            candidate.get("site", "") or "",
-            candidate.get("goal", "") or "",
-            source_steps,
-            replay_steps,
-            metadata=dict(review.get("skill_metadata") or {}),
-        )
-    return {
-        "enabled": True,
-        "promoted": saved_count > 0,
-        "saved_count": saved_count,
-        "promoted_step_count": len(replay_steps),
-        "skipped_steps": skipped_steps,
-    }
-
-
-def reapply_reviewed_candidate_promotion(candidate_id: str, db_path=None) -> dict[str, Any]:
-    """저장된 Critic 판정을 현재 결정론 정책으로 다시 적용한다."""
-
-    from agent.recipe.candidate_store import RecipeCandidateStore
-
-    candidate = RecipeCandidateStore(db_path).get_candidate(candidate_id)
-    if not candidate:
-        return {"candidate_id": candidate_id, "promoted": False, "reason": "candidate_not_found"}
-    validation = dict(candidate.get("validation", {}) or {})
-    review = dict(validation.get("review", {}) or {})
-    if review.get("decision") != "accept" or not review.get("promote_to_active_recipe"):
-        return {"candidate_id": candidate_id, "promoted": False, "reason": "stored_review_not_promotable"}
-    promotion = _apply_active_promotion(candidate, review, db_path=db_path)
-    return {"candidate_id": candidate_id, **promotion}
-
-
 def review_and_apply_candidate(
     candidate_id: str,
     db_path=None,
@@ -597,7 +435,7 @@ def review_and_apply_candidate(
 
     normalized_mode = _process_mode(mode)
     allow_promotion = normalized_mode == "promote"
-    review = _ensure_review_task_category(
+    review = ensure_review_task_category(
         review_candidate(
             candidate,
             critic=critic,
@@ -608,7 +446,11 @@ def review_and_apply_candidate(
     )
     promotion = {"enabled": allow_promotion, "promoted": False, "saved_count": 0, "promoted_step_count": 0, "skipped_steps": []}
     if allow_promotion and review.get("decision") == "accept" and review.get("promote_to_active_recipe"):
-        promotion = _apply_active_promotion(candidate, review, db_path=db_path)
+        promotion = apply_candidate_promotion(
+            candidate,
+            review,
+            db_path=db_path,
+        )
 
     validation = {
         "review": review,

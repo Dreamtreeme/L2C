@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent.recipe.candidate_reviewer import reapply_reviewed_candidate_promotion
+from agent.recipe.candidate_promotion import (
+    reapply_reviewed_candidate_promotion,
+)
 from agent.recipe.candidate_store import RecipeCandidateStore
 from agent.recipe.store import RecipeStore
 

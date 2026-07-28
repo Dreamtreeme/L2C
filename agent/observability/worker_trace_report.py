@@ -98,7 +98,7 @@ def build_worker_trace(submission: dict[str, Any]) -> dict[str, Any]:
             continue
         feedback_by_seq[seq] = episode
 
-    for item in payload.get("transition_observations", []) or []:
+    for item in payload.get("transition_records", []) or []:
         observation = _as_dict(item)
         seq = _sequence(observation.get("action_seq"))
         if seq is None:

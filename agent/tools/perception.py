@@ -301,6 +301,38 @@ class PerceptionEngine:
             region=region,
         )
 
+    def wait_for_transition_phash_change(
+        self,
+        reference_phash: str,
+        *,
+        max_wait_sec: float | None = None,
+    ) -> bool:
+        """전환 재검사에서는 pHash가 바뀔 때까지만 메모리 화면을 확인합니다."""
+
+        region = self._get_browser_region()
+        return self._wait_stable.wait_for_phash_change(
+            reference_phash,
+            max_wait_sec=max_wait_sec,
+            region=region,
+        )
+
+    def wait_for_transition_phash_match(
+        self,
+        target_phash: str,
+        *,
+        max_distance: int,
+        max_wait_sec: float | None = None,
+    ) -> bool:
+        """목표 화면 pHash가 나타날 때까지 메모리 캡처만 반복합니다."""
+
+        region = self._get_browser_region()
+        return self._wait_stable.wait_for_phash_match(
+            target_phash,
+            max_distance=max_distance,
+            max_wait_sec=max_wait_sec,
+            region=region,
+        )
+
     def screen_quality(self, image_path: Path) -> Dict[str, Any]:
         """브라우저 본문이 단색 빈 화면에 가까운지 저비용 이미지 지표로 검사한다."""
         settings = get_settings().vision

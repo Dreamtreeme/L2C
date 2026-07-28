@@ -278,8 +278,8 @@ def build_detail_section_context(markers: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def detail_ocr_buffer_enabled() -> bool:
-    return get_settings().vision.detail_ocr_buffer_enabled
+def job_detail_buffer_enabled() -> bool:
+    return get_settings().vision.job_detail_buffer_enabled
 
 
 def detail_context_matches(
@@ -309,7 +309,7 @@ def detail_lines_for_buffer(markers: list[dict]) -> list[dict]:
     ]
 
 
-def new_detail_ocr_buffer(current_url: str, detail_key: str = "") -> dict[str, Any]:
+def new_job_detail_buffer(current_url: str, detail_key: str = "") -> dict[str, Any]:
     return {
         "url": current_url,
         "detail_key": detail_key,
@@ -326,7 +326,7 @@ def new_detail_ocr_buffer(current_url: str, detail_key: str = "") -> dict[str, A
     }
 
 
-def update_detail_ocr_buffer(
+def update_job_detail_buffer(
     existing: dict[str, Any] | None,
     markers: list[dict],
     current_url: str,
@@ -337,7 +337,7 @@ def update_detail_ocr_buffer(
 ) -> dict[str, Any]:
     """상세 페이지 OCR 본문 줄을 공고 단위 버퍼에 누적한다."""
 
-    if not detail_ocr_buffer_enabled():
+    if not job_detail_buffer_enabled():
         return dict(existing or {})
     marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
     if not current_url or not is_job_detail_context(
@@ -353,7 +353,7 @@ def update_detail_ocr_buffer(
 
     buffer = dict(existing or {})
     if not detail_context_matches(buffer, current_url, detail_key):
-        buffer = new_detail_ocr_buffer(current_url, detail_key)
+        buffer = new_job_detail_buffer(current_url, detail_key)
     lines = [dict(item) for item in (buffer.get("lines") or []) if isinstance(item, dict)]
     seen_keys = [str(item) for item in (buffer.get("seen_keys") or []) if str(item)]
     seen = set(seen_keys)
@@ -438,14 +438,14 @@ def update_detail_ocr_buffer(
     return buffer
 
 
-def compact_detail_ocr_buffer_context(
+def compact_job_detail_buffer_context(
     state: dict,
     current_url: str,
     detail_key: str = "",
 ) -> str:
-    if not detail_ocr_buffer_enabled() or not current_url:
+    if not job_detail_buffer_enabled() or not current_url:
         return ""
-    buffer = dict(state.get("detail_ocr_buffer", {}) or {})
+    buffer = dict(state.get("job_detail_buffer", {}) or {})
     if not detail_context_matches(buffer, current_url, detail_key):
         return ""
     if not buffer.get("lines") and not is_job_detail_context(
@@ -459,7 +459,7 @@ def compact_detail_ocr_buffer_context(
     first_preview = [line for line in first_preview if line]
     preview = [str(item.get("text") or "").strip() for item in lines[-8:]]
     preview = [line for line in preview if line]
-    followup = dict(state.get("detail_followup_required") or {})
+    followup = dict(state.get("job_detail_followup") or {})
     followup_active = detail_context_matches(followup, current_url, detail_key)
     parts = [
         "상세 OCR 누적 상태:",
@@ -515,14 +515,14 @@ def detail_buffer_text(buffer: dict[str, Any]) -> str:
 __all__ = [
     "build_detail_lightweight_marked_image",
     "build_detail_section_context",
-    "compact_detail_ocr_buffer_context",
+    "compact_job_detail_buffer_context",
     "detail_action_marker_candidates",
     "detail_buffer_text",
     "detail_buffer_line_key",
     "detail_context_matches",
     "detail_lightweight_marked_image_enabled",
     "detail_lines_for_buffer",
-    "detail_ocr_buffer_enabled",
+    "job_detail_buffer_enabled",
     "detail_reveal_controls",
     "draw_detail_lightweight_marker",
     "group_text_markers_into_lines",
@@ -531,6 +531,6 @@ __all__ = [
     "join_line_marker_text",
     "line_bbox",
     "marker_prompt_rank",
-    "new_detail_ocr_buffer",
-    "update_detail_ocr_buffer",
+    "new_job_detail_buffer",
+    "update_job_detail_buffer",
 ]

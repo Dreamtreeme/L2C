@@ -1,33 +1,21 @@
 """
 Phase 0: 비전 런의 UI 행동과 타깃 ROI 기록.
-action_node에서 호출되며, 전부 예외 안전 -> 실패해도 실제 실행 흐름에 영향 0.
+execution_node의 기록 단계에서 호출되며, 실패해도 실제 실행 흐름에는 영향을 주지 않는다.
 """
 
 from __future__ import annotations
 
 from agent.recipe.matcher import marker_ordinal, marker_region
 from agent.recipe.page_context import normalize_page_role
+from agent.recipe.replay_actions import (
+    RECORDED_REPLAY_ACTIONS,
+    TARGET_REPLAY_ACTIONS,
+)
 from agent.recipe.text_utils import normalize_text, url_template
 from agent.utils.logger import logger
-from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox, marker_bbox, marker_center
+from agent.vision.marker_geometry import marker_bbox, marker_center
 from agent.vision.screen_signature import compute_target_roi_signature
-
-_TARGET_ACTIONS = {"click_marker", "type_in_marker"}
-_RECORDED_ACTIONS = _TARGET_ACTIONS | {
-    "scroll",
-    "press_key",
-    "go_back",
-    "close_current_tab",
-    "switch_tab",
-}
-
-
-def _marker(markers, marker_id):
-    for m in markers or []:
-        if isinstance(m, dict) and m.get("id") == marker_id:
-            return m
-    return None
-
+from agent.vision.target_snapshot import build_marker_target_snapshot, marker_by_id
 
 def _has_letter(text: str) -> bool:
     return any(ch.isalpha() for ch in text or "")
@@ -112,7 +100,7 @@ def _evidence_texts_for_marker(
 def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
     """UI 액션 디스패치 직후 호출. recorded_steps에 in-place append (예외 안전)."""
     try:
-        if action_name not in _RECORDED_ACTIONS:
+        if action_name not in RECORDED_REPLAY_ACTIONS:
             return
         markers = state.get("current_markers", []) or []
         url = state.get("current_url", "") or ""
@@ -146,12 +134,17 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
                 "switch_tab",
             },
         }
-        if action_name in _TARGET_ACTIONS or (
+        if action_name in TARGET_REPLAY_ACTIONS or (
             action_name == "scroll" and args.get("marker_id") is not None
         ):
-            marker = _marker(markers, args.get("marker_id"))
+            marker = marker_by_id(markers, args.get("marker_id"))
             if not marker:
                 return
+            target_snapshot = build_marker_target_snapshot(
+                markers,
+                args.get("marker_id"),
+                screen_signature=screen_signature,
+            ) or {}
             target = {
                 "text": normalize_text(marker.get("text")),
                 "region": marker_region(marker, markers),
@@ -160,11 +153,13 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             marker_type = normalize_text(marker.get("type"))
             if marker_type:
                 target["marker_type"] = marker_type
+            if target_snapshot.get("bbox_ratio"):
+                target["bbox_ratio"] = target_snapshot["bbox_ratio"]
+            if target_snapshot.get("center_ratio"):
+                target["center_ratio"] = target_snapshot["center_ratio"]
             screen_size = screen_signature.get("size") or []
             if isinstance(screen_size, list) and len(screen_size) == 2:
                 bbox = marker_bbox(marker)
-                target["bbox_ratio"] = bbox_to_ratio(bbox, screen_size)
-                target["center_ratio"] = center_ratio_from_bbox(bbox, screen_size)
                 recent_images = state.get("recent_images", []) or []
                 image_path = recent_images[-1] if recent_images else ""
                 roi_signature = (

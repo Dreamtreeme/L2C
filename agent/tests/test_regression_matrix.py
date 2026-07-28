@@ -1,6 +1,10 @@
-from benchmark.run_realtime_e2e import _apply_run_mode_environment
+import json
 import sqlite3
 
+from benchmark.run_realtime_e2e import (
+    _apply_run_mode_environment,
+    _finalize_warm_preconditions,
+)
 from benchmark.run_regression_matrix import (
     _attach_promotion_metrics,
     _clear_jobs_for_warm_run,
@@ -26,7 +30,10 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
                     {"stage": "ocr", "duration_sec": 3.0},
                     {"stage": "reasoning", "duration_sec": 2.5},
                     {"stage": "reflex", "action_source": "reflex"},
-                    {"stage": "selection", "action_source": "card_queue"},
+                    {"stage": "selection", "action_source": "job_card_queue"},
+                    {"stage": "execution", "action_source": "reflex"},
+                    {"stage": "execution", "action_source": "job_card_queue"},
+                    {"stage": "execution", "action_source": "followup_strategy"},
                 ],
                 "llm": {
                     "totals": {
@@ -47,7 +54,54 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
     assert summary["reasoning_count"] == 1
     assert summary["reflex_count"] == 1
     assert summary["queue_count"] == 1
+    assert summary["followup_count"] == 1
     assert summary["total_tokens"] == 12
+
+
+def test_profile_summary_reports_execution_actions(tmp_path) -> None:
+    from benchmark.profile_reflex_trace import profile_summary
+
+    summary_path = tmp_path / "execution.summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "metrics": {
+                    "steps": [
+                        {
+                            "component": "graph:execution",
+                            "duration_sec": 0.25,
+                            "action_source": "job_card_queue",
+                            "action_names": ["click_marker"],
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = profile_summary(summary_path)
+
+    assert report["actions"]["click_marker"]["count"] == 1
+    assert report["actions"]["click_marker"]["total"] == 0.25
+
+
+def test_warm_comparison_rejects_existing_jobs() -> None:
+    preconditions = {
+        "required": True,
+        "roi_recipes": 2,
+        "followup_strategies": 1,
+        "performance_comparable": True,
+        "reasons": [],
+    }
+
+    result = _finalize_warm_preconditions(
+        preconditions,
+        {"observed_existing_count": 3},
+    )
+
+    assert result["performance_comparable"] is False
+    assert result["reasons"] == ["existing_jobs_observed"]
 
 
 def test_run_modes_control_reflex_environment(monkeypatch) -> None:

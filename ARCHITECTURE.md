@@ -56,24 +56,24 @@ flowchart TD
     OCR --> COLLECT[관찰 및 상세 본문 반영]
     COLLECT --> SELECT
     TRANSITION -->|OCR 불필요| SELECT
-    SELECT -->|카드 큐 또는 상세 정책| ACTION[원자 행동 실행]
+    SELECT -->|카드 큐 또는 상세 정책| EXECUTION[원자 행동 실행]
     SELECT -->|재생 후보| REFLEX[Reflex ROI 검증]
     SELECT -->|의미 판단 필요| REASON
-    REFLEX -->|ROI pHash와 마커 비율 일치| ACTION
+    REFLEX -->|ROI pHash와 마커 비율 일치| EXECUTION
     REFLEX -->|불일치| REASON
-    REASON --> ACTION
-    ACTION --> RECORD[실행 기록]
+    REASON --> EXECUTION
+    EXECUTION --> RECORD[실행 기록]
     RECORD -->|화면 변경| CAPTURE
     RECORD -->|같은 화면 연속 행동| REASON
     RECORD -->|완료 또는 승인 필요| END[종료]
 ```
 
 - `Perception`: 브라우저 화면을 캡처하고 PaddleOCR·OmniParser 마커와 화면 서명을 만듭니다.
-- `Result Card Queue`: 검색 결과에서 LLM이 한 번 고른 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
+- `Job Card Queue`: 검색 결과에서 LLM이 한 번 고른 공고 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
 - `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 반복 스크롤은 결정론적으로 처리하고 마지막에 한 번만 구조화합니다. 펼치기 자동 클릭은 사이트 설명서에 선언된 라벨의 정확 일치만 허용하며, 나머지 컨트롤 의미는 LLM이 판단합니다. 최종 정제 모델에는 상세 OCR과 URL만 전달하고, 검색 목록의 카드 메타데이터는 모델이 필드를 비운 경우의 폴백으로만 사용합니다.
 - `Reflex Runtime`: `site + task_category + page_role`로 활성 레시피를 조회하고 ROI pHash와 현재 마커 좌표비율이 맞을 때만 재생합니다.
 - `Reasoning`: 큐, 상세 정책, Reflex로 고정할 수 없는 현재 화면의 의미 판단만 수행합니다.
-- `Action`: `click_marker`, `type_in_marker`, `scroll`, `press_key`, `go_back`을 물리 입력으로 실행합니다.
+- `Execution`: `click_marker`, `type_in_marker`, `scroll`, `press_key`, `go_back`을 물리 입력으로 실행합니다.
 
 ## 계층과 책임
 
@@ -87,7 +87,8 @@ flowchart TD
 | 작업자 실행 | `agent/application/worker_execution_service.py` | 시작 화면 준비, 그래프 실행, 브라우저 정리 순서 |
 | 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 공고 정규화·UPSERT, 상세 OCR 최종 구조화 |
 | 비동기 승격 | `agent/application/recipe_promotion_service.py`, `recipe_promotion_worker.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
-| 지휘자 그래프 | `agent/graph/investigation_workflow.py` | 요청 이해, 확인 질문, 근거 계획, 도구 실행, 결과 검증 |
+| 지휘자 그래프 조립 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
+| 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 요청 해석, 확인 질문, 근거 판정, 수집 실행, 답변 |
 | 작업자 그래프 | `agent/graph/workflow.py`, `state.py`, `state_factory.py` | Vision LangGraph 연결과 WorkerState 계약 |
 | 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 수집, 선택, 추론, 원자 실행, 기록 |
 | 런타임 정책 | `agent/runtime/` | 전환 검증, 상세 버퍼, 카드 큐, Reflex 재생 |
@@ -98,12 +99,12 @@ flowchart TD
 
 - 모든 작업자 진입점은 `create_worker_state()`로 독립된 초기 상태를 만듭니다.
 - 작업자 상태는 체크포인트 직렬화가 가능한 하나의 평면 `GraphState`입니다. 중첩 상태와 평면 호환 필드를 동시에 유지하지 않으며 각 `worker_*` 모듈이 자기 책임의 필드만 갱신합니다.
-- LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 결과 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
+- LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `pending_action: ActionRequest`, 실행 후 결과는 `last_action_result: ActionResult`로 분리합니다.
-- `action_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
+- `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
-- 행동 전후 검증은 `pending_transition`과 `transition_observations`로 연결합니다.
+- 행동이 요구한 전환은 `transition_request`, 현재 검증 결과는 `transition_result`, 확정된 이력은 `transition_records`로 구분합니다.
 - 결정론적 정책이 검증에 실패하면 행동을 강행하지 않고 reasoning으로 폴백합니다.
 
 ## 로컬 작업자 생명주기

@@ -20,7 +20,7 @@ COMPONENT_STAGE = {
     "graph:recording": "recording",
     "graph:reasoning": "reasoning",
     "graph:reflex": "reflex",
-    "graph:action": "action",
+    "graph:execution": "execution",
 }
 
 
@@ -28,8 +28,8 @@ def stage_for_component(component: str) -> str:
     name = str(component or "unknown")
     if name in COMPONENT_STAGE:
         return COMPONENT_STAGE[name]
-    if name.startswith("graph:action ("):
-        return "action"
+    if name.startswith("graph:execution ("):
+        return "execution"
     return "other"
 
 

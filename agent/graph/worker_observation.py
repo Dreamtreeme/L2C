@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 
 from agent.config import get_settings
@@ -69,19 +70,84 @@ def _previous_screen_observation(state: GraphState) -> dict[str, Any]:
     return dict(state.get("previous_screen_observation") or {})
 
 
-def capture_screen_node(state: GraphState) -> dict[str, Any]:
+def capture_node(state: GraphState) -> dict[str, Any]:
     """화면 변화 대기, 캡처, URL 읽기와 원본 pHash 계산만 수행한다."""
 
     from agent.application.run_context import raise_if_cancelled
 
     raise_if_cancelled()
     perception = _perception_engine()
-    pending = dict(state.get("pending_transition", {}) or {})
-    pending_action = str(pending.get("action") or "")
+    transition_request = dict(state.get("transition_request", {}) or {})
+    pending_action = str(transition_request.get("action") or "")
+    pending_screen_phash = str(
+        transition_request.get("pending_screen_phash") or ""
+    )
+    pending_target_phash = str(
+        transition_request.get("pending_target_phash") or ""
+    )
 
-    if pending_action in _WAIT_ACTIONS:
+    if pending_screen_phash or pending_target_phash:
+        wait_method_name = (
+            "wait_for_transition_phash_match"
+            if pending_target_phash
+            else "wait_for_transition_phash_change"
+        )
+        wait_for_phash = getattr(perception, wait_method_name, None)
+        if callable(wait_for_phash):
+            contract = (
+                transition_request.get("contract")
+                if isinstance(transition_request.get("contract"), dict)
+                else {}
+            )
+            timeout_sec = float(contract.get("timeout_sec") or 12.0)
+            elapsed_sec = max(
+                0.0,
+                time.time()
+                - float(transition_request.get("started_at") or time.time()),
+            )
+            remaining_sec = max(0.0, timeout_sec - elapsed_sec)
+            probe_wait_sec = min(
+                get_settings().vision.transition_change_max_wait_sec,
+                remaining_sec,
+            )
+            try:
+                if pending_target_phash:
+                    changed = wait_for_phash(
+                        pending_target_phash,
+                        max_distance=int(
+                            transition_request.get(
+                                "pending_target_max_distance"
+                            )
+                            or 0
+                        ),
+                        max_wait_sec=probe_wait_sec,
+                    )
+                else:
+                    changed = wait_for_phash(
+                        pending_screen_phash,
+                        max_wait_sec=probe_wait_sec,
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "Transition pHash wait skipped",
+                    error=str(exc),
+                )
+                changed = True
+            if not changed:
+                return {
+                    "ocr_complete": False,
+                    "transition_probe_unchanged": True,
+                }
+
+    if (
+        pending_action in _WAIT_ACTIONS
+        and not pending_screen_phash
+        and not pending_target_phash
+    ):
         wait_for_change = getattr(perception, "wait_for_transition_change", None)
-        before_screenshot = str(pending.get("before_screenshot") or "")
+        before_screenshot = str(
+            transition_request.get("before_screenshot") or ""
+        )
         if callable(wait_for_change) and before_screenshot:
             try:
                 wait_for_change(before_screenshot)
@@ -108,7 +174,11 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
     current_url = str(state.get("current_url") or "")
     current_url_stale = bool(state.get("current_url_stale", True))
     read_current_url = getattr(perception, "get_current_url", None)
-    if (current_url_stale or not current_url or pending) and callable(read_current_url):
+    if (
+        current_url_stale
+        or not current_url
+        or transition_request
+    ) and callable(read_current_url):
         fetched_url = str(read_current_url() or "")
         if fetched_url:
             current_url = fetched_url
@@ -116,7 +186,11 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
         else:
             current_url_stale = True
 
-    raw_signature = raw_screen_phash_signature(image_path) if pending else {}
+    raw_signature = (
+        raw_screen_phash_signature(image_path)
+        if transition_request
+        else {}
+    )
     low_information = bool(capture_quality.get("low_information"))
     low_information_capture_count = (
         int(state.get("low_information_capture_count") or 0) + 1
@@ -129,7 +203,7 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
         "Worker screen captured",
         capture_id=capture_id,
         low_information=low_information,
-        has_transition=bool(pending),
+        has_transition=bool(transition_request),
     )
     return {
         "current_capture_id": capture_id,
@@ -140,6 +214,7 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
         "raw_screen_signature": raw_signature,
         "analysis_mode": "",
         "ocr_complete": False,
+        "transition_probe_unchanged": False,
         "recent_images": [str(image_path)],
         "current_url": current_url,
         "current_url_stale": current_url_stale,
@@ -154,7 +229,7 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
     }
 
 
-def analyze_screen_node(state: GraphState) -> dict[str, Any]:
+def ocr_node(state: GraphState) -> dict[str, Any]:
     """현재 캡처 한 장에 SoM/OCR을 한 번 실행하고 화면 문맥을 만든다."""
 
     from agent.application.run_context import raise_if_cancelled
@@ -222,4 +297,4 @@ def analyze_screen_node(state: GraphState) -> dict[str, Any]:
     }
 
 
-__all__ = ["analyze_screen_node", "capture_screen_node"]
+__all__ = ["capture_node", "ocr_node"]

@@ -1,4 +1,4 @@
-"""검색 결과 카드 큐를 만들고 뒤로가기 후 다음 카드를 재생한다."""
+"""채용공고 카드 큐를 만들고 목록 복귀 후 다음 카드를 재생한다."""
 
 from __future__ import annotations
 
@@ -18,20 +18,14 @@ from agent.vision.marker_geometry import (
     screen_size_from_signature,
 )
 from agent.vision.screen_signature import hamming_distance
+from agent.vision.target_snapshot import marker_by_id
 
 
-def marker_by_id(markers: list[dict], marker_id: int | None) -> dict | None:
-    for marker in markers or []:
-        if isinstance(marker, dict) and marker.get("id") == marker_id:
-            return marker
-    return None
+def job_card_queue_enabled() -> bool:
+    return get_settings().reflex.job_card_queue_enabled
 
 
-def card_queue_enabled() -> bool:
-    return get_settings().reflex.result_card_queue_enabled
-
-
-def queue_card_label(card: dict) -> str:
+def job_card_label(card: dict) -> str:
     for key in ("title", "target_label", "position", "text", "label"):
         value = card.get(key)
         if value not in (None, "", [], {}):
@@ -39,7 +33,7 @@ def queue_card_label(card: dict) -> str:
     return ""
 
 
-def result_card_entries_from_args(args: dict) -> list[dict]:
+def job_card_entries_from_args(args: dict) -> list[dict]:
     """도구 입력을 카드 후보 목록으로 통일한다."""
 
     cards = args.get("cards")
@@ -53,7 +47,7 @@ def result_card_entries_from_args(args: dict) -> list[dict]:
     return []
 
 
-def queue_match_text(value: Any) -> str:
+def job_card_match_text(value: Any) -> str:
     text = normalize_text(value)
     return text.casefold().replace(" ", "")
 
@@ -66,26 +60,26 @@ def _target_count_from_state(state: GraphState) -> int:
         return 0
 
 
-def normalize_result_card_queue(args: dict, state: GraphState, current_url: str) -> tuple[list[dict], dict]:
+def normalize_job_card_queue(args: dict, state: GraphState, current_url: str) -> tuple[list[dict], dict]:
     """LLM이 고른 현재 화면의 공고 카드를 좌표비율 기반 큐로 정규화한다."""
 
-    cards = result_card_entries_from_args(args)
+    cards = job_card_entries_from_args(args)
     markers = list(state.get("current_markers", []) or [])
     signature = dict(state.get("screen_signature", {}) or {})
     size = screen_size_from_signature(signature)
     queue: list[dict] = [
         dict(item)
-        for item in (state.get("result_card_queue", []) or [])
+        for item in (state.get("job_card_queue", []) or [])
         if isinstance(item, dict) and str(item.get("status") or "") != "pending"
     ]
     existing_labels = {
-        (queue_match_text(item.get("title")), queue_match_text(item.get("company")))
+        (job_card_match_text(item.get("title")), job_card_match_text(item.get("company")))
         for item in queue
     }
     target_count = _target_count_from_state(state)
     resolved_count = max(
         job_count(state.get("extracted_jd", {}) or {}),
-        completed_result_card_count(queue),
+        completed_job_card_count(queue),
     )
     remaining = (
         target_count - resolved_count
@@ -103,7 +97,7 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
         except (TypeError, ValueError):
             marker_id = None
         marker = marker_by_id(markers, marker_id)
-        label = queue_card_label(raw) or (str(marker.get("text") or "").strip() if marker else "")
+        label = job_card_label(raw) or (str(marker.get("text") or "").strip() if marker else "")
         if marker is None:
             continue
         if not label:
@@ -128,7 +122,7 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
             continue
 
         company = str(raw.get("company") or raw.get("company_name") or "").strip()
-        identity = (queue_match_text(label), queue_match_text(company))
+        identity = (job_card_match_text(label), job_card_match_text(company))
         if identity in existing_labels or (identity[0], "") in existing_labels:
             continue
         existing_labels.add(identity)
@@ -168,14 +162,14 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
         "marked_image": state.get("marked_image", "") or "",
     }
     previous_return_action = dict(
-        (state.get("result_page_memory") or {}).get("return_action") or {}
+        (state.get("job_results_memory") or {}).get("return_action") or {}
     )
     if previous_return_action:
         memory["return_action"] = previous_return_action
     return queue, memory
 
 
-def pending_result_cards(queue: list[dict]) -> list[dict]:
+def pending_job_cards(queue: list[dict]) -> list[dict]:
     return [
         dict(item)
         for item in queue or []
@@ -183,7 +177,7 @@ def pending_result_cards(queue: list[dict]) -> list[dict]:
     ]
 
 
-def completed_result_card_count(queue: list[dict]) -> int:
+def completed_job_card_count(queue: list[dict]) -> int:
     """상세 정보를 실제로 수집 완료한 카드 수만 반환한다."""
 
     return sum(
@@ -193,7 +187,7 @@ def completed_result_card_count(queue: list[dict]) -> int:
     )
 
 
-def result_card_queue_scope_complete(
+def job_card_queue_scope_complete(
     queue: list[dict],
     *,
     count_mode: str,
@@ -209,10 +203,10 @@ def result_card_queue_scope_complete(
         return False
     if str(count_mode or "").strip().lower() == "visible_all":
         return True
-    return target_count > 0 and completed_result_card_count(queue) >= target_count
+    return target_count > 0 and completed_job_card_count(queue) >= target_count
 
 
-def same_queue_card(item: dict, args: dict) -> bool:
+def same_job_card(item: dict, args: dict) -> bool:
     if args.get("queue_id") and str(args.get("queue_id")) == str(item.get("queue_id")):
         return True
     label = str(args.get("target_label") or "").strip()
@@ -222,19 +216,19 @@ def same_queue_card(item: dict, args: dict) -> bool:
     return marker_id is not None and str(marker_id) == str(item.get("source_marker_id"))
 
 
-def mark_result_card_active(queue: list[dict], args: dict) -> tuple[list[dict], dict]:
+def activate_job_card(queue: list[dict], args: dict) -> tuple[list[dict], dict]:
     updated = []
     active: dict = {}
     for raw in queue or []:
         item = dict(raw)
-        if not active and item.get("status") == "pending" and same_queue_card(item, args):
+        if not active and item.get("status") == "pending" and same_job_card(item, args):
             item["status"] = "active"
             active = dict(item)
         updated.append(item)
     return updated, active
 
 
-def result_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
+def job_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
     if not queue:
         return False
     if args.get("queue_id"):
@@ -251,7 +245,7 @@ def result_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
     )
 
 
-def complete_active_result_card(queue: list[dict], active_card: dict) -> tuple[list[dict], dict]:
+def complete_active_job_card(queue: list[dict], active_card: dict) -> tuple[list[dict], dict]:
     if not active_card:
         return queue, {}
     active_id = str(active_card.get("queue_id") or "")
@@ -264,7 +258,7 @@ def complete_active_result_card(queue: list[dict], active_card: dict) -> tuple[l
     return updated, {}
 
 
-def skip_active_result_card(
+def skip_active_job_card(
     queue: list[dict],
     active_card: dict,
     *,
@@ -288,7 +282,7 @@ def skip_active_result_card(
     return updated, {}
 
 
-def queue_return_screen_matches(
+def job_results_page_matches(
     memory: dict,
     current_url: str,
     current_signature: dict,
@@ -328,8 +322,8 @@ def queue_return_screen_matches(
     )
 
     settings = get_settings().reflex
-    max_distance = settings.card_queue_return_phash_max_distance
-    min_overlap = settings.card_queue_return_min_anchor_overlap
+    max_distance = settings.job_card_return_phash_max_distance
+    min_overlap = settings.job_card_return_min_anchor_overlap
     matched = bool(
         distance is not None
         and distance <= max_distance
@@ -369,22 +363,24 @@ def normalized_return_action(value: Any) -> dict[str, Any]:
     return {"name": name, "args": {}}
 
 
-def return_action_from_transition(observed_transition: dict) -> dict[str, Any]:
+def return_action_from_transition(
+    transition_result: dict,
+) -> dict[str, Any]:
     step = (
-        observed_transition.get("step")
-        if isinstance(observed_transition.get("step"), dict)
+        transition_result.get("step")
+        if isinstance(transition_result.get("step"), dict)
         else {}
     )
     args = step.get("args") if isinstance(step.get("args"), dict) else {}
     return normalized_return_action(
         {
-            "name": observed_transition.get("action"),
+            "name": transition_result.get("action"),
             "args": args,
         }
     )
 
 
-def queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> tuple[int | None, list[dict], dict]:
+def job_card_marker_for_item(item: dict, markers: list[dict], signature: dict) -> tuple[int | None, list[dict], dict]:
     target = dict(item.get("target") or {})
     target.setdefault("text", item.get("title", ""))
     target.setdefault("semantic_label", item.get("title", ""))
@@ -408,7 +404,7 @@ def queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> t
     synthetic = {
         "id": next_id,
         "bbox": bbox,
-        "text": item.get("title") or "queued result card",
+        "text": item.get("title") or "queued job card",
         "type": "queue_cached_card",
     }
     return next_id, [*markers, synthetic], {
@@ -417,9 +413,9 @@ def queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> t
     }
 
 
-def queue_replay_after_return(
+def replay_job_card_after_return(
     state: GraphState,
-    observed_transition: dict,
+    transition_result: dict,
     current_url: str,
     markers: list[dict],
     screen_signature: dict,
@@ -428,19 +424,19 @@ def queue_replay_after_return(
 ) -> tuple[ActionRequest | None, list[dict], dict]:
     """어떤 물리 행동으로 복귀했든 목록 화면이 확인되면 다음 카드를 준비한다."""
 
-    if not card_queue_enabled():
+    if not job_card_queue_enabled():
         return None, markers, {"reason": "queue_disabled"}
-    if not str(observed_transition.get("action") or ""):
+    if not str(transition_result.get("action") or ""):
         return None, markers, {"reason": "return_transition_missing"}
     queue = [
         dict(item)
-        for item in (state.get("result_card_queue", []) or [])
+        for item in (state.get("job_card_queue", []) or [])
         if isinstance(item, dict)
     ]
-    pending = pending_result_cards(queue)
+    pending = pending_job_cards(queue)
     if not pending:
         return None, markers, {"reason": "queue_empty"}
-    active_card = dict(state.get("active_result_card", {}) or {})
+    active_card = dict(state.get("active_job_card", {}) or {})
     if active_card:
         return None, markers, {
             "reason": "active_card_not_completed",
@@ -448,8 +444,8 @@ def queue_replay_after_return(
             "title": active_card.get("title", ""),
         }
 
-    matched, match_trace = queue_return_screen_matches(
-        dict(state.get("result_page_memory", {}) or {}),
+    matched, match_trace = job_results_page_matches(
+        dict(state.get("job_results_memory", {}) or {}),
         current_url,
         screen_signature,
         require_anchors=require_anchors,
@@ -458,7 +454,7 @@ def queue_replay_after_return(
         return None, markers, match_trace
 
     item = pending[0]
-    marker_id, next_markers, marker_trace = queue_marker_for_item(item, markers, screen_signature)
+    marker_id, next_markers, marker_trace = job_card_marker_for_item(item, markers, screen_signature)
     if marker_id is None:
         trace = dict(match_trace)
         trace.update(marker_trace)
@@ -473,13 +469,13 @@ def queue_replay_after_return(
         "expected_after": "선택한 공고의 상세 페이지가 열린다.",
     }
     request = build_action_request(
-        "card_queue",
-        "cached next result card",
+        "job_card_queue",
+        "cached next job card",
         [
             {
                 "name": "click_marker",
                 "args": {key: value for key, value in args.items() if key != "queue_id"},
-                "id": f"card_queue_{item.get('queue_id', 'next')}",
+                "id": f"job_card_queue_{item.get('queue_id', 'next')}",
                 "metadata": {"queue_id": item.get("queue_id", "")},
             }
         ],
@@ -494,23 +490,22 @@ def queue_replay_after_return(
 
 
 __all__ = [
-    "card_queue_enabled",
-    "completed_result_card_count",
-    "complete_active_result_card",
-    "mark_result_card_active",
-    "marker_by_id",
-    "normalize_result_card_queue",
+    "job_card_queue_enabled",
+    "completed_job_card_count",
+    "complete_active_job_card",
+    "activate_job_card",
+    "normalize_job_card_queue",
     "normalized_return_action",
-    "pending_result_cards",
-    "result_card_queue_scope_complete",
-    "queue_card_label",
-    "queue_marker_for_item",
-    "queue_match_text",
-    "queue_replay_after_return",
-    "queue_return_screen_matches",
+    "pending_job_cards",
+    "job_card_queue_scope_complete",
+    "job_card_label",
+    "job_card_marker_for_item",
+    "job_card_match_text",
+    "replay_job_card_after_return",
+    "job_results_page_matches",
     "return_action_from_transition",
-    "result_card_click_matches_queue",
-    "result_card_entries_from_args",
-    "same_queue_card",
-    "skip_active_result_card",
+    "job_card_click_matches_queue",
+    "job_card_entries_from_args",
+    "same_job_card",
+    "skip_active_job_card",
 ]

@@ -31,7 +31,7 @@
     "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "혜택", "url"]
   },
   "tools": {
-    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
+    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
     "tool_rules": {"click_marker": "직무명과 회사명이 확인되는 채용 항목만 선택한다."}
   },
   "guidance": "직무명과 회사명으로 공고를 식별한다. 상세가 측면 패널에 열리면 활성 상세 화면의 사실을 수집하고, 명확한 원본 상세 링크가 있을 때만 추가 이동한다."

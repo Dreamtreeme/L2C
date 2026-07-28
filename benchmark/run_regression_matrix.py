@@ -36,15 +36,13 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
         if item.get("component") == "ocr_request"
     ]
     reasoning = [item for item in steps if item.get("stage") == "reasoning"]
-    action_sources = [
-        str(item.get("action_source") or "")
-        for item in steps
-        if item.get("stage") in {"action", "selection", "reflex"}
-    ]
     llm = dict(metrics.get("llm") or {})
     totals = dict(llm.get("totals") or {})
     outcome = dict(metrics.get("outcome") or {})
     quality = dict(payload.get("quality") or {})
+    warm_preconditions = dict(
+        payload.get("warm_preconditions") or {}
+    )
     return {
         "status": payload.get("status"),
         "quality_passed": bool(quality.get("passed")),
@@ -67,8 +65,30 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "reasoning_count": len(reasoning),
         "reasoning_time_sec": round(sum(float(item.get("duration_sec") or 0.0) for item in reasoning), 6),
-        "reflex_count": sum(source == "reflex" for source in action_sources),
-        "queue_count": sum(source == "card_queue" for source in action_sources),
+        "reflex_count": sum(
+            item.get("stage") == "reflex"
+            and item.get("action_source") == "reflex"
+            for item in steps
+        ),
+        "queue_count": sum(
+            item.get("stage") == "selection"
+            and item.get("action_source") == "job_card_queue"
+            for item in steps
+        ),
+        "followup_count": sum(
+            item.get("stage") == "execution"
+            and item.get("action_source") == "followup_strategy"
+            for item in steps
+        ),
+        "warm_performance_comparable": bool(
+            warm_preconditions.get("performance_comparable", True)
+        ),
+        "active_roi_recipe_count": int(
+            warm_preconditions.get("roi_recipes") or 0
+        ),
+        "active_followup_strategy_count": int(
+            warm_preconditions.get("followup_strategies") or 0
+        ),
         "input_tokens": int(totals.get("input_tokens") or 0),
         "output_tokens": int(totals.get("output_tokens") or 0),
         "total_tokens": int(totals.get("total_tokens") or 0),
@@ -331,6 +351,8 @@ def main() -> int:
             mode_contract_passed = (
                 metric_summary["persisted_count"] >= target_count
                 and metric_summary["reflex_count"] > 0
+                and metric_summary["observed_existing_count"] == 0
+                and metric_summary["warm_performance_comparable"]
             )
         if run_mode == "cold":
             cold_contracts[workload_key] = bool(

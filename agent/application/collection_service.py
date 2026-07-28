@@ -46,12 +46,12 @@ class CollectionService:
         self.operations = operations
 
     @staticmethod
-    def _result_availability(submission: dict, worker_result: dict) -> dict[str, Any]:
+    def _job_results_availability(submission: dict, worker_result: dict) -> dict[str, Any]:
         summary = submission.get("extracted_summary") if isinstance(submission, dict) else {}
         summary = summary if isinstance(summary, dict) else {}
         final_state = worker_result.get("final_state") if isinstance(worker_result, dict) else {}
         final_state = final_state if isinstance(final_state, dict) else {}
-        availability = summary.get("result_availability") or final_state.get("result_availability") or {}
+        availability = summary.get("job_results_availability") or final_state.get("job_results_availability") or {}
         return dict(availability) if isinstance(availability, dict) else {}
 
     @classmethod
@@ -63,9 +63,9 @@ class CollectionService:
     ) -> tuple[bool, dict[str, Any]]:
         """화면에서 확인한 전체 결과를 모두 처리했는지 판단한다."""
 
-        availability = cls._result_availability(submission, worker_result)
+        availability = cls._job_results_availability(submission, worker_result)
         try:
-            available_count = int(availability.get("available_result_count"))
+            available_count = int(availability.get("available_job_count"))
             confidence = float(availability.get("count_confidence") or 0.0)
         except (TypeError, ValueError):
             return False, {}
@@ -402,7 +402,7 @@ class CollectionService:
         elif scope_exhausted:
             message = (
                 f"search scope exhausted: keyword={effective_keyword!r}, site={site_name}, "
-                f"available={availability.get('available_result_count', 0)}, "
+                f"available={availability.get('available_job_count', 0)}, "
                 f"resolved={resolved_count}, persisted={persisted_count}"
             )
         elif persisted_count > 0:
@@ -466,7 +466,7 @@ class CollectionService:
             "collection_intent": collection_intent,
             "completion_status": completion_status,
             "search_scope_exhausted": scope_exhausted,
-            "result_availability": availability,
+            "job_results_availability": availability,
             "missing_count": missing_count,
             "document_ids": collection_document_ids,
             "persistence_validation": validation,

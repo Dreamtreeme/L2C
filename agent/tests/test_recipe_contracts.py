@@ -1,8 +1,12 @@
 import time
 
-from agent.graph import worker_execution, worker_observation, worker_transition
-from agent.runtime.reflex_runtime import reflex_node
-from agent.runtime.result_card_queue import queue_replay_after_return
+from agent.graph import (
+    worker_execution_dispatch,
+    worker_observation,
+    worker_transition,
+)
+from agent.graph.worker_reflex import reflex_node
+from agent.runtime.job_card_queue import replay_job_card_after_return
 
 
 def _candidate_submission() -> dict:
@@ -35,7 +39,7 @@ def _candidate_submission() -> dict:
                 },
             }
         ],
-        "transition_observations": [
+        "transition_records": [
             {
                 "action_seq": 0,
                 "status": "ready",
@@ -154,7 +158,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
         lambda _path: {"phash": "0" * 16, "size": [800, 600]},
     )
 
-    from agent.graph.worker_selection import select_deterministic_action_node
+    from agent.graph.worker_selection import selection_node
 
     working = {
         "worker_run_id": "worker-no-effect",
@@ -174,7 +178,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
         "analysis_mode": "full",
         "ocr_complete": True,
         "reflex_blocked_recipe_keys": [],
-        "pending_transition": {
+        "transition_request": {
             "action": "click_marker",
             "action_seq": 3,
             "from_capture_id": "worker-no-effect:attempt:00:capture:0004",
@@ -189,15 +193,18 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     }
     result = {}
     for node in (
-        worker_observation.capture_screen_node,
-        worker_transition.evaluate_transition_node,
-        select_deterministic_action_node,
+        worker_observation.capture_node,
+        worker_transition.transition_node,
+        selection_node,
     ):
         update = node(working)
         working.update(update)
         result.update(update)
 
-    assert result["transition_reason"] == "reflex_no_screen_change"
+    assert (
+        result["transition_result"]["reason"]
+        == "reflex_no_screen_change"
+    )
     assert result["ocr_complete"] is True
     assert result["current_markers"][0]["id"] == 1
     assert (
@@ -215,7 +222,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
         "transition_no_effect_by_phash",
         lambda _pending, _url, _signature: (True, 0),
     )
-    stale = worker_transition.evaluate_transition_node(
+    stale = worker_transition.transition_node(
         {
             "current_capture_id": "worker-test:capture:0003",
             "current_screenshot": str(screenshot),
@@ -228,7 +235,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                 "screenshot": str(screenshot),
                 "markers": [{"id": 4, "bbox": [10, 20, 30, 40]}],
             },
-            "pending_transition": {
+            "transition_request": {
                 "action": "click_marker",
                 "from_capture_id": "worker-test:capture:0002",
                 "source": "autonomous",
@@ -241,12 +248,12 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     )
 
     assert stale.get("ocr_complete") is None
-    assert stale["transition_observations"][0]["marker_count"] == 0
+    assert stale["transition_records"][0]["marker_count"] == 0
 
 
 def test_result_queue_replays_cached_card_after_return():
     state = {
-        "result_card_queue": [
+        "job_card_queue": [
             {
                 "queue_id": "card-2",
                 "status": "pending",
@@ -260,7 +267,7 @@ def test_result_queue_replays_cached_card_after_return():
                 },
             }
         ],
-        "result_page_memory": {
+        "job_results_memory": {
             "screen_signature": {
                 "phash": "0" * 16,
                 "size": [1000, 1000],
@@ -269,7 +276,7 @@ def test_result_queue_replays_cached_card_after_return():
         },
     }
 
-    request, markers, trace = queue_replay_after_return(
+    request, markers, trace = replay_job_card_after_return(
         state,
         {"action": "go_back"},
         "https://www.wanted.co.kr/search?query=ios",
@@ -388,8 +395,8 @@ def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
 
 def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
     monkeypatch.setattr(
-        worker_execution,
-        "_extract_job_from_detail_ocr_buffer",
+        worker_execution_dispatch,
+        "extract_job_from_job_detail_buffer",
         lambda _state, current_url: {
             "company_name": "보이저엑스",
             "position": "iOS 개발자",
@@ -398,13 +405,13 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
         },
     )
 
-    result, extracted = worker_execution._dispatch_state(
+    result, extracted = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {"page_role": "job_detail", "detail_complete": True},
         {},
         current_url="https://www.wanted.co.kr/wd/1",
         state={
-            "detail_ocr_buffer": {
+            "job_detail_buffer": {
                 "url": "https://www.wanted.co.kr/wd/1",
                 "lines": [{"text": "자격요건 Swift"}],
             }
@@ -412,7 +419,7 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
     )
 
     assert result["status"] == "success"
-    assert result["_detail_ocr_buffer"] == {}
+    assert result["_job_detail_buffer"] == {}
     assert extracted["공고목록"][0]["position"] == "iOS 개발자"
 
 
@@ -481,6 +488,538 @@ def test_candidate_promotion_keeps_only_safe_roi_target(tmp_path):
     assert review["promotion"]["promoted_step_count"] == 1
     assert len(recipes) == 1
     assert recipes[0]["steps"][0]["action"] == "click_marker"
+
+
+def test_contextual_followup_is_promoted_and_selected(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.store import RecipeStore
+    from agent.runtime.followup_runtime import (
+        select_followup_after_transition,
+    )
+
+    submission = _candidate_submission()
+    submission["recorded_steps"].extend(
+        [
+            {
+                "seq": 1,
+                "url_template": "wanted.co.kr/search",
+                "page_role": "search_overlay",
+                "declared_page_role": "search_overlay",
+                "action": "type_in_marker",
+                "component": "search_input",
+                "target": {"text": "검색어"},
+                "roi_signature": {
+                    "phash": "1" * 16,
+                    "crop_rect_ratio": [0.1, 0.1, 0.7, 0.2],
+                },
+            },
+            {
+                "seq": 2,
+                "url_template": "wanted.co.kr/search",
+                "page_role": "search_overlay",
+                "declared_page_role": "search_overlay",
+                "action": "press_key",
+                "param": {"key": "enter"},
+                "expected_after": "검색 결과가 표시된다.",
+            },
+        ]
+    )
+    submission["feedback_episodes"].extend(
+        [
+            {
+                "seq": 1,
+                "proposal": {
+                    "action": "type_in_marker",
+                    "args": {
+                        "page_role": "search_overlay",
+                        "target_component": "search_input",
+                    },
+                    "component_candidate": "search_input",
+                },
+                "feedback": {"label": "partial"},
+                "observation": {
+                    "before": {
+                        "url": "https://www.wanted.co.kr/search",
+                        "marker_texts": ["검색어"],
+                    },
+                    "result": {"status": "success"},
+                },
+            },
+            {
+                "seq": 2,
+                "proposal": {
+                    "action": "press_key",
+                    "args": {
+                        "key": "enter",
+                        "page_role": "search_overlay",
+                    },
+                },
+                "feedback": {"label": "partial"},
+                "observation": {
+                    "before": {
+                        "url": "https://www.wanted.co.kr/search",
+                        "marker_texts": ["AI 엔지니어"],
+                    },
+                    "result": {"status": "success"},
+                },
+            },
+        ]
+    )
+    submission["transition_records"].extend(
+        [
+            {
+                "action_seq": 1,
+                "action": "type_in_marker",
+                "status": "unknown",
+                "reason": "transition_contract_missing",
+                "marker_count": 3,
+                "visual_change_ratio": 0.08,
+                "marker_texts": ["AI 엔지니어"],
+            },
+            {
+                "action_seq": 2,
+                "action": "press_key",
+                "status": "unknown",
+                "reason": "transition_contract_missing",
+                "marker_count": 5,
+                "visual_change_ratio": 0.12,
+                "marker_texts": ["검색 결과", "AI 엔지니어"],
+            },
+        ]
+    )
+    db_path = tmp_path / "followup.db"
+    store = RecipeCandidateStore(db_path)
+    candidate_id = store.commit_candidate(
+        submission,
+        review={"decision": "accept", "recipe_candidate": True},
+        source="test",
+        submission_id="worker-followup:0",
+    )
+
+    review = review_and_apply_candidate(
+        candidate_id,
+        db_path=db_path,
+        mode="promote",
+        critic=lambda payload: {
+            "decision": "accept",
+            "reasons": ["검색 입력 직후 Enter 전환이 검증됨"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "site": "wanted",
+                "task_category": "검색",
+                "step_intents": [
+                    {
+                        "seq": item["seq"],
+                        "action": item["action"],
+                        "replay_mode": (
+                            "fixed"
+                            if item["seq"] in {0, 2}
+                            else "reasoning"
+                        ),
+                    }
+                    for item in payload["required_step_intents"]
+                ],
+            },
+            "transition_contracts": [
+                {
+                    "seq": 2,
+                    "contract": {
+                        "common_ready_cues": [
+                            {
+                                "kind": "text_any",
+                                "values": ["검색 결과"],
+                            }
+                        ],
+                        "timeout_sec": 8.0,
+                    },
+                }
+            ],
+            "confidence": 0.9,
+        },
+    )
+
+    active = RecipeStore(db_path).active_counts("wanted")
+    assert review["promotion"]["promoted_followup_count"] == 1
+    assert active["followup_strategies"] == 1
+
+    request, trace = select_followup_after_transition(
+        {
+            "current_url": "https://www.wanted.co.kr/search",
+            "current_page_role": "home",
+            "recipe_params": {"task_category": "검색"},
+        },
+        {
+            "status": "ready",
+            "action": "type_in_marker",
+            "step": {
+                "component": "search_input",
+                "page_role": "search_overlay",
+            },
+        },
+        db_path=db_path,
+    )
+
+    assert trace["hit"] is True
+    assert request is not None
+    assert request.source == "followup_strategy"
+    assert request.tool_calls[0].name == "press_key"
+    assert request.tool_calls[0].args["key"] == "enter"
+
+
+def test_queue_phash_match_records_return_transition(monkeypatch):
+    from agent.graph import worker_selection
+
+    monkeypatch.setattr(
+        worker_selection,
+        "select_followup_after_transition",
+        lambda *_args, **_kwargs: (
+            None,
+            {"hit": False, "reason": "test"},
+        ),
+    )
+    result = worker_selection.selection_node(
+        {
+            "current_capture_id": "capture:0009",
+            "current_screenshot": "returned-list.png",
+            "current_url": "https://www.wanted.co.kr/search",
+            "ocr_complete": False,
+            "raw_screen_signature": {
+                "phash": "0" * 16,
+                "size": [1000, 1000],
+            },
+            "transition_result": {
+                "status": "needs_ocr",
+                "action": "go_back",
+                "action_seq": 9,
+                "source": "autonomous",
+                "started_at": time.time(),
+                "step": {
+                    "seq": 9,
+                    "action": "go_back",
+                    "page_role": "job_detail",
+                    "args": {"page_role": "job_detail"},
+                },
+            },
+            "job_card_queue": [
+                {
+                    "queue_id": "card-2",
+                    "status": "pending",
+                    "title": "두 번째 iOS 개발자",
+                    "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+                    "center_ratio": [0.4, 0.425],
+                }
+            ],
+            "job_results_memory": {
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
+                    "anchors": ["검색 결과", "두 번째 iOS 개발자"],
+                },
+            },
+            "active_job_card": {},
+        }
+    )
+
+    assert result["pending_action"].source == "job_card_queue"
+    record = result["transition_records"][0]
+    assert record["action_seq"] == 9
+    assert record["action"] == "go_back"
+    assert record["status"] == "ready"
+    assert record["reason"] == "queue_return_phash_match"
+    assert record["marker_texts"] == [
+        "검색 결과",
+        "두 번째 iOS 개발자",
+    ]
+
+
+def test_queue_return_waits_for_saved_phash_before_ocr(monkeypatch):
+    from agent.graph import worker_selection
+
+    monkeypatch.setattr(
+        worker_selection,
+        "select_followup_after_transition",
+        lambda *_args, **_kwargs: (
+            None,
+            {"hit": False, "reason": "test"},
+        ),
+    )
+    transition_request = {
+        "status": "needs_ocr",
+        "action": "go_back",
+        "action_seq": 9,
+        "source": "followup_strategy",
+        "started_at": time.time(),
+        "contract": {"timeout_sec": 8.0},
+        "step": {
+            "seq": 9,
+            "action": "go_back",
+            "page_role": "job_detail",
+        },
+    }
+    result = worker_selection.selection_node(
+        {
+            "current_url": "https://www.wanted.co.kr/search",
+            "ocr_complete": False,
+            "raw_screen_signature": {
+                "phash": "f" * 16,
+                "size": [1000, 1000],
+            },
+            "transition_request": transition_request,
+            "transition_result": transition_request,
+            "job_card_queue": [
+                {
+                    "queue_id": "card-2",
+                    "status": "pending",
+                    "title": "두 번째 iOS 개발자",
+                    "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+                }
+            ],
+            "job_results_memory": {
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
+                    "anchors": ["검색 결과", "두 번째 iOS 개발자"],
+                },
+            },
+            "active_job_card": {},
+        }
+    )
+
+    assert "pending_action" not in result
+    assert result["transition_result"]["status"] == "pending"
+    assert result["transition_result"]["needs_ocr"] is False
+    assert (
+        result["transition_request"]["pending_target_phash"]
+        == "0" * 16
+    )
+
+
+def test_detail_completion_promotes_go_back_followup(tmp_path):
+    from agent.recipe.candidate_reviewer import review_and_apply_candidate
+    from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.runtime.followup_runtime import select_followup_action
+
+    submission = _candidate_submission()
+    submission["recorded_steps"].append(
+        {
+            "seq": 2,
+            "url_template": "wanted.co.kr/wd/{id}",
+            "page_role": "job_detail",
+            "declared_page_role": "job_detail",
+            "action": "go_back",
+            "param": {},
+            "expected_after": "검색 결과 목록이 표시된다.",
+        }
+    )
+    submission["feedback_episodes"].extend(
+        [
+            {
+                "seq": 1,
+                "proposal": {
+                    "action": "finish_detail_reading",
+                    "args": {
+                        "page_role": "job_detail",
+                        "detail_complete": True,
+                    },
+                },
+                "feedback": {"label": "success"},
+                "observation": {
+                    "before": {
+                        "url": "https://www.wanted.co.kr/wd/123",
+                        "marker_texts": ["주요업무", "자격요건"],
+                    },
+                    "result": {"status": "success"},
+                },
+            },
+            {
+                "seq": 2,
+                "proposal": {
+                    "action": "go_back",
+                    "args": {"page_role": "job_detail"},
+                },
+                "feedback": {"label": "partial"},
+                "observation": {
+                    "before": {
+                        "url": "https://www.wanted.co.kr/wd/123",
+                        "marker_texts": ["주요업무", "자격요건"],
+                    },
+                    "result": {"status": "success"},
+                },
+            },
+        ]
+    )
+    submission["transition_records"].append(
+        {
+            "action_seq": 2,
+            "action": "go_back",
+            "source": "autonomous",
+            "status": "ready",
+            "reason": "queue_return_phash_match",
+            "marker_count": 2,
+            "marker_texts": ["검색 결과", "iOS 개발자"],
+            "ocr_skipped": True,
+        }
+    )
+    db_path = tmp_path / "go-back.db"
+    candidate_id = RecipeCandidateStore(db_path).commit_candidate(
+        submission,
+        review={"decision": "accept", "recipe_candidate": True},
+        source="test",
+        submission_id="worker-go-back:0",
+    )
+
+    review = review_and_apply_candidate(
+        candidate_id,
+        db_path=db_path,
+        mode="promote",
+        critic=lambda payload: {
+            "decision": "accept",
+            "reasons": ["상세 완료 뒤 목록 복귀가 검증됨"],
+            "feedback_to_worker": "",
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "site": "wanted",
+                "task_category": "검색",
+                "step_intents": [
+                    {
+                        "seq": item["seq"],
+                        "action": item["action"],
+                        "replay_mode": "fixed",
+                    }
+                    for item in payload["required_step_intents"]
+                ],
+            },
+            "transition_contracts": [
+                {
+                    "seq": 2,
+                    "contract": {
+                        "common_ready_cues": [
+                            {
+                                "kind": "text_any",
+                                "values": ["검색 결과"],
+                            }
+                        ],
+                        "timeout_sec": 8.0,
+                    },
+                }
+            ],
+            "confidence": 0.9,
+        },
+    )
+
+    assert review["promotion"]["promoted_followup_count"] == 1
+    request, trace = select_followup_action(
+        {
+            "current_url": "https://www.wanted.co.kr/wd/999",
+            "current_page_role": "job_detail",
+            "recipe_params": {"task_category": "검색"},
+        },
+        trigger_action="finish_detail_reading",
+        trigger_page_role="job_detail",
+        page_role="job_detail",
+        current_url="https://www.wanted.co.kr/wd/999",
+        db_path=db_path,
+    )
+    assert trace["hit"] is True
+    assert request is not None
+    assert request.tool_calls[0].name == "go_back"
+
+
+def test_pending_transition_skips_ocr_until_phash_changes(
+    tmp_path,
+    monkeypatch,
+):
+    screenshot = tmp_path / "screen.png"
+    screenshot.write_bytes(b"not-read")
+
+    class FakePerception:
+        def wait_for_transition_phash_change(
+            self,
+            _reference_phash,
+            *,
+            max_wait_sec=None,
+        ):
+            return False
+
+        def capture_usable_screen(self, **_kwargs):
+            raise AssertionError("같은 pHash에서는 파일 캡처를 하면 안 됩니다.")
+
+    monkeypatch.setattr(
+        worker_observation,
+        "_perception_engine",
+        lambda: FakePerception(),
+    )
+    request = {
+        "action": "press_key",
+        "action_seq": 2,
+        "source": "followup_strategy",
+        "pending_screen_phash": "0" * 16,
+        "started_at": time.time(),
+        "attempts": 1,
+        "contract": {"timeout_sec": 8.0},
+    }
+    capture = worker_observation.capture_node(
+        {
+            "transition_request": request,
+            "ocr_complete": True,
+        }
+    )
+    assert capture == {
+        "ocr_complete": False,
+        "transition_probe_unchanged": True,
+    }
+
+    transition = worker_transition.transition_node(
+        {
+            "transition_request": request,
+            "transition_probe_unchanged": True,
+            "ocr_complete": False,
+        }
+    )
+    assert transition["transition_result"]["status"] == "pending"
+    assert transition["transition_result"]["needs_ocr"] is False
+    assert transition["transition_request"]["attempts"] == 2
+
+
+def test_target_phash_wait_skips_capture_until_match(monkeypatch):
+    class FakePerception:
+        def wait_for_transition_phash_match(
+            self,
+            _target_phash,
+            *,
+            max_distance,
+            max_wait_sec=None,
+        ):
+            assert max_distance == 9
+            return False
+
+        def capture_usable_screen(self, **_kwargs):
+            raise AssertionError("목표 pHash 전에는 파일 캡처를 하면 안 됩니다.")
+
+    monkeypatch.setattr(
+        worker_observation,
+        "_perception_engine",
+        lambda: FakePerception(),
+    )
+    capture = worker_observation.capture_node(
+        {
+            "transition_request": {
+                "action": "go_back",
+                "pending_target_phash": "0" * 16,
+                "pending_target_max_distance": 9,
+                "started_at": time.time(),
+                "contract": {"timeout_sec": 8.0},
+            },
+            "ocr_complete": False,
+        }
+    )
+
+    assert capture == {
+        "ocr_complete": False,
+        "transition_probe_unchanged": True,
+    }
 
 
 def test_candidate_promotion_blocks_no_effect_step(tmp_path):

@@ -165,7 +165,7 @@ class go_back(BaseModel):
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
-class set_result_card_queue(BaseModel):
+class set_job_card_queue(BaseModel):
     """현재 화면의 수집 대상 공고 카드를 런타임 작업 큐에 저장합니다."""
 
     cards: Optional[List[Dict[str, Any]]] = Field(
@@ -175,7 +175,7 @@ class set_result_card_queue(BaseModel):
             "현재 화면에 보이는 카드만 넣어야 합니다."
         ),
     )
-    available_result_count: Optional[int] = Field(
+    available_job_count: Optional[int] = Field(
         None,
         ge=0,
         description="화면에 명시된 전체 검색 결과 개수. 숫자의 의미가 확실할 때만 입력합니다.",
@@ -204,7 +204,7 @@ ACTION_TOOL_SCHEMAS = {
         update_extracted_info,
         finish_detail_reading,
         go_back,
-        set_result_card_queue,
+        set_job_card_queue,
         switch_tab,
         finish_task,
     )
@@ -222,7 +222,7 @@ __all__ = [
     "open_browser",
     "press_key",
     "scroll",
-    "set_result_card_queue",
+    "set_job_card_queue",
     "switch_tab",
     "type_in_marker",
     "update_extracted_info",

@@ -161,9 +161,9 @@ def prepare_worker_start_screen(
 
     try:
         from agent.graph.worker_resources import get_action_tools, prepare_reasoning_models
-        from agent.graph.worker_collection import apply_observation_node
-        from agent.graph.worker_observation import analyze_screen_node, capture_screen_node
-        from agent.graph.worker_transition import evaluate_transition_node
+        from agent.graph.worker_collection import collection_node
+        from agent.graph.worker_observation import capture_node, ocr_node
+        from agent.graph.worker_transition import transition_node
 
         runtime_context = (
             worker_runtime.activate()
@@ -178,7 +178,7 @@ def prepare_worker_start_screen(
                 **initial_state,
                 "current_url": start_url,
                 "current_url_stale": True,
-                "pending_transition": {},
+                "transition_request": {},
             }
             result = _open_browser_while_ocr_starts(
                 action_tools,
@@ -199,16 +199,16 @@ def prepare_worker_start_screen(
                 **observation_state,
                 "action_history": action_history,
             }
-            captured = capture_screen_node(observed_state)
+            captured = capture_node(observed_state)
             observed_state.update(captured)
-            transition = evaluate_transition_node(observed_state)
+            transition = transition_node(observed_state)
             observed_state.update(transition)
             if not observed_state.get("low_information_screen"):
-                analyzed = analyze_screen_node(observed_state)
+                analyzed = ocr_node(observed_state)
                 observed_state.update(analyzed)
-                transition = evaluate_transition_node(observed_state)
+                transition = transition_node(observed_state)
                 observed_state.update(transition)
-                collected = apply_observation_node(observed_state)
+                collected = collection_node(observed_state)
                 observed_state.update(collected)
             observation = observed_state
 

@@ -1,7 +1,12 @@
-from agent.graph import worker_execution, worker_observation, worker_recording
+from agent.graph import (
+    worker_execution,
+    worker_execution_dispatch,
+    worker_observation,
+    worker_recording,
+)
 from agent.graph.action_request import build_action_request
 from agent.graph.workflow import (
-    route_after_action,
+    route_after_recording,
     route_after_reasoning,
     route_after_reflex,
     route_after_selection,
@@ -19,16 +24,24 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     assert route_after_selection(observed) == "reflex"
 
     queue_request = _request(
-        "card_queue",
+        "job_card_queue",
         [{"name": "click_marker", "args": {"marker_id": 1}, "id": "queue"}],
     )
-    assert route_after_selection({**observed, "pending_action": queue_request}) == "action"
+    assert (
+        route_after_selection(
+            {**observed, "pending_action": queue_request}
+        )
+        == "execution"
+    )
 
     reflex_request = _request(
         "reflex",
         [{"name": "press_key", "args": {"key": "enter"}, "id": "reflex"}],
     )
-    assert route_after_reflex({"pending_action": reflex_request}) == "action"
+    assert (
+        route_after_reflex({"pending_action": reflex_request})
+        == "execution"
+    )
     assert route_after_reflex({}) == "reasoning"
 
 
@@ -38,18 +51,26 @@ def test_transition_requires_collection_only_after_ocr():
 
 
 def test_screen_changing_action_always_routes_to_capture():
-    assert route_after_action({"pending_transition": {"action": "click_marker"}}) == "capture"
-    assert route_after_action({}) == "reasoning"
+    assert (
+        route_after_recording(
+            {"transition_request": {"action": "click_marker"}}
+        )
+        == "capture"
+    )
+    assert route_after_recording({}) == "reasoning"
 
 
 def test_loading_card_screen_routes_from_reasoning_to_recapture():
     state = {
         "pending_action": None,
-        "result_card_selector_trace": {"reason": "screen_loading"},
+        "job_card_selection_trace": {"reason": "screen_loading"},
     }
 
     assert route_after_reasoning(state) == "capture"
-    assert route_after_reasoning({"pending_action": object()}) == "action"
+    assert (
+        route_after_reasoning({"pending_action": object()})
+        == "execution"
+    )
 
 
 def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
@@ -74,9 +95,9 @@ def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
         "current_url_stale": False,
     }
 
-    first = worker_observation.capture_screen_node(state)
-    second = worker_observation.capture_screen_node({**state, **first})
-    retry_first = worker_observation.capture_screen_node(
+    first = worker_observation.capture_node(state)
+    second = worker_observation.capture_node({**state, **first})
+    retry_first = worker_observation.capture_node(
         {
             **state,
             "worker_attempt_index": 1,
@@ -101,14 +122,18 @@ def test_atomic_execution_and_recording_are_separate(monkeypatch):
         get_bbox(args["marker_id"])
         return {"action": action_name, "status": "success", "result": "clicked"}
 
-    monkeypatch.setattr(worker_execution, "_dispatch_ui", fake_dispatch)
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        fake_dispatch,
+    )
     request = _request(
         "llm",
         [
             {"name": "click_marker", "args": {"marker_id": 1}, "id": "click"},
         ],
     )
-    result = worker_execution.action_node(
+    result = worker_execution.execution_node(
         {
             "goal": "테스트",
             "pending_action": request,
@@ -128,9 +153,9 @@ def test_atomic_execution_and_recording_are_separate(monkeypatch):
 
     assert calls == ["click_marker"]
     assert [item["status"] for item in result["action_history"]] == ["success"]
-    assert result["pending_transition"]["action"] == "click_marker"
+    assert result["transition_request"]["action"] == "click_marker"
     assert (
-        result["pending_transition"]["from_capture_id"]
+        result["transition_request"]["from_capture_id"]
         == "worker-test:capture:0003"
     )
     assert (
@@ -139,7 +164,7 @@ def test_atomic_execution_and_recording_are_separate(monkeypatch):
     )
     assert "recorded_steps" not in result
 
-    recorded = worker_recording.record_execution_node(result)
+    recorded = worker_recording.recording_node(result)
     assert recorded["recorded_steps"][0]["action"] == "click_marker"
     assert (
         recorded["recorded_steps"][0]["decision_capture_id"]

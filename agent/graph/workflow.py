@@ -9,15 +9,15 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.config import get_settings
 from agent.graph.worker_reasoning import reasoning_node
+from agent.graph.worker_reflex import reflex_node
 from agent.graph.state import GraphState
-from agent.graph.worker_collection import apply_observation_node
-from agent.graph.worker_observation import analyze_screen_node, capture_screen_node
-from agent.graph.worker_recording import record_execution_node
-from agent.graph.worker_selection import select_deterministic_action_node
-from agent.graph.worker_transition import evaluate_transition_node
-from agent.graph.worker_execution import action_node
-from agent.graph.worker_state import detail_return_pending_for_url
-from agent.runtime.reflex_runtime import reflex_node
+from agent.graph.worker_collection import collection_node
+from agent.graph.worker_observation import capture_node, ocr_node
+from agent.graph.worker_recording import recording_node
+from agent.graph.worker_selection import selection_node
+from agent.graph.worker_transition import transition_node
+from agent.graph.worker_execution import execution_node
+from agent.graph.worker_state import return_to_job_results_for_url
 from agent.observability.graph_events import graph_step
 from agent.utils.logger import logger
 
@@ -55,22 +55,33 @@ def route_after_selection(state: GraphState) -> str:
     """결정론적 정책, 선택적 OCR, Reflex, LLM 순서로 다음 경로를 고른다."""
 
     if state.get("pending_action") is not None:
-        return "action"
+        return "execution"
     if state.get("low_information_screen"):
         return "capture"
 
-    if state.get("transition_status") == "pending" and state.get("ocr_complete"):
+    transition_result = dict(state.get("transition_result", {}) or {})
+    if transition_result.get("status") == "pending":
         return "capture"
     if not state.get("ocr_complete"):
-        return "ocr" if state.get("ocr_required") else "reasoning"
-    if detail_return_pending_for_url(state):
+        return (
+            "ocr"
+            if transition_result.get("needs_ocr")
+            else "reasoning"
+        )
+    if return_to_job_results_for_url(state):
         return "reasoning"
-    if state.get("detail_followup_required"):
+    if state.get("job_detail_followup"):
         return "reasoning"
-    if state.get("transition_status") == "unknown" and (
-        str(state.get("transition_source") or "").startswith("reflex")
-        or state.get("transition_source") in {"page_policy", "duplicate_job_policy"}
-        or state.get("transition_reason") in {"no_screen_change", "reflex_no_screen_change"}
+    if transition_result.get("status") == "unknown" and (
+        str(transition_result.get("source") or "").startswith("reflex")
+        or transition_result.get("source")
+        in {
+            "page_policy",
+            "duplicate_job_policy",
+            "followup_strategy",
+        }
+        or transition_result.get("reason")
+        in {"no_screen_change", "reflex_no_screen_change"}
     ):
         return "reasoning"
     if not _reflex_enabled():
@@ -81,7 +92,11 @@ def route_after_selection(state: GraphState) -> str:
 def route_after_reflex(state: GraphState) -> str:
     """Reflex가 요청을 만들었을 때만 실행하고 나머지는 LLM으로 보낸다."""
 
-    return "action" if _request_source(state) == "reflex" else "reasoning"
+    return (
+        "execution"
+        if _request_source(state) == "reflex"
+        else "reasoning"
+    )
 
 
 def route_after_reasoning(state: GraphState) -> str:
@@ -89,14 +104,14 @@ def route_after_reasoning(state: GraphState) -> str:
 
     if (
         state.get("pending_action") is None
-        and (state.get("result_card_selector_trace") or {}).get("reason")
+        and (state.get("job_card_selection_trace") or {}).get("reason")
         == "screen_loading"
     ):
         return "capture"
-    return "action"
+    return "execution"
 
 
-def route_after_action(state: GraphState) -> str:
+def route_after_recording(state: GraphState) -> str:
     """원자 실행 뒤 종료, 후속 정책, 새 관찰 또는 새 판단을 선택한다."""
 
     if state.get("is_finished", False):
@@ -109,8 +124,8 @@ def route_after_action(state: GraphState) -> str:
         logger.error("Too many errors. Forcing workflow to end.")
         return "end"
     if state.get("pending_action") is not None:
-        return "action"
-    if state.get("pending_transition"):
+        return "execution"
+    if state.get("transition_request"):
         return "capture"
     return "reasoning"
 
@@ -120,12 +135,26 @@ def _instrument_node(name: str, node: Callable[[GraphState], dict[str, Any]]):
     def observed(state: GraphState) -> dict[str, Any]:
         with graph_step(name) as observation:
             result = node(state)
-            request = result.get("pending_action") if isinstance(result, dict) else None
+            request = (
+                state.get("pending_action")
+                if name == "execution"
+                else (
+                    result.get("pending_action")
+                    if isinstance(result, dict)
+                    else None
+                )
+            )
             action_source = str(getattr(request, "source", "") or "")
             observation.update(
                 action_source=action_source,
                 success=True,
             )
+            if name == "execution" and request is not None:
+                observation["action_names"] = [
+                    str(call.name)
+                    for call in getattr(request, "tool_calls", [])
+                    if getattr(call, "name", "")
+                ]
             if name == "ocr" and isinstance(result, dict):
                 observation["analysis_mode"] = str(result.get("analysis_mode") or "full")
             if name == "reasoning":
@@ -145,15 +174,15 @@ def build_graph(*, worker_runtime=None):
     bind = worker_runtime.bind_node if worker_runtime is not None else lambda node: node
 
     nodes = {
-        "capture": capture_screen_node,
-        "transition": evaluate_transition_node,
-        "ocr": analyze_screen_node,
-        "collection": apply_observation_node,
-        "selection": select_deterministic_action_node,
+        "capture": capture_node,
+        "transition": transition_node,
+        "ocr": ocr_node,
+        "collection": collection_node,
+        "selection": selection_node,
         "reflex": reflex_node,
         "reasoning": reasoning_node,
-        "action": action_node,
-        "recording": record_execution_node,
+        "execution": execution_node,
+        "recording": recording_node,
     }
     for name, node in nodes.items():
         workflow.add_node(name, bind(_instrument_node(name, node)))
@@ -175,7 +204,7 @@ def build_graph(*, worker_runtime=None):
         "selection",
         route_after_selection,
         {
-            "action": "action",
+            "execution": "execution",
             "capture": "capture",
             "ocr": "ocr",
             "reflex": "reflex",
@@ -185,19 +214,19 @@ def build_graph(*, worker_runtime=None):
     workflow.add_conditional_edges(
         "reflex",
         route_after_reflex,
-        {"action": "action", "reasoning": "reasoning"},
+        {"execution": "execution", "reasoning": "reasoning"},
     )
     workflow.add_conditional_edges(
         "reasoning",
         route_after_reasoning,
-        {"action": "action", "capture": "capture"},
+        {"execution": "execution", "capture": "capture"},
     )
-    workflow.add_edge("action", "recording")
+    workflow.add_edge("execution", "recording")
     workflow.add_conditional_edges(
         "recording",
-        route_after_action,
+        route_after_recording,
         {
-            "action": "action",
+            "execution": "execution",
             "capture": "capture",
             "reasoning": "reasoning",
             "end": END,
@@ -210,7 +239,7 @@ def build_graph(*, worker_runtime=None):
 
 __all__ = [
     "build_graph",
-    "route_after_action",
+    "route_after_recording",
     "route_after_reasoning",
     "route_after_reflex",
     "route_after_selection",

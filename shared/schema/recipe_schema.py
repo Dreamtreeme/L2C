@@ -84,6 +84,29 @@ class RecipeStep(BaseModel):
     )
 
 
+class FollowupActionTrigger(BaseModel):
+    """대상 좌표가 없는 후속 행동을 선택할 수 있는 직전 성공 문맥."""
+
+    action: str = Field(..., description="직전에 성공한 행동(trigger action)")
+    component: str = Field("", description="직전 행동의 화면 구성요소(trigger component)")
+    page_role: str = Field("", description="직전 행동을 수행한 화면 역할(trigger page role)")
+
+
+class FollowupActionStrategy(BaseModel):
+    """직전 성공 문맥에 이어 실행할 좌표 없는 원자 행동 전략."""
+
+    site: str = Field(..., description="사이트 식별자(site)")
+    task_category: str = Field("", description="작업 카테고리(task category)")
+    trigger: FollowupActionTrigger
+    page_role: str = Field("", description="후속 행동을 수행할 화면 역할(page role)")
+    url_template: str = Field("", description="후속 행동을 기록한 URL 템플릿(url template)")
+    action: str = Field(..., description="후속 도구 이름(follow-up action)")
+    param: Dict[str, Any] = Field(default_factory=dict, description="도구 실행 인자(action parameters)")
+    expected_after: str = Field("", description="행동 뒤 기대 화면 변화(expected after)")
+    transition_contract: TransitionContract
+    success_count: int = Field(1, ge=0, description="성공 누적 횟수(success count)")
+
+
 class SiteRecipe(BaseModel):
     """특정 사이트(site)와 목표(goal)에 대해 재사용할 원자 행동 레시피."""
 

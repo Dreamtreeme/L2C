@@ -107,7 +107,7 @@ class WorkerSubmission(BaseModel):
     feedback_saved: int = 0
     recorded_steps: List[Dict[str, Any]] = Field(default_factory=list)
     feedback_episodes: List[Dict[str, Any]] = Field(default_factory=list)
-    transition_observations: List[Dict[str, Any]] = Field(default_factory=list)
+    transition_records: List[Dict[str, Any]] = Field(default_factory=list)
     skill_metadata_evidence: Dict[str, Any] = Field(default_factory=dict)
     collection_intent: Dict[str, Any] = Field(default_factory=dict)
     semantic_evidence: List[Dict[str, Any]] = Field(default_factory=list)

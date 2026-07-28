@@ -89,7 +89,13 @@ def build_e2e_observability(summary: dict[str, Any]) -> dict[str, Any]:
         1
         for item in steps
         if item.get("component") == "graph:selection"
-        and item.get("action_source") == "card_queue"
+        and item.get("action_source") == "job_card_queue"
+    )
+    followup_hits = sum(
+        1
+        for item in steps
+        if item.get("component") == "graph:execution"
+        and item.get("action_source") == "followup_strategy"
     )
     reasoning_calls = sum(
         1 for item in llm_calls if item.get("component") == "vision_reasoning"
@@ -125,6 +131,7 @@ def build_e2e_observability(summary: dict[str, Any]) -> dict[str, Any]:
         ),
         "reflex_hits": reflex_hits,
         "queue_replay_hits": queue_replay_hits,
+        "followup_hits": followup_hits,
         "internal_failure_codes": sorted(
             {
                 str(item.get("failure_code") or "step_failed")
@@ -156,6 +163,7 @@ def build_langsmith_feedback(observability: dict[str, Any]) -> list[dict[str, An
         "recovery_success",
         "reflex_hits",
         "queue_replay_hits",
+        "followup_hits",
     )
     feedback = [
         {"key": key, "score": observability[key]}

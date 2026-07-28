@@ -81,9 +81,9 @@ class ModelSettings(SectionSettings):
     worker_summary_model: str | None = Field(None, validation_alias="VISION_WORKER_SUMMARY_MODEL")
     worker_review_model: str | None = Field(None, validation_alias="VISION_WORKER_REVIEW_MODEL")
     search_intent_model: str | None = Field(None, validation_alias="VISION_SEARCH_INTENT_MODEL")
-    result_card_selector_model: str | None = Field(
+    job_card_selector_model: str | None = Field(
         None,
-        validation_alias="VISION_RESULT_CARD_SELECTOR_MODEL",
+        validation_alias="VISION_JOB_CARD_SELECTOR_MODEL",
     )
     recipe_critic_model: str | None = Field(None, validation_alias="VISION_RECIPE_CRITIC_MODEL")
     ollama_host: str = Field("http://localhost:11434", validation_alias="OLLAMA_HOST")
@@ -126,7 +126,7 @@ class ModelSettings(SectionSettings):
             "VISION_WORKER_SUMMARY_MODEL": "worker_summary_model",
             "VISION_WORKER_REVIEW_MODEL": "worker_review_model",
             "VISION_SEARCH_INTENT_MODEL": "search_intent_model",
-            "VISION_RESULT_CARD_SELECTOR_MODEL": "result_card_selector_model",
+            "VISION_JOB_CARD_SELECTOR_MODEL": "job_card_selector_model",
             "VISION_RECIPE_CRITIC_MODEL": "recipe_critic_model",
             "VISION_WORKER_REASONING_MODEL": "worker_reasoning_model",
             "COMMANDER_MODEL": "commander_model",
@@ -217,12 +217,12 @@ class VisionSettings(SectionSettings):
     detail_section_min_text_markers: int = Field(120, ge=1, le=2000, validation_alias="VISION_DETAIL_SECTION_MIN_TEXT_MARKERS")
     detail_ocr_max_lines: int = Field(90, ge=1, le=2000, validation_alias="VISION_DETAIL_OCR_MAX_LINES")
     detail_section_max_line_chars: int = Field(180, ge=20, le=2000, validation_alias="VISION_DETAIL_SECTION_MAX_LINE_CHARS")
-    detail_buffer_max_lines: int = Field(260, ge=1, le=5000, validation_alias="VISION_DETAIL_OCR_BUFFER_MAX_LINES")
-    detail_buffer_max_line_chars: int = Field(220, ge=20, le=4000, validation_alias="VISION_DETAIL_OCR_BUFFER_MAX_LINE_CHARS")
+    detail_buffer_max_lines: int = Field(260, ge=1, le=5000, validation_alias="VISION_JOB_DETAIL_BUFFER_MAX_LINES")
+    detail_buffer_max_line_chars: int = Field(220, ge=20, le=4000, validation_alias="VISION_JOB_DETAIL_BUFFER_MAX_LINE_CHARS")
     detail_final_ocr_max_chars: int = Field(16000, ge=1000, le=200000, validation_alias="VISION_DETAIL_FINAL_OCR_MAX_CHARS")
     detail_section_context_enabled: bool = Field(True, validation_alias="VISION_DETAIL_SECTION_CONTEXT_ENABLED")
     detail_lightweight_marked_image_enabled: bool = Field(True, validation_alias="VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED")
-    detail_ocr_buffer_enabled: bool = Field(True, validation_alias="VISION_DETAIL_OCR_BUFFER_ENABLED")
+    job_detail_buffer_enabled: bool = Field(True, validation_alias="VISION_JOB_DETAIL_BUFFER_ENABLED")
     search_intent_mode: str = Field("llm", validation_alias="VISION_SEARCH_INTENT_MODE")
     ui_analysis_cache_limit: int = Field(8, ge=0, le=128, validation_alias="VISION_UI_ANALYSIS_CACHE_LIMIT")
     page_content_top_px: str = Field("auto", validation_alias="VISION_PAGE_CONTENT_TOP_PX")
@@ -323,10 +323,10 @@ class ReflexSettings(SectionSettings):
     no_effect_phash_max_distance: int = Field(2, ge=0, le=64, validation_alias="REFLEX_NO_EFFECT_PHASH_MAX_DISTANCE")
     visual_change_pixel_threshold: int = Field(8, ge=0, le=255, validation_alias="REFLEX_VISUAL_CHANGE_PIXEL_THRESHOLD")
     visual_change_min_ratio: float = Field(0.03, ge=0, le=1, validation_alias="REFLEX_VISUAL_CHANGE_MIN_RATIO")
-    card_queue_return_phash_max_distance: int = Field(16, ge=0, le=64, validation_alias="VISION_CARD_QUEUE_RETURN_PHASH_MAX_DISTANCE")
-    card_queue_return_min_anchor_overlap: float = Field(0.20, ge=0, le=1, validation_alias="VISION_CARD_QUEUE_RETURN_MIN_ANCHOR_OVERLAP")
-    result_card_queue_enabled: bool = Field(True, validation_alias="VISION_RESULT_CARD_QUEUE_ENABLED")
-    result_card_selector_enabled: bool = Field(True, validation_alias="VISION_RESULT_CARD_SELECTOR_ENABLED")
+    job_card_return_phash_max_distance: int = Field(16, ge=0, le=64, validation_alias="VISION_JOB_CARD_RETURN_PHASH_MAX_DISTANCE")
+    job_card_return_min_anchor_overlap: float = Field(0.20, ge=0, le=1, validation_alias="VISION_JOB_CARD_RETURN_MIN_ANCHOR_OVERLAP")
+    job_card_queue_enabled: bool = Field(True, validation_alias="VISION_JOB_CARD_QUEUE_ENABLED")
+    job_card_selector_enabled: bool = Field(True, validation_alias="VISION_JOB_CARD_SELECTOR_ENABLED")
     skip_existing_job_details: bool = Field(True, validation_alias="VISION_SKIP_EXISTING_JOB_DETAILS")
     transition_cycle_phash_max_distance: int = Field(
         4,
@@ -348,8 +348,8 @@ class ReflexSettings(SectionSettings):
             "expand_detail_button",
             "reveal_button",
             "details_toggle",
-            "result_filter",
-            "result_filter_input",
+            "job_results_filter",
+            "job_results_filter_input",
         ),
         validation_alias="REFLEX_IDEMPOTENT_CONTROL_COMPONENTS",
     )

@@ -43,10 +43,10 @@ def infer_current_page_role(
     )
 
 
-def detail_key_from_state(state: GraphState) -> str:
+def job_detail_key_from_state(state: GraphState) -> str:
     """같은 URL의 패널형 상세 화면도 공고별로 OCR 버퍼를 분리한다."""
 
-    card = dict(state.get("active_result_card", {}) or {})
+    card = dict(state.get("active_job_card", {}) or {})
     queue_id = str(card.get("queue_id") or "").strip()
     if queue_id:
         return queue_id
@@ -55,13 +55,13 @@ def detail_key_from_state(state: GraphState) -> str:
     return "|".join(part for part in (company, title) if part)
 
 
-def detail_return_pending_for_url(
+def return_to_job_results_for_url(
     state: GraphState,
     current_url: str | None = None,
 ) -> dict[str, Any]:
     """현재 상세 URL에서 완료 후 목록 복귀가 남아 있는지 반환한다."""
 
-    pending = dict(state.get("detail_return_pending", {}) or {})
+    pending = dict(state.get("return_to_job_results", {}) or {})
     pending_url = str(pending.get("url") or "").strip()
     resolved_url = str(
         current_url if current_url is not None else state.get("current_url") or ""
@@ -73,8 +73,8 @@ def detail_return_pending_for_url(
 
 __all__ = [
     "count_mode_from_state",
-    "detail_key_from_state",
-    "detail_return_pending_for_url",
+    "job_detail_key_from_state",
+    "return_to_job_results_for_url",
     "extracted_job_count",
     "infer_current_page_role",
     "target_count_from_state",

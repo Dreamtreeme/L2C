@@ -103,6 +103,63 @@ def _apply_run_mode_environment(run_mode: str) -> None:
         os.environ["REFLEX_ENABLED"] = "1"
 
 
+def _warm_run_preconditions(
+    run_mode: str,
+    site: str,
+) -> dict[str, object]:
+    """warm 성능 비교에 필요한 활성 레시피 상태를 실행 전에 고정합니다."""
+
+    if run_mode != "warm":
+        return {
+            "required": False,
+            "performance_comparable": True,
+            "reasons": [],
+        }
+    try:
+        from agent.recipe.store import RecipeStore
+
+        counts = RecipeStore().active_counts(site)
+    except Exception as exc:
+        return {
+            "required": True,
+            "site": site,
+            "performance_comparable": False,
+            "reasons": ["active_recipe_lookup_failed"],
+            "error": str(exc)[:200],
+        }
+    reasons = []
+    if int(counts.get("roi_recipes") or 0) <= 0:
+        reasons.append("active_roi_recipe_missing")
+    return {
+        "required": True,
+        "site": site,
+        **counts,
+        "performance_comparable": not reasons,
+        "reasons": reasons,
+    }
+
+
+def _finalize_warm_preconditions(
+    preconditions: dict[str, object],
+    quality: dict[str, object],
+) -> dict[str, object]:
+    """기존 DB 공고가 섞인 warm 실행을 성능 비교 대상에서 제외합니다."""
+
+    out = dict(preconditions)
+    if not out.get("required"):
+        return out
+    reasons = list(out.get("reasons") or [])
+    observed_existing_count = int(
+        quality.get("observed_existing_count") or 0
+    )
+    if observed_existing_count > 0:
+        reasons.append("existing_jobs_observed")
+    out["observed_existing_count"] = observed_existing_count
+    out["reasons"] = list(dict.fromkeys(reasons))
+    out["performance_comparable"] = not out["reasons"]
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run realtime_scraping E2E and tee stdout/stderr to a log file.")
     parser.add_argument("--site", default="wanted")
@@ -145,6 +202,10 @@ def main() -> int:
         or "manual"
     )
     recipe_version = args.recipe_version or os.getenv("VISION_RECIPE_VERSION", "")
+    warm_preconditions = _warm_run_preconditions(
+        args.run_mode,
+        args.site,
+    )
     configured_models = sorted(
         {
             value
@@ -160,6 +221,10 @@ def main() -> int:
         sys.stderr = _Tee(original_stderr, log_file)  # type: ignore[assignment]
         vision_runtime = None
         try:
+            print(
+                "WARM_PRECONDITIONS="
+                + json.dumps(warm_preconditions, ensure_ascii=False)
+            )
             from agent.application.run_context import run_context
             from agent.application.run_contracts import RunPhase, RunStatus
             from agent.observability.langsmith_adapter import publish_langsmith_feedback
@@ -269,6 +334,13 @@ def main() -> int:
                 parsed_result = json.loads(result) if isinstance(result, str) else result
             except json.JSONDecodeError:
                 parsed_result = {"raw": str(result)}
+            final_quality = quality or evaluate_collection_summary(
+                parsed_result
+            )
+            warm_preconditions = _finalize_warm_preconditions(
+                warm_preconditions,
+                final_quality,
+            )
             summary = {
                 "schema_version": 2,
                 "run_id": context.run_id,
@@ -294,7 +366,8 @@ def main() -> int:
                 "config": runtime_config,
                 "metrics": metrics,
                 "events": [event.model_dump(mode="json") for event in events],
-                "quality": quality or evaluate_collection_summary(parsed_result),
+                "quality": final_quality,
+                "warm_preconditions": warm_preconditions,
                 "recipe_promotion": recipe_promotion,
                 "result": parsed_result,
             }

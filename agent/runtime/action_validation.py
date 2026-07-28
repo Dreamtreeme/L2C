@@ -4,25 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.vision.target_snapshot import marker_by_id
+
 
 IMPLAUSIBLE_TEXT_INPUT_TARGET = "implausible_text_input_target"
 _WIDE_INPUT_ASPECT_RATIO = 2.0
 _BBOX_ROUNDING_TOLERANCE_PX = 1.0
-
-
-def _marker_by_id(markers: list[dict[str, Any]], marker_id: Any) -> dict[str, Any] | None:
-    try:
-        target_id = int(marker_id)
-    except (TypeError, ValueError):
-        return None
-    return next(
-        (
-            marker
-            for marker in markers
-            if isinstance(marker, dict) and marker.get("id") == target_id
-        ),
-        None,
-    )
 
 
 def _valid_bbox(marker: dict[str, Any]) -> tuple[float, float, float, float] | None:
@@ -63,7 +50,7 @@ def text_input_target_rejection(
 ) -> dict[str, Any] | None:
     """선택한 마커가 텍스트 입력 대상으로 보기 어려울 때만 거절 정보를 반환한다."""
 
-    marker = _marker_by_id(markers, marker_id)
+    marker = marker_by_id(markers, marker_id)
     if marker is None:
         return None
     marker_type = str(marker.get("type") or "").lower()

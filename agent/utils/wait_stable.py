@@ -91,6 +91,102 @@ class WaitStable:
         )
         return False
 
+    def wait_for_phash_change(
+        self,
+        reference_phash: str,
+        *,
+        max_wait_sec: Optional[float] = None,
+        check_interval_sec: Optional[float] = None,
+        region: Optional[dict] = None,
+    ) -> bool:
+        """직전 관찰 화면의 pHash와 달라질 때까지 파일 저장 없이 확인합니다."""
+
+        if not reference_phash:
+            return True
+        if max_wait_sec is None:
+            max_wait_sec = get_settings().vision.transition_change_max_wait_sec
+        if check_interval_sec is None:
+            check_interval_sec = get_settings().vision.transition_change_check_sec
+        max_distance = get_settings().reflex.no_effect_phash_max_distance
+
+        from agent.vision.screen_signature import (
+            hamming_distance,
+            perceptual_hash_image,
+        )
+
+        started = time.perf_counter()
+        while (time.perf_counter() - started) < max(0.0, max_wait_sec):
+            current = self._capture_memory_image(
+                region=region,
+                sample_width=0,
+            )
+            distance = hamming_distance(
+                reference_phash,
+                perceptual_hash_image(current),
+            )
+            if distance is None or distance > max_distance:
+                logger.info(
+                    "Transition pHash change detected",
+                    elapsed_sec=round(time.perf_counter() - started, 3),
+                    phash_distance=distance,
+                )
+                return True
+            time.sleep(max(0.0, check_interval_sec))
+
+        logger.info(
+            "Transition pHash probe unchanged",
+            max_wait_sec=round(max(0.0, max_wait_sec), 3),
+        )
+        return False
+
+    def wait_for_phash_match(
+        self,
+        target_phash: str,
+        *,
+        max_distance: int,
+        max_wait_sec: Optional[float] = None,
+        check_interval_sec: Optional[float] = None,
+        region: Optional[dict] = None,
+    ) -> bool:
+        """저장된 목표 화면 pHash가 나타날 때까지 파일 저장 없이 확인합니다."""
+
+        if not target_phash:
+            return False
+        if max_wait_sec is None:
+            max_wait_sec = get_settings().vision.transition_change_max_wait_sec
+        if check_interval_sec is None:
+            check_interval_sec = get_settings().vision.transition_change_check_sec
+
+        from agent.vision.screen_signature import (
+            hamming_distance,
+            perceptual_hash_image,
+        )
+
+        started = time.perf_counter()
+        while (time.perf_counter() - started) < max(0.0, max_wait_sec):
+            current = self._capture_memory_image(
+                region=region,
+                sample_width=0,
+            )
+            distance = hamming_distance(
+                target_phash,
+                perceptual_hash_image(current),
+            )
+            if distance is not None and distance <= max(0, max_distance):
+                logger.info(
+                    "Transition target pHash matched",
+                    elapsed_sec=round(time.perf_counter() - started, 3),
+                    phash_distance=distance,
+                )
+                return True
+            time.sleep(max(0.0, check_interval_sec))
+
+        logger.info(
+            "Transition target pHash wait pending",
+            max_wait_sec=round(max(0.0, max_wait_sec), 3),
+        )
+        return False
+
     def wait(
         self,
         max_wait_sec: Optional[float] = None,

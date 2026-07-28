@@ -16,20 +16,20 @@ from agent.graph.state import GraphState
 from agent.graph.tool_schema import ACTION_TOOL_SCHEMAS as _ACTION_TOOL_SCHEMAS
 from agent.graph.worker_execution_policy import compact_action_args as _compact_action_args
 from agent.graph.worker_state import (
-    detail_key_from_state as _detail_key_from_state,
-    detail_return_pending_for_url as _detail_return_pending_for_url,
+    job_detail_key_from_state as _job_detail_key_from_state,
+    return_to_job_results_for_url as _return_to_job_results_for_url,
 )
 from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT
 from agent.runtime.action_validation import IMPLAUSIBLE_TEXT_INPUT_TARGET
 from agent.runtime.detail_runtime import (
-    compact_detail_ocr_buffer_context as _compact_detail_ocr_buffer_context,
+    compact_job_detail_buffer_context as _compact_job_detail_buffer_context,
 )
 from agent.runtime.job_collection import (
     job_count as _job_count,
     job_items as _job_items,
 )
-from agent.runtime.result_card_queue import pending_result_cards as _pending_result_cards
-from agent.runtime.result_card_selector import select_result_cards as _select_result_cards
+from agent.runtime.job_card_queue import pending_job_cards as _pending_job_cards
+from agent.runtime.job_card_selector import select_job_cards as _select_job_cards
 from agent.runtime.site_context import site_runtime_guidance as _site_runtime_guidance
 from agent.runtime.transition_runtime import (
     detect_two_screen_transition_cycle as _detect_two_screen_transition_cycle,
@@ -356,8 +356,8 @@ def _compact_recent_actions_context(action_history: list[dict]) -> str:
     )
 
 
-def _compact_result_card_queue_context(state: GraphState) -> str:
-    queue = [item for item in (state.get("result_card_queue", []) or []) if isinstance(item, dict)]
+def _compact_job_card_queue_context(state: GraphState) -> str:
+    queue = [item for item in (state.get("job_card_queue", []) or []) if isinstance(item, dict)]
     if not queue:
         return "공고 카드 큐: []\n\n"
     compact = [
@@ -369,7 +369,7 @@ def _compact_result_card_queue_context(state: GraphState) -> str:
         }
         for item in queue
     ]
-    pending_count = len(_pending_result_cards(queue))
+    pending_count = len(_pending_job_cards(queue))
     return (
         "공고 카드 큐:\n"
         f"- pending_count: {pending_count}\n"
@@ -379,7 +379,7 @@ def _compact_result_card_queue_context(state: GraphState) -> str:
 
 
 def _compact_detail_return_context(state: GraphState, current_url: str) -> str:
-    pending = _detail_return_pending_for_url(state, current_url)
+    pending = _return_to_job_results_for_url(state, current_url)
     if not pending:
         return ""
     return (
@@ -392,13 +392,13 @@ def _compact_detail_return_context(state: GraphState, current_url: str) -> str:
     )
 
 
-def _compact_result_availability_context(state: GraphState) -> str:
-    availability = dict(state.get("result_availability", {}) or {})
+def _compact_job_results_availability_context(state: GraphState) -> str:
+    availability = dict(state.get("job_results_availability", {}) or {})
     if not availability:
         return "검색 결과 개수 힌트: 없음\n\n"
     return (
         "검색 결과 개수 힌트:\n"
-        f"- 현재 검색 조건의 전체 결과 수: {availability.get('available_result_count')}\n"
+        f"- 현재 검색 조건의 전체 결과 수: {availability.get('available_job_count')}\n"
         f"- 화면 근거: {availability.get('count_evidence') or '(없음)'}\n"
         f"- 판단 신뢰도: {availability.get('count_confidence', 0)}\n"
         "- 이 숫자는 현재 검색어와 필터 조건의 결과 수이지 사이트 전체의 최대치가 아닙니다.\n"
@@ -471,13 +471,14 @@ def _build_reasoning_messages(
         "- 목표 수를 채웠으면 목록으로 돌아가거나 같은 카드를 다시 열지 말고 finish_task를 호출하십시오.\n\n"
     )
     transition_context = ""
-    if state.get("transition_status"):
+    transition_result = dict(state.get("transition_result", {}) or {})
+    if transition_result.get("status") not in {"", "idle", None}:
         latest_transition = _latest_no_effect_transition(state)
         transition_context = (
             "직전 화면 전환 검증:\n"
-            f"- status: {state.get('transition_status')}\n"
-            f"- outcome: {state.get('transition_outcome') or '(없음)'}\n"
-            f"- source: {state.get('transition_source') or '(없음)'}\n"
+            f"- status: {transition_result.get('status')}\n"
+            f"- outcome: {transition_result.get('outcome') or '(없음)'}\n"
+            f"- source: {transition_result.get('source') or '(없음)'}\n"
         )
         if latest_transition:
             transition_context += (
@@ -487,11 +488,11 @@ def _build_reasoning_messages(
                 "close_current_tab을 사용하고, 이전 탭을 유지해야 하면 switch_tab을 사용하십시오.\n"
             )
         transition_context += "\n"
-    result_refinement_context = ""
+    job_results_refinement_context = ""
     selector_trace = selector_trace or {}
-    if selector_trace.get("reason") == "result_refinement_needed":
+    if selector_trace.get("reason") == "job_results_refinement_needed":
         refinement_reason = str(selector_trace.get("refinement_reason") or "").strip()
-        result_refinement_context = (
+        job_results_refinement_context = (
             "검색 결과 정제 필요:\n"
             "- 현재 화면에서 검색어와 직접 일치하는 공고가 목표 수보다 부족합니다. 비슷한 직무로 개수를 채우지 마십시오.\n"
             "- 검색어를 더 정확하게 표현하는 화면 필터가 있으면 적용하고, 없으면 다음 정확한 후보를 찾도록 스크롤하십시오.\n"
@@ -506,12 +507,12 @@ def _build_reasoning_messages(
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"{_site_runtime_guidance(current_url, state.get('current_page_role', ''))}"
         f"{collection_context}"
-        f"{_compact_result_availability_context(state)}"
-        f"{_compact_result_card_queue_context(state)}"
+        f"{_compact_job_results_availability_context(state)}"
+        f"{_compact_job_card_queue_context(state)}"
         f"{_compact_detail_return_context(state, current_url)}"
-        f"{_compact_detail_ocr_buffer_context(state, current_url, _detail_key_from_state(state))}"
+        f"{_compact_job_detail_buffer_context(state, current_url, _job_detail_key_from_state(state))}"
         f"{transition_context}"
-        f"{result_refinement_context}"
+        f"{job_results_refinement_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
         f"{_compact_recent_actions_context(action_history)}"
@@ -563,7 +564,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         )
 
     transition_cycle = _detect_two_screen_transition_cycle(
-        list(state.get("transition_observations", []) or [])
+        list(state.get("transition_records", []) or [])
     )
     if transition_cycle.get("detected"):
         logger.warning(
@@ -582,7 +583,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         logger.error("Persistent loop detected. Increasing error count to terminate.")
         error_increment = 1
 
-    selector_request, selector_trace = _select_result_cards(state)
+    selector_request, selector_trace = _select_job_cards(state)
     if selector_trace.get("reason") == "screen_loading":
         elapsed = time.perf_counter() - start_time
         logger.info(
@@ -593,7 +594,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         )
         return {
             "pending_action": None,
-            "result_card_selector_trace": selector_trace,
+            "job_card_selection_trace": selector_trace,
             "reflex_trace": {"hit": False, "source": "screen_loading"},
             "reflex_transition_contracts": {},
         }
@@ -607,7 +608,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         )
         result = {
             "pending_action": selector_request,
-            "result_card_selector_trace": selector_trace,
+            "job_card_selection_trace": selector_trace,
             "reflex_trace": {"hit": False, "source": "card_selector"},
             "reflex_transition_contracts": {},
         }
@@ -649,7 +650,7 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
 
     result = {
         "pending_action": pending_action,
-        "result_card_selector_trace": selector_trace,
+        "job_card_selection_trace": selector_trace,
         "reflex_trace": {"hit": False, "source": "reasoning"},
         "reflex_transition_contracts": {},
     }

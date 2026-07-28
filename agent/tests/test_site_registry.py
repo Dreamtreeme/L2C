@@ -79,7 +79,7 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
         lambda: reasoning_warmed.append(True),
     )
     monkeypatch.setattr(
-        "agent.graph.worker_observation.capture_screen_node",
+        "agent.graph.worker_observation.capture_node",
         lambda state: {
             "current_url": "https://www.jobkorea.co.kr",
             "current_url_stale": False,
@@ -88,15 +88,15 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
         },
     )
     monkeypatch.setattr(
-        "agent.graph.worker_observation.analyze_screen_node",
+        "agent.graph.worker_observation.ocr_node",
         lambda state: {"current_markers": [{"id": 1}]},
     )
     monkeypatch.setattr(
-        "agent.graph.worker_transition.evaluate_transition_node",
+        "agent.graph.worker_transition.transition_node",
         lambda state: {},
     )
     monkeypatch.setattr(
-        "agent.graph.worker_collection.apply_observation_node",
+        "agent.graph.worker_collection.collection_node",
         lambda state: {},
     )
 
@@ -129,7 +129,7 @@ def test_load_site_profile_returns_typed_contract():
     assert "원티드" in profile.guidance
     assert "click_marker" in profile.tools.allowed_tools
     assert "finish_detail_reading" in profile.tools.allowed_tools
-    assert "set_result_card_queue" in profile.tools.allowed_tools
+    assert "set_job_card_queue" in profile.tools.allowed_tools
     assert profile.collection_policy.required_fields
 
 
@@ -226,18 +226,18 @@ def test_rocketpunch_jobs_list_uses_job_search_guidance_without_hiding_side_pane
     ) == "job_detail"
 
 
-def test_result_card_selector_receives_current_site_guidance(monkeypatch, tmp_path):
-    from agent.runtime import result_card_selector
+def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path):
+    from agent.runtime import job_card_selector
 
     image_path = tmp_path / "screen.png"
     image_path.write_bytes(b"not-used")
     monkeypatch.setattr(
-        result_card_selector,
+        job_card_selector,
         "image_to_base64_jpeg",
         lambda *_args, **_kwargs: "image",
     )
 
-    messages = result_card_selector._selection_messages(
+    messages = job_card_selector._selection_messages(
         {
             "current_url": "https://www.rocketpunch.com/jobs",
             "current_page_role": "search",

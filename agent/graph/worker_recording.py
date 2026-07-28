@@ -10,7 +10,7 @@ from agent.recipe.feedback import record_action_episode
 from agent.recipe.record import record_ui_step
 
 
-def record_execution_node(state: GraphState) -> dict[str, Any]:
+def recording_node(state: GraphState) -> dict[str, Any]:
     """실행 노드가 남긴 결과만 읽어 학습용 기록을 생성한다."""
 
     records = [
@@ -53,4 +53,4 @@ def record_execution_node(state: GraphState) -> dict[str, Any]:
     }
 
 
-__all__ = ["record_execution_node"]
+__all__ = ["recording_node"]

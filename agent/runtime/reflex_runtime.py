@@ -13,7 +13,7 @@ from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
 
 
-def reflex_trace_args(step: dict) -> dict:
+def _reflex_trace_args(step: dict) -> dict:
     """실행에 영향 없는 레시피 추적 메타데이터를 도구 인자로 복원한다."""
 
     out: dict[str, str] = {}
@@ -35,14 +35,14 @@ def reflex_trace_args(step: dict) -> dict:
     return out
 
 
-def reflex_action_args(step: dict, marker_id: int | None, params: dict | None = None) -> dict | None:
+def _reflex_action_args(step: dict, marker_id: int | None, params: dict | None = None) -> dict | None:
     """저장된 RecipeStep을 action 도구 인자로 변환한다."""
 
     action = step.get("action")
     param = dict(step.get("param") or {})
     value = step.get("value")
     params = dict(params or {})
-    trace_args = reflex_trace_args(step)
+    trace_args = _reflex_trace_args(step)
 
     if action == "click_marker":
         return {"marker_id": marker_id, **trace_args} if marker_id is not None else None
@@ -68,7 +68,7 @@ def reflex_action_args(step: dict, marker_id: int | None, params: dict | None = 
     return None
 
 
-def missing_required_recipe_inputs(recipe: Any, params: dict) -> list[str]:
+def _missing_required_recipe_inputs(recipe: Any, params: dict) -> list[str]:
     """레시피 skill metadata의 필수 입력 중 누락된 이름을 반환한다."""
 
     metadata = getattr(recipe, "skill_metadata", None)
@@ -83,7 +83,7 @@ def missing_required_recipe_inputs(recipe: Any, params: dict) -> list[str]:
     return missing
 
 
-def reflex_node(state: GraphState) -> dict[str, Any]:
+def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
     """일치하는 ROI Recipe가 있으면 reasoning을 우회해 행동 요청을 만든다."""
 
     started = time.perf_counter()
@@ -192,7 +192,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                 )
                 record_rejection(recipe_key, reason)
                 continue
-            if missing_required_recipe_inputs(recipe, params):
+            if _missing_required_recipe_inputs(recipe, params):
                 rejected_count += 1
                 record_rejection(recipe_key, "missing_required_inputs")
                 continue
@@ -267,7 +267,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                         candidate_valid = False
                         break
                 step_trace["marker_id"] = marker_id
-                args = reflex_action_args(step, marker_id, params=params)
+                args = _reflex_action_args(step, marker_id, params=params)
                 if args is None:
                     record_rejection(recipe_key, "args_build_failed", step_trace)
                     candidate_valid = False
@@ -352,9 +352,4 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
         return miss(elapsed, "exception", {"error": str(exc)})
 
 
-__all__ = [
-    "missing_required_recipe_inputs",
-    "reflex_action_args",
-    "reflex_node",
-    "reflex_trace_args",
-]
+__all__ = ["attempt_reflex_replay"]

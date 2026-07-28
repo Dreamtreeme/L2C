@@ -8,6 +8,18 @@ from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.tool_capabilities import build_tool_capability_catalog
+from agent.graph.investigation_context import (
+    InvestigationModels,
+    capabilities_for_investigation,
+    normalize_site_slugs,
+)
+from agent.graph.investigation_evidence_policy import (
+    apply_evidence_validation,
+    build_evidence_validation_payload,
+    normalize_collection_steps,
+    normalize_evidence_requirements,
+)
+from agent.graph.investigation_workflow import InvestigationWorkflow
 from shared.db.database import Database
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
@@ -30,7 +42,6 @@ from shared.schema.investigation_schema import (
 
 
 def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path):
-    from agent.graph.investigation_workflow import _normalized_evidence_requirements
 
     investigation = InvestigationRequest(
         investigation_id="visible-all-evidence",
@@ -54,7 +65,7 @@ def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path)
         ]
     )
 
-    normalized = _normalized_evidence_requirements(
+    normalized = normalize_evidence_requirements(
         plan,
         investigation,
         SearchTaxonomyService(tmp_path / "jobs.db"),
@@ -64,7 +75,6 @@ def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path)
     assert plan.requirements[0].minimum_count == 50
 
 def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
-    from agent.graph.investigation_workflow import _normalized_evidence_requirements
 
     investigation = InvestigationRequest(
         investigation_id="explicit-evidence",
@@ -86,7 +96,7 @@ def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
         ]
     )
 
-    normalized = _normalized_evidence_requirements(
+    normalized = normalize_evidence_requirements(
         plan,
         investigation,
         SearchTaxonomyService(tmp_path / "jobs.db"),
@@ -243,7 +253,6 @@ def test_tool_catalog_exposes_limits_before_collection():
     ].limitations
 
 def test_capability_catalog_only_exposes_confirmed_collection_site():
-    from agent.graph.investigation_workflow import _capabilities_for_investigation
 
     investigation = InvestigationRequest(
         investigation_id="selected-capability",
@@ -256,7 +265,7 @@ def test_capability_catalog_only_exposes_confirmed_collection_site():
         {"tool_name": "realtime_scraping:saramin"},
     ]
 
-    selected = _capabilities_for_investigation(catalog, investigation)
+    selected = capabilities_for_investigation(catalog, investigation)
 
     assert [item["tool_name"] for item in selected] == [
         "inspect_job_evidence",
@@ -359,7 +368,6 @@ def _test_capabilities():
     ]
 
 def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
-    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
 
     analysis_model = _FakeModel(
         RequestAnalysis(
@@ -396,7 +404,6 @@ def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
     assert answer_model.calls == 1
 
 def test_workflow_stops_for_choice_before_db_or_collection(tmp_path):
-    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
 
     analysis_model = _FakeModel(
         RequestAnalysis(
@@ -453,7 +460,6 @@ def test_workflow_stops_for_choice_before_db_or_collection(tmp_path):
 def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
     from datetime import datetime, timezone
 
-    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
 
     analysis_model = _FakeModel(
         RequestAnalysis(
@@ -571,7 +577,6 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
 def test_workflow_executes_only_registered_collection_plan(tmp_path):
     from langchain_core.messages import AIMessage
 
-    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
 
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
@@ -676,7 +681,6 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
 def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_path):
     from langchain_core.messages import AIMessage
 
-    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
 
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
@@ -774,7 +778,6 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
 def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_path):
     from langchain_core.messages import AIMessage
 
-    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
 
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
@@ -910,7 +913,6 @@ def test_chat_service_uses_investigation_workflow_for_production_path():
     assert result["clarification"]["field"] == "recent_period"
 
 def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
-    from agent.graph.investigation_workflow import _normalized_collection_steps
 
     investigation = InvestigationRequest(
         investigation_id="plan-normalization",
@@ -945,7 +947,7 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
         ]
     )
 
-    steps = _normalized_collection_steps(
+    steps = normalize_collection_steps(
         plan,
         investigation,
         [
@@ -975,16 +977,14 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
     }
 
 def test_site_display_name_is_normalized_to_registry_slug():
-    from agent.graph.investigation_workflow import _normalize_site_slugs
 
-    constraints = _normalize_site_slugs(
+    constraints = normalize_site_slugs(
         InvestigationConstraints(sites=["원티드", "jobkorea"])
     )
 
     assert constraints.sites == ["wanted", "jobkorea"]
 
 def test_semantic_evidence_validation_keeps_only_matching_candidate():
-    from agent.graph.investigation_workflow import _apply_evidence_validation
 
     investigation = InvestigationRequest(
         investigation_id="semantic-validation",
@@ -1020,7 +1020,7 @@ def test_semantic_evidence_validation_keeps_only_matching_candidate():
         ],
     }
 
-    validated = _apply_evidence_validation(
+    validated = apply_evidence_validation(
         report,
         investigation,
         EvidenceValidation(
@@ -1038,7 +1038,6 @@ def test_semantic_evidence_validation_keeps_only_matching_candidate():
     assert validated["requirements"][0]["document_ids"] == [1]
 
 def test_evidence_validation_payload_excludes_full_document_text():
-    from agent.graph.investigation_workflow import _evidence_validation_payload
 
     investigation = InvestigationRequest(
         investigation_id="compact-validation",
@@ -1051,7 +1050,7 @@ def test_evidence_validation_payload_excludes_full_document_text():
             )
         ],
     )
-    payload = _evidence_validation_payload(
+    payload = build_evidence_validation_payload(
         {
             "requirements": [
                 {

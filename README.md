@@ -248,7 +248,7 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
     - [x] LLM/VLM이 선택한 행동, 대상 마커, target_label, component 후보, parameter 후보, 선택 이유(`reason`)를 기록
     - [x] 검색어(`query`)와 수집 개수(`target_count`)처럼 실행마다 바뀔 수 있는 후보 값을 별도 필드로 보존
   - [x] 2. 전후 관찰(Observer) 파이프라인 구축
-    - [x] 화면 변경 action과 다음 OCR·스크린샷을 `transition_observations`로 연결
+    - [x] 화면 변경 행동과 다음 OCR·스크린샷을 `transition_records`로 연결
     - [x] 로딩 중 관찰은 같은 action seq에 누적하고, 준비 완료 여부는 전환 계약으로 판정
     - [ ] 같은 카드 반복 클릭, 화면 변화 없음, 팝업/승인창 개입 등 오염 신호 탐지
   - [x] 3. Critic 피드백 루프 추가
