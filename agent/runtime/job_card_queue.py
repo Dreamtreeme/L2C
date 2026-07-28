@@ -79,7 +79,7 @@ def normalize_job_card_queue(args: dict, state: GraphState, current_url: str) ->
     target_count = _target_count_from_state(state)
     resolved_count = max(
         job_count(state.get("extracted_jd", {}) or {}),
-        completed_job_card_count(queue),
+        resolved_job_card_count(queue),
     )
     remaining = (
         target_count - resolved_count
@@ -187,6 +187,24 @@ def completed_job_card_count(queue: list[dict]) -> int:
     )
 
 
+def resolved_job_card_count(queue: list[dict]) -> int:
+    """이번 실행에서 수집했거나 DB 중복으로 확인한 카드 수를 반환한다."""
+
+    return sum(
+        1
+        for item in queue or []
+        if isinstance(item, dict)
+        and (
+            str(item.get("status") or "") == "done"
+            or (
+                str(item.get("status") or "") == "skipped"
+                and str(item.get("job_id") or "").isdigit()
+                and int(item["job_id"]) > 0
+            )
+        )
+    )
+
+
 def job_card_queue_scope_complete(
     queue: list[dict],
     *,
@@ -203,7 +221,7 @@ def job_card_queue_scope_complete(
         return False
     if str(count_mode or "").strip().lower() == "visible_all":
         return True
-    return target_count > 0 and completed_job_card_count(queue) >= target_count
+    return target_count > 0 and resolved_job_card_count(queue) >= target_count
 
 
 def same_job_card(item: dict, args: dict) -> bool:
@@ -492,6 +510,7 @@ def replay_job_card_after_return(
 __all__ = [
     "job_card_queue_enabled",
     "completed_job_card_count",
+    "resolved_job_card_count",
     "complete_active_job_card",
     "activate_job_card",
     "normalize_job_card_queue",

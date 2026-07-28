@@ -19,11 +19,11 @@ from agent.runtime.followup_runtime import select_followup_action
 from agent.runtime.job_card_queue import (
     activate_job_card,
     complete_active_job_card,
-    completed_job_card_count,
     job_card_click_matches_queue,
     job_card_queue_scope_complete,
     normalized_return_action,
     pending_job_cards,
+    resolved_job_card_count,
 )
 from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.runtime.worker_actions import (
@@ -179,7 +179,7 @@ def _apply_job_card_queue_result(
         target_count=target_count_from_state(context.state),
     ):
         context.is_finished = True
-        resolved_count = completed_job_card_count(
+        resolved_count = resolved_job_card_count(
             context.job_card_queue
         )
         context.collected_data.append(
@@ -265,7 +265,7 @@ def _apply_job_detail_completion(
     pending_cards = pending_job_cards(context.job_card_queue)
     resolved_count = max(
         collected_count,
-        completed_job_card_count(context.job_card_queue),
+        resolved_job_card_count(context.job_card_queue),
     )
     if pending_cards or (
         target_count > 0 and resolved_count < target_count
@@ -306,7 +306,7 @@ def _apply_collection_target_completion(
     collected_count = extracted_job_count(context.current_jobs)
     resolved_count = max(
         collected_count,
-        completed_job_card_count(context.job_card_queue),
+        resolved_job_card_count(context.job_card_queue),
     )
     if target_count <= 0 or resolved_count < target_count:
         return

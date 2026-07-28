@@ -318,6 +318,66 @@ def test_stored_job_card_queue_schedules_first_card(monkeypatch):
     assert result["job_card_queue"] == [queued_card]
 
 
+def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
+    existing_cards = [
+        {
+            "queue_id": "card-1",
+            "status": "skipped",
+            "title": "기존 공고 1",
+            "job_id": 7,
+        },
+        {
+            "queue_id": "card-2",
+            "status": "skipped",
+            "title": "기존 공고 2",
+            "job_id": 8,
+        },
+    ]
+
+    def fake_dispatch(*args, **kwargs):
+        return (
+            {
+                "action": "set_job_card_queue",
+                "status": "success",
+                "result": "stored",
+                "_job_card_queue": existing_cards,
+                "_job_results_memory": {"url": "https://example.com/jobs"},
+                "_job_results_availability": {},
+            },
+            {},
+        )
+
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_state_action",
+        fake_dispatch,
+    )
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "set_job_card_queue",
+                "args": {"cards": []},
+                "id": "queue",
+            }
+        ],
+    )
+    result = worker_execution.execution_node(
+        _execution_state(
+            request,
+            recipe_params={
+                "count_mode": "explicit",
+                "target_count": 2,
+            },
+        )
+    )
+
+    assert result["is_finished"] is True
+    assert result["pending_action"] is None
+    assert result["job_card_queue"] == existing_cards
+    assert result["action_history"][0]["resolved_count"] == 2
+
+
 def test_graph_custom_event_is_shared_by_metrics_and_sse():
     from agent.application.run_context import run_context
     from agent.observability.graph_events import forward_graph_event

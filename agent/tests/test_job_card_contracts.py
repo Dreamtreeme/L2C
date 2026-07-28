@@ -140,3 +140,23 @@ def test_loading_result_recaptures_without_general_reasoning(tmp_path, monkeypat
 
     assert result["pending_action"] is None
     assert result["job_card_selection_trace"]["reason"] == "screen_loading"
+
+
+def test_resolved_card_count_only_includes_collected_or_database_confirmed():
+    from agent.runtime.job_card_queue import (
+        job_card_queue_scope_complete,
+        resolved_job_card_count,
+    )
+
+    queue = [
+        {"status": "done"},
+        {"status": "skipped", "job_id": 7},
+        {"status": "skipped", "skip_reason": "invalid_marker"},
+    ]
+
+    assert resolved_job_card_count(queue) == 2
+    assert job_card_queue_scope_complete(
+        queue,
+        count_mode="explicit",
+        target_count=2,
+    )

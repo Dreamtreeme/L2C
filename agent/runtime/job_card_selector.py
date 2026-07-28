@@ -16,9 +16,9 @@ from agent.recipe.page_context import normalize_page_role
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.job_collection import job_count
 from agent.runtime.job_card_queue import (
-    job_card_queue_enabled,
-    completed_job_card_count,
     job_card_queue_scope_complete,
+    job_card_queue_enabled,
+    resolved_job_card_count,
 )
 from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
@@ -359,7 +359,7 @@ def select_job_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
     target_count = _target_count(state)
     resolved_count = max(
         _collected_count(state),
-        completed_job_card_count(list(state.get("job_card_queue") or [])),
+        resolved_job_card_count(list(state.get("job_card_queue") or [])),
     )
     remaining_count = (
         target_count - resolved_count
