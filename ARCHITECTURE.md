@@ -95,6 +95,8 @@ flowchart TD
 | 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 요청 해석, 확인 질문, 근거 판정, 수집 실행, 답변 |
 | 작업자 그래프 | `agent/graph/workflow.py`, `state.py`, `state_factory.py` | Vision LangGraph 연결과 WorkerState 계약 |
 | 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 수집, 선택, 추론, 원자 실행, 기록 |
+| 행동 실행 세부 | `agent/graph/worker_action_guard.py`, `worker_execution_dispatch.py`, `worker_action_effects.py` | 실행 전 안전 검증, 물리·상태 도구 전달, 실행 후 상태 반영 |
+| 추론 문맥 | `agent/graph/worker_reasoning_prompt.py` | 화면·수집·전환 정보를 모델 메시지로 압축 |
 | 런타임 정책 | `agent/runtime/` | 전환 검증, 상세 버퍼, 카드 큐, Reflex 재생 |
 | 화면·입력 | `agent/tools/perception.py`, `som_engine.py`, `actions.py` | 화면/OCR/마커 생성과 물리 입력 |
 | 학습 메모리 | `agent/recipe/` | 행동 기록, 후보 검토, 활성 레시피 저장·매칭 |
@@ -106,6 +108,7 @@ flowchart TD
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `pending_action: ActionRequest`, 실행 후 결과는 `last_action_result: ActionResult`로 분리합니다.
 - `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
+- 실행기는 안전 검증, 도구 전달, 상태 효과를 순서대로 조립하며 행동 종류는 `agent/runtime/worker_actions.py`에서 한 번만 정의합니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
 - 행동이 요구한 전환은 `transition_request`, 현재 검증 결과는 `transition_result`, 확정된 이력은 `transition_records`로 구분합니다.
