@@ -1049,7 +1049,7 @@ def test_open_browser_uses_new_window_when_no_browser_is_bound(monkeypatch):
         "--user-data-dir=C:\\L2C\\browser-profile",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
         "--window-size=1976,2129",
         "https://www.wanted.co.kr",
     ]]
@@ -1092,7 +1092,7 @@ def test_open_browser_window_size_can_be_disabled(monkeypatch):
         "--user-data-dir=C:\\L2C\\browser-profile",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
         "https://www.wanted.co.kr",
     ]]
 
@@ -1183,6 +1183,40 @@ def test_normalize_browser_window_restores_and_resizes(monkeypatch):
     assert calls[1] == ("resize", 1976, 2129)
 
 
+def test_browser_capture_region_excludes_taskbar_work_area(monkeypatch):
+    from agent.tools.perception import PerceptionEngine
+
+    class FakeWindow:
+        _hWnd = 10
+        left = 60
+        top = 30
+        width = 1976
+        height = 2129
+        isMaximized = False
+
+        def activate(self):
+            return None
+
+    engine = object.__new__(PerceptionEngine)
+    monkeypatch.setattr(
+        engine,
+        "_monitor_work_area",
+        lambda _window: {
+            "left": 0,
+            "top": 0,
+            "width": 3840,
+            "height": 2088,
+        },
+    )
+
+    assert engine._browser_region_from_window(FakeWindow()) == {
+        "left": 68,
+        "top": 30,
+        "width": 1960,
+        "height": 2058,
+    }
+
+
 def test_reasoning_screen_guard_detects_changed_screen(tmp_path, monkeypatch):
     from PIL import Image, ImageDraw
 
@@ -1214,6 +1248,49 @@ def test_reasoning_screen_guard_detects_changed_screen(tmp_path, monkeypatch):
     assert result["stale"] is True
     assert result["reason"] == "screen_changed_during_reasoning"
     assert result["distance"] > result["max_distance"]
+    assert not list(tmp_path.glob("pre_action_*.png"))
+
+
+def test_reasoning_screen_guard_ignores_changes_outside_target_roi(tmp_path, monkeypatch):
+    from PIL import Image, ImageDraw
+
+    from agent.runtime.action_guard import check_reasoning_screen_stale
+    from agent.vision.screen_signature import perceptual_hash
+
+    before = tmp_path / "before-roi.png"
+    before_image = Image.new("RGB", (400, 300), "white")
+    ImageDraw.Draw(before_image).rectangle([20, 20, 100, 60], fill="black")
+    before_image.save(before)
+
+    after_image = before_image.copy()
+    ImageDraw.Draw(after_image).rectangle([220, 80, 399, 299], fill="black")
+
+    class FakePerception:
+        def capture_screen(self, **kwargs):
+            temporary = tmp_path / kwargs["filename"]
+            after_image.save(temporary)
+            return temporary
+
+    monkeypatch.setenv("VISION_REASONING_STALE_PHASH_MAX_DISTANCE", "10")
+    result = check_reasoning_screen_stale(
+        {
+            "screen_signature": {
+                "phash": perceptual_hash(before),
+                "size": [400, 300],
+            },
+            "recent_images": [before],
+            "current_markers": [
+                {"id": 7, "bbox": [20, 20, 100, 60], "text": "검색"}
+            ],
+        },
+        FakePerception(),
+        marker_id=7,
+    )
+
+    assert result["checked"] is True
+    assert result["stale"] is False
+    assert result["mode"] == "target_roi"
+    assert result["distance"] <= result["max_distance"]
     assert not list(tmp_path.glob("pre_action_*.png"))
 
 
@@ -1440,7 +1517,7 @@ def test_action_node_allows_different_marker_after_no_effect_click(monkeypatch):
     monkeypatch.setattr(
         worker_execution,
         "_check_current_reasoning_screen",
-        lambda _state: {"checked": True, "stale": False},
+        lambda _state, marker_id=None: {"checked": True, "stale": False},
     )
 
     result = worker_execution.action_node(

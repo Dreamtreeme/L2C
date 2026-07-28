@@ -19,14 +19,21 @@ def get_action_tools() -> Any:
     return current_vision_worker_runtime().get_action_tools()
 
 
-def check_current_reasoning_screen(state: GraphState) -> dict[str, Any]:
-    """저장된 pHash가 있을 때만 행동 직전 화면을 검사한다."""
+def check_current_reasoning_screen(
+    state: GraphState,
+    marker_id: int | None = None,
+) -> dict[str, Any]:
+    """저장된 화면 서명이 있을 때 행동 대상 주변을 다시 검사한다."""
 
     if not str((state.get("screen_signature") or {}).get("phash") or ""):
         return {"checked": False, "stale": False, "reason": "previous_phash_missing"}
     from agent.runtime.action_guard import check_reasoning_screen_stale
 
-    return check_reasoning_screen_stale(state, get_perception())
+    return check_reasoning_screen_stale(
+        state,
+        get_perception(),
+        marker_id=marker_id,
+    )
 
 
 def prepare_reasoning_models() -> None:

@@ -8,19 +8,61 @@ from typing import Any
 
 from agent.config import get_settings
 from agent.utils.logger import logger
-from agent.vision.screen_signature import hamming_distance, perceptual_hash
+from agent.vision.marker_geometry import marker_bbox
+from agent.vision.screen_signature import (
+    compute_roi_signature,
+    compute_target_roi_signature,
+    hamming_distance,
+    perceptual_hash,
+)
 
 
 def reasoning_screen_guard_enabled() -> bool:
     return get_settings().vision.reasoning_screen_guard
 
 
-def check_reasoning_screen_stale(state: dict[str, Any], perception: Any) -> dict[str, Any]:
-    """OCR 없이 현재 pHash만 다시 계산해 오래된 마커 클릭을 차단한다."""
+def _marker_for_id(state: dict[str, Any], marker_id: int | None) -> dict[str, Any] | None:
+    if marker_id is None:
+        return None
+    for marker in state.get("current_markers", []) or []:
+        if isinstance(marker, dict) and marker.get("id") == marker_id:
+            return marker
+    return None
+
+
+def _target_roi_signature(
+    state: dict[str, Any],
+    marker_id: int | None,
+) -> dict[str, Any]:
+    marker = _marker_for_id(state, marker_id)
+    recent_images = state.get("recent_images", []) or []
+    image_path = str(recent_images[-1]) if recent_images else ""
+    screen_size = list((state.get("screen_signature") or {}).get("size") or [])
+    if marker is None or not image_path or len(screen_size) != 2:
+        return {}
+    return compute_target_roi_signature(
+        image_path,
+        marker_bbox(marker),
+        screen_size,
+    )
+
+
+def check_reasoning_screen_stale(
+    state: dict[str, Any],
+    perception: Any,
+    *,
+    marker_id: int | None = None,
+) -> dict[str, Any]:
+    """OCR 없이 행동 대상 ROI를 다시 계산해 오래된 마커 클릭을 차단한다."""
 
     if not reasoning_screen_guard_enabled():
         return {"checked": False, "stale": False, "reason": "disabled"}
-    previous_phash = str((state.get("screen_signature") or {}).get("phash") or "")
+    target_signature = _target_roi_signature(state, marker_id)
+    previous_phash = str(target_signature.get("phash") or "")
+    mode = "target_roi"
+    if not previous_phash:
+        previous_phash = str((state.get("screen_signature") or {}).get("phash") or "")
+        mode = "full_screen"
     if not previous_phash:
         return {"checked": False, "stale": False, "reason": "previous_phash_missing"}
 
@@ -34,7 +76,16 @@ def check_reasoning_screen_stale(state: dict[str, Any], perception: Any) -> dict
                 wait_for_stable=False,
             )
         )
-        current_phash = perceptual_hash(image_path)
+        crop_rect_ratio = target_signature.get("crop_rect_ratio") or []
+        if crop_rect_ratio:
+            current_signature = compute_roi_signature(
+                image_path,
+                crop_rect_ratio,
+                algorithm=str(target_signature.get("algorithm") or "roi-phash-dct64-v2"),
+            )
+            current_phash = str(current_signature.get("phash") or "")
+        else:
+            current_phash = perceptual_hash(image_path)
         distance = hamming_distance(previous_phash, current_phash)
     except Exception as exc:
         logger.debug("Reasoning screen guard skipped", error=str(exc))
@@ -54,6 +105,7 @@ def check_reasoning_screen_stale(state: dict[str, Any], perception: Any) -> dict
         "reason": "screen_changed_during_reasoning" if stale else "screen_unchanged",
         "distance": distance,
         "max_distance": max_distance,
+        "mode": mode,
     }
     logger.info("Reasoning screen guard completed", **result)
     return result

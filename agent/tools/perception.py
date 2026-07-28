@@ -1,6 +1,8 @@
+import ctypes
 import datetime
 import hashlib
 import math
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -111,12 +113,78 @@ class PerceptionEngine:
 
         border = 8
         top = win.top + border if win.isMaximized else win.top
-        return {
+        region = {
             "top": top,
             "left": win.left + border,
             "width": win.width - (border * 2),
             "height": win.height - border - (border if win.isMaximized else 0),
         }
+        work_area = self._monitor_work_area(win)
+        return self._intersect_regions(region, work_area) if work_area else region
+
+    @staticmethod
+    def _intersect_regions(
+        region: Dict[str, int],
+        bounds: Dict[str, int],
+    ) -> Dict[str, int]:
+        """화면 캡처 영역을 모니터 작업영역 안으로 제한한다."""
+
+        left = max(int(region["left"]), int(bounds["left"]))
+        top = max(int(region["top"]), int(bounds["top"]))
+        right = min(
+            int(region["left"]) + int(region["width"]),
+            int(bounds["left"]) + int(bounds["width"]),
+        )
+        bottom = min(
+            int(region["top"]) + int(region["height"]),
+            int(bounds["top"]) + int(bounds["height"]),
+        )
+        if right <= left or bottom <= top:
+            return dict(region)
+        return {
+            "top": top,
+            "left": left,
+            "width": right - left,
+            "height": bottom - top,
+        }
+
+    @classmethod
+    def _monitor_work_area(cls, window) -> Optional[Dict[str, int]]:
+        """현재 창이 있는 Windows 모니터의 작업표시줄 제외 영역을 반환한다."""
+
+        if os.name != "nt":
+            return None
+        window_id = cls._window_id(window)
+        if not window_id:
+            return None
+        try:
+            from ctypes import wintypes
+
+            class MonitorInfo(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT),
+                    ("dwFlags", wintypes.DWORD),
+                ]
+
+            user32 = ctypes.windll.user32
+            monitor = user32.MonitorFromWindow(wintypes.HWND(window_id), 2)
+            if not monitor:
+                return None
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(MonitorInfo)
+            if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                return None
+            return {
+                "top": int(info.rcWork.top),
+                "left": int(info.rcWork.left),
+                "width": int(info.rcWork.right - info.rcWork.left),
+                "height": int(info.rcWork.bottom - info.rcWork.top),
+            }
+        except Exception as exc:
+            logger.debug("Monitor work area lookup failed", error=str(exc))
+            return None
 
     def _find_browser_window(self):
         windows = [win for win in gw.getAllWindows() if self._is_visible_window(win)]
@@ -148,6 +216,7 @@ class PerceptionEngine:
         if not win:
             return None
         return self._browser_region_from_window(win)
+
     def capture_screen(
         self,
         filename: Optional[str] = None,

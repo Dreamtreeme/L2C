@@ -667,7 +667,10 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     and action_request.source
                     not in {"reflex", "card_queue", "page_policy", "duplicate_job_policy"}
                 ):
-                    guard_result = _check_current_reasoning_screen(state)
+                    guard_result = _check_current_reasoning_screen(
+                        state,
+                        marker_id=args.get("marker_id"),
+                    )
                     if guard_result.get("stale"):
                         append_guard_result(
                             action_name,

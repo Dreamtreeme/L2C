@@ -164,7 +164,7 @@ class ActionTools:
             f"--user-data-dir={self._browser_profile_dir()}",
             "--no-first-run",
             "--no-default-browser-check",
-            "--disable-session-crashed-bubble",
+            "--hide-crash-restore-bubble",
         ]
         if not self._browser_window_size_enabled():
             return args

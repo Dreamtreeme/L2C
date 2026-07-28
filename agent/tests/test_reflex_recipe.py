@@ -2216,7 +2216,7 @@ def test_action_node_skips_stale_reasoning_screen_click(monkeypatch):
     monkeypatch.setattr(
         worker_execution,
         "_check_current_reasoning_screen",
-        lambda state: {
+        lambda state, marker_id=None: {
             "checked": True,
             "stale": True,
             "reason": "screen_changed_during_reasoning",
