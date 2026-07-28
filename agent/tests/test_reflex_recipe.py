@@ -520,19 +520,30 @@ def test_perception_node_blocks_reflex_click_when_screen_does_not_change(monkeyp
         {
             "current_url": "https://www.wanted.co.kr/search?query=ios",
             "current_url_stale": False,
+            "worker_run_id": "worker-no-effect",
+            "worker_attempt_index": 0,
+            "current_capture_id": "worker-no-effect:attempt:00:capture:0004",
+            "capture_sequence": 4,
+            "current_screenshot": str(screenshot),
             "current_markers": [{"id": 1, "bbox": [10, 150, 200, 180], "text": "포지션"}],
             "marked_image": str(screenshot),
             "ui_context": "포지션",
+            "screen_signature": {"phash": "0" * 16, "size": [800, 600]},
+            "current_page_role": "search",
+            "analysis_mode": "full",
+            "ocr_complete": True,
             "reflex_blocked_recipe_keys": [],
             "pending_transition": {
                 "action_seq": 3,
                 "action": "click_marker",
+                "from_capture_id": "worker-no-effect:attempt:00:capture:0004",
                 "expected_after": "포지션 결과가 보임",
                 "source": "reflex",
                 "recipe_key": "roi#tab",
                 "step": {"seq": 3, "action": "click_marker", "marker_id": 1},
                 "before_url": "https://www.wanted.co.kr/search?query=ios",
                 "before_phash": "0" * 16,
+                "before_screenshot": str(screenshot),
                 "started_at": time.time(),
                 "attempts": 0,
                 "params": {},
@@ -549,6 +560,68 @@ def test_perception_node_blocks_reflex_click_when_screen_does_not_change(monkeyp
     assert result["transition_observations"][0]["ocr_skipped"] is True
     assert result["transition_observations"][0]["step"]["action"] == "click_marker"
     assert result["reflex_blocked_recipe_keys"] == ["roi#tab"]
+    assert result["ocr_complete"] is True
+    assert result["current_markers"] == [
+        {"id": 1, "bbox": [10, 150, 200, 180], "text": "포지션"}
+    ]
+    assert result["ui_context"] == "포지션"
+    assert (
+        result["previous_screen_observation"]["capture_id"]
+        == "worker-no-effect:attempt:00:capture:0005"
+    )
+
+
+def test_no_effect_does_not_reuse_observation_from_another_capture(monkeypatch, tmp_path):
+    import time
+    from PIL import Image
+
+    from agent.graph import worker_transition
+
+    screenshot = tmp_path / "screen.png"
+    Image.new("RGB", (800, 600), "white").save(screenshot)
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda _pending, _path: (False, 0.0),
+    )
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_no_effect_by_phash",
+        lambda _pending, _url, _signature: (True, 0),
+    )
+
+    result = worker_transition.evaluate_transition_node(
+        {
+            "current_capture_id": "worker-test:attempt:00:capture:0003",
+            "current_screenshot": str(screenshot),
+            "current_url": "https://example.com/jobs",
+            "raw_screen_signature": {"phash": "0" * 16, "size": [800, 600]},
+            "ocr_complete": False,
+            "current_markers": [],
+            "previous_screen_observation": {
+                "capture_id": "worker-test:attempt:00:capture:0001",
+                "screenshot": str(screenshot),
+                "current_url": "https://example.com/jobs",
+                "markers": [{"id": 4, "bbox": [10, 20, 30, 40], "text": "검색"}],
+                "ui_context": "검색",
+                "screen_signature": {"phash": "0" * 16, "size": [800, 600]},
+            },
+            "pending_transition": {
+                "action": "click_marker",
+                "from_capture_id": "worker-test:attempt:00:capture:0002",
+                "source": "autonomous",
+                "before_url": "https://example.com/jobs",
+                "before_phash": "0" * 16,
+                "before_screenshot": str(screenshot),
+                "started_at": time.time(),
+            },
+        }
+    )
+
+    assert result["transition_reason"] == "no_screen_change"
+    assert result.get("ocr_complete") is None
+    assert result.get("current_markers") is None
+    assert result["transition_observations"][0]["marker_count"] == 0
 
 
 def test_perception_node_accepts_tab_visual_change_when_ocr_cue_is_pending(monkeypatch, tmp_path):

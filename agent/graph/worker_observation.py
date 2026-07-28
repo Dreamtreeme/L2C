@@ -46,6 +46,29 @@ def _next_capture_identity(state: GraphState) -> tuple[int, str]:
     return sequence, f"{prefix}capture:{sequence:04d}"
 
 
+def _previous_screen_observation(state: GraphState) -> dict[str, Any]:
+    """새 캡처 전에 현재 OCR 관찰을 캡처 ID와 함께 보존한다."""
+
+    if (
+        state.get("ocr_complete")
+        and state.get("current_capture_id")
+        and state.get("current_screenshot")
+        and state.get("current_markers")
+    ):
+        return {
+            "capture_id": str(state.get("current_capture_id") or ""),
+            "screenshot": str(state.get("current_screenshot") or ""),
+            "current_url": str(state.get("current_url") or ""),
+            "markers": list(state.get("current_markers") or []),
+            "ui_context": str(state.get("ui_context") or ""),
+            "marked_image": str(state.get("marked_image") or ""),
+            "screen_signature": dict(state.get("screen_signature") or {}),
+            "page_role": str(state.get("current_page_role") or ""),
+            "analysis_mode": str(state.get("analysis_mode") or "full"),
+        }
+    return dict(state.get("previous_screen_observation") or {})
+
+
 def capture_screen_node(state: GraphState) -> dict[str, Any]:
     """화면 변화 대기, 캡처, URL 읽기와 원본 pHash 계산만 수행한다."""
 
@@ -101,6 +124,7 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
         else 0
     )
     capture_sequence, capture_id = _next_capture_identity(state)
+    previous_observation = _previous_screen_observation(state)
     logger.info(
         "Worker screen captured",
         capture_id=capture_id,
@@ -111,6 +135,7 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
         "current_capture_id": capture_id,
         "capture_sequence": capture_sequence,
         "current_screenshot": str(image_path),
+        "previous_screen_observation": previous_observation,
         "capture_quality": capture_quality,
         "raw_screen_signature": raw_signature,
         "analysis_mode": "",

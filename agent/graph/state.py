@@ -23,6 +23,7 @@ class GraphState(TypedDict, total=False):
     raw_screen_signature: Dict[str, Any]
     analysis_mode: str
     ocr_complete: bool
+    previous_screen_observation: Dict[str, Any]
 
     # 현재 화면에서 추출된 UI 요소 목록 (텍스트)
     ui_context: str

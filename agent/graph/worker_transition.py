@@ -24,6 +24,74 @@ def _blocked_recipe_keys(state: GraphState) -> list[str]:
     ]
 
 
+def _reused_observation(
+    state: GraphState,
+    pending: dict[str, Any],
+) -> dict[str, Any]:
+    """pHash 무변화가 확인된 경우에만 행동 전 OCR 관찰을 현재 캡처에 연결한다."""
+
+    previous = dict(state.get("previous_screen_observation") or {})
+    if not previous:
+        return {}
+
+    expected_capture_id = str(pending.get("from_capture_id") or "")
+    previous_capture_id = str(previous.get("capture_id") or "")
+    if (
+        not expected_capture_id
+        or not previous_capture_id
+        or expected_capture_id != previous_capture_id
+    ):
+        return {}
+
+    before_screenshot = str(pending.get("before_screenshot") or "")
+    previous_screenshot = str(previous.get("screenshot") or "")
+    if (
+        not before_screenshot
+        or not previous_screenshot
+        or before_screenshot != previous_screenshot
+    ):
+        return {}
+
+    before_url = str(pending.get("before_url") or "")
+    previous_url = str(previous.get("current_url") or "")
+    if before_url and previous_url and before_url != previous_url:
+        return {}
+
+    markers = [
+        dict(marker)
+        for marker in previous.get("markers", []) or []
+        if isinstance(marker, dict)
+    ]
+    if not markers:
+        return {}
+
+    screen_signature = dict(previous.get("screen_signature") or {})
+    raw_signature = dict(state.get("raw_screen_signature") or {})
+    if raw_signature.get("phash"):
+        screen_signature["phash"] = raw_signature["phash"]
+    if raw_signature.get("size"):
+        screen_signature["size"] = raw_signature["size"]
+
+    current_observation = {
+        **previous,
+        "capture_id": str(state.get("current_capture_id") or ""),
+        "screenshot": str(state.get("current_screenshot") or ""),
+        "current_url": str(state.get("current_url") or previous_url),
+        "markers": markers,
+        "screen_signature": screen_signature,
+    }
+    return {
+        "current_markers": markers,
+        "ui_context": str(previous.get("ui_context") or ""),
+        "marked_image": str(previous.get("marked_image") or ""),
+        "screen_signature": screen_signature,
+        "current_page_role": str(previous.get("page_role") or ""),
+        "analysis_mode": str(previous.get("analysis_mode") or "full"),
+        "ocr_complete": True,
+        "previous_screen_observation": current_observation,
+    }
+
+
 def _transition_record(
     pending: dict[str, Any],
     *,
@@ -109,6 +177,8 @@ def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
             if source == "reflex" and recipe_key and recipe_key not in blocked_keys:
                 blocked_keys.append(recipe_key)
             attempt = int(pending.get("attempts") or 0) + 1
+            reused_observation = _reused_observation(state, pending)
+            record_state = {**state, **reused_observation}
             record = _transition_record(
                 pending,
                 status="unknown",
@@ -116,7 +186,7 @@ def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
                 source=source,
                 reason=reason,
                 attempt=attempt,
-                state=state,
+                state=record_state,
                 phash_distance=phash_distance,
                 visual_change_ratio=visual_ratio,
                 ocr_skipped=True,
@@ -139,6 +209,7 @@ def evaluate_transition_node(state: GraphState) -> dict[str, Any]:
                 "ocr_required": False,
                 "transition_observations": [record],
                 "reflex_blocked_recipe_keys": blocked_keys,
+                **reused_observation,
             }
 
         return {
