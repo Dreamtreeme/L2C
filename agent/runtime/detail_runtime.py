@@ -282,6 +282,21 @@ def detail_ocr_buffer_enabled() -> bool:
     return get_settings().vision.detail_ocr_buffer_enabled
 
 
+def detail_context_matches(
+    context: dict[str, Any] | None,
+    current_url: str,
+    detail_key: str = "",
+) -> bool:
+    """카드 식별자가 있으면 URL 이동보다 공고 단위를 우선해 같은 상세 문맥인지 판단한다."""
+
+    value = dict(context or {})
+    stored_key = str(value.get("detail_key") or "").strip()
+    resolved_key = str(detail_key or "").strip()
+    if stored_key and resolved_key:
+        return stored_key == resolved_key
+    return bool(current_url and value.get("url") == current_url)
+
+
 def detail_buffer_line_key(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
@@ -337,10 +352,7 @@ def update_detail_ocr_buffer(
     max_line_chars = settings.detail_buffer_max_line_chars
 
     buffer = dict(existing or {})
-    if (
-        buffer.get("url") != current_url
-        or (detail_key and buffer.get("detail_key") != detail_key)
-    ):
+    if not detail_context_matches(buffer, current_url, detail_key):
         buffer = new_detail_ocr_buffer(current_url, detail_key)
     lines = [dict(item) for item in (buffer.get("lines") or []) if isinstance(item, dict)]
     seen_keys = [str(item) for item in (buffer.get("seen_keys") or []) if str(item)]
@@ -426,11 +438,15 @@ def update_detail_ocr_buffer(
     return buffer
 
 
-def compact_detail_ocr_buffer_context(state: dict, current_url: str) -> str:
+def compact_detail_ocr_buffer_context(
+    state: dict,
+    current_url: str,
+    detail_key: str = "",
+) -> str:
     if not detail_ocr_buffer_enabled() or not current_url:
         return ""
     buffer = dict(state.get("detail_ocr_buffer", {}) or {})
-    if buffer.get("url") != current_url:
+    if not detail_context_matches(buffer, current_url, detail_key):
         return ""
     if not buffer.get("lines") and not is_job_detail_context(
         current_url,
@@ -444,7 +460,7 @@ def compact_detail_ocr_buffer_context(state: dict, current_url: str) -> str:
     preview = [str(item.get("text") or "").strip() for item in lines[-8:]]
     preview = [line for line in preview if line]
     followup = dict(state.get("detail_followup_required") or {})
-    followup_active = bool(followup and followup.get("url") == current_url)
+    followup_active = detail_context_matches(followup, current_url, detail_key)
     parts = [
         "상세 OCR 누적 상태:",
         f"- 누적 본문 줄 수: {len(lines)}",
@@ -503,6 +519,7 @@ __all__ = [
     "detail_action_marker_candidates",
     "detail_buffer_text",
     "detail_buffer_line_key",
+    "detail_context_matches",
     "detail_lightweight_marked_image_enabled",
     "detail_lines_for_buffer",
     "detail_ocr_buffer_enabled",

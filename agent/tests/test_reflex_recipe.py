@@ -2689,6 +2689,36 @@ def test_detail_ocr_buffer_resets_for_another_card_on_same_url(monkeypatch):
     assert second["stats"]["screen_count"] == 1
 
 
+def test_detail_ocr_buffer_follows_same_card_across_source_url(monkeypatch):
+    from agent.runtime.detail_runtime import update_detail_ocr_buffer
+
+    monkeypatch.setenv("VISION_DETAIL_OCR_BUFFER_ENABLED", "1")
+    first = update_detail_ocr_buffer(
+        {},
+        [{"id": 1, "bbox": [100, 220, 260, 250], "text": "중계 공고 근무조건"}],
+        "https://www.work24.go.kr/empDetailAuthView.do?id=1",
+        "screen_a.png",
+        page_role="job_detail",
+        detail_key="card-a",
+    )
+    second = update_detail_ocr_buffer(
+        first,
+        [{"id": 2, "bbox": [100, 280, 260, 310], "text": "원문 공고 주요업무"}],
+        "https://www.jobkorea.co.kr/Recruit/GI_Read/1",
+        "screen_b.png",
+        page_role="job_detail",
+        detail_key="card-a",
+    )
+
+    assert second["url"] == "https://www.jobkorea.co.kr/Recruit/GI_Read/1"
+    assert second["detail_key"] == "card-a"
+    assert [line["text"] for line in second["lines"]] == [
+        "중계 공고 근무조건",
+        "원문 공고 주요업무",
+    ]
+    assert second["stats"]["screen_count"] == 2
+
+
 def test_detail_ocr_buffer_context_guides_finish_detail_reading(monkeypatch):
 
     monkeypatch.setenv("VISION_DETAIL_OCR_BUFFER_ENABLED", "1")
@@ -2776,6 +2806,37 @@ def test_finish_detail_reading_keeps_buffer_when_actual_job_content_is_missing(m
     assert result["_detail_ocr_buffer"] == buffer
     assert result["_detail_followup_required"]["url"] == url
     assert current_jd == {}
+
+
+def test_detail_followup_keeps_card_identity_across_url_change(monkeypatch):
+    from agent.graph.worker_collection import apply_observation_node
+
+    state = {
+        "ocr_complete": True,
+        "current_url": "https://www.jobkorea.co.kr/Recruit/GI_Read/1",
+        "current_markers": [
+            {"id": 1, "bbox": [100, 220, 260, 250], "text": "주요업무 데이터 분석"}
+        ],
+        "current_screenshot": "source.png",
+        "current_page_role": "job_detail",
+        "active_result_card": {"queue_id": "card-a"},
+        "detail_ocr_buffer": {
+            "url": "https://www.work24.go.kr/empDetailAuthView.do?id=1",
+            "detail_key": "card-a",
+            "lines": [{"text": "중계 공고 근무조건"}],
+        },
+        "detail_followup_required": {
+            "url": "https://www.work24.go.kr/empDetailAuthView.do?id=1",
+            "detail_key": "card-a",
+            "reason": "detail_content_incomplete",
+        },
+    }
+
+    result = apply_observation_node(state)
+
+    assert result["detail_followup_required"]["reason"] == "detail_content_incomplete"
+    assert result["detail_ocr_buffer"]["url"] == state["current_url"]
+    assert len(result["detail_ocr_buffer"]["lines"]) == 2
 
 
 def test_detail_followup_routes_to_reasoning_before_reflex():

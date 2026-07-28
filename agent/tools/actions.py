@@ -165,6 +165,7 @@ class ActionTools:
             "--no-first-run",
             "--no-default-browser-check",
             "--hide-crash-restore-bubble",
+            "--disable-popup-blocking",
         ]
         if not self._browser_window_size_enabled():
             return args

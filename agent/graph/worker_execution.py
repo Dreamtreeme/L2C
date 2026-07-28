@@ -56,6 +56,7 @@ from agent.graph.worker_resources import (
 )
 from agent.graph.worker_state import (
     count_mode_from_state as _count_mode_from_state,
+    detail_key_from_state as _detail_key_from_state,
     detail_return_pending_for_url as _detail_return_pending_for_url,
     extracted_job_count as _extracted_job_count,
     target_count_from_state as _target_count_from_state,
@@ -173,12 +174,19 @@ def _dispatch_state(
                 }
             elif not _has_meaningful_job_content(extracted_job):
                 presence = _job_content_presence(extracted_job)
+                detail_key = _detail_key_from_state(state or {})
                 previous_followup = dict(
                     (state or {}).get("detail_followup_required", {}) or {}
                 )
                 attempts = (
                     int(previous_followup.get("attempts") or 0) + 1
-                    if previous_followup.get("url") == current_url
+                    if (
+                        previous_followup.get("url") == current_url
+                        or (
+                            detail_key
+                            and previous_followup.get("detail_key") == detail_key
+                        )
+                    )
                     else 1
                 )
                 result = {
@@ -196,6 +204,7 @@ def _dispatch_state(
                     ),
                     "_detail_followup_required": {
                         "url": current_url,
+                        "detail_key": detail_key,
                         "reason": "detail_content_incomplete",
                         "missing_fields": [
                             field for field, present in presence.items() if not present

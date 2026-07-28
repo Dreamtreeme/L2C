@@ -1050,6 +1050,7 @@ def test_open_browser_uses_new_window_when_no_browser_is_bound(monkeypatch):
         "--no-first-run",
         "--no-default-browser-check",
         "--hide-crash-restore-bubble",
+        "--disable-popup-blocking",
         "--window-size=1976,2129",
         "https://www.wanted.co.kr",
     ]]
@@ -1093,6 +1094,7 @@ def test_open_browser_window_size_can_be_disabled(monkeypatch):
         "--no-first-run",
         "--no-default-browser-check",
         "--hide-crash-restore-bubble",
+        "--disable-popup-blocking",
         "https://www.wanted.co.kr",
     ]]
 

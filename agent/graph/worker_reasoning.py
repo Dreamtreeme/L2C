@@ -16,6 +16,7 @@ from agent.graph.state import GraphState
 from agent.graph.tool_schema import ACTION_TOOL_SCHEMAS as _ACTION_TOOL_SCHEMAS
 from agent.graph.worker_execution_policy import compact_action_args as _compact_action_args
 from agent.graph.worker_state import (
+    detail_key_from_state as _detail_key_from_state,
     detail_return_pending_for_url as _detail_return_pending_for_url,
 )
 from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT
@@ -508,7 +509,7 @@ def _build_reasoning_messages(
         f"{_compact_result_availability_context(state)}"
         f"{_compact_result_card_queue_context(state)}"
         f"{_compact_detail_return_context(state, current_url)}"
-        f"{_compact_detail_ocr_buffer_context(state, current_url)}"
+        f"{_compact_detail_ocr_buffer_context(state, current_url, _detail_key_from_state(state))}"
         f"{transition_context}"
         f"{result_refinement_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"

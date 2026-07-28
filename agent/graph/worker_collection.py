@@ -6,7 +6,7 @@ from typing import Any
 
 from agent.graph.state import GraphState
 from agent.graph.worker_state import detail_key_from_state
-from agent.runtime.detail_runtime import update_detail_ocr_buffer
+from agent.runtime.detail_runtime import detail_context_matches, update_detail_ocr_buffer
 
 
 def apply_observation_node(state: GraphState) -> dict[str, Any]:
@@ -16,16 +16,21 @@ def apply_observation_node(state: GraphState) -> dict[str, Any]:
         return {}
 
     current_url = str(state.get("current_url") or "")
+    detail_key = detail_key_from_state(state)
     detail_buffer = update_detail_ocr_buffer(
         dict(state.get("detail_ocr_buffer", {}) or {}),
         list(state.get("current_markers") or []),
         current_url,
         str(state.get("current_screenshot") or ""),
         page_role=str(state.get("current_page_role") or ""),
-        detail_key=detail_key_from_state(state),
+        detail_key=detail_key,
     )
     detail_followup = dict(state.get("detail_followup_required", {}) or {})
-    if detail_followup and detail_followup.get("url") != current_url:
+    if detail_followup and not detail_context_matches(
+        detail_followup,
+        current_url,
+        detail_key,
+    ):
         detail_followup = {}
     detail_return_pending = dict(state.get("detail_return_pending", {}) or {})
     if detail_return_pending and detail_return_pending.get("url") != current_url:
