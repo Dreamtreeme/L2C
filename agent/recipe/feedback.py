@@ -11,6 +11,11 @@ from typing import Any
 
 from agent.recipe.text_utils import site_of
 from agent.runtime.job_collection import job_count
+from agent.runtime.worker_actions import (
+    STATE_UPDATE_ACTIONS,
+    TERMINAL_ACTIONS,
+    UI_ACTIONS,
+)
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
 from agent.vision.target_snapshot import build_action_target_snapshot
@@ -21,20 +26,6 @@ from shared.schema.feedback_schema import (
     FeedbackEpisode,
     ParameterCandidate,
 )
-
-_UI_ACTIONS = {
-    "click_marker",
-    "type_in_marker",
-    "scroll",
-    "press_key",
-    "open_browser",
-    "close_browser",
-    "close_current_tab",
-    "switch_tab",
-    "go_back",
-}
-_STATE_ACTIONS = {"update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task"}
-
 
 def _message_text(content: Any) -> str:
     if isinstance(content, str):
@@ -134,11 +125,11 @@ def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, A
         return ActionFeedback(label="success", reason="task finished", confidence=0.8)
     if action_name == "open_browser" and isinstance(result.get("result"), dict) and result["result"].get("opened") is False:
         return ActionFeedback(label="no_effect", reason=result["result"].get("reason", "browser already at target"), confidence=0.75)
-    if action_name in _UI_ACTIONS:
+    if action_name in UI_ACTIONS:
         if after.get("screen_changed"):
             return ActionFeedback(label="partial", reason="screen-changing action executed; next perception must validate", confidence=0.45)
         return ActionFeedback(label="no_effect", reason="no screen change expected or observed in action result", confidence=0.45)
-    if action_name in _STATE_ACTIONS:
+    if action_name in STATE_UPDATE_ACTIONS | TERMINAL_ACTIONS:
         return ActionFeedback(label="success", reason="state action executed", confidence=0.5)
     return ActionFeedback(label="partial", reason="unclassified successful action", confidence=0.2)
 

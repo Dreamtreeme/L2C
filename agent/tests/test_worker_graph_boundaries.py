@@ -18,6 +18,26 @@ def _request(source: str, tool_calls: list[dict]):
     return build_action_request(source, "test", tool_calls)
 
 
+def _execution_state(request, **overrides):
+    state = {
+        "goal": "테스트",
+        "pending_action": request,
+        "current_markers": [],
+        "current_url": "https://example.com/jobs",
+        "current_url_stale": False,
+        "current_capture_id": "worker-test:capture:0003",
+        "screen_signature": {},
+        "recent_images": [],
+        "action_history": [],
+        "extracted_jd": {},
+        "collected_data": [],
+        "error_count": 0,
+        "is_finished": False,
+    }
+    state.update(overrides)
+    return state
+
+
 def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     monkeypatch.setenv("REFLEX_ENABLED", "1")
     observed = {"ocr_complete": True}
@@ -175,6 +195,127 @@ def test_atomic_execution_and_recording_are_separate(monkeypatch):
         == "worker-test:capture:0003"
     )
     assert len(recorded["feedback_episodes"]) == 1
+
+
+def test_detail_completion_guard_blocks_more_screen_exploration(monkeypatch):
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("목록 복귀 전에 상세 화면을 더 탐색하면 안 됩니다.")
+        ),
+    )
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "scroll",
+                "args": {"direction": "down"},
+                "id": "scroll",
+            }
+        ],
+    )
+    result = worker_execution.execution_node(
+        _execution_state(
+            request,
+            current_url="https://example.com/jobs/1",
+            return_to_job_results={
+                "url": "https://example.com/jobs/1",
+                "reason": "detail_complete",
+            },
+        )
+    )
+
+    assert result["action_history"][0]["status"] == "skipped"
+    assert (
+        result["action_history"][0]["reason"]
+        == "return_to_job_results"
+    )
+    assert result["error_count"] == 0
+
+
+def test_failed_ui_dispatch_is_recorded_once(monkeypatch):
+    def fail_dispatch(*args, **kwargs):
+        raise RuntimeError("physical input failed")
+
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        fail_dispatch,
+    )
+    request = _request(
+        "job_card_queue",
+        [
+            {
+                "name": "click_marker",
+                "args": {"marker_id": 1},
+                "id": "click",
+            }
+        ],
+    )
+    result = worker_execution.execution_node(
+        _execution_state(
+            request,
+            current_markers=[
+                {"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"},
+            ],
+        )
+    )
+
+    assert len(result["action_history"]) == 1
+    assert result["action_history"][0]["status"] == "error"
+    assert result["action_history"][0]["error"] == "physical input failed"
+    assert len(result["execution_records"]) == 1
+    assert result["error_count"] == 1
+
+
+def test_stored_job_card_queue_schedules_first_card(monkeypatch):
+    queued_card = {
+        "queue_id": "card-1",
+        "status": "pending",
+        "title": "첫 번째 공고",
+        "source_marker_id": 4,
+    }
+
+    def fake_dispatch(*args, **kwargs):
+        return (
+            {
+                "action": "set_job_card_queue",
+                "status": "success",
+                "result": "stored",
+                "_job_card_queue": [queued_card],
+                "_job_results_memory": {"url": "https://example.com/jobs"},
+                "_job_results_availability": {},
+            },
+            {},
+        )
+
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_state_action",
+        fake_dispatch,
+    )
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "set_job_card_queue",
+                "args": {
+                    "cards": [
+                        {"marker_id": 4, "title": "첫 번째 공고"},
+                    ]
+                },
+                "id": "queue",
+            }
+        ],
+    )
+    result = worker_execution.execution_node(_execution_state(request))
+
+    follow_up = result["pending_action"]
+    assert follow_up.source == "job_card_queue"
+    assert follow_up.tool_calls[0].name == "click_marker"
+    assert follow_up.tool_calls[0].args["marker_id"] == 4
+    assert result["job_card_queue"] == [queued_card]
 
 
 def test_graph_custom_event_is_shared_by_metrics_and_sse():
