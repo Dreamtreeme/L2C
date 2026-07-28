@@ -278,10 +278,10 @@ def test_preprocessor_uses_registry_source_platform():
 
 
 def test_realtime_scraping_goal_uses_requested_site_profile():
+    from agent.application.collection_request_builder import build_site_goal
     from agent.sites import load_site_profile
-    from agent.tools.realtime_scraping import _build_site_goal
 
-    goal = _build_site_goal("AI 엔지니어", load_site_profile("saramin"))
+    goal = build_site_goal("AI 엔지니어", load_site_profile("saramin"))
 
     assert "사람인(" in goal
     assert "https://www.saramin.co.kr" in goal
@@ -289,10 +289,10 @@ def test_realtime_scraping_goal_uses_requested_site_profile():
     assert "원티드(" not in goal
 
 def test_realtime_scraping_goal_includes_task_context():
+    from agent.application.collection_request_builder import build_site_goal
     from agent.sites import load_site_profile
-    from agent.tools.realtime_scraping import _build_site_goal
 
-    goal = _build_site_goal(
+    goal = build_site_goal(
         "AI engineer",
         load_site_profile("wanted"),
         task_context={
@@ -309,10 +309,10 @@ def test_realtime_scraping_goal_includes_task_context():
 
 
 def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
+    from agent.application.collection_request_builder import build_site_goal
     from agent.sites import load_site_profile
-    from agent.tools.realtime_scraping import _build_site_goal
 
-    goal = _build_site_goal(
+    goal = build_site_goal(
         "AI 엔지니어",
         load_site_profile("wanted"),
         collection_intent={
@@ -328,8 +328,8 @@ def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
     assert "[허용 도구]" not in goal
 
 def test_realtime_scraping_extracts_user_search_intent_with_llm(monkeypatch):
+    from agent.application.collection_request_builder import extract_search_intent
     from agent.sites import load_site_profile
-    from agent.tools.realtime_scraping import _extract_search_intent
     from shared.schema.collection_intent import CollectionIntent
 
     class FakeStructuredLLM:
@@ -348,7 +348,7 @@ def test_realtime_scraping_extracts_user_search_intent_with_llm(monkeypatch):
     monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "llm")
     monkeypatch.setattr("langchain_google_genai.ChatGoogleGenerativeAI", FakeLLM)
 
-    intent = _extract_search_intent(query, profile)
+    intent = extract_search_intent(query, profile)
     assert intent["search_keyword"] == "ai\uc751\uc6a9\uc5d4\uc9c0\ub2c8\uc5b4"
     assert intent["target_count"] == 8
     assert intent["source"] == "llm"
@@ -357,7 +357,10 @@ def test_realtime_scraping_extracts_user_search_intent_with_llm(monkeypatch):
 def test_realtime_scraping_direct_search_url_encodes_keyword():
     from urllib.parse import parse_qs, urlparse
 
-    from agent.tools.realtime_scraping import _build_direct_search_url, _build_site_goal
+    from agent.application.collection_request_builder import (
+        build_direct_search_url,
+        build_site_goal,
+    )
 
     from agent.sites import load_site_profile
     from agent.sites.profile import NavigationPolicy
@@ -375,7 +378,7 @@ def test_realtime_scraping_direct_search_url_encodes_keyword():
         }
     )
     keyword = "AI \uc751\uc6a9 \uc5d4\uc9c0\ub2c8\uc5b4"
-    url = _build_direct_search_url(keyword, profile)
+    url = build_direct_search_url(keyword, profile)
     parsed = urlparse(url)
 
     assert parsed.scheme == "https"
@@ -383,17 +386,20 @@ def test_realtime_scraping_direct_search_url_encodes_keyword():
     assert parsed.path == "/search"
     assert parse_qs(parsed.query)["query"] == [keyword]
     assert parse_qs(parsed.query)["tab"] == ["position"]
-    assert "Code-generated search URL" in _build_site_goal(keyword, profile, url)
+    assert "Code-generated search URL" in build_site_goal(keyword, profile, url)
 
 
 def test_realtime_scraping_wanted_starts_from_home_without_query_url():
+    from agent.application.collection_request_builder import (
+        build_direct_search_url,
+        build_site_goal,
+    )
     from agent.sites import load_site_profile
-    from agent.tools.realtime_scraping import _build_direct_search_url, _build_site_goal
 
     profile = load_site_profile("wanted")
     keyword = "android \uac1c\ubc1c\uc790"
-    url = _build_direct_search_url(keyword, profile)
-    goal = _build_site_goal(keyword, profile, url)
+    url = build_direct_search_url(keyword, profile)
+    goal = build_site_goal(keyword, profile, url)
 
     assert url == ""
     assert "Code-generated search URL" not in goal
@@ -402,7 +408,7 @@ def test_realtime_scraping_wanted_starts_from_home_without_query_url():
 
 
 def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
-    from agent.tools import realtime_scraping as rt
+    from agent.application import collection_worker_runner as rt
 
     captured = {}
 
@@ -418,9 +424,9 @@ def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
         return {**initial_state, "is_finished": True, "extracted_jd": {}}, False
 
     monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
-    monkeypatch.setattr(rt, "_extract_search_intent", fake_extract_search_intent)
-    monkeypatch.setattr(rt, "_prepare_worker_start_screen", lambda initial_state, profile: initial_state)
-    monkeypatch.setattr(rt, "_run_graph_with_last_state", fake_run_graph_with_last_state)
+    monkeypatch.setattr(rt, "extract_search_intent", fake_extract_search_intent)
+    monkeypatch.setattr(rt, "prepare_worker_start_screen", lambda initial_state, profile: initial_state)
+    monkeypatch.setattr(rt, "run_graph_with_last_state", fake_run_graph_with_last_state)
     monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
 
     result = rt.run_worker_once("iOS 개발자", site="wanted", target_count=2, task_category="검색")
@@ -435,7 +441,7 @@ def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
 
 
 def test_realtime_scraping_reuses_structured_search_intent(monkeypatch):
-    from agent.tools import realtime_scraping as rt
+    from agent.application import collection_worker_runner as rt
 
     class FakeApp:
         pass
@@ -443,13 +449,13 @@ def test_realtime_scraping_reuses_structured_search_intent(monkeypatch):
     monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
     monkeypatch.setattr(
         rt,
-        "_extract_search_intent",
+        "extract_search_intent",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("구조화된 검색 인자를 다시 해석함")),
     )
-    monkeypatch.setattr(rt, "_prepare_worker_start_screen", lambda initial_state, profile: initial_state)
+    monkeypatch.setattr(rt, "prepare_worker_start_screen", lambda initial_state, profile: initial_state)
     monkeypatch.setattr(
         rt,
-        "_run_graph_with_last_state",
+        "run_graph_with_last_state",
         lambda app, initial_state, recursion_limit: ({**initial_state, "is_finished": True, "extracted_jd": {}}, False),
     )
     monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
@@ -468,7 +474,7 @@ def test_realtime_scraping_reuses_structured_search_intent(monkeypatch):
 
 
 def test_realtime_scraping_passes_confirmed_collection_constraints_to_worker(monkeypatch):
-    from agent.tools import realtime_scraping as rt
+    from agent.application import collection_worker_runner as rt
 
     captured = {}
 
@@ -478,8 +484,8 @@ def test_realtime_scraping_passes_confirmed_collection_constraints_to_worker(mon
         return {**initial_state, "is_finished": True, "extracted_jd": {}}, False
 
     monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: object())
-    monkeypatch.setattr(rt, "_prepare_worker_start_screen", lambda initial_state, profile: initial_state)
-    monkeypatch.setattr(rt, "_run_graph_with_last_state", fake_run_graph_with_last_state)
+    monkeypatch.setattr(rt, "prepare_worker_start_screen", lambda initial_state, profile: initial_state)
+    monkeypatch.setattr(rt, "run_graph_with_last_state", fake_run_graph_with_last_state)
     monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
 
     intent = {
@@ -512,15 +518,15 @@ def test_realtime_scraping_passes_confirmed_collection_constraints_to_worker(mon
 
 
 def test_worker_review_retries_are_disabled_by_default(monkeypatch):
-    from agent.tools import realtime_scraping as rt
+    from agent.application import collection_worker_runner as rt
 
     monkeypatch.delenv("VISION_WORKER_REVIEW_RETRIES", raising=False)
 
-    assert rt._worker_review_retries() == 0
+    assert rt.worker_review_retries() == 0
 
 
 def test_realtime_scraping_target_count_falls_back_to_intent(monkeypatch):
-    from agent.tools import realtime_scraping as rt
+    from agent.application import collection_worker_runner as rt
 
     class FakeApp:
         pass
@@ -529,11 +535,11 @@ def test_realtime_scraping_target_count_falls_back_to_intent(monkeypatch):
         return {"search_keyword": "iOS 개발자", "target_count": 3, "source": "test"}
 
     monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
-    monkeypatch.setattr(rt, "_extract_search_intent", fake_extract_search_intent)
-    monkeypatch.setattr(rt, "_prepare_worker_start_screen", lambda initial_state, profile: initial_state)
+    monkeypatch.setattr(rt, "extract_search_intent", fake_extract_search_intent)
+    monkeypatch.setattr(rt, "prepare_worker_start_screen", lambda initial_state, profile: initial_state)
     monkeypatch.setattr(
         rt,
-        "_run_graph_with_last_state",
+        "run_graph_with_last_state",
         lambda app, initial_state, recursion_limit: ({**initial_state, "is_finished": True, "extracted_jd": {}}, False),
     )
     monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)

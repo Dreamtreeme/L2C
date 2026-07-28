@@ -235,7 +235,10 @@ def main() -> int:
                 build_langsmith_feedback,
             )
             from benchmark.quality_eval import evaluate_collection_summary
+            from shared.config import DB_PATH
+            from shared.db.database import Database
 
+            Database(DB_PATH)
             vision_runtime = VisionWorkerRuntime()
             collection_tool = build_runtime_realtime_scraping_tool(vision_runtime)
             events = []

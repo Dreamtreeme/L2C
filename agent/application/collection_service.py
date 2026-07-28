@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable
 
 from agent.application.run_context import emit_run_event, measure_step
@@ -480,4 +481,55 @@ class CollectionService:
         }
 
 
-__all__ = ["CollectionOperations", "CollectionRequest", "CollectionService"]
+def build_collection_operations(
+    worker_runtime: Any,
+) -> CollectionOperations:
+    """애플리케이션 수집 서비스가 사용할 외부 작업을 조립한다."""
+
+    from agent.application.collection_request_builder import (
+        normalize_target_count,
+    )
+    from agent.application.collection_submission_service import (
+        commit_worker_review,
+        persist_accepted_worker_result,
+    )
+    from agent.application.collection_worker_runner import (
+        build_limit_intermediate_report,
+        limit_report_requires_more_collection,
+        needs_human_limit_approval,
+        run_worker_once,
+        worker_review_retries,
+    )
+    from agent.application.worker_execution_service import (
+        close_browser_after_run,
+    )
+    from agent.recipe.reviewer import render_review_feedback
+    from agent.recipe.task_category import normalize_task_category
+
+    return CollectionOperations(
+        normalize_target_count=normalize_target_count,
+        normalize_task_category=normalize_task_category,
+        review_retries=worker_review_retries,
+        run_worker=partial(
+            run_worker_once,
+            worker_runtime=worker_runtime,
+        ),
+        review_worker=commit_worker_review,
+        persist_result=persist_accepted_worker_result,
+        render_review_feedback=render_review_feedback,
+        needs_approval=needs_human_limit_approval,
+        build_intermediate_report=build_limit_intermediate_report,
+        report_requires_more_collection=limit_report_requires_more_collection,
+        close_browser=partial(
+            close_browser_after_run,
+            worker_runtime=worker_runtime,
+        ),
+    )
+
+
+__all__ = [
+    "CollectionOperations",
+    "CollectionRequest",
+    "CollectionService",
+    "build_collection_operations",
+]

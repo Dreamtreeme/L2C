@@ -82,7 +82,11 @@ flowchart TD
 | 진입점 | `agent/main.py`, `agent/web_server.py` | CLI·HTTP 입력과 응답 |
 | 실행 계약 | `agent/application/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
 | 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py` | 조사 실행 진입과 DB 근거 충분성 검사 |
+| 수집 요청 | `agent/application/collection_request_builder.py` | 검색 의도 정규화, 사이트 프로필 선택, 작업자 목표 생성 |
 | 수집 조율 | `agent/application/collection_service.py` | 작업자 실행, 검토 재시도, 승인 데이터 저장 순서 |
+| 수집 작업자 | `agent/application/collection_worker_runner.py` | 단일 비전 작업자 실행, 제출물 생성, 재귀 한도 보고 |
+| 수집 제출물 | `agent/application/collection_submission_service.py` | Critic 검토, 승인 데이터 저장, 레시피 후보 등록 |
+| 수집 도구 | `agent/tools/realtime_scraping.py` | 구조화 도구 인자와 애플리케이션 수집 서비스 연결 |
 | 런타임 소유권 | `agent/runtime/application_runtime.py`, `vision_worker_runtime.py` | 체크포인터·그래프·OCR·모델·잠금·승격 작업자의 생성과 종료 |
 | 작업자 실행 | `agent/application/worker_execution_service.py` | 시작 화면 준비, 그래프 실행, 브라우저 정리 순서 |
 | 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 공고 정규화·UPSERT, 상세 OCR 최종 구조화 |

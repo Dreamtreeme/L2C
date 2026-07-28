@@ -3,7 +3,7 @@ title: "L2C 네이밍 규칙"
 type: reference
 area: architecture
 status: active
-updated: 2026-07-23
+updated: 2026-07-29
 tags:
   - l2c
   - docs/architecture
@@ -137,6 +137,16 @@ tags:
 | `investigation_answer_nodes.py` | 검증된 문서 조회와 최종 답변 |
 | `investigation_workflow.py` | 노드 연결, 체크포인트 중단·재개, 실행 진입 |
 
+채용공고 수집 애플리케이션은 `collection_<책임>.py`를 사용한다.
+
+| 모듈 | 책임 |
+|---|---|
+| `collection_request_builder.py` | 수집 의도, 사이트 프로필과 작업자 목표 생성 |
+| `collection_service.py` | 작업자·검토·저장 순서와 재시도 조율 |
+| `collection_worker_runner.py` | 단일 비전 작업자 실행과 실행 결과 구성 |
+| `collection_submission_service.py` | 제출물 검토, 저장과 레시피 후보 등록 |
+| `tools/realtime_scraping.py` | 수집 도구 계약과 애플리케이션 호출 어댑터 |
+
 ## 피해야 할 이름
 
 - `recipe`: 단독 사용 금지. `recipe_candidate`, `active_recipe`, `site_recipe`, `recipe_step` 중 하나를 쓴다.
@@ -181,4 +191,7 @@ def test_candidate_promotion_skips_non_target_action():
 3. [완료] `candidate_reviewer.py`에서 promotion 로직을 `candidate_promotion.py`로 분리한다.
 4. [완료] `RecipeStore` 조회를 `recipe_key + site + task_category + page_role + roi_signature` 기준으로 정리한다.
 5. [완료] `investigation_workflow.py`를 조립부와 요청·근거·수집·답변 노드로 분리한다.
-6. 남은 `_dump_model`, `_bbox`, `_center` 같은 작은 중복 유틸을 공통 모듈로 옮긴다.
+6. [완료] 모델 변환과 좌표 계산을 `utils/model_dump.py`, `vision/marker_geometry.py`, `vision/target_snapshot.py`로 통합한다.
+7. [완료] `realtime_scraping.py`에서 요청 생성, 작업자 실행과 제출물 처리를 분리한다.
+
+입력 검증용 bbox, OCR 줄 병합 bbox, pHash 레거시 비율 복원처럼 의미가 다른 함수는 이름이 비슷하다는 이유만으로 합치지 않는다.
