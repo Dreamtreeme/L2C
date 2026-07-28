@@ -16,8 +16,21 @@ REQUIRED_IDENTITY_FIELDS = (
     "config_fingerprint",
     "scenario_id",
     "site",
-    "run_mode",
+    "execution_mode",
 )
+
+
+def _execution_mode(payload: dict[str, Any]) -> str:
+    """현재 스키마와 과거 E2E 기록의 실행 방식을 표준 명칭으로 읽는다."""
+
+    current = str(payload.get("execution_mode") or "").strip()
+    if current:
+        return current
+    historical = str(payload.get("run_mode") or "").strip()
+    return {
+        "cold": "autonomous",
+        "warm": "experience_guided",
+    }.get(historical, historical)
 
 
 def _as_float(value: Any) -> float | None:
@@ -53,11 +66,16 @@ def _load_run(path: Path) -> tuple[dict[str, Any] | None, str]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None, "invalid_json"
-    if payload.get("schema_version") != 2 or not payload.get("site"):
+    if payload.get("schema_version") not in {2, 3} or not payload.get("site"):
         return None, "non_collection_summary"
 
+    execution_mode = _execution_mode(payload)
+    identity = {
+        **payload,
+        "execution_mode": execution_mode,
+    }
     missing_fields = [
-        field for field in REQUIRED_IDENTITY_FIELDS if not payload.get(field)
+        field for field in REQUIRED_IDENTITY_FIELDS if not identity.get(field)
     ]
     if missing_fields:
         classification = "incomplete_identity"
@@ -78,7 +96,7 @@ def _load_run(path: Path) -> tuple[dict[str, Any] | None, str]:
         "config_fingerprint": str(payload.get("config_fingerprint") or ""),
         "scenario_id": str(payload.get("scenario_id") or ""),
         "site": str(payload.get("site") or ""),
-        "run_mode": str(payload.get("run_mode") or ""),
+        "execution_mode": execution_mode,
         "query": str(payload.get("query") or ""),
         "target_count": _as_int(payload.get("target_count")) or 0,
         "recipe_version": str(payload.get("recipe_version") or ""),
@@ -100,7 +118,7 @@ def _group_key(run: dict[str, Any]) -> tuple[Any, ...]:
         run["config_fingerprint"],
         run["scenario_id"],
         run["site"],
-        run["run_mode"],
+        run["execution_mode"],
         run["query"],
         run["target_count"],
         run["recipe_version"],
@@ -135,7 +153,7 @@ def _summarize_group(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "config_fingerprint": first["config_fingerprint"],
         "scenario_id": first["scenario_id"],
         "site": first["site"],
-        "run_mode": first["run_mode"],
+        "execution_mode": first["execution_mode"],
         "query": first["query"],
         "target_count": first["target_count"],
         "recipe_version": first["recipe_version"],
@@ -181,7 +199,7 @@ def build_history_audit(root: Path) -> dict[str, Any]:
     )
     classifications = Counter(run["classification"] for run in runs)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now().astimezone().isoformat(),
         "root": str(root.resolve()),
         "discovered_summary_count": len(paths),
@@ -198,6 +216,13 @@ def _display_number(value: Any, digits: int = 2) -> str:
     if value is None:
         return "-"
     return f"{float(value):.{digits}f}"
+
+
+def _display_execution_mode(value: Any) -> str:
+    return {
+        "autonomous": "자율 탐색",
+        "experience_guided": "경험 기반 탐색",
+    }.get(str(value or ""), str(value or ""))
 
 
 def render_markdown(
@@ -254,7 +279,9 @@ def render_markdown(
                 commit=str(group.get("git_commit") or "")[:8],
                 config=group.get("config_fingerprint", ""),
                 scenario=group.get("scenario_id", ""),
-                mode=group.get("run_mode", ""),
+                mode=_display_execution_mode(
+                    group.get("execution_mode", "")
+                ),
                 passed=group.get("passed_count", 0),
                 count=group.get("count", 0),
                 duration=duration_text,

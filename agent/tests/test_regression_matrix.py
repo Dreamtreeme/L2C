@@ -1,19 +1,50 @@
 import json
 import sqlite3
 
+from benchmark.audit_e2e_history import _execution_mode
 from benchmark.run_realtime_e2e import (
-    _apply_run_mode_environment,
-    _finalize_warm_preconditions,
+    _apply_execution_mode_environment,
+    _finalize_experience_guided_preconditions,
 )
 from benchmark.run_regression_matrix import (
     _attach_promotion_metrics,
-    _clear_jobs_for_warm_run,
+    _clear_jobs_for_experience_guided_run,
+    _command,
     _metric_summary,
-    _paired_cold_failed,
-    _promote_cold_candidate,
+    _paired_autonomous_failed,
+    _promote_autonomous_candidate,
     _scenario_environment,
     _scenario_workload_key,
 )
+
+
+def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
+    command = _command(
+        {
+            "id": "wanted-ios-experience-guided",
+            "site": "wanted",
+            "query": "iOS 개발자",
+            "target_count": 2,
+            "count_mode": "explicit",
+            "execution_mode": "experience_guided",
+        },
+        tmp_path / "run.log",
+        tmp_path / "run.summary.json",
+    )
+
+    assert "--execution-mode" in command
+    assert command[command.index("--execution-mode") + 1] == (
+        "experience_guided"
+    )
+    assert "--run-mode" not in command
+
+
+def test_history_audit_normalizes_execution_mode_names() -> None:
+    assert _execution_mode(
+        {"execution_mode": "experience_guided"}
+    ) == "experience_guided"
+    assert _execution_mode({"run_mode": "cold"}) == "autonomous"
+    assert _execution_mode({"run_mode": "warm"}) == "experience_guided"
 
 
 def test_metric_summary_prefers_ocr_request_metrics() -> None:
@@ -86,7 +117,7 @@ def test_profile_summary_reports_execution_actions(tmp_path) -> None:
     assert report["actions"]["click_marker"]["total"] == 0.25
 
 
-def test_warm_comparison_rejects_existing_jobs() -> None:
+def test_experience_guided_comparison_rejects_existing_jobs() -> None:
     preconditions = {
         "required": True,
         "roi_recipes": 2,
@@ -95,7 +126,7 @@ def test_warm_comparison_rejects_existing_jobs() -> None:
         "reasons": [],
     }
 
-    result = _finalize_warm_preconditions(
+    result = _finalize_experience_guided_preconditions(
         preconditions,
         {"observed_existing_count": 3},
     )
@@ -104,25 +135,34 @@ def test_warm_comparison_rejects_existing_jobs() -> None:
     assert result["reasons"] == ["existing_jobs_observed"]
 
 
-def test_run_modes_control_reflex_environment(monkeypatch) -> None:
+def test_execution_modes_control_reflex_environment(monkeypatch) -> None:
     monkeypatch.setenv("REFLEX_ENABLED", "1")
-    _apply_run_mode_environment("cold")
-    assert _scenario_environment({"run_mode": "cold"})["REFLEX_ENABLED"] == "0"
+    _apply_execution_mode_environment("autonomous")
+    assert _scenario_environment(
+        {"execution_mode": "autonomous"}
+    )["REFLEX_ENABLED"] == "0"
 
-    _apply_run_mode_environment("warm")
-    assert _scenario_environment({"run_mode": "warm"})["REFLEX_ENABLED"] == "1"
+    _apply_execution_mode_environment("experience_guided")
+    assert _scenario_environment(
+        {"execution_mode": "experience_guided"}
+    )["REFLEX_ENABLED"] == "1"
 
 
 def test_scenario_environment_uses_isolated_database(tmp_path) -> None:
     db_path = tmp_path / "regression.db"
 
-    environment = _scenario_environment({"run_mode": "cold"}, db_path=db_path)
+    environment = _scenario_environment(
+        {"execution_mode": "autonomous"},
+        db_path=db_path,
+    )
 
     assert environment["DB_PATH"] == str(db_path)
     assert environment["VISION_RECIPE_AUTO_PROMOTE"] == "0"
 
 
-def test_warm_reset_keeps_recipes_and_removes_jobs(tmp_path) -> None:
+def test_experience_guided_reset_keeps_recipes_and_removes_jobs(
+    tmp_path,
+) -> None:
     db_path = tmp_path / "regression.db"
     with sqlite3.connect(db_path) as connection:
         connection.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, title TEXT)")
@@ -130,32 +170,42 @@ def test_warm_reset_keeps_recipes_and_removes_jobs(tmp_path) -> None:
         connection.execute("INSERT INTO jobs (title) VALUES ('iOS 개발자')")
         connection.execute("INSERT INTO recipes (recipe_key) VALUES ('roi2#search')")
 
-    assert _clear_jobs_for_warm_run(db_path) == 1
+    assert _clear_jobs_for_experience_guided_run(db_path) == 1
 
     with sqlite3.connect(db_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 1
 
 
-def test_scenario_workload_key_matches_cold_and_warm() -> None:
-    cold = {
+def test_scenario_workload_key_matches_both_execution_modes() -> None:
+    autonomous = {
         "site": "Wanted",
         "query": " iOS 개발자 ",
         "target_count": 2,
         "count_mode": "explicit",
-        "run_mode": "cold",
+        "execution_mode": "autonomous",
     }
-    warm = {
-        **cold,
+    experience_guided = {
+        **autonomous,
         "site": "wanted",
         "query": "iOS 개발자",
-        "run_mode": "warm",
+        "execution_mode": "experience_guided",
     }
 
-    assert _scenario_workload_key(cold) == _scenario_workload_key(warm)
-    assert _paired_cold_failed(warm, {_scenario_workload_key(cold): False}) is True
-    assert _paired_cold_failed(warm, {_scenario_workload_key(cold): True}) is False
-    assert _paired_cold_failed(cold, {_scenario_workload_key(cold): False}) is False
+    workload_key = _scenario_workload_key(autonomous)
+    assert workload_key == _scenario_workload_key(experience_guided)
+    assert _paired_autonomous_failed(
+        experience_guided,
+        {workload_key: False},
+    )
+    assert not _paired_autonomous_failed(
+        experience_guided,
+        {workload_key: True},
+    )
+    assert not _paired_autonomous_failed(
+        autonomous,
+        {workload_key: False},
+    )
 
 
 def test_promotion_metrics_are_added_to_collection_metrics() -> None:
@@ -180,7 +230,10 @@ def test_promotion_metrics_are_added_to_collection_metrics() -> None:
     assert combined["workflow_estimated_cost"] == 0.013
 
 
-def test_cold_promotion_uses_worker_retry_and_persists_attempts(tmp_path, monkeypatch) -> None:
+def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
+    tmp_path,
+    monkeypatch,
+) -> None:
     from agent.recipe import candidate_reviewer
     from agent.recipe.candidate_store import RecipeCandidateStore
 
@@ -204,7 +257,7 @@ def test_cold_promotion_uses_worker_retry_and_persists_attempts(tmp_path, monkey
     assert store.enqueue_review(other_candidate_id) is True
     candidate_id = store.commit_candidate(
         {
-            "run_id": "cold-run",
+            "run_id": "autonomous-run",
             "site": "wanted",
             "goal": "iOS 개발자 공고 수집",
             "keyword": "iOS 개발자",
@@ -223,7 +276,7 @@ def test_cold_promotion_uses_worker_retry_and_persists_attempts(tmp_path, monkey
             "recipe_candidate": True,
             "confidence": 0.8,
         },
-        submission_id="cold-run:0",
+        submission_id="autonomous-run:0",
     )
     calls = []
 
@@ -253,7 +306,7 @@ def test_cold_promotion_uses_worker_retry_and_persists_attempts(tmp_path, monkey
 
     monkeypatch.setattr(candidate_reviewer, "review_and_apply_candidate", review)
 
-    result = _promote_cold_candidate(
+    result = _promote_autonomous_candidate(
         {"result": {"submission_id": candidate_id}},
         db_path=db_path,
     )

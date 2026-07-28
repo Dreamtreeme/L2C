@@ -22,6 +22,7 @@ from agent.graph.investigation_context import (
 )
 from agent.graph.investigation_evidence_policy import compact_db_report
 from agent.prompts.investigation import answer_prompt
+from agent.utils.job_fields import DETAIL_JOB_FIELDS
 from shared.schema.investigation_schema import (
     InvestigationRequest,
     InvestigationStatus,
@@ -71,13 +72,12 @@ def compact_collection_results(results: list[dict[str, Any]]) -> list[dict[str, 
 def build_answer_evidence_documents(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """구조화 상세 필드가 완전한 문서는 중복 OCR 원문을 답변 입력에서 제외한다."""
 
-    detail_fields = ("tech_stack", "main_tasks", "requirements", "preferred", "benefits")
     projected = []
     for document in documents or []:
         if not isinstance(document, dict):
             continue
         item = dict(document)
-        if all(str(item.get(field) or "").strip() for field in detail_fields):
+        if all(str(item.get(field) or "").strip() for field in DETAIL_JOB_FIELDS):
             item.pop("raw_ocr_text", None)
         projected.append(item)
     return projected

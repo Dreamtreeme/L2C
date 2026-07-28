@@ -172,6 +172,11 @@ def normalize_collection_steps(
                 "purpose": investigation.purpose.value,
                 "analysis_goal": investigation.objective,
                 "task_category": "검색",
+                "required_fields": (
+                    list(requirement.required_fields)
+                    if requirement is not None
+                    else list(arguments.get("required_fields") or [])
+                ),
             }
         )
         signature = json.dumps(arguments, ensure_ascii=False, sort_keys=True)

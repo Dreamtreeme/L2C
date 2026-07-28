@@ -45,6 +45,7 @@ class WorkerExecutionContext:
     job_results_availability: dict[str, Any] = field(default_factory=dict)
     active_job_card: dict[str, Any] = field(default_factory=dict)
     job_detail_buffer: dict[str, Any] = field(default_factory=dict)
+    job_detail_coverage: dict[str, Any] = field(default_factory=dict)
     job_detail_followup: dict[str, Any] = field(default_factory=dict)
     return_to_job_results: dict[str, Any] = field(default_factory=dict)
     screen_changed: bool = False
@@ -100,6 +101,9 @@ class WorkerExecutionContext:
             job_detail_buffer=dict(
                 state.get("job_detail_buffer", {}) or {}
             ),
+            job_detail_coverage=dict(
+                state.get("job_detail_coverage", {}) or {}
+            ),
             job_detail_followup=dict(
                 state.get("job_detail_followup", {}) or {}
             ),
@@ -120,8 +124,47 @@ class WorkerExecutionContext:
             "current_url": self.current_url,
             "active_job_card": self.active_job_card,
             "job_detail_buffer": self.job_detail_buffer,
+            "job_detail_coverage": self.job_detail_coverage,
             "job_detail_followup": self.job_detail_followup,
         }
+
+    def observe_job_detail_fields(
+        self,
+        action_name: str,
+        args: dict[str, Any],
+    ) -> None:
+        """기존 추론 호출이 판독한 상세 필드 근거를 상태에 누적한다."""
+
+        if action_name not in {
+            "click_marker",
+            "scroll",
+            "finish_detail_reading",
+        }:
+            return
+        from agent.graph.worker_state import job_detail_key_from_state
+        from agent.runtime.detail_runtime import is_job_detail_context
+        from agent.runtime.job_field_contract import (
+            merge_job_detail_coverage,
+        )
+
+        page_role = str(
+            args.get("page_role")
+            or self.state.get("current_page_role")
+            or ""
+        )
+        if not is_job_detail_context(
+            self.current_url,
+            page_role=page_role,
+        ):
+            return
+        dispatch_state = self.state_for_dispatch()
+        self.job_detail_coverage = merge_job_detail_coverage(
+            self.job_detail_coverage,
+            args,
+            state=dispatch_state,
+            current_url=self.current_url,
+            detail_key=job_detail_key_from_state(dispatch_state),
+        )
 
     def next_action_sequence(self) -> int:
         return len(self.prior_actions) + len(self.new_actions)
@@ -518,6 +561,7 @@ class WorkerExecutionContext:
             "job_card_replay_trace": {},
             "job_page_policy_trace": {},
             "job_detail_buffer": self.job_detail_buffer,
+            "job_detail_coverage": self.job_detail_coverage,
             "job_detail_followup": self.job_detail_followup,
             "return_to_job_results": self.return_to_job_results,
             "pending_human_approval": self.pending_human_approval,

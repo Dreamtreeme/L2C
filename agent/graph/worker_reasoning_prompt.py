@@ -22,7 +22,9 @@ from agent.runtime.job_card_queue import pending_job_cards
 from agent.runtime.job_collection import job_count, job_items
 from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
+from agent.utils.job_fields import job_field_value
 from agent.utils.logger import logger
+from shared.schema.agent_contract import JOB_COLLECTION_FIELD_LABELS
 
 
 def _is_open_browser_noop(action: dict[str, Any]) -> bool:
@@ -119,9 +121,10 @@ def _safety_page_role_contract() -> str:
         "- For public job collection, do not attempt login, signup, authentication, or account switching unless the user explicitly asked for it. If such a screen appears, leave that flow and return to a public search/list/home surface. Use neutral action reasons such as 'return to public search surface' instead of describing a login/signup action.\n"
         "- A marker whose OCR text is only a generic icon label has no known semantic identity. Infer it only from a clearly visible symbol; otherwise choose a nearby labeled text marker or another visible navigation path instead of inventing what its ID means.\n"
         "- Unknown or newly released tasks should be researched and narrowed before execution. Do not try random branches first.\n"
-        "- On detail pages, your main judgment is whether enough information has been read. If detail OCR buffering is active, do not call update_extracted_info for intermediate extraction; scroll, click a clearly relevant reveal/details control, or call finish_detail_reading(page_role=\"job_detail\", detail_complete=true) when the current posting is sufficiently read.\n"
+        "- On detail pages, report fields visibly confirmed on the current screen in observed_fields whenever you scroll, click a reveal control, or finish. The state keeps this evidence across screens without another extraction call.\n"
+        "- If detail OCR buffering is active, do not call update_extracted_info for intermediate extraction. Call finish_detail_reading only after every field in the current required-field contract is confirmed. A field that the posting does not provide may be listed in unavailable_fields only after page_exhausted=true.\n"
         "- A title and company without actual duties or qualifications may be an intermediary page. Follow a visible original-source or content-reveal control before finishing; never guess a destination URL.\n"
-        "- If finish_detail_reading was rejected with detail_content_incomplete, inspect accumulated OCR and the visible page, then navigate to the original posting or reveal its content instead of repeating finish.\n"
+        "- If finish_detail_reading was rejected with required_field_evidence_incomplete, use the returned missing_fields to choose one visible reveal, navigation, or scroll action instead of repeating finish.\n"
     )
 
 
@@ -130,17 +133,6 @@ def _clip_prompt_text(value: Any, max_chars: int = 160) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars].rstrip() + "..."
-
-
-def _first_nonempty_field(
-    data: dict[str, Any],
-    aliases: tuple[str, ...],
-) -> Any:
-    for key in aliases:
-        value = data.get(key)
-        if value not in (None, "", [], {}):
-            return value
-    return None
 
 
 def _compact_prompt_value(value: Any, max_chars: int = 140) -> Any:
@@ -168,26 +160,20 @@ def _compact_prompt_value(value: Any, max_chars: int = 140) -> Any:
     return _clip_prompt_text(value, max_chars=max_chars)
 
 
-_JOB_FIELD_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("회사명", ("회사명", "company_name", "company")),
-    ("직무명", ("직무명", "position", "title", "job_title")),
-    ("url", ("url", "공고URL", "link")),
-    ("주요업무", ("주요업무", "main_tasks", "responsibilities")),
-    ("자격요건", ("자격요건", "requirements", "qualifications")),
-    ("우대사항", ("우대사항", "preferred", "preferred_qualifications")),
-    ("혜택", ("혜택", "혜택 및 복지", "복리후생", "benefits")),
+_JOB_SUMMARY_FIELDS: tuple[str, ...] = (
+    "company_name",
+    "position",
+    "url",
+    "main_tasks",
+    "requirements",
+    "preferred",
+    "benefits",
 )
 
 
 def _job_display_label(job: dict[str, Any]) -> str:
-    company = _first_nonempty_field(
-        job,
-        ("회사명", "company_name", "company"),
-    )
-    position = _first_nonempty_field(
-        job,
-        ("직무명", "position", "title", "job_title"),
-    )
+    company = job_field_value(job, "company_name")
+    position = job_field_value(job, "position")
     if company and position:
         return _clip_prompt_text(f"{company} - {position}", 120)
     return _clip_prompt_text(
@@ -200,18 +186,19 @@ def _job_summary_for_prompt(job: dict[str, Any]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     present_fields: list[str] = []
     missing_fields: list[str] = []
-    for label, aliases in _JOB_FIELD_ALIASES:
-        value = _first_nonempty_field(job, aliases)
+    for field in _JOB_SUMMARY_FIELDS:
+        label = JOB_COLLECTION_FIELD_LABELS.get(field, field)
+        value = job_field_value(job, field)
         if value in (None, "", [], {}):
             missing_fields.append(label)
             continue
         present_fields.append(label)
-        if label in {"회사명", "직무명", "url"}:
+        if field in {"company_name", "position", "url"}:
             summary[label] = _compact_prompt_value(
                 value,
                 max_chars=140,
             )
-        elif label in {"주요업무", "자격요건", "우대사항", "혜택"}:
+        elif field in {"main_tasks", "requirements", "preferred", "benefits"}:
             summary[label] = _compact_prompt_value(
                 value,
                 max_chars=120,

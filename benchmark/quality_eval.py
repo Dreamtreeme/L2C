@@ -11,20 +11,21 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import ValidationError
 
+from agent.utils.job_fields import (
+    DETAIL_JOB_FIELDS,
+    IDENTITY_JOB_FIELDS,
+    JOB_FIELD_ALIASES,
+    normalize_job_collection_fields,
+)
 from shared.schema.jd_schema import JobPosting
 
 
 FIELD_ALIASES = {
-    "company_name": ("company_name", "회사명"),
-    "position": ("position", "직무명", "포지션"),
-    "url": ("url", "공고url", "공고_url", "source_url"),
-    "main_tasks": ("main_tasks", "주요업무"),
-    "requirements": ("requirements", "자격요건"),
-    "preferred": ("preferred", "우대사항"),
-    "benefits": ("benefits", "혜택", "혜택정보", "혜택 및 복지"),
+    field: tuple(aliases)
+    for field, aliases in JOB_FIELD_ALIASES.items()
 }
-REQUIRED_FIELDS = ("company_name", "position", "url")
-CONTENT_FIELDS = ("main_tasks", "requirements", "preferred", "benefits")
+REQUIRED_FIELDS = IDENTITY_JOB_FIELDS
+CONTENT_FIELDS = DETAIL_JOB_FIELDS
 RECORD_KEYS = ("jobs", "job_postings", "공고목록", "collected_data")
 
 
@@ -79,32 +80,75 @@ def _strict_value(value: Any, *, url: bool = False) -> Any:
     return _normalized_url(value) if url else _normalized_text(value)
 
 
-def evaluate_job_records(actual: Any, reference: Any | None = None) -> dict[str, Any]:
+def evaluate_job_records(
+    actual: Any,
+    reference: Any | None = None,
+    *,
+    required_fields: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     """필수 필드와 URL을 중심으로 수집 결과를 평가한다."""
 
-    actual_records = [normalize_job_record(item) for item in extract_job_records(actual)]
+    payload_intent = (
+        actual.get("collection_intent")
+        if isinstance(actual, dict)
+        and isinstance(actual.get("collection_intent"), dict)
+        else {}
+    )
+    resolved_required_fields = normalize_job_collection_fields(
+        required_fields
+        if required_fields is not None
+        else payload_intent.get("required_fields")
+    )
+    if not resolved_required_fields:
+        resolved_required_fields = list(REQUIRED_FIELDS)
+    raw_actual_records = extract_job_records(actual)
+    actual_records = [
+        normalize_job_record(item)
+        for item in raw_actual_records
+    ]
     count = len(actual_records)
     valid_count = 0
     required_present = 0
+    unavailable_required = 0
     content_present = 0
     urls = []
-    for record in actual_records:
+    for raw_record, record in zip(
+        raw_actual_records,
+        actual_records,
+        strict=True,
+    ):
         try:
             JobPosting.model_validate(record)
             valid_count += 1
         except ValidationError:
             pass
-        required_present += sum(_is_present(record.get(field)) for field in REQUIRED_FIELDS)
+        unavailable = (
+            set(
+                normalize_job_collection_fields(
+                    raw_record.get("_collection_unavailable_fields")
+                )
+            )
+            if raw_record.get("_collection_page_exhausted") is True
+            else set()
+        )
+        for field in resolved_required_fields:
+            if _is_present(record.get(field)):
+                required_present += 1
+            elif field in unavailable:
+                required_present += 1
+                unavailable_required += 1
         content_present += sum(_is_present(record.get(field)) for field in CONTENT_FIELDS)
         normalized_url = _normalized_url(record.get("url"))
         if normalized_url:
             urls.append(normalized_url)
 
-    required_slots = count * len(REQUIRED_FIELDS)
+    required_slots = count * len(resolved_required_fields)
     content_slots = count * len(CONTENT_FIELDS)
     unique_url_rate = len(set(urls)) / len(urls) if urls else 0.0
     result: dict[str, Any] = {
         "record_count": count,
+        "required_fields": resolved_required_fields,
+        "unavailable_required_field_count": unavailable_required,
         "schema_valid_rate": round(valid_count / count, 6) if count else 0.0,
         "required_field_coverage": round(required_present / required_slots, 6) if required_slots else 0.0,
         "content_field_coverage": round(content_present / content_slots, 6) if content_slots else 0.0,

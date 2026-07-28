@@ -407,10 +407,25 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
 
     result, extracted = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
-        {"page_role": "job_detail", "detail_complete": True},
+        {
+            "page_role": "job_detail",
+            "observed_fields": {
+                "company_name": "보이저엑스",
+                "position": "iOS 개발자",
+                "requirements": "자격요건 Swift",
+            },
+        },
         {},
         current_url="https://www.wanted.co.kr/wd/1",
         state={
+            "job_collection_contract": {
+                "required_fields": [
+                    "company_name",
+                    "position",
+                    "url",
+                    "requirements",
+                ]
+            },
             "job_detail_buffer": {
                 "url": "https://www.wanted.co.kr/wd/1",
                 "lines": [{"text": "자격요건 Swift"}],
@@ -421,6 +436,120 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
     assert result["status"] == "success"
     assert result["_job_detail_buffer"] == {}
     assert extracted["공고목록"][0]["position"] == "iOS 개발자"
+
+
+def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
+    monkeypatch,
+):
+    calls = []
+
+    def fail_if_called(_state, _current_url):
+        calls.append(True)
+        return {}
+
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "extract_job_from_job_detail_buffer",
+        fail_if_called,
+    )
+
+    result, _extracted = worker_execution_dispatch.dispatch_state_action(
+        "finish_detail_reading",
+        {
+            "page_role": "job_detail",
+            "observed_fields": {
+                "company_name": "예시회사",
+                "position": "백엔드 개발자",
+            },
+        },
+        {},
+        current_url="https://www.wanted.co.kr/wd/2",
+        state={
+            "job_collection_contract": {
+                "required_fields": [
+                    "company_name",
+                    "position",
+                    "url",
+                    "main_tasks",
+                    "requirements",
+                ]
+            },
+            "job_detail_buffer": {
+                "url": "https://www.wanted.co.kr/wd/2",
+                "lines": [{"text": "백엔드 개발자"}],
+            },
+        },
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "required_field_evidence_incomplete"
+    assert result["_job_detail_followup"]["missing_fields"] == [
+        "main_tasks",
+        "requirements",
+    ]
+    assert calls == []
+
+
+def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
+    monkeypatch,
+):
+    calls = []
+
+    def extract_once(_state, current_url):
+        calls.append(True)
+        return {
+            "company_name": "예시회사",
+            "position": "백엔드 개발자",
+            "url": current_url,
+            "main_tasks": ["API 개발"],
+            "requirements": ["Python"],
+        }
+
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "extract_job_from_job_detail_buffer",
+        extract_once,
+    )
+    required_fields = [
+        "company_name",
+        "position",
+        "url",
+        "main_tasks",
+        "requirements",
+        "benefits",
+    ]
+
+    result, extracted = worker_execution_dispatch.dispatch_state_action(
+        "finish_detail_reading",
+        {
+            "page_role": "job_detail",
+            "observed_fields": {
+                "company_name": "예시회사",
+                "position": "백엔드 개발자",
+                "main_tasks": "API 개발",
+                "requirements": "Python",
+            },
+            "unavailable_fields": ["benefits"],
+            "page_exhausted": True,
+        },
+        {},
+        current_url="https://www.wanted.co.kr/wd/3",
+        state={
+            "job_collection_contract": {
+                "required_fields": required_fields,
+            },
+            "job_detail_buffer": {
+                "url": "https://www.wanted.co.kr/wd/3",
+                "lines": [{"text": "API 개발"}, {"text": "Python"}],
+            },
+        },
+    )
+
+    assert result["status"] == "success"
+    assert calls == [True]
+    job = extracted["공고목록"][0]
+    assert job["_collection_required_fields"] == required_fields
+    assert job["_collection_unavailable_fields"] == ["benefits"]
 
 
 def test_candidate_promotion_keeps_only_safe_roi_target(tmp_path):
@@ -821,7 +950,6 @@ def test_detail_completion_promotes_go_back_followup(tmp_path):
                     "action": "finish_detail_reading",
                     "args": {
                         "page_role": "job_detail",
-                        "detail_complete": True,
                     },
                 },
                 "feedback": {"label": "success"},

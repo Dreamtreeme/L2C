@@ -23,6 +23,9 @@ from agent.recipe.task_category import (
     DEFAULT_SEARCH_TASK_CATEGORY,
     normalize_task_category,
 )
+from agent.runtime.job_field_contract import (
+    build_job_collection_contract,
+)
 from agent.utils.model_dump import dump_model
 from shared.schema.collection_intent import (
     CollectionCountMode,
@@ -290,6 +293,13 @@ def run_worker_once(
         task_category
         or DEFAULT_SEARCH_TASK_CATEGORY
     )
+    job_collection_contract = build_job_collection_contract(
+        search_intent,
+        profile_fields=site_profile.collection_policy.required_fields,
+    )
+    search_intent["required_fields"] = list(
+        job_collection_contract["required_fields"]
+    )
     direct_search_url = build_direct_search_url(
         search_keyword,
         site_profile,
@@ -310,6 +320,7 @@ def run_worker_once(
         run_id=run_id,
         attempt_index=review_attempt,
     )
+    initial_state["job_collection_contract"] = job_collection_contract
     initial_state["recipe_params"] = {
         "query": search_keyword,
         "keyword": search_keyword,

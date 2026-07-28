@@ -40,8 +40,8 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
     totals = dict(llm.get("totals") or {})
     outcome = dict(metrics.get("outcome") or {})
     quality = dict(payload.get("quality") or {})
-    warm_preconditions = dict(
-        payload.get("warm_preconditions") or {}
+    experience_preconditions = dict(
+        payload.get("experience_guided_preconditions") or {}
     )
     return {
         "status": payload.get("status"),
@@ -80,14 +80,14 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
             and item.get("action_source") == "followup_strategy"
             for item in steps
         ),
-        "warm_performance_comparable": bool(
-            warm_preconditions.get("performance_comparable", True)
+        "experience_guided_performance_comparable": bool(
+            experience_preconditions.get("performance_comparable", True)
         ),
         "active_roi_recipe_count": int(
-            warm_preconditions.get("roi_recipes") or 0
+            experience_preconditions.get("roi_recipes") or 0
         ),
         "active_followup_strategy_count": int(
-            warm_preconditions.get("followup_strategies") or 0
+            experience_preconditions.get("followup_strategies") or 0
         ),
         "input_tokens": int(totals.get("input_tokens") or 0),
         "output_tokens": int(totals.get("output_tokens") or 0),
@@ -115,8 +115,8 @@ def _command(scenario: dict[str, Any], log_path: Path, summary_path: Path) -> li
         str(scenario.get("original_query") or scenario["query"]),
         "--scenario-id",
         str(scenario["id"]),
-        "--run-mode",
-        str(scenario.get("run_mode") or "unspecified"),
+        "--execution-mode",
+        str(scenario["execution_mode"]),
         "--experiment-name",
         "architecture-regression",
         "--log",
@@ -136,15 +136,15 @@ def _scenario_environment(
         env["DB_PATH"] = str(db_path)
     # 승격 시간은 수집 실행과 분리하고 부모 프로세스의 승격 작업자로 측정한다.
     env["VISION_RECIPE_AUTO_PROMOTE"] = "0"
-    run_mode = str(scenario.get("run_mode") or "unspecified")
-    if run_mode == "cold":
+    execution_mode = str(scenario["execution_mode"])
+    if execution_mode == "autonomous":
         env["REFLEX_ENABLED"] = "0"
-    elif run_mode == "warm":
+    elif execution_mode == "experience_guided":
         env["REFLEX_ENABLED"] = "1"
     return env
 
 
-def _clear_jobs_for_warm_run(db_path: Path) -> int:
+def _clear_jobs_for_experience_guided_run(db_path: Path) -> int:
     """격리 DB의 레시피는 보존하고 공고만 지워 동일 작업량을 만든다."""
 
     if not db_path.exists():
@@ -176,22 +176,26 @@ def _scenario_workload_key(scenario: dict[str, Any]) -> str:
     )
 
 
-def _paired_cold_failed(
+def _paired_autonomous_failed(
     scenario: dict[str, Any],
-    cold_contracts: dict[str, bool],
+    autonomous_contracts: dict[str, bool],
 ) -> bool:
     return (
-        str(scenario.get("run_mode") or "") == "warm"
-        and cold_contracts.get(_scenario_workload_key(scenario)) is False
+        str(scenario.get("execution_mode") or "")
+        == "experience_guided"
+        and autonomous_contracts.get(
+            _scenario_workload_key(scenario)
+        )
+        is False
     )
 
 
-def _promote_cold_candidate(
+def _promote_autonomous_candidate(
     payload: dict[str, Any],
     *,
     db_path: Path,
 ) -> dict[str, Any]:
-    """cold 실행 시간과 분리해 후보를 검토하고 다음 warm 실행에 반영한다."""
+    """자율 탐색 시간과 분리해 후보를 검토하고 경험 기반 탐색에 반영한다."""
 
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     candidate_id = str(result.get("submission_id") or "")
@@ -281,11 +285,14 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=False)
     results = []
     exit_code = 0
-    cold_contracts: dict[str, bool] = {}
+    autonomous_contracts: dict[str, bool] = {}
     for scenario, command in zip(scenarios, commands):
-        run_mode = str(scenario.get("run_mode") or "unspecified")
+        execution_mode = str(scenario["execution_mode"])
         workload_key = _scenario_workload_key(scenario)
-        if _paired_cold_failed(scenario, cold_contracts):
+        if _paired_autonomous_failed(
+            scenario,
+            autonomous_contracts,
+        ):
             skipped_metrics = _attach_promotion_metrics(
                 _metric_summary({"status": "skipped"}),
                 {},
@@ -297,9 +304,11 @@ def main() -> int:
                     "summary_path": str(Path(command[-1])),
                     "metrics": skipped_metrics,
                     "promotion": {},
-                    "warm_reset_count": 0,
+                    "experience_guided_reset_count": 0,
                     "mode_contract_passed": False,
-                    "skipped_reason": "paired_cold_promotion_failed",
+                    "skipped_reason": (
+                        "paired_autonomous_promotion_failed"
+                    ),
                 }
             )
             exit_code = 1
@@ -307,9 +316,9 @@ def main() -> int:
                 break
             continue
 
-        warm_reset_count = (
-            _clear_jobs_for_warm_run(db_path)
-            if run_mode == "warm"
+        experience_guided_reset_count = (
+            _clear_jobs_for_experience_guided_run(db_path)
+            if execution_mode == "experience_guided"
             else 0
         )
         completed = subprocess.run(
@@ -326,12 +335,16 @@ def main() -> int:
         )
         promotion: dict[str, Any] = {}
         if (
-            str(scenario.get("run_mode") or "") == "cold"
+            str(scenario.get("execution_mode") or "")
+            == "autonomous"
             and completed.returncode == 0
             and payload.get("status") == "completed"
         ):
             try:
-                promotion = _promote_cold_candidate(payload, db_path=db_path)
+                promotion = _promote_autonomous_candidate(
+                    payload,
+                    db_path=db_path,
+                )
             except Exception as exc:
                 promotion = {
                     "promoted": False,
@@ -340,22 +353,24 @@ def main() -> int:
                 }
         metric_summary = _attach_promotion_metrics(_metric_summary(payload), promotion)
         mode_contract_passed = True
-        if run_mode == "cold":
+        if execution_mode == "autonomous":
             target_count = max(0, int(scenario.get("target_count") or 0))
             mode_contract_passed = (
                 metric_summary["persisted_count"] >= target_count
                 and bool(promotion.get("promoted"))
             )
-        elif run_mode == "warm":
+        elif execution_mode == "experience_guided":
             target_count = max(0, int(scenario.get("target_count") or 0))
             mode_contract_passed = (
                 metric_summary["persisted_count"] >= target_count
                 and metric_summary["reflex_count"] > 0
                 and metric_summary["observed_existing_count"] == 0
-                and metric_summary["warm_performance_comparable"]
+                and metric_summary[
+                    "experience_guided_performance_comparable"
+                ]
             )
-        if run_mode == "cold":
-            cold_contracts[workload_key] = bool(
+        if execution_mode == "autonomous":
+            autonomous_contracts[workload_key] = bool(
                 completed.returncode == 0
                 and metric_summary["quality_passed"]
                 and mode_contract_passed
@@ -368,7 +383,9 @@ def main() -> int:
                 "summary_path": str(summary_path),
                 "metrics": metric_summary,
                 "promotion": promotion,
-                "warm_reset_count": warm_reset_count,
+                "experience_guided_reset_count": (
+                    experience_guided_reset_count
+                ),
                 "mode_contract_passed": mode_contract_passed,
                 "skipped_reason": "",
             }
@@ -383,7 +400,7 @@ def main() -> int:
                 break
 
     aggregate = {
-        "schema_version": 1,
+        "schema_version": 2,
         "matrix": str(matrix_path),
         "db_path": str(db_path),
         "created_at": datetime.now().astimezone().isoformat(),

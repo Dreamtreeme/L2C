@@ -8,6 +8,10 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from agent.config import get_settings
+from agent.runtime.job_field_contract import (
+    build_job_collection_contract,
+    field_contract_items,
+)
 from agent.sites.profile import SiteProfile
 from agent.utils.model_dump import dump_model
 from shared.schema.collection_intent import (
@@ -42,12 +46,6 @@ def load_collection_profile(site: str | None) -> SiteProfile:
     from agent.sites import load_site_profile
 
     return load_site_profile(site or _default_site_slug())
-
-
-def _join_manual_items(items) -> str:
-    if not isinstance(items, (list, tuple)):
-        return ""
-    return "; ".join(str(item) for item in items if item)
 
 
 def _profile_site_terms(profile: SiteProfile) -> list[str]:
@@ -122,6 +120,8 @@ def extract_search_intent(
                     "Use count_mode=visible_all for all/every posting or "
                     "when no count is specified. "
                     "Use purpose=compare or trend only when requested. "
+                    "Leave required_fields empty; the evidence plan and site profile "
+                    "supply that contract. "
                     "Do not translate or broaden the keyword."
                 )
             ),
@@ -257,9 +257,6 @@ def build_site_goal(
 
     site_name = profile.display_name or profile.slug
     base_url = profile.base_url
-    required_fields = _join_manual_items(
-        profile.collection_policy.required_fields
-    )
     site_skill = profile.guidance.strip()
     navigation = profile.navigation_policy
     start_url = str(navigation.start_url or base_url or "").strip()
@@ -287,6 +284,28 @@ def build_site_goal(
         search_keyword=search_keyword,
         target_count=target_count,
     )
+    job_collection_contract = build_job_collection_contract(
+        dump_model(intent),
+        profile_fields=profile.collection_policy.required_fields,
+    )
+    required_field_items = field_contract_items(
+        job_collection_contract["required_fields"]
+    )
+    list_fields = {
+        "tech_stack",
+        "main_tasks",
+        "requirements",
+        "preferred",
+        "benefits",
+    }
+    required_record_shape = {
+        item["field"]: (
+            []
+            if item["field"] in list_fields
+            else ""
+        )
+        for item in required_field_items
+    }
     target_section = ""
     if int(target_count or 0) > 0:
         target_section = (
@@ -339,7 +358,14 @@ def build_site_goal(
         f"{target_section}"
         f"{confirmed_request_section}"
         f"{task_context_section}"
-        f"[필수 수집 필드]\n{required_fields}\n\n"
+        "[필수 공고 필드 계약]\n"
+        f"required_fields={json.dumps(required_field_items, ensure_ascii=False)}\n"
+        f"required_record_shape={json.dumps(required_record_shape, ensure_ascii=False)}\n"
+        "상세 화면의 scroll 또는 본문 펼치기 click_marker를 선택할 때마다 현재 화면에서 "
+        "확인한 필드를 observed_fields에 함께 기록하십시오. 모든 필수 필드에 화면 근거가 "
+        "모였을 때만 finish_detail_reading을 호출하십시오. 페이지 끝까지 확인했는데 공고가 "
+        "제공하지 않는 필드는 page_exhausted=true와 unavailable_fields로 명시하십시오. "
+        "값을 추측해서 빈 필드를 채우지 마십시오.\n\n"
         f"[선택된 사이트 스킬]\n{site_skill}"
     )
 

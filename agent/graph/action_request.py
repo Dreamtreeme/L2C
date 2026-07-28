@@ -73,7 +73,14 @@ class ActionRequest(BaseModel):
                     f"{call.name}에 정의되지 않은 인자가 있습니다: {sorted(unknown)}"
                 )
             validated = schema.model_validate(call.args)
-            call.args = validated.model_dump(exclude_none=True)
+            normalized_args = validated.model_dump(exclude_none=True)
+            for empty_collection_field in (
+                "observed_fields",
+                "unavailable_fields",
+            ):
+                if not normalized_args.get(empty_collection_field):
+                    normalized_args.pop(empty_collection_field, None)
+            call.args = normalized_args
         return self
 
 

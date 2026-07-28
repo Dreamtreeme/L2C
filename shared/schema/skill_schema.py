@@ -1,6 +1,6 @@
 """스킬형 메타데이터(Skill-style metadata) 스키마.
 
-자율탐색(worker exploration)에서 나온 행동 기록을 재사용 가능한 작업 설명으로
+자율 탐색(worker exploration)에서 나온 행동 기록을 재사용 가능한 작업 설명으로
 검토할 수 있게 만드는 구조다. 이 스키마는 실행 판단을 직접 하지 않고,
 지휘자/비평가 모델(Commander/Critic LLM)이 판단할 근거를 담는다.
 """

@@ -15,7 +15,7 @@ tags:
 
 ## 목표
 
-- 새 화면은 Vision/ReAct 자율탐색이 판단한다.
+- 새 화면은 Vision/ReAct 자율 탐색이 판단한다.
 - 반복되는 안정 UI 조작만 Reflex가 reasoning 없이 재생한다.
 - DOM selector, Playwright selector, 절대좌표는 Vision/Realtme 경로에 저장하지 않는다.
 - 공고 카드 선택, 본문 수집 완료 판단, 예외 복구처럼 실행마다 달라지는 판단은 LLM 또는 카드 큐 정책에 남긴다.
@@ -23,7 +23,7 @@ tags:
 ## 현재 저장 흐름
 
 ```text
-자율탐색 action
+자율 탐색 action
 -> recorded_step 저장
 -> worker_submission 저장
 -> recipe_candidate를 pending_review로 저장
@@ -31,7 +31,7 @@ tags:
 -> 백엔드 승격 작업자가 후보를 선점
 -> Critic review/promote
 -> active_recipe 저장
--> 다음 반복탐색에서 Reflex replay
+-> 다음 경험 기반 탐색에서 Reflex replay
 ```
 
 승격 검토는 현재 답변의 전제 조건이 아니다. FastAPI 수명주기의 단일 작업자가 SQLite 대기열을 처리하므로 요청과 E2E는 Critic 완료를 기다리지 않는다. 전송 오류는 `pending_review`로 재시도하고, 재시도 한도를 넘기면 의미상 거절인 `revise`와 구분해 `review_failed`로 남긴다.
@@ -77,4 +77,4 @@ Critic은 의미 판단을 담당한다. 코드는 후보를 포장하고 필수
 - target marker 비율 매칭이 실패하면 즉시 reasoning fallback.
 - Reflex action 뒤 전환 계약이 확인되지 않으면 해당 `recipe_key`는 같은 run 안에서 재시도하지 않는다.
 
-이 기준은 Reflex가 자율탐색 전체를 대체하지 않고, 고정 가능한 부모 경로만 빠르게 재생하도록 제한한다.
+이 기준은 Reflex가 자율 탐색 전체를 대체하지 않고, 고정 가능한 부모 경로만 빠르게 재생하도록 제한한다.

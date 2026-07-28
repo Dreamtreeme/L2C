@@ -82,6 +82,14 @@ def _runtime_config() -> dict[str, str]:
         "VISION_BROWSER_WINDOW_WIDTH": "",
         "VISION_BROWSER_WINDOW_HEIGHT": "",
         "VISION_REASONING_SCREEN_GUARD": "",
+        "VISION_PAGE_READY_TIMEOUT_SEC": "15",
+        "VISION_PAGE_BLANK_MAX_STDDEV": "12",
+        "VISION_PAGE_BLANK_MAX_EDGE_MEAN": "3",
+        "VISION_PAGE_BLANK_MIN_DOMINANT_RATIO": "0.96",
+        "VISION_STABLE_MAX_WAIT_SEC": "2",
+        "VISION_STABLE_CHECK_INTERVAL_SEC": "0.04",
+        "VISION_STABLE_THRESHOLD_PERCENT": "1",
+        "VISION_STABLE_REQUIRED_FRAMES": "2",
     }
     return {
         key: os.getenv(key, "").strip() or default
@@ -94,22 +102,22 @@ def _config_fingerprint(config: dict[str, str]) -> str:
     return hashlib.sha256(serialized).hexdigest()[:12]
 
 
-def _apply_run_mode_environment(run_mode: str) -> None:
-    """E2E 실행 모드가 실제 Reflex 경로를 결정하게 한다."""
+def _apply_execution_mode_environment(execution_mode: str) -> None:
+    """탐색 방식에 따라 실제 Reflex 경로를 결정한다."""
 
-    if run_mode == "cold":
+    if execution_mode == "autonomous":
         os.environ["REFLEX_ENABLED"] = "0"
-    elif run_mode == "warm":
+    elif execution_mode == "experience_guided":
         os.environ["REFLEX_ENABLED"] = "1"
 
 
-def _warm_run_preconditions(
-    run_mode: str,
+def _experience_guided_preconditions(
+    execution_mode: str,
     site: str,
 ) -> dict[str, object]:
-    """warm 성능 비교에 필요한 활성 레시피 상태를 실행 전에 고정합니다."""
+    """경험 기반 탐색에 필요한 활성 레시피 상태를 실행 전에 고정한다."""
 
-    if run_mode != "warm":
+    if execution_mode != "experience_guided":
         return {
             "required": False,
             "performance_comparable": True,
@@ -139,11 +147,11 @@ def _warm_run_preconditions(
     }
 
 
-def _finalize_warm_preconditions(
+def _finalize_experience_guided_preconditions(
     preconditions: dict[str, object],
     quality: dict[str, object],
 ) -> dict[str, object]:
-    """기존 DB 공고가 섞인 warm 실행을 성능 비교 대상에서 제외합니다."""
+    """기존 DB 공고가 섞인 경험 기반 탐색을 성능 비교에서 제외한다."""
 
     out = dict(preconditions)
     if not out.get("required"):
@@ -173,9 +181,9 @@ def main() -> int:
     parser.add_argument("--original-query", default="")
     parser.add_argument("--scenario-id", default="manual")
     parser.add_argument(
-        "--run-mode",
-        choices=("unspecified", "cold", "warm"),
-        default="unspecified",
+        "--execution-mode",
+        choices=("autonomous", "experience_guided"),
+        required=True,
     )
     parser.add_argument("--experiment-name", default="")
     parser.add_argument("--recipe-version", default="")
@@ -192,7 +200,7 @@ def main() -> int:
     if summary_path.exists():
         raise SystemExit(f"summary already exists: {summary_path}")
 
-    _apply_run_mode_environment(args.run_mode)
+    _apply_execution_mode_environment(args.execution_mode)
     commit, git_dirty = _git_revision()
     runtime_config = _runtime_config()
     config_fingerprint = _config_fingerprint(runtime_config)
@@ -202,8 +210,8 @@ def main() -> int:
         or "manual"
     )
     recipe_version = args.recipe_version or os.getenv("VISION_RECIPE_VERSION", "")
-    warm_preconditions = _warm_run_preconditions(
-        args.run_mode,
+    experience_guided_preconditions = _experience_guided_preconditions(
+        args.execution_mode,
         args.site,
     )
     configured_models = sorted(
@@ -222,8 +230,11 @@ def main() -> int:
         vision_runtime = None
         try:
             print(
-                "WARM_PRECONDITIONS="
-                + json.dumps(warm_preconditions, ensure_ascii=False)
+                "EXPERIENCE_GUIDED_PRECONDITIONS="
+                + json.dumps(
+                    experience_guided_preconditions,
+                    ensure_ascii=False,
+                )
             )
             from agent.application.run_context import run_context
             from agent.application.run_contracts import RunPhase, RunStatus
@@ -258,7 +269,7 @@ def main() -> int:
                     "site": args.site,
                     "target_count": max(0, args.target_count),
                     "count_mode": args.count_mode,
-                    "run_mode": args.run_mode,
+                    "execution_mode": args.execution_mode,
                     "git_commit": commit,
                     "git_dirty": git_dirty,
                     "config_fingerprint": config_fingerprint,
@@ -269,7 +280,7 @@ def main() -> int:
                     "e2e",
                     f"site:{args.site}",
                     f"scenario:{args.scenario_id}",
-                    f"mode:{args.run_mode}",
+                    f"mode:{args.execution_mode}",
                 ],
             ) as (context, _created):
                 start = time.perf_counter()
@@ -340,19 +351,21 @@ def main() -> int:
             final_quality = quality or evaluate_collection_summary(
                 parsed_result
             )
-            warm_preconditions = _finalize_warm_preconditions(
-                warm_preconditions,
-                final_quality,
+            experience_guided_preconditions = (
+                _finalize_experience_guided_preconditions(
+                    experience_guided_preconditions,
+                    final_quality,
+                )
             )
             summary = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "run_id": context.run_id,
                 "status": status,
                 "error": error,
                 "started_at": started_at,
                 "scenario_id": args.scenario_id,
                 "experiment_name": experiment_name,
-                "run_mode": args.run_mode,
+                "execution_mode": args.execution_mode,
                 "site": args.site,
                 "query": args.query,
                 "target_count": max(0, args.target_count),
@@ -370,7 +383,9 @@ def main() -> int:
                 "metrics": metrics,
                 "events": [event.model_dump(mode="json") for event in events],
                 "quality": final_quality,
-                "warm_preconditions": warm_preconditions,
+                "experience_guided_preconditions": (
+                    experience_guided_preconditions
+                ),
                 "recipe_promotion": recipe_promotion,
                 "result": parsed_result,
             }

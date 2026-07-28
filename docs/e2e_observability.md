@@ -42,7 +42,7 @@ Standard 유료 단가만 기록하며, 출력 단가는 공개 답변과 내부
 
 ## 실행
 
-비교할 실행에는 같은 `scenario-id`와 `experiment-name`을 사용하고, 자율탐색은 `cold`, 레시피 반복탐색은 `warm`으로 구분합니다.
+비교할 실행에는 같은 `scenario-id`와 `experiment-name`을 사용합니다. 저장된 경험 없이 화면마다 판단하는 실행은 `autonomous`, 검증된 레시피를 우선 활용하고 불일치 구간만 다시 판단하는 실행은 `experience_guided`로 구분합니다.
 
 ```powershell
 python -m benchmark.run_realtime_e2e `
@@ -52,7 +52,7 @@ python -m benchmark.run_realtime_e2e `
   --count-mode explicit `
   --scenario-id wanted-ios-2 `
   --experiment-name reflex-regression `
-  --run-mode warm `
+  --execution-mode experience_guided `
   --recipe-version roi-v1 `
   --log logs/e2e_wanted_ios2.log
 ```
@@ -82,17 +82,17 @@ python -m benchmark.audit_e2e_history logs `
 현재 분류 결과는 [`benchmark/e2e_history_audit.md`](../benchmark/e2e_history_audit.md)에
 보관합니다.
 
-### 자율탐색과 반복탐색 회귀
+### 자율 탐색과 경험 기반 탐색 회귀
 
-`benchmark.run_regression_matrix`는 격리 DB에서 같은 작업의 `cold`와 `warm`을 순서대로 실행합니다.
+`benchmark.run_regression_matrix`는 격리 DB에서 같은 작업의 자율 탐색과 경험 기반 탐색을 순서대로 실행합니다.
 
 ```powershell
 python -m benchmark.run_regression_matrix `
-  --scenario wanted-ios-cold `
-  --scenario wanted-ios-warm
+  --scenario wanted-ios-autonomous `
+  --scenario wanted-ios-experience-guided
 ```
 
-`cold` 수집 프로세스에서는 자동승격을 끕니다. 수집이 끝나면 부모 프로세스가 실제 서비스와 같은 `RecipePromotionWorker`를 사용해 해당 후보만 재시도하며 검토합니다. 프로세스 종료, 저장 품질, 목표 수, 실제 레시피 승격을 모두 통과한 경우에만 짝이 되는 `warm`을 실행합니다. 하나라도 실패하면 `warm`은 `paired_cold_promotion_failed`로 건너뛰므로, 승격되지 않은 실행을 반복탐색 성능으로 잘못 집계하지 않습니다.
+자율 탐색 프로세스에서는 자동승격을 끕니다. 수집이 끝나면 부모 프로세스가 실제 서비스와 같은 `RecipePromotionWorker`를 사용해 해당 후보만 재시도하며 검토합니다. 프로세스 종료, 저장 품질, 목표 수, 실제 레시피 승격을 모두 통과한 경우에만 짝이 되는 경험 기반 탐색을 실행합니다. 하나라도 실패하면 `paired_autonomous_promotion_failed`로 건너뛰므로, 승격되지 않은 실행을 경험 기반 탐색 성능으로 잘못 집계하지 않습니다.
 
 수집과 승격 비용은 다음 필드로 분리합니다.
 
@@ -100,7 +100,7 @@ python -m benchmark.run_regression_matrix `
 |---|---|
 | 수집 실행 | `execution_time_sec`, `total_tokens`, `estimated_cost` |
 | Critic 승격 | `promotion_time_sec`, `promotion_total_tokens`, `promotion_estimated_cost` |
-| 전체 cold 작업 | `workflow_total_tokens`, `workflow_estimated_cost` |
+| 자율 탐색과 승격 전체 | `workflow_total_tokens`, `workflow_estimated_cost` |
 
 Critic 호출은 별도 실행 문맥과 LangSmith trace를 사용합니다. 재시도가 발생하면 모든 시도의 시간, 토큰, 비용을 합산하며, 단가를 알 수 없는 모델은 기존 원칙대로 비용을 임의 추정하지 않습니다.
 
@@ -181,7 +181,7 @@ LangSmith에서 root run 이름 `l2c.e2e`를 기준으로 다음 지표를 구�
 | 토큰 소비 | `total_tokens`, `tokens_per_persisted_item` | 합계와 공고당 평균 |
 | 비용 | `estimated_cost_usd`, `cost_per_persisted_item_usd` | 단가 파일이 있을 때만 |
 | OCR 안정성 | `ocr_timeout_count`, `recovered_failure_count` | 합계와 성공 실행 비교 |
-| 반복탐색 성과 | `reflex_hits`, `queue_replay_hits` | warm 실행의 평균 |
+| 경험 기반 탐색 성과 | `reflex_hits`, `queue_replay_hits` | 경험 기반 탐색 실행의 평균 |
 | 변경 영향 | `git_commit`, `git_dirty`, `config_fingerprint`, `recipe_version` | 필터와 그룹 |
 
-비교할 때는 `scenario_id`, `site`, `target_count`, `run_mode`가 같은 실행만 묶습니다. 서로 다른 검색 난이도나 수집 개수를 한 그래프에 섞으면 실행시간과 토큰 변화의 원인을 판단할 수 없습니다.
+비교할 때는 `scenario_id`, `site`, `target_count`, `execution_mode`가 같은 실행만 묶습니다. 서로 다른 검색 난이도나 수집 개수를 한 그래프에 섞으면 실행시간과 토큰 변화의 원인을 판단할 수 없습니다.

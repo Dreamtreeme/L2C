@@ -357,6 +357,35 @@ def test_screen_quality_preserves_sparse_search_ui(monkeypatch, tmp_path):
     assert quality["low_information"] is False
 
 
+def test_screen_quality_rejects_low_contrast_loading_shell(monkeypatch, tmp_path):
+    from PIL import ImageDraw
+    from agent.tools.perception import PerceptionEngine
+
+    image_path = tmp_path / "loading-shell.png"
+    image = Image.new("RGB", (800, 900), "white")
+    image.paste((45, 58, 65), (0, 0, 800, 185))
+    draw = ImageDraw.Draw(image)
+    for row in range(2):
+        y = 225 + row * 42
+        draw.rounded_rectangle(
+            (250, y, 550, y + 18),
+            radius=7,
+            fill=(180, 180, 180),
+        )
+    image.save(image_path)
+
+    engine = object.__new__(PerceptionEngine)
+    monkeypatch.delenv("VISION_PAGE_CONTENT_TOP_PX", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MAX_STDDEV", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MAX_EDGE_MEAN", raising=False)
+    monkeypatch.delenv("VISION_PAGE_BLANK_MIN_DOMINANT_RATIO", raising=False)
+
+    quality = engine.screen_quality(image_path)
+
+    assert 6.0 < quality["stddev"] <= 12.0
+    assert quality["low_information"] is True
+
+
 def test_capture_usable_screen_retries_before_ocr(monkeypatch, tmp_path):
     from agent.tools.perception import PerceptionEngine
 
@@ -381,6 +410,53 @@ def test_capture_usable_screen_retries_before_ocr(monkeypatch, tmp_path):
     assert len(calls) == 2
     assert calls[0] is None
     assert calls[1] == "blank.png"
+
+
+def test_capture_usable_screen_retries_when_frame_stability_times_out(
+    monkeypatch,
+    tmp_path,
+):
+    from agent.tools.perception import PerceptionEngine
+
+    engine = object.__new__(PerceptionEngine)
+    paths = [tmp_path / "moving.png", tmp_path / "ready.png"]
+    calls = []
+
+    class FakeWaitStable:
+        last_wait_result = {}
+
+    wait_stable = FakeWaitStable()
+    engine._wait_stable = wait_stable
+
+    def fake_capture_screen(filename=None):
+        calls.append(filename)
+        stable = len(calls) > 1
+        wait_stable.last_wait_result = {
+            "stable": stable,
+            "reason": (
+                "consecutive_frames_stable"
+                if stable
+                else "stability_timeout"
+            ),
+            "probe_count": 2,
+            "stable_frames": 2 if stable else 0,
+            "diff_percent": 0.1 if stable else 2.5,
+        }
+        return paths[len(calls) - 1]
+
+    monkeypatch.setenv("VISION_PAGE_CAPTURE_RETRY_SEC", "0")
+    monkeypatch.setenv("VISION_PAGE_READY_TIMEOUT_SEC", "1")
+    monkeypatch.setattr(engine, "capture_screen", fake_capture_screen)
+    monkeypatch.setattr(
+        engine,
+        "screen_quality",
+        lambda _path: {"low_information": False},
+    )
+
+    assert engine.capture_usable_screen() == paths[1]
+    assert calls == [None, "moving.png"]
+    assert engine.last_capture_quality["stable"] is True
+    assert engine.last_capture_quality["stability_confirmations"] == 2
 
 
 def test_capture_usable_screen_honors_single_attempt_override(monkeypatch, tmp_path):
@@ -630,3 +706,41 @@ def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
         check_interval_sec=0,
         region={"top": 0, "left": 0, "width": 200, "height": 200},
     ) is True
+
+
+def test_wait_stable_requires_consecutive_stable_frames(monkeypatch):
+    from agent.utils.wait_stable import WaitStable
+
+    white = Image.new("RGB", (200, 200), "white")
+    black = Image.new("RGB", (200, 200), "black")
+    frames = iter([white, white, black, black, black])
+    capture_count = {"value": 0}
+
+    wait_stable = object.__new__(WaitStable)
+    wait_stable.perception = object()
+    wait_stable.last_wait_result = {}
+
+    def capture_frame(**_kwargs):
+        capture_count["value"] += 1
+        return next(frames)
+
+    monkeypatch.setattr(
+        wait_stable,
+        "_capture_memory_image",
+        capture_frame,
+    )
+    monkeypatch.setattr(
+        "agent.utils.wait_stable.time.sleep",
+        lambda _seconds: None,
+    )
+
+    assert wait_stable.wait(
+        max_wait_sec=1,
+        check_interval_sec=0,
+        threshold_percent=1,
+        required_stable_frames=2,
+        region={"top": 0, "left": 0, "width": 200, "height": 200},
+    ) is True
+    assert capture_count["value"] == 5
+    assert wait_stable.last_wait_result["probe_count"] == 4
+    assert wait_stable.last_wait_result["stable_frames"] == 2

@@ -435,6 +435,9 @@ def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
 
     def fake_run_graph_with_last_state(app, initial_state, recursion_limit):
         captured["recipe_params"] = dict(initial_state.get("recipe_params") or {})
+        captured["job_collection_contract"] = dict(
+            initial_state.get("job_collection_contract") or {}
+        )
         captured["goal"] = initial_state.get("goal", "")
         return {**initial_state, "is_finished": True, "extracted_jd": {}}, False
 
@@ -452,6 +455,22 @@ def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
     assert result["submission"]["task_category"] == "검색"
     assert captured["recipe_params"]["target_count"] == 2
     assert captured["recipe_params"]["task_category"] == "검색"
+    assert captured["job_collection_contract"]["required_fields"] == [
+        "company_name",
+        "position",
+        "url",
+        "main_tasks",
+        "requirements",
+        "preferred",
+        "benefits",
+    ]
+    assert (
+        captured["recipe_params"]["collection_intent"][
+            "required_fields"
+        ]
+        == captured["job_collection_contract"]["required_fields"]
+    )
+    assert "required_record_shape" in captured["goal"]
     assert "Collect up to 2 distinct job postings" in captured["goal"]
 
 
@@ -513,6 +532,7 @@ def test_realtime_scraping_passes_confirmed_collection_constraints_to_worker(mon
         "freshness_required": True,
         "purpose": "compare",
         "analysis_goal": "회사별 요구 기술 비교",
+        "required_fields": ["posted_at"],
     }
     result = rt.run_worker_once(
         "AI 개발자",
@@ -524,6 +544,7 @@ def test_realtime_scraping_passes_confirmed_collection_constraints_to_worker(mon
     assert result["collection_intent"]["filters"]["posted_date_expression"] == "지난달"
     assert captured["recipe_params"]["count_mode"] == "visible_all"
     assert captured["recipe_params"]["collection_intent"]["purpose"] == "compare"
+    assert "posted_at" in captured["recipe_params"]["collection_intent"]["required_fields"]
     assert "Collect every relevant job card visible" in captured["goal"]
     assert "[Confirmed collection constraints]" in captured["goal"]
     assert '"posted_date_expression": "지난달"' in captured["goal"]

@@ -60,6 +60,7 @@ def _run_realtime_scraping(
     purpose: str = "collect",
     analysis_goal: str = "",
     original_query: str = "",
+    required_fields: list[str] | None = None,
     worker_runtime: Any = None,
 ) -> str:
     """수집 요청을 정규화해 애플리케이션 수집 서비스에 전달한다."""
@@ -97,6 +98,7 @@ def _run_realtime_scraping(
             "freshness_required": freshness_required,
             "purpose": purpose,
             "analysis_goal": analysis_goal,
+            "required_fields": required_fields or [],
         }
     )
     result = CollectionService(
@@ -221,6 +223,7 @@ def realtime_scraping(
     purpose: str = "collect",
     analysis_goal: str = "",
     original_query: str = "",
+    required_fields: list[str] | None = None,
 ) -> str:
     """구조화된 요청에 따라 비전 작업자로 공고를 수집하고 승인된 결과만 저장한다."""
 
@@ -246,6 +249,7 @@ def realtime_scraping(
             "purpose": purpose,
             "analysis_goal": analysis_goal,
             "original_query": original_query,
+            "required_fields": required_fields or [],
         },
     )
 

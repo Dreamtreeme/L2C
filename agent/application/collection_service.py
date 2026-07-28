@@ -280,7 +280,10 @@ class CollectionService:
                     review=review,
                     persisted_count=int(aggregate_validation.get("persisted_count") or 0),
                     resolved_count=resolved_count,
-                    collection_intent=intent_payload,
+                    collection_intent=(
+                        worker_result.get("collection_intent")
+                        or intent_payload
+                    ),
                 )
         except Exception as exc:
             from agent.application.run_context import RunCancelled

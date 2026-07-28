@@ -926,13 +926,14 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
             location="서울",
         ),
         evidence_requirements=[
-            EvidenceRequirement(
-                requirement_id="current",
-                description="최근 기간",
-                occupation_query="AI 개발자",
-                posted_from="2026-04-14",
-                posted_to="2026-07-14",
-            )
+                EvidenceRequirement(
+                    requirement_id="current",
+                    description="최근 기간",
+                    occupation_query="AI 개발자",
+                    posted_from="2026-04-14",
+                    posted_to="2026-07-14",
+                    required_fields=["posted_at", "requirements"],
+                )
         ],
     )
     plan = InvestigationActionPlan(
@@ -972,9 +973,10 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
         "employment_type": "",
         "freshness_required": True,
         "purpose": "trend",
-        "analysis_goal": "최근과 이전 기간의 요구 기술 비교",
-        "task_category": "검색",
-    }
+            "analysis_goal": "최근과 이전 기간의 요구 기술 비교",
+            "task_category": "검색",
+            "required_fields": ["posted_at", "requirements"],
+        }
 
 def test_site_display_name_is_normalized_to_registry_slug():
 

@@ -6,6 +6,7 @@ import re
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from shared.schema.agent_contract import JobCollectionField
 
 
 class SiteModel(BaseModel):
@@ -44,7 +45,19 @@ class PageGuidance(SiteModel):
 
 
 class CollectionPolicy(SiteModel):
-    required_fields: tuple[str, ...]
+    required_fields: tuple[JobCollectionField, ...]
+
+    @field_validator("required_fields")
+    @classmethod
+    def validate_required_fields(
+        cls,
+        values: tuple[JobCollectionField, ...],
+    ) -> tuple[JobCollectionField, ...]:
+        if not values:
+            raise ValueError("필수 수집 필드가 하나 이상 필요합니다.")
+        if len(set(values)) != len(values):
+            raise ValueError("필수 수집 필드가 중복되었습니다.")
+        return values
 
 
 class ToolPolicy(SiteModel):

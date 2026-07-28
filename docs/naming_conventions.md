@@ -25,12 +25,12 @@ tags:
 
 | 이름 | 의미 |
 |---|---|
-| `worker_submission` | 자율탐색 worker가 끝난 뒤 지휘자/리뷰어에 제출하는 구조화 결과 |
-| `recorded_step` | 자율탐색 중 실제 실행된 원본 행동 기록 |
+| `worker_submission` | 자율 탐색 worker가 끝난 뒤 지휘자/리뷰어에 제출하는 구조화 결과 |
+| `recorded_step` | 자율 탐색 중 실제 실행된 원본 행동 기록 |
 | `recipe_candidate` | 아직 active가 아닌 예비 레시피 후보 |
 | `candidate_review` | Critic이 후보를 검토한 결과 |
 | `promotion` | 후보를 active recipe로 승격하는 처리 결과 |
-| `active_recipe` | 반복탐색에서 실제 재생 가능한 활성 레시피 |
+| `active_recipe` | 경험 기반 탐색에서 실제 재생 가능한 활성 레시피 |
 | `recipe_step` | 레시피 안의 단일 행동 단계 |
 | `replay_step` | Critic이 fixed/parameterized로 승인한 재생 단계 |
 | `task_category` | 검색, 로그인, 결제, 사이트 탐색 같은 작업 카테고리 |
@@ -158,7 +158,7 @@ tags:
 
 ## Reflex Recipe 단계 이름
 
-자율탐색과 반복탐색 경계는 아래 이름을 쓴다.
+실행 방식은 `autonomous`(자율 탐색)와 `experience_guided`(경험 기반 탐색)로 구분한다. 두 실행의 공통 Recipe 단계 이름은 아래와 같다.
 
 ```text
 recorded_step

@@ -5,9 +5,10 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agent.utils.model_dump import dump_model
+from shared.schema.agent_contract import JobCollectionField
 
 
 class CollectionCountMode(str, Enum):
@@ -48,12 +49,20 @@ class CollectionIntent(BaseModel):
     target_count: int = Field(default=0, ge=0, le=100)
     filters: JobSearchFilters = Field(default_factory=JobSearchFilters)
     freshness_required: bool = Field(default=False, description="최신 공고 확인이 필요한지 여부")
-    require_job_content: bool = Field(
-        default=True,
-        description="주요업무 또는 자격요건이 확인된 공고만 완전 수집으로 인정할지 여부",
-    )
     purpose: CollectionPurpose = CollectionPurpose.COLLECT
     analysis_goal: str = Field(default="", description="비교·트렌드 등 수집 이후 분석 목적")
+    required_fields: list[JobCollectionField] = Field(
+        default_factory=list,
+        description="사이트 정책과 답변 근거 요구를 합쳐 반드시 확인할 공고 필드",
+    )
+
+    @field_validator("required_fields")
+    @classmethod
+    def unique_required_fields(
+        cls,
+        values: list[JobCollectionField],
+    ) -> list[JobCollectionField]:
+        return list(dict.fromkeys(values))
 
 
 def normalize_collection_intent(

@@ -144,11 +144,6 @@ def auto_finish_on_target_enabled() -> bool:
     return get_settings().vision.auto_finish_on_target
 
 
-def is_detail_update(args: dict[str, Any]) -> bool:
-    role = str(args.get("page_role") or "").strip().lower()
-    return role in {"job_detail", "detail", "posting_detail"}
-
-
 def sensitive_action_reason(
     _state: GraphState,
     action_name: str,
@@ -178,7 +173,14 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
     if action_name == "finish_detail_reading":
         return {
             "page_role": args.get("page_role", "job_detail"),
-            "detail_complete": args.get("detail_complete", True),
+            "observed_fields": sorted(
+                str(field)
+                for field in dict(args.get("observed_fields") or {})
+            ),
+            "unavailable_fields": list(
+                args.get("unavailable_fields") or []
+            ),
+            "page_exhausted": bool(args.get("page_exhausted")),
             "reason": _clip_text(args.get("reason", ""), 120),
         }
     if action_name == "set_job_card_queue":
@@ -189,7 +191,17 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
             "titles": [title for title in titles if title][:5],
         }
     if action_name != "update_extracted_info":
-        return {key: value for key, value in args.items() if not str(key).startswith("_")}
+        compact = {
+            key: value
+            for key, value in args.items()
+            if not str(key).startswith("_")
+        }
+        if isinstance(compact.get("observed_fields"), dict):
+            compact["observed_fields"] = sorted(
+                str(field)
+                for field in compact["observed_fields"]
+            )
+        return compact
     try:
         data = json.loads(args.get("data_json", "{}"))
     except Exception:
@@ -250,7 +262,6 @@ def repeats_no_effect_target(
 __all__ = [
     "auto_finish_on_target_enabled",
     "compact_action_args",
-    "is_detail_update",
     "merge_extracted_info",
     "repeats_no_effect_target",
     "sensitive_action_reason",

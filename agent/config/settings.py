@@ -230,9 +230,9 @@ class VisionSettings(SectionSettings):
     capture_initial_wait_sec: float = Field(0.16, ge=0, le=10, validation_alias="VISION_CAPTURE_INITIAL_WAIT_SEC")
     page_content_bottom_ignore_px: int = Field(80, ge=0, le=2000, validation_alias="VISION_PAGE_CONTENT_BOTTOM_IGNORE_PX")
     page_quality_sample_width: int = Field(240, ge=32, le=4096, validation_alias="VISION_PAGE_QUALITY_SAMPLE_WIDTH")
-    page_blank_max_stddev: float = Field(6.0, ge=0, le=255, validation_alias="VISION_PAGE_BLANK_MAX_STDDEV")
-    page_blank_max_edge_mean: float = Field(1.2, ge=0, le=255, validation_alias="VISION_PAGE_BLANK_MAX_EDGE_MEAN")
-    page_blank_min_dominant_ratio: float = Field(0.98, ge=0, le=1, validation_alias="VISION_PAGE_BLANK_MIN_DOMINANT_RATIO")
+    page_blank_max_stddev: float = Field(12.0, ge=0, le=255, validation_alias="VISION_PAGE_BLANK_MAX_STDDEV")
+    page_blank_max_edge_mean: float = Field(3.0, ge=0, le=255, validation_alias="VISION_PAGE_BLANK_MAX_EDGE_MEAN")
+    page_blank_min_dominant_ratio: float = Field(0.96, ge=0, le=1, validation_alias="VISION_PAGE_BLANK_MIN_DOMINANT_RATIO")
     page_capture_retry_sec: float = Field(0.4, ge=0, le=30, validation_alias="VISION_PAGE_CAPTURE_RETRY_SEC")
     page_ready_timeout_sec: float = Field(15.0, gt=0, le=300, validation_alias="VISION_PAGE_READY_TIMEOUT_SEC")
     low_information_max_capture_cycles: int = Field(
@@ -256,6 +256,7 @@ class VisionSettings(SectionSettings):
     stable_check_interval_sec: float = Field(0.04, gt=0, le=5, validation_alias="VISION_STABLE_CHECK_INTERVAL_SEC")
     stable_threshold_percent: float = Field(1.0, ge=0, le=100, validation_alias="VISION_STABLE_THRESHOLD_PERCENT")
     stable_sample_width: int = Field(360, ge=32, le=4096, validation_alias="VISION_STABLE_SAMPLE_WIDTH")
+    stable_required_frames: int = Field(2, ge=1, le=10, validation_alias="VISION_STABLE_REQUIRED_FRAMES")
 
 
 class OcrSettings(SectionSettings):

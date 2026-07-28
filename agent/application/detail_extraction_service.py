@@ -249,23 +249,41 @@ def clear_detail_extraction_model_cache() -> None:
 def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[str, Any]:
     """상태의 OCR 버퍼를 공고 한 건으로 정제하고 카드 메타데이터를 보완한다."""
 
+    from agent.runtime.job_field_contract import (
+        detail_coverage_status,
+        required_fields_from_state,
+    )
+
     buffer = dict(state.get("job_detail_buffer", {}) or {})
     ocr_text = detail_buffer_text(buffer)
     if not ocr_text.strip():
         return {}
     active_card = dict(state.get("active_job_card", {}) or {})
+    required_fields = required_fields_from_state(state)
+    coverage = detail_coverage_status(
+        dict(state.get("job_detail_coverage", {}) or {}),
+        required_fields,
+    )
     messages = [
         SystemMessage(
             content=(
                 "누적 OCR 본문에서 채용공고 1건을 JobPosting 스키마로 정리하십시오. "
                 "OCR에 없는 사실은 만들지 말고, 알 수 없는 필드는 비우십시오. "
-                "현재 상세 URL은 보존하십시오."
+                "required_fields는 반드시 OCR과 field_evidence를 확인해 채우십시오. "
+                "unavailable_fields는 공고가 제공하지 않는 것으로 이미 판정된 필드이므로 "
+                "추측해서 채우지 마십시오. 현재 상세 URL은 보존하십시오."
             )
         ),
         HumanMessage(
             content=json.dumps(
                 {
                     "current_url": current_url,
+                    "active_card": active_card,
+                    "required_fields": required_fields,
+                    "field_evidence": coverage["field_evidence"],
+                    "unavailable_fields": coverage[
+                        "unavailable_fields"
+                    ],
                     "ocr_text": ocr_text,
                 },
                 ensure_ascii=False,

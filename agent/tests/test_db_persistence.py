@@ -295,15 +295,78 @@ def test_pre_persistence_validation_rejects_job_without_actual_content(monkeypat
             ]
         },
         "백엔드 개발자",
-        collection_intent={"require_job_content": True},
+        collection_intent={
+            "required_fields": [
+                "company_name",
+                "position",
+                "url",
+                "main_tasks",
+                "requirements",
+            ]
+        },
     )
 
     assert result["persisted_count"] == 0
     assert result["rejected_count"] == 1
-    assert (
-        "required_content_missing:main_tasks_or_requirements"
-        in result["rejected_items"][0]["issues"]
+    assert result["rejected_items"][0]["issues"] == [
+        "required_field_missing:main_tasks",
+        "required_field_missing:requirements",
+    ]
+
+
+def test_persistence_accepts_field_confirmed_unavailable_at_page_end(
+    monkeypatch,
+    tmp_path,
+):
+    import shared.config as cfg
+    from agent.application.job_persistence_service import (
+        persist_collected_data_with_report,
     )
+
+    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "unavailable_field.db")
+    required_fields = [
+        "company_name",
+        "position",
+        "url",
+        "main_tasks",
+        "requirements",
+        "benefits",
+    ]
+    result = persist_collected_data_with_report(
+        {
+            "jobs": [
+                {
+                    "company_name": "예시회사",
+                    "position": "데이터 엔지니어",
+                    "url": "https://example.com/jobs/no-benefits",
+                    "main_tasks": ["데이터 파이프라인 개발"],
+                    "requirements": ["Python"],
+                    "_collection_required_fields": required_fields,
+                    "_collection_unavailable_fields": ["benefits"],
+                    "_collection_page_exhausted": True,
+                }
+            ]
+        },
+        "데이터 엔지니어",
+        collection_intent={
+            "required_fields": required_fields,
+        },
+    )
+
+    assert result["persisted_count"] == 1
+    assert result["rejected_count"] == 0
+    assert result["persisted_items"][0]["unavailable_fields"] == [
+        "benefits"
+    ]
+    from shared.db.database import Database
+
+    stored = Database(tmp_path / "unavailable_field.db").get_by_url(
+        "https://example.com/jobs/no-benefits"
+    )
+    assert stored["raw_json"]["_collection_required_fields"] == required_fields
+    assert stored["raw_json"]["_collection_unavailable_fields"] == [
+        "benefits"
+    ]
 
 
 def test_persistence_report_distinguishes_created_and_updated_jobs(monkeypatch, tmp_path):

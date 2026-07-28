@@ -240,13 +240,15 @@ def test_backend_contract_endpoint_exposes_generated_json_schemas():
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["version"] == 3
+    assert payload["version"] == 4
     assert payload["transport"]["media_type"] == "text/event-stream"
     assert "chat_request" in payload["schemas"]
     assert "taxonomy_resolution" in payload["schemas"]
+    assert "job_collection_contract" in payload["schemas"]
     properties = payload["schemas"]["collection_tool_arguments"]["properties"]
     assert "query" in properties
     assert "site" in properties
+    assert "required_fields" in properties
 
 def test_chat_api_resumes_from_structured_clarification(monkeypatch):
     from fastapi.testclient import TestClient

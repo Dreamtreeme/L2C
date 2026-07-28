@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from agent.application.run_contracts import ChatFinalPayload, ChatRequest, RunEvent
-from shared.schema.agent_contract import CollectionToolArguments, EvidenceDocument
+from shared.schema.agent_contract import (
+    CollectionToolArguments,
+    EvidenceDocument,
+    JobCollectionContract,
+)
 from shared.schema.collection_intent import CollectionIntent
 from shared.schema.investigation_schema import RequestAnalysis, TaxonomyResolution
 
@@ -14,7 +18,7 @@ def build_backend_contract_manifest() -> dict[str, Any]:
     """실행 코드의 Pydantic 모델에서 계약을 생성한다."""
 
     return {
-        "version": 3,
+        "version": 4,
         "transport": {
             "chat_endpoint": "/api/chat",
             "media_type": "text/event-stream",
@@ -25,6 +29,7 @@ def build_backend_contract_manifest() -> dict[str, Any]:
             "request_analysis": RequestAnalysis.model_json_schema(),
             "taxonomy_resolution": TaxonomyResolution.model_json_schema(),
             "collection_intent": CollectionIntent.model_json_schema(),
+            "job_collection_contract": JobCollectionContract.model_json_schema(),
             "collection_tool_arguments": CollectionToolArguments.model_json_schema(),
             "evidence_document": EvidenceDocument.model_json_schema(),
             "run_event": RunEvent.model_json_schema(),

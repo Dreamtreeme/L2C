@@ -87,7 +87,7 @@ def _schedule_recipe_candidate_promotion(candidate_id: str) -> bool:
 
 
 def _recipe_candidate_run_is_complete(submission: dict) -> bool:
-    """정상 종료한 전체 작업만 반복탐색 후보로 허용한다."""
+    """정상 종료한 전체 작업만 경험 기반 탐색 후보로 허용한다."""
 
     return bool(
         submission.get("run_status") == "finished"

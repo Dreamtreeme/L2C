@@ -19,6 +19,7 @@ class WaitStable:
 
     def __init__(self, perception_engine: PerceptionEngine):
         self.perception = perception_engine
+        self.last_wait_result: dict = {}
 
     def _capture_memory_image(self, region: Optional[dict] = None, sample_width: int = 360) -> Image.Image:
         """
@@ -192,11 +193,12 @@ class WaitStable:
         max_wait_sec: Optional[float] = None,
         check_interval_sec: Optional[float] = None,
         threshold_percent: Optional[float] = None,
+        required_stable_frames: Optional[int] = None,
         region: Optional[dict] = None,
     ) -> bool:
         """
-        연속된 두 프레임의 픽셀 변화율 평균이 threshold_percent 이하가 될 때까지 기다립니다.
-        반환값은 캡처 안정화 여부일 뿐 페이지 준비 완료를 의미하지 않습니다.
+        연속 프레임의 픽셀 변화율이 여러 번 안정 범위에 들어올 때까지 기다립니다.
+        정보량 검사는 이후 capture_usable_screen에서 수행합니다.
         
         Args:
             max_wait_sec: 최대 대기 시간(초). 이 시간이 넘어가면 무한 대기를 멈추고 반환.
@@ -212,37 +214,65 @@ class WaitStable:
             check_interval_sec = get_settings().vision.stable_check_interval_sec
         if threshold_percent is None:
             threshold_percent = get_settings().vision.stable_threshold_percent
+        if required_stable_frames is None:
+            required_stable_frames = get_settings().vision.stable_required_frames
+        required_stable_frames = max(1, int(required_stable_frames))
         sample_width = get_settings().vision.stable_sample_width
 
         logger.info("Waiting for screen to stabilize...")
         start_time = time.perf_counter()
-        
+        probe_count = 0
+        stable_count = 0
+        last_diff_percent: float | None = None
         prev_img = self._capture_memory_image(region=region, sample_width=sample_width)
-        
+
         while (time.perf_counter() - start_time) < max_wait_sec:
             time.sleep(check_interval_sec)
             curr_img = self._capture_memory_image(region=region, sample_width=sample_width)
-            
-            # 1. 두 이미지 간의 픽셀 차이 절댓값 이미지 생성
+            probe_count += 1
+
             diff = ImageChops.difference(prev_img, curr_img)
-            
-            # 2. 이미지 통계 계산
             stat = ImageStat.Stat(diff)
-            
-            # 3. R, G, B 각 채널의 평균 픽셀 차이값(0~255)의 총합을 퍼센트로 환산
             diff_ratio = (sum(stat.mean) / (3 * 255.0)) * 100.0
-            
+            last_diff_percent = diff_ratio
+
             if diff_ratio <= threshold_percent:
-                elapsed = time.perf_counter() - start_time
+                stable_count += 1
+                if stable_count >= required_stable_frames:
+                    elapsed = time.perf_counter() - start_time
+                    self.last_wait_result = {
+                        "stable": True,
+                        "reason": "consecutive_frames_stable",
+                        "elapsed_sec": round(elapsed, 3),
+                        "probe_count": probe_count,
+                        "stable_frames": stable_count,
+                        "diff_percent": round(diff_ratio, 3),
+                    }
+                    logger.info("Screen stabilized", **self.last_wait_result)
+                    return True
+            else:
+                stable_count = 0
                 logger.info(
-                    "Screen stabilized", 
-                    elapsed_sec=round(elapsed, 2), 
-                    diff_percent=round(diff_ratio, 3)
+                    "Screen still changing...",
+                    diff_percent=round(diff_ratio, 3),
                 )
-                return True
-                
-            logger.info("Screen still changing...", diff_percent=round(diff_ratio, 3))
             prev_img = curr_img
-            
-        logger.warning("Screen stabilization timeout reached", max_wait_sec=max_wait_sec)
+
+        self.last_wait_result = {
+            "stable": False,
+            "reason": "stability_timeout",
+            "elapsed_sec": round(time.perf_counter() - start_time, 3),
+            "probe_count": probe_count,
+            "stable_frames": stable_count,
+            "diff_percent": (
+                round(last_diff_percent, 3)
+                if last_diff_percent is not None
+                else None
+            ),
+        }
+        logger.warning(
+            "Screen stabilization timeout reached",
+            max_wait_sec=max_wait_sec,
+            **self.last_wait_result,
+        )
         return False

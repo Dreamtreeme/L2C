@@ -107,7 +107,7 @@ def execute_action_request(
         action_context_args = {**args, **call_metadata}
         if action_name == "finish_detail_reading":
             args.setdefault("page_role", "job_detail")
-            args.setdefault("detail_complete", True)
+        context.observe_job_detail_fields(action_name, args)
 
         logger.info(
             "Executing requested tool",

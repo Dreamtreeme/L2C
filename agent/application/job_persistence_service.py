@@ -78,20 +78,26 @@ def normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dic
         return fallback
 
 
-def _job_validation_issues(job_posting: Any, collection_intent: dict[str, Any]) -> list[str]:
+def _job_validation_issues(
+    job_posting: Any,
+    collection_intent: dict[str, Any],
+    *,
+    unavailable_fields: list[str] | tuple[str, ...] = (),
+) -> list[str]:
     """저장에 필요한 사실과 요청 조건을 검증하되 의미 유사도는 추측하지 않는다."""
 
-    from agent.runtime.job_content import has_meaningful_job_content
+    from agent.utils.job_fields import (
+        missing_job_fields,
+        required_job_fields,
+    )
 
     issues: list[str] = []
-    for field in ("url", "company_name", "position"):
-        if not str(getattr(job_posting, field, None) or "").strip():
-            issues.append(f"required_field_missing:{field}")
-    if (
-        collection_intent.get("require_job_content") is True
-        and not has_meaningful_job_content(job_posting)
+    for field in missing_job_fields(
+        job_posting,
+        required_job_fields(collection_intent),
+        unavailable_fields=unavailable_fields,
     ):
-        issues.append("required_content_missing:main_tasks_or_requirements")
+        issues.append(f"required_field_missing:{field}")
 
     filters = collection_intent.get("filters") if isinstance(collection_intent, dict) else {}
     filters = filters if isinstance(filters, dict) else {}
@@ -149,11 +155,35 @@ def persist_collected_data_with_report(
     updated_count = 0
     persisted_items: list[dict[str, Any]] = []
     rejected_items: list[dict[str, Any]] = []
+    base_collection_intent = dict(collection_intent or {})
+    report_required_fields = list(
+        base_collection_intent.get("required_fields") or []
+    )
     for index, job in enumerate(job_list):
         if not isinstance(job, dict) or not job:
             rejected_items.append({"index": index, "issues": ["invalid_job_payload"]})
             continue
 
+        effective_intent = dict(base_collection_intent)
+        if not effective_intent.get("required_fields"):
+            effective_intent["required_fields"] = list(
+                job.get("_collection_required_fields") or []
+            )
+        for field in effective_intent.get("required_fields") or []:
+            if field not in report_required_fields:
+                report_required_fields.append(field)
+        page_exhausted = bool(
+            job.get("_collection_page_exhausted")
+        )
+        from agent.utils.job_fields import normalize_job_collection_fields
+
+        unavailable_fields = (
+            normalize_job_collection_fields(
+                job.get("_collection_unavailable_fields")
+            )
+            if page_exhausted
+            else []
+        )
         normalized_job = normalize_job_for_persistence(job, keyword=keyword)
         url = normalized_job.get("url") or job.get("url") or job.get("URL") or job.get("공고url")
         if not url:
@@ -182,7 +212,11 @@ def persist_collected_data_with_report(
                 normalized_job,
                 raw_ocr_text=raw_ocr_text,
             )
-            issues = _job_validation_issues(job_posting, collection_intent or {})
+            issues = _job_validation_issues(
+                job_posting,
+                effective_intent,
+                unavailable_fields=unavailable_fields,
+            )
             if issues:
                 rejected_items.append(
                     {
@@ -206,9 +240,20 @@ def persist_collected_data_with_report(
             ocr_text_path = str(
                 normalized_job.get("_evidence_ocr_text_path") or ""
             ).strip() or None
+            persistence_data = dump_model(job_posting)
+            persistence_data["_collection_required_fields"] = list(
+                effective_intent.get("required_fields") or []
+            )
+            persistence_data["_collection_unavailable_fields"] = list(
+                unavailable_fields
+            )
+            persistence_data["_collection_page_exhausted"] = page_exhausted
+            persistence_data["_collection_field_evidence"] = dict(
+                job.get("_collection_field_evidence") or {}
+            )
             job_id = db.upsert(
                 url=url,
-                data=dump_model(job_posting),
+                data=persistence_data,
                 screenshot_path=screenshot_path,
                 ocr_text_path=ocr_text_path,
             )
@@ -232,6 +277,10 @@ def persist_collected_data_with_report(
                     "company_name": job_posting.company_name or "",
                     "position": job_posting.position or "",
                     "operation": "updated" if existed else "created",
+                    "required_fields": list(
+                        effective_intent.get("required_fields") or []
+                    ),
+                    "unavailable_fields": list(unavailable_fields),
                 }
             )
             logger.info(
@@ -258,6 +307,7 @@ def persist_collected_data_with_report(
         "persisted_items": persisted_items,
         "rejected_count": len(rejected_items),
         "rejected_items": rejected_items,
+        "required_fields": report_required_fields,
     }
 
 

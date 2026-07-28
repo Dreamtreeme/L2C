@@ -221,7 +221,7 @@ def test_detail_completion_guard_blocks_more_screen_exploration(monkeypatch):
             current_url="https://example.com/jobs/1",
             return_to_job_results={
                 "url": "https://example.com/jobs/1",
-                "reason": "detail_complete",
+                "reason": "required_fields_complete",
             },
         )
     )

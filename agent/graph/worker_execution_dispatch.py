@@ -17,12 +17,14 @@ from agent.graph.worker_resources import get_action_tools
 from agent.graph.worker_state import job_detail_key_from_state
 from agent.runtime.duplicate_job_policy import mark_existing_job_cards
 from agent.runtime.job_collection import job_list_value
-from agent.runtime.job_content import (
-    has_meaningful_job_content,
-    job_content_presence,
+from agent.runtime.job_field_contract import (
+    detail_coverage_status,
+    merge_job_detail_coverage,
+    required_fields_from_state,
 )
 from agent.runtime.job_identity import source_card_key
 from agent.runtime.job_card_queue import normalize_job_card_queue
+from agent.utils.job_fields import missing_job_fields
 
 
 def dispatch_ui_action(
@@ -173,14 +175,87 @@ def _update_extracted_info(
         )
 
 
+def _detail_followup(
+    state: GraphState,
+    *,
+    current_url: str,
+    reason: str,
+    missing_fields: list[str],
+) -> dict[str, Any]:
+    """같은 상세 화면의 추가 판독 횟수와 누락 필드를 기록한다."""
+
+    detail_key = job_detail_key_from_state(state)
+    previous = dict(state.get("job_detail_followup", {}) or {})
+    same_detail = previous.get("url") == current_url or (
+        detail_key
+        and previous.get("detail_key") == detail_key
+    )
+    attempts = int(previous.get("attempts") or 0) + 1 if same_detail else 1
+    return {
+        "url": current_url,
+        "detail_key": detail_key,
+        "reason": reason,
+        "missing_fields": list(missing_fields),
+        "attempts": attempts,
+    }
+
+
 def _finish_detail_reading(
+    args: dict[str, Any],
     current_jobs: dict[str, Any],
     *,
     current_url: str,
     state: GraphState,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
-        extracted_job = extract_job_from_job_detail_buffer(state, current_url)
+        detail_key = job_detail_key_from_state(state)
+        coverage = merge_job_detail_coverage(
+            dict(state.get("job_detail_coverage", {}) or {}),
+            args,
+            state=state,
+            current_url=current_url,
+            detail_key=detail_key,
+        )
+        required_fields = required_fields_from_state(state)
+        coverage_status = detail_coverage_status(
+            coverage,
+            required_fields,
+        )
+        if coverage_status["missing_fields"]:
+            missing = list(coverage_status["missing_fields"])
+            return (
+                {
+                    "action": "finish_detail_reading",
+                    "status": "skipped",
+                    "result": (
+                        "Detail reading is not complete because required field "
+                        f"evidence is missing: {', '.join(missing)}"
+                    ),
+                    "reason": "required_field_evidence_incomplete",
+                    "required_fields": required_fields,
+                    "field_coverage": coverage_status,
+                    "_job_detail_buffer": dict(
+                        state.get("job_detail_buffer", {}) or {}
+                    ),
+                    "_job_detail_coverage": coverage,
+                    "_job_detail_followup": _detail_followup(
+                        state,
+                        current_url=current_url,
+                        reason="required_field_evidence_incomplete",
+                        missing_fields=missing,
+                    ),
+                },
+                current_jobs,
+            )
+
+        extraction_state = {
+            **state,
+            "job_detail_coverage": coverage,
+        }
+        extracted_job = extract_job_from_job_detail_buffer(
+            extraction_state,
+            current_url,
+        )
         if not extracted_job:
             return (
                 {
@@ -189,54 +264,54 @@ def _finish_detail_reading(
                     "result": "No accumulated detail OCR text to extract.",
                     "reason": "empty_job_detail_buffer",
                     "_job_detail_buffer": {},
+                    "_job_detail_coverage": {},
                 },
                 current_jobs,
             )
 
-        if not has_meaningful_job_content(extracted_job):
-            presence = job_content_presence(extracted_job)
-            detail_key = job_detail_key_from_state(state)
-            previous_followup = dict(
-                state.get("job_detail_followup", {}) or {}
-            )
-            same_detail = previous_followup.get("url") == current_url or (
-                detail_key
-                and previous_followup.get("detail_key") == detail_key
-            )
-            attempts = (
-                int(previous_followup.get("attempts") or 0) + 1
-                if same_detail
-                else 1
-            )
+        unavailable_fields = list(
+            coverage_status["unavailable_fields"]
+        )
+        missing = missing_job_fields(
+            extracted_job,
+            required_fields,
+            unavailable_fields=unavailable_fields,
+        )
+        if missing:
             return (
                 {
                     "action": "finish_detail_reading",
                     "status": "skipped",
                     "result": (
-                        "Detail reading is not complete because neither main_tasks nor "
-                        "requirements were extracted. Inspect the accumulated OCR and visible "
-                        "page for an original-source link or another way to reveal job content."
+                        "Final detail extraction did not produce all fields that had "
+                        f"visible evidence: {', '.join(missing)}"
                     ),
-                    "reason": "detail_content_incomplete",
-                    "content_presence": presence,
+                    "reason": "required_field_extraction_incomplete",
+                    "required_fields": required_fields,
+                    "missing_fields": missing,
+                    "field_coverage": coverage_status,
                     "_job_detail_buffer": dict(
                         state.get("job_detail_buffer", {}) or {}
                     ),
-                    "_job_detail_followup": {
-                        "url": current_url,
-                        "detail_key": detail_key,
-                        "reason": "detail_content_incomplete",
-                        "missing_fields": [
-                            field
-                            for field, present in presence.items()
-                            if not present
-                        ],
-                        "attempts": attempts,
-                    },
+                    "_job_detail_coverage": coverage,
+                    "_job_detail_followup": _detail_followup(
+                        state,
+                        current_url=current_url,
+                        reason="required_field_extraction_incomplete",
+                        missing_fields=missing,
+                    ),
                 },
                 current_jobs,
             )
 
+        extracted_job["_collection_required_fields"] = required_fields
+        extracted_job["_collection_unavailable_fields"] = unavailable_fields
+        extracted_job["_collection_page_exhausted"] = bool(
+            coverage_status["page_exhausted"]
+        )
+        extracted_job["_collection_field_evidence"] = dict(
+            coverage_status["field_evidence"]
+        )
         extracted_job = _attach_active_card_identity(
             extracted_job,
             state=state,
@@ -261,6 +336,7 @@ def _finish_detail_reading(
                 "total_jobs": summary["total_jobs"],
                 "fields": summary["fields"],
                 "_job_detail_buffer": {},
+                "_job_detail_coverage": {},
                 "_job_detail_followup": {},
             },
             merged_jobs,
@@ -355,6 +431,7 @@ def dispatch_state_action(
         )
     if action_name == "finish_detail_reading":
         return _finish_detail_reading(
+            args,
             current_jobs,
             current_url=current_url,
             state=state,

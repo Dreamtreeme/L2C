@@ -9,7 +9,6 @@ from agent.graph.action_request import ActionRequest, build_action_request
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.graph.worker_execution_policy import (
     auto_finish_on_target_enabled,
-    is_detail_update,
 )
 from agent.graph.worker_state import (
     count_mode_from_state,
@@ -250,13 +249,10 @@ def _confirmed_job_results_return_action(
 def _apply_job_detail_completion(
     context: WorkerExecutionContext,
     result: dict[str, Any],
-    args: dict[str, Any],
     action_sequence: int,
 ) -> ActionRequest | None:
     target_count = target_count_from_state(context.state)
     collected_count = extracted_job_count(context.current_jobs)
-    if args.get("detail_complete") is not True:
-        return None
 
     (
         context.job_card_queue,
@@ -265,7 +261,7 @@ def _apply_job_detail_completion(
         context.job_card_queue,
         context.active_job_card,
     )
-    result["detail_policy"] = "detail_complete"
+    result["detail_policy"] = "required_fields_complete"
     pending_cards = pending_job_cards(context.job_card_queue)
     resolved_count = max(
         collected_count,
@@ -276,7 +272,7 @@ def _apply_job_detail_completion(
     ):
         context.return_to_job_results = {
             "url": context.current_url,
-            "reason": "detail_complete",
+            "reason": "required_fields_complete",
             "pending_count": len(pending_cards),
             "completed_action_seq": action_sequence,
         }
@@ -302,12 +298,8 @@ def _apply_job_detail_completion(
 def _apply_collection_target_completion(
     context: WorkerExecutionContext,
     result: dict[str, Any],
-    args: dict[str, Any],
 ) -> None:
-    if (
-        not auto_finish_on_target_enabled()
-        or args.get("detail_complete") is False
-    ):
+    if not auto_finish_on_target_enabled():
         return
 
     target_count = target_count_from_state(context.state)
@@ -359,6 +351,13 @@ def execute_state_action(
             )
             or {}
         )
+        context.job_detail_coverage = dict(
+            result.pop(
+                "_job_detail_coverage",
+                context.job_detail_coverage,
+            )
+            or {}
+        )
         context.job_detail_followup = dict(
             result.pop(
                 "_job_detail_followup",
@@ -368,16 +367,14 @@ def execute_state_action(
         )
 
     is_successful_detail_update = (
-        action_name in {"update_extracted_info", "finish_detail_reading"}
+        action_name == "finish_detail_reading"
         and result.get("status") == "success"
-        and is_detail_update(args)
     )
     if is_successful_detail_update:
         follow_up = (
             _apply_job_detail_completion(
                 context,
                 result,
-                args,
                 action_sequence,
             )
             or follow_up
@@ -387,7 +384,7 @@ def execute_state_action(
         action_name in {"update_extracted_info", "finish_detail_reading"}
         and result.get("status") == "success"
     ):
-        _apply_collection_target_completion(context, result, args)
+        _apply_collection_target_completion(context, result)
     return result, follow_up
 
 

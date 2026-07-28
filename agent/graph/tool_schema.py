@@ -4,11 +4,42 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from shared.schema.agent_contract import (
+    JOB_COLLECTION_FIELDS,
+    JobCollectionField,
+)
 
 
 # 클래스 이름은 LLM에 노출되는 도구 이름과 같아야 하므로 소문자를 유지한다.
-class click_marker(BaseModel):
+class _DetailObservation(BaseModel):
+    """상세 화면 판단에 이미 사용한 필드 근거를 행동과 함께 보존한다."""
+
+    observed_fields: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "현재 상세 화면에서 실제로 확인한 공고 필드와 짧은 화면 근거. "
+            "상세 화면에서만 채우며 추측한 값은 넣지 않는다. 허용 키: "
+            + ", ".join(JOB_COLLECTION_FIELDS)
+        ),
+    )
+
+    @field_validator("observed_fields")
+    @classmethod
+    def validate_observed_fields(
+        cls,
+        values: Dict[str, str],
+    ) -> Dict[str, str]:
+        unknown = sorted(set(values) - set(JOB_COLLECTION_FIELDS))
+        if unknown:
+            raise ValueError(
+                "지원하지 않는 공고 필드입니다: "
+                + ", ".join(unknown)
+            )
+        return values
+
+
+class click_marker(_DetailObservation):
     """화면의 특정 ID 마커를 클릭합니다."""
 
     marker_id: int = Field(..., description="클릭할 마커의 ID")
@@ -44,7 +75,7 @@ class type_in_marker(BaseModel):
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
-class scroll(BaseModel):
+class scroll(_DetailObservation):
     """화면을 스크롤합니다."""
 
     direction: Literal["down", "up", "left", "right"] = Field(
@@ -129,25 +160,28 @@ class switch_tab(BaseModel):
 
 
 class update_extracted_info(BaseModel):
-    """현재 화면에서 식별한 채용 공고 정보를 수집 상태에 병합합니다."""
+    """상세 OCR 버퍼가 없는 화면에서 식별한 정보를 수집 상태에 병합합니다."""
 
     data_json: str = Field(..., description="업데이트할 정보 키-값 딕셔너리의 JSON 문자열")
     page_role: Optional[str] = Field(None, description="현재 정보를 읽은 페이지 역할(page_role). 상세 공고면 job_detail.")
-    detail_complete: Optional[bool] = Field(None, description="상세 공고 본문 정보가 충분히 수집되었는지 여부(detail_complete).")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
-class finish_detail_reading(BaseModel):
+class finish_detail_reading(_DetailObservation):
     """누적한 상세 페이지 OCR을 한 번 정제하여 수집 상태에 병합합니다."""
 
     reason: Optional[str] = Field(None, description="상세 페이지 읽기를 종료하는 이유(reason)")
-    detail_complete: Optional[bool] = Field(
-        True,
+    unavailable_fields: List[JobCollectionField] = Field(
+        default_factory=list,
         description=(
-            "주요업무 또는 자격요건을 포함한 실제 상세 공고 본문이 충분히 수집되었는지 여부. "
-            "회사명과 제목만 있는 중계 페이지에서는 true로 두지 않는다."
+            "페이지 전체를 확인했지만 공고가 제공하지 않는 필수 필드. "
+            "page_exhausted=true일 때만 완료 필드로 인정한다."
         ),
+    )
+    page_exhausted: bool = Field(
+        False,
+        description="더 펼칠 본문이나 아래쪽 공고 내용이 없음을 화면에서 확인했는지 여부",
     )
     expected_after: Optional[str] = Field(None, description="정제 후 정상이라면 다음에 기대되는 상태(expected_after)")
     page_role: Optional[str] = Field("job_detail", description="Current page role.")

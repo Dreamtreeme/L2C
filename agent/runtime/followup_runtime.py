@@ -88,7 +88,7 @@ def select_followup_action(
     }
     args.update(
         {
-            "reason": "자율탐색에서 검증된 직전 행동의 후속 전략을 재사용합니다.",
+            "reason": "자율 탐색에서 검증된 직전 행동의 후속 전략을 재사용합니다.",
             "expected_after": strategy.expected_after,
             "page_role": strategy.page_role or page_role or None,
             "risk_level": "safe_navigation",

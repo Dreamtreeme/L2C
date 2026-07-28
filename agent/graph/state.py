@@ -135,6 +135,9 @@ class GraphState(TypedDict, total=False):
     # 레시피 재생 때 치환할 입력값
     recipe_params: Dict[str, Any]
 
+    # 상세 판독, 최종 추출과 저장 검증이 함께 쓰는 필수 필드 계약
+    job_collection_contract: Dict[str, Any]
+
     # 행동 뒤 확인할 전환 요청, 현재 판정 결과, 누적 기록
     transition_request: TransitionRequest
     transition_result: TransitionResult
@@ -156,6 +159,9 @@ class GraphState(TypedDict, total=False):
 
     # 공고 상세 OCR을 화면별로 누적하고 마지막에 한 번 정제한다.
     job_detail_buffer: Dict[str, Any]
+
+    # 상세 화면별로 LLM이 확인한 필드 근거와 누락 상태
+    job_detail_coverage: Dict[str, Any]
 
     # 본문이 부족해 원문 이동 또는 추가 공개가 필요한 상태
     job_detail_followup: Dict[str, Any]

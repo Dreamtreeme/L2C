@@ -461,20 +461,63 @@ def compact_job_detail_buffer_context(
     preview = [line for line in preview if line]
     followup = dict(state.get("job_detail_followup") or {})
     followup_active = detail_context_matches(followup, current_url, detail_key)
+    from agent.runtime.job_field_contract import (
+        detail_coverage_status,
+        field_contract_items,
+        required_fields_from_state,
+    )
+
+    required_fields = required_fields_from_state(state)
+    coverage = detail_coverage_status(
+        dict(state.get("job_detail_coverage") or {}),
+        required_fields,
+    )
+    evidence_preview = {
+        field: str(value)[:120]
+        for field, value in coverage["field_evidence"].items()
+        if field in coverage["found_fields"]
+    }
     parts = [
         "상세 OCR 누적 상태:",
         f"- 누적 본문 줄 수: {len(lines)}",
         f"- 이번 화면 새 줄 수: {stats.get('added_lines_last_screen', 0)}",
         f"- 이번 화면 중복 줄 수: {stats.get('duplicate_lines_last_screen', 0)}",
         f"- 상세 화면 관찰 횟수: {stats.get('screen_count', 0)}",
+        "- 필수 필드 계약: "
+        + json.dumps(
+            field_contract_items(required_fields),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "- 지금까지 확인한 필드 근거: "
+        + json.dumps(
+            evidence_preview,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "- 아직 확인하지 못한 필드: "
+        + json.dumps(
+            coverage["missing_fields"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
         "- 상세 페이지에서는 중간 DB 추출을 위해 update_extracted_info를 호출하지 마십시오.",
-        "- 더 읽어야 하면 scroll 또는 현재 사이트 안내에 선언된 상세 펼치기 버튼을 선택하십시오.",
-        "- 현재 공고 정보가 충분하면 finish_detail_reading(page_role=\"job_detail\", detail_complete=true)을 호출하십시오.",
+        "- 더 읽어야 하면 scroll 또는 현재 사이트 안내에 선언된 상세 펼치기 버튼을 선택하고, "
+        "현재 화면에서 확인한 필드를 observed_fields에 함께 넣으십시오.",
+        "- 모든 필수 필드가 확인되었을 때만 finish_detail_reading을 호출하십시오. "
+        "페이지 끝까지 확인해도 제공되지 않은 필드는 page_exhausted=true와 "
+        "unavailable_fields로 명시하십시오.",
     ]
     if followup_active:
         parts.extend(
             [
-                "- 직전 상세 완료는 실제 직무 본문 부족으로 거부되었습니다.",
+                "- 직전 상세 완료는 필수 필드 근거 부족으로 거부되었습니다.",
+                "- 거부된 누락 필드: "
+                + json.dumps(
+                    followup.get("missing_fields") or [],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
                 "- 누적 OCR과 화면을 보고 원문 공고 이동 수단 또는 추가 본문 공개 수단이 있는지 판단하십시오.",
                 "- 원문 이동 수단이 현재 화면에 없으면 위로 스크롤하고, 보이면 해당 마커를 click_marker로 선택하십시오.",
                 "- URL을 추측해 open_browser를 호출하지 마십시오.",

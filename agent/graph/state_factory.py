@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.graph.state import GraphState
+from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
 
 
 def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
@@ -46,6 +47,9 @@ def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
         "reflex_transition_contracts": {},
         "reflex_blocked_recipe_keys": [],
         "recipe_params": {},
+        "job_collection_contract": {
+            "required_fields": list(DEFAULT_JOB_COLLECTION_FIELDS),
+        },
         "transition_request": {},
         "transition_result": {
             "status": "idle",
@@ -61,6 +65,7 @@ def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
         "job_results_availability": {},
         "job_page_policy_trace": {},
         "job_detail_buffer": {},
+        "job_detail_coverage": {},
         "job_detail_followup": {},
         "return_to_job_results": {},
         "pending_human_approval": False,

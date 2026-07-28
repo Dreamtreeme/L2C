@@ -415,9 +415,34 @@ class PerceptionEngine:
             else:
                 last_path = self.capture_screen(filename=filename, initial_wait_sec=initial_wait_sec)
             quality = self.screen_quality(last_path)
+            wait_stable = getattr(self, "_wait_stable", None)
+            stability = dict(
+                getattr(wait_stable, "last_wait_result", {}) or {}
+            )
+            if stability:
+                quality.update(
+                    {
+                        "stable": bool(stability.get("stable")),
+                        "stability_reason": str(
+                            stability.get("reason") or ""
+                        ),
+                        "stability_probe_count": int(
+                            stability.get("probe_count") or 0
+                        ),
+                        "stability_confirmations": int(
+                            stability.get("stable_frames") or 0
+                        ),
+                        "stability_diff_percent": stability.get(
+                            "diff_percent"
+                        ),
+                    }
+                )
             self.last_capture_quality = dict(quality)
             logger.info("Screen quality checked", attempt=attempt, max_attempts=max_attempts, **quality)
-            if not quality.get("low_information"):
+            if (
+                not quality.get("low_information")
+                and quality.get("stable", True)
+            ):
                 return last_path
             if deadline is not None and time.monotonic() >= deadline:
                 break

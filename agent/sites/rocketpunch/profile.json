@@ -28,7 +28,7 @@
     }
   },
   "collection_policy": {
-    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "혜택", "url"]
+    "required_fields": ["company_name", "position", "main_tasks", "requirements", "preferred", "benefits", "url"]
   },
   "tools": {
     "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
