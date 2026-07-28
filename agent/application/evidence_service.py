@@ -80,6 +80,9 @@ def inspect_job_evidence(
     db_path: str | Path,
     requirements: list[EvidenceRequirement],
     constraints: InvestigationConstraints,
+    *,
+    document_scope_ids: list[int] | set[int] | None = None,
+    force_semantic_review: bool = False,
 ) -> dict[str, Any]:
     """요구사항별 표본 수, 날짜 근거, 필드 충족률을 반환한다."""
 
@@ -97,6 +100,15 @@ def inspect_job_evidence(
 
     reports: list[dict[str, Any]] = []
     all_document_ids: set[int] = set()
+    document_scope = (
+        None
+        if document_scope_ids is None
+        else {
+            int(document_id)
+            for document_id in document_scope_ids
+            if int(document_id) > 0
+        }
+    )
     taxonomy_constraints = constraints.model_copy(
         update={"location": "", "experience": "", "employment_type": ""}
     )
@@ -137,6 +149,12 @@ def inspect_job_evidence(
             if candidate_sets
             else None
         )
+        if document_scope is not None:
+            allowed_job_ids = (
+                set(document_scope)
+                if allowed_job_ids is None
+                else allowed_job_ids & document_scope
+            )
         matched = _rows_for_requirement(
             rows,
             requirement,
@@ -175,7 +193,8 @@ def inspect_job_evidence(
                 "skill_queries": list(requirement.skill_queries),
                 "skill_concept_keys": list(skill_keys),
                 "semantic_review_required": bool(
-                    (requirement.occupation_query and not resolved_occupation_keys)
+                    force_semantic_review
+                    or (requirement.occupation_query and not resolved_occupation_keys)
                     or (
                         requirement.occupation_domain_query
                         and not domain_keys
@@ -220,6 +239,11 @@ def inspect_job_evidence(
         )
     return {
         "total_db_rows": len(rows),
+        "document_scope_ids": (
+            sorted(document_scope)
+            if document_scope is not None
+            else None
+        ),
         "requirements": reports,
         "sufficient": bool(reports) and all(item["sufficient"] for item in reports),
         "document_ids": sorted(all_document_ids),

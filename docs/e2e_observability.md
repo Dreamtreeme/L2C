@@ -3,7 +3,7 @@ title: "E2E 관측 환경"
 type: guide
 area: observability
 status: active
-updated: 2026-07-24
+updated: 2026-07-28
 tags:
   - l2c
   - docs/observability
@@ -65,6 +65,21 @@ python -m benchmark.run_realtime_e2e `
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 ```
 
+기존 실행 기록 전체를 재사용할 때는 먼저 출처 수준과 비교 단위를 감사합니다.
+
+```powershell
+python -m benchmark.audit_e2e_history logs `
+  --json-output logs/e2e_history_audit.json `
+  --markdown-output benchmark/e2e_history_audit.md `
+  --minimum-group-size 2
+```
+
+감사 도구는 `git_commit`, 설정 fingerprint, 시나리오, 사이트, 실행 모드,
+질의와 목표 수가 같은 기록만 한 그룹으로 묶습니다. `git_dirty=true` 실행은
+코드 상태를 완전히 재현할 수 없으므로 최종 성능 기준이 아니라 개발 중 회귀와
+트러블슈팅 증거로 분리합니다. 표본이 작은 그룹에는 p95를 붙이지 않고 성공
+건수와 실행시간 최소·중앙·최대값을 그대로 표시합니다.
+
 ### 자율탐색과 반복탐색 회귀
 
 `benchmark.run_regression_matrix`는 격리 DB에서 같은 작업의 `cold`와 `warm`을 순서대로 실행합니다.
@@ -86,6 +101,43 @@ python -m benchmark.run_regression_matrix `
 | 전체 cold 작업 | `workflow_total_tokens`, `workflow_estimated_cost` |
 
 Critic 호출은 별도 실행 문맥과 LangSmith trace를 사용합니다. 재시도가 발생하면 모든 시도의 시간, 토큰, 비용을 합산하며, 단가를 알 수 없는 모델은 기존 원칙대로 비용을 임의 추정하지 않습니다.
+
+### 자연어 제품 회귀
+
+`benchmark.run_product_chat_matrix`는 실제 `/api/chat` SSE 경로를 같은 FastAPI
+수명에서 실행합니다. 원본 DB는 수정하지 않고 SQLite `backup`으로 만든 테스트
+DB를 사용합니다.
+
+```powershell
+python -m benchmark.run_product_chat_matrix `
+  --source-db data/jobs.db `
+  --db-path logs/product_matrix.db `
+  --log logs/product_matrix.log `
+  --summary logs/product_matrix.summary.json
+```
+
+기본 행렬은 다음 세 계약을 검사합니다.
+
+| 시나리오 | 자동 판정 |
+|---|---|
+| DB 전용 비교 | 수집 이벤트 없음, DB 행 변화 없음, 최소 인용 수와 `job_id` 무결성 |
+| 범위가 없는 요청 | `waiting_input`, 수집 이벤트 없음, 구조화된 객관식 선택지 |
+| 실제 사이트 수집 | 수집 시작·완료 이벤트, 완료 답변, 저장 DB에 존재하는 `job_id` 인용 |
+
+답변 문구나 특정 회사명을 문자열로 맞추지 않습니다. 상태, 이벤트, DB 변화,
+인용처럼 코드로 결정할 수 있는 제품 계약만 자동 판정하고 답변의 의미 품질은
+사람이 검토합니다. 전체 SSE와 런타임 로그는 로그 파일에만 기록하며 콘솔에는
+요약을 출력합니다. 화면 진행을 같이 볼 때만 `--verbose`를 사용합니다.
+
+지휘자의 요청 이해만 빠르게 회귀할 때는 실제 12개 자연어 질문을 구조화 출력으로
+평가합니다.
+
+```powershell
+python -m benchmark.profile_investigation_planner `
+  --summary `
+  --failures-only `
+  --max-concurrency 3
+```
 
 ## Trace 구조
 

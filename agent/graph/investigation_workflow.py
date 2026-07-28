@@ -81,13 +81,23 @@ class InvestigationModels:
         self.validation_model = validation_model
         self.answer_model = answer_model
 
+    @staticmethod
+    def _max_output_tokens() -> int | None:
+        from agent.config import get_settings
+
+        value = get_settings().models.commander_max_output_tokens
+        return value if value > 0 else None
+
     def analysis(self) -> Any:
         if self.analysis_model is None:
             from agent.application.model_clients import get_structured_google_model
             from agent.application.model_policy import commander_model_name
 
             self.analysis_model = get_structured_google_model(
-                commander_model_name(), RequestAnalysis, temperature=0.0
+                commander_model_name(),
+                RequestAnalysis,
+                temperature=0.0,
+                max_output_tokens=self._max_output_tokens(),
             )
         return self.analysis_model
 
@@ -97,7 +107,10 @@ class InvestigationModels:
             from agent.application.model_policy import commander_model_name
 
             self.evidence_model = get_structured_google_model(
-                commander_model_name(), EvidencePlan, temperature=0.0
+                commander_model_name(),
+                EvidencePlan,
+                temperature=0.0,
+                max_output_tokens=self._max_output_tokens(),
             )
         return self.evidence_model
 
@@ -107,7 +120,10 @@ class InvestigationModels:
             from agent.application.model_policy import commander_model_name
 
             self.taxonomy_model = get_structured_google_model(
-                commander_model_name(), TaxonomyResolution, temperature=0.0
+                commander_model_name(),
+                TaxonomyResolution,
+                temperature=0.0,
+                max_output_tokens=self._max_output_tokens(),
             )
         return self.taxonomy_model
 
@@ -117,7 +133,10 @@ class InvestigationModels:
             from agent.application.model_policy import commander_model_name
 
             self.action_model = get_structured_google_model(
-                commander_model_name(), InvestigationActionPlan, temperature=0.0
+                commander_model_name(),
+                InvestigationActionPlan,
+                temperature=0.0,
+                max_output_tokens=self._max_output_tokens(),
             )
         return self.action_model
 
@@ -127,7 +146,10 @@ class InvestigationModels:
             from agent.application.model_policy import commander_model_name
 
             self.validation_model = get_structured_google_model(
-                commander_model_name(), EvidenceValidation, temperature=0.0
+                commander_model_name(),
+                EvidenceValidation,
+                temperature=0.0,
+                max_output_tokens=self._max_output_tokens(),
             )
         return self.validation_model
 
@@ -137,7 +159,9 @@ class InvestigationModels:
             from agent.application.model_policy import commander_model_name
 
             self.answer_model = get_google_chat_model(
-                commander_model_name(), temperature=0.0
+                commander_model_name(),
+                temperature=0.0,
+                max_output_tokens=self._max_output_tokens(),
             )
         return self.answer_model
 
@@ -990,10 +1014,20 @@ class InvestigationWorkflow:
         raise_if_cancelled()
         investigation = InvestigationRequest.model_validate(state["investigation"])
         emit_run_event("database_check", RunPhase.DATABASE, "DB에 필요한 근거가 있는지 확인하고 있습니다.")
+        collected_web_evidence = (
+            investigation.evidence_policy == EvidencePolicy.WEB_REQUIRED
+            and bool(investigation.executed_step_ids)
+        )
         report = inspect_job_evidence(
             self.db_path,
             investigation.evidence_requirements,
             investigation.constraints,
+            document_scope_ids=(
+                investigation.collection_document_ids
+                if collected_web_evidence
+                else None
+            ),
+            force_semantic_review=collected_web_evidence,
         )
         if _needs_semantic_evidence_validation(report):
             validation = _model_payload(

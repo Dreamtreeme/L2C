@@ -387,6 +387,10 @@ def test_text_input_target_guard_rejects_close_icon_and_accepts_input_container(
     }
     assert text_input_target_rejection(markers, 1) is None
     assert text_input_target_rejection(markers, 2) is None
+    assert text_input_target_rejection(
+        [{"id": 3, "bbox": [408, 283, 515, 337], "type": "icon"}],
+        3,
+    ) is None
 
 
 def test_action_node_rejects_type_on_compact_icon_before_physical_input(monkeypatch):

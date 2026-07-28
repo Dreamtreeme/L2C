@@ -375,6 +375,22 @@ class CollectionService:
             if effective_target_count > 0
             else 0
         )
+        collection_document_ids = sorted(
+            {
+                *(
+                    int(item["job_id"])
+                    for item in validation.get("persisted_items", [])
+                    if isinstance(item, dict)
+                    and str(item.get("job_id", "")).isdigit()
+                    and int(item["job_id"]) > 0
+                ),
+                *(
+                    int(job_id)
+                    for job_id in (worker_result.get("observed_job_ids") or [])
+                    if str(job_id).isdigit() and int(job_id) > 0
+                ),
+            }
+        )
 
         if needs_approval:
             message = (
@@ -424,6 +440,7 @@ class CollectionService:
                 "site": site_slug,
                 "item_count": item_count,
                 "persisted_count": persisted_count,
+                "document_ids": collection_document_ids,
                 "needs_human_approval": needs_approval,
                 "completion_status": completion_status,
             },
@@ -451,6 +468,7 @@ class CollectionService:
             "search_scope_exhausted": scope_exhausted,
             "result_availability": availability,
             "missing_count": missing_count,
+            "document_ids": collection_document_ids,
             "persistence_validation": validation,
             "observed_job_ids": sorted(
                 {

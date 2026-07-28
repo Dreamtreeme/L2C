@@ -583,6 +583,20 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         error_increment = 1
 
     selector_request, selector_trace = _select_result_cards(state)
+    if selector_trace.get("reason") == "screen_loading":
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "Reasoning Node skipped while result screen is loading",
+            component="reasoning",
+            duration_sec=round(elapsed, 6),
+            reasoning_mode="loading_retry",
+        )
+        return {
+            "pending_action": None,
+            "result_card_selector_trace": selector_trace,
+            "reflex_trace": {"hit": False, "source": "screen_loading"},
+            "reflex_transition_contracts": {},
+        }
     if selector_request is not None:
         elapsed = time.perf_counter() - start_time
         logger.info(

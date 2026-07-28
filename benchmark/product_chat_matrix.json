@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "scenario_id": "database_only_ios_compare",
+      "query": "웹 수집은 하지 말고 현재 DB에 저장된 iOS 개발자 공고 2개를 비교해서 주요 업무와 요구 기술을 근거와 함께 알려줘.",
+      "expected_status": "completed",
+      "collection": "forbidden",
+      "clarification": "forbidden",
+      "database_mutation": "forbidden",
+      "minimum_citations": 2,
+      "minimum_database_jobs": 2,
+      "maximum_execution_time_sec": 60,
+      "maximum_total_tokens": 30000
+    },
+    {
+      "scenario_id": "clarify_unspecified_job",
+      "query": "채용공고 찾아줘.",
+      "expected_status": "waiting_input",
+      "collection": "forbidden",
+      "clarification": "required",
+      "database_mutation": "forbidden",
+      "minimum_citations": 0,
+      "minimum_clarification_options": 2,
+      "maximum_execution_time_sec": 30,
+      "maximum_total_tokens": 10000
+    },
+    {
+      "scenario_id": "wanted_ios_collection",
+      "query": "원티드에서 iOS 개발자 공고 1개를 직접 확인하고 주요 업무와 요구 기술을 DB 근거와 함께 알려줘.",
+      "expected_status": "completed",
+      "collection": "required",
+      "clarification": "forbidden",
+      "database_mutation": "optional",
+      "citation_scope": "collection",
+      "minimum_citations": 1,
+      "minimum_database_jobs": 1,
+      "maximum_execution_time_sec": 150,
+      "maximum_total_tokens": 100000
+    }
+  ]
+}

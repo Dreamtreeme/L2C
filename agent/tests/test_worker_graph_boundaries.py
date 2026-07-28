@@ -2,6 +2,7 @@ from agent.graph import worker_execution, worker_observation, worker_recording
 from agent.graph.action_request import build_action_request
 from agent.graph.workflow import (
     route_after_action,
+    route_after_reasoning,
     route_after_reflex,
     route_after_selection,
     route_after_transition,
@@ -39,6 +40,16 @@ def test_transition_requires_collection_only_after_ocr():
 def test_screen_changing_action_always_routes_to_capture():
     assert route_after_action({"pending_transition": {"action": "click_marker"}}) == "capture"
     assert route_after_action({}) == "reasoning"
+
+
+def test_loading_card_screen_routes_from_reasoning_to_recapture():
+    state = {
+        "pending_action": None,
+        "result_card_selector_trace": {"reason": "screen_loading"},
+    }
+
+    assert route_after_reasoning(state) == "capture"
+    assert route_after_reasoning({"pending_action": object()}) == "action"
 
 
 def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):

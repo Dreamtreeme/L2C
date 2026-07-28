@@ -6,6 +6,8 @@
     {"id": "wanted-ios-warm", "site": "wanted", "query": "iOS 개발자", "target_count": 2, "count_mode": "explicit", "run_mode": "warm"},
     {"id": "saramin-ai-cold", "site": "saramin", "query": "AI 엔지니어", "target_count": 1, "count_mode": "explicit", "run_mode": "cold"},
     {"id": "saramin-ai-warm", "site": "saramin", "query": "AI 엔지니어", "target_count": 1, "count_mode": "explicit", "run_mode": "warm"},
+    {"id": "jobkorea-backend-cold", "site": "jobkorea", "query": "백엔드 개발자", "target_count": 1, "count_mode": "explicit", "run_mode": "cold"},
+    {"id": "jobkorea-backend-warm", "site": "jobkorea", "query": "백엔드 개발자", "target_count": 1, "count_mode": "explicit", "run_mode": "warm"},
     {"id": "worknet-data-cold", "site": "worknet", "query": "데이터 엔지니어", "target_count": 1, "count_mode": "explicit", "run_mode": "cold"},
     {"id": "worknet-data-warm", "site": "worknet", "query": "데이터 엔지니어", "target_count": 1, "count_mode": "explicit", "run_mode": "warm"},
     {"id": "rocketpunch-backend-cold", "site": "rocketpunch", "query": "백엔드 개발자", "target_count": 1, "count_mode": "explicit", "run_mode": "cold"},

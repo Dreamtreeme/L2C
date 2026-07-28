@@ -60,7 +60,7 @@ def test_occupation_expression_clears_missing_scope_flag():
     assert constraints.occupation_scope_required is False
 
 
-def test_ambiguous_trend_quality_assumes_period_and_only_asks_for_goal():
+def test_ambiguous_trend_quality_keeps_collection_goal_until_metric_is_selected():
     scenario = INVESTIGATION_SCENARIOS[0]
     questions = [
         ClarificationQuestion(
@@ -79,7 +79,7 @@ def test_ambiguous_trend_quality_assumes_period_and_only_asks_for_goal():
     analysis = RequestAnalysis(
         objective="개발자 채용 트렌드 확인",
         deliverable="기간별 변화 요약",
-        purpose=InvestigationPurpose.TREND,
+        purpose=InvestigationPurpose.COLLECT,
         evidence_policy=EvidencePolicy.WEB_REQUIRED,
         constraints=InvestigationConstraints(
             occupation_query="개발자",

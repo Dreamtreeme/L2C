@@ -6,6 +6,8 @@ from typing import Any
 
 
 IMPLAUSIBLE_TEXT_INPUT_TARGET = "implausible_text_input_target"
+_WIDE_INPUT_ASPECT_RATIO = 2.0
+_BBOX_ROUNDING_TOLERANCE_PX = 1.0
 
 
 def _marker_by_id(markers: list[dict[str, Any]], marker_id: Any) -> dict[str, Any] | None:
@@ -78,8 +80,15 @@ def text_input_target_rejection(
         }
 
     left, top, right, bottom = bbox
-    aspect_ratio = (right - left) / (bottom - top)
-    if aspect_ratio >= 2.0 or _contains_text_marker(bbox, markers):
+    width = right - left
+    height = bottom - top
+    aspect_ratio = width / height
+    # 동일한 입력 박스가 정수 좌표 반올림으로 1px 좁아져도 같은 대상으로 본다.
+    is_wide_input = (
+        width + _BBOX_ROUNDING_TOLERANCE_PX
+        >= _WIDE_INPUT_ASPECT_RATIO * height
+    )
+    if is_wide_input or _contains_text_marker(bbox, markers):
         return None
 
     return {

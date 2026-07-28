@@ -84,6 +84,18 @@ def route_after_reflex(state: GraphState) -> str:
     return "action" if _request_source(state) == "reflex" else "reasoning"
 
 
+def route_after_reasoning(state: GraphState) -> str:
+    """로딩 화면은 행동 없이 재관찰하고, 그 외 판단 결과만 실행한다."""
+
+    if (
+        state.get("pending_action") is None
+        and (state.get("result_card_selector_trace") or {}).get("reason")
+        == "screen_loading"
+    ):
+        return "capture"
+    return "action"
+
+
 def route_after_action(state: GraphState) -> str:
     """원자 실행 뒤 종료, 후속 정책, 새 관찰 또는 새 판단을 선택한다."""
 
@@ -175,7 +187,11 @@ def build_graph(*, worker_runtime=None):
         route_after_reflex,
         {"action": "action", "reasoning": "reasoning"},
     )
-    workflow.add_edge("reasoning", "action")
+    workflow.add_conditional_edges(
+        "reasoning",
+        route_after_reasoning,
+        {"action": "action", "capture": "capture"},
+    )
     workflow.add_edge("action", "recording")
     workflow.add_conditional_edges(
         "recording",
@@ -195,6 +211,7 @@ def build_graph(*, worker_runtime=None):
 __all__ = [
     "build_graph",
     "route_after_action",
+    "route_after_reasoning",
     "route_after_reflex",
     "route_after_selection",
     "route_after_start",

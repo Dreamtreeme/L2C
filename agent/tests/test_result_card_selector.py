@@ -213,6 +213,25 @@ def test_result_card_selector_skips_non_result_screen(tmp_path, monkeypatch):
     assert trace == {"attempted": True, "reason": "not_result_list"}
 
 
+def test_result_card_selector_marks_skeleton_screen_as_loading(tmp_path, monkeypatch):
+    from PIL import Image
+    from agent.runtime import result_card_selector as selector
+
+    image_path = tmp_path / "marked.jpg"
+    Image.new("RGB", (200, 100), "white").save(image_path)
+
+    class FakeModel:
+        def invoke(self, inputs, config=None):
+            return selector.ResultCardSelection(is_loading=True)
+
+    monkeypatch.setattr(selector, "_get_result_card_selector_model", lambda: FakeModel())
+
+    request, trace = selector.select_result_cards(_state(image_path))
+
+    assert request is None
+    assert trace["reason"] == "screen_loading"
+
+
 def test_result_card_selector_requests_refinement_instead_of_adjacent_role(tmp_path, monkeypatch):
     from PIL import Image
     from agent.runtime import result_card_selector as selector
@@ -473,3 +492,24 @@ def test_reasoning_node_uses_card_selector_without_general_model(monkeypatch):
     assert result["pending_action"] is request
     assert result["pending_action"].source == "card_selector"
     assert result["reflex_trace"]["source"] == "card_selector"
+
+
+def test_reasoning_node_recaptures_loading_result_without_general_model(monkeypatch):
+    monkeypatch.setattr(
+        worker_reasoning,
+        "_select_result_cards",
+        lambda state: (None, {"attempted": True, "reason": "screen_loading"}),
+    )
+    monkeypatch.setattr(
+        worker_reasoning,
+        "_get_ui_llm_with_tools",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("로딩 화면을 범용 모델에 전달함")
+        ),
+    )
+
+    result = worker_reasoning.reasoning_node({"action_history": []})
+
+    assert result["pending_action"] is None
+    assert result["result_card_selector_trace"]["reason"] == "screen_loading"
+    assert result["reflex_trace"]["source"] == "screen_loading"

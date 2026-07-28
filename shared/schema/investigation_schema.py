@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -175,7 +175,9 @@ class InvestigationConstraints(BaseModel):
     location: str = ""
     experience: str = ""
     employment_type: str = ""
-    analysis_dimensions: list[str] = Field(default_factory=list)
+    analysis_dimensions: list[
+        Annotated[str, Field(min_length=1, max_length=80)]
+    ] = Field(default_factory=list, max_length=12)
 
     @model_validator(mode="after")
     def normalize_occupation_scope_requirement(self) -> "InvestigationConstraints":

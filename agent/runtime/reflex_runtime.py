@@ -7,6 +7,7 @@ from typing import Any
 
 from agent.graph.action_request import build_action_request
 from agent.graph.state import GraphState
+from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
@@ -255,6 +256,16 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                     )
                     candidate_valid = False
                     break
+                if action == "type_in_marker":
+                    target_rejection = text_input_target_rejection(markers, marker_id)
+                    if target_rejection:
+                        record_rejection(
+                            recipe_key,
+                            str(target_rejection.get("reason") or "invalid_text_input_target"),
+                            step_trace,
+                        )
+                        candidate_valid = False
+                        break
                 step_trace["marker_id"] = marker_id
                 args = reflex_action_args(step, marker_id, params=params)
                 if args is None:

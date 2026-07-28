@@ -173,9 +173,15 @@ def _candidate_task_category(candidate: dict[str, Any]) -> str:
 def _promotion_policy(allow_promotion: bool) -> str:
     if allow_promotion:
         return (
-            "Active recipe promotion is enabled for this review only if the candidate is reusable. "
-            "Set promote_to_active_recipe=true only when fixed/parameterized steps are safe to replay. "
-            "The code will still activate only ROI-verifiable click/type target actions."
+            "Active recipe promotion is evaluated per step, not for the trajectory as one indivisible path. "
+            "Set promote_to_active_recipe=true when at least one fixed/parameterized target step is independently "
+            "safe to replay, even if the same successful trajectory also contains mistakes, recovery actions, or "
+            "reasoning-only steps. Classify every unsafe step as reasoning; the code will activate only the safe, "
+            "ROI-verifiable click/type subset. Set promote_to_active_recipe=false only when no target step is safe "
+            "for active replay. Do not maximize the number of promoted steps. A screen change alone is not success. "
+            "A step is reusable only when its expected result was achieved and it belongs to the causal path that "
+            "completed the task. If later actions abandoned that branch, reopened the start page, or used an "
+            "alternative route to recover, classify the abandoned branch steps as reasoning."
         )
     return (
         "Active recipe promotion is disabled in this review, so promote_to_active_recipe is only "

@@ -49,6 +49,16 @@ def test_clarification_question_requires_unique_option_ids():
         raise AssertionError("중복 선택지 식별자가 허용되었습니다.")
 
 
+def test_analysis_dimensions_rejects_unbounded_model_output():
+    with pytest.raises(ValueError):
+        InvestigationConstraints(analysis_dimensions=["분석 축" * 30])
+
+    with pytest.raises(ValueError):
+        InvestigationConstraints(
+            analysis_dimensions=[f"분석 축 {index}" for index in range(13)]
+        )
+
+
 def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path):
     from agent.graph.investigation_workflow import _normalized_evidence_requirements
 
@@ -251,6 +261,44 @@ def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
     assert set(requirement_report["document_ids"]) == expected_ids
     assert requirement_report["semantic_review_required"] is True
     assert requirement_report["occupation_query"] == "알려지지 않은 신직무"
+
+
+def test_evidence_inspection_limits_candidates_to_document_scope(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    db = Database(db_path)
+    excluded_id = db.upsert(
+        "https://example.com/jobs/old",
+        {
+            "company_name": "기존회사",
+            "position": "기존 공고",
+            "source_platform": "wanted",
+        },
+    )
+    included_id = db.upsert(
+        "https://example.com/jobs/current",
+        {
+            "company_name": "현재회사",
+            "position": "현재 수집 공고",
+            "source_platform": "wanted",
+        },
+    )
+
+    report = inspect_job_evidence(
+        db_path,
+        [
+            EvidenceRequirement(
+                requirement_id="current_collection",
+                description="이번 수집 공고",
+                required_sites=["wanted"],
+            )
+        ],
+        InvestigationConstraints(),
+        document_scope_ids=[included_id],
+    )
+
+    assert report["document_scope_ids"] == [included_id]
+    assert report["document_ids"] == [included_id]
+    assert excluded_id not in report["requirements"][0]["document_ids"]
 
 
 def test_investigation_checkpoint_is_separate_from_business_database(tmp_path):
@@ -970,7 +1018,7 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
     assert result["investigation"]["collection_document_ids"] == [1]
 
 
-def test_workflow_loads_dictionary_indexed_collection_documents_without_role_recheck(tmp_path):
+def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_path):
     from langchain_core.messages import AIMessage
 
     from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
@@ -1017,12 +1065,13 @@ def test_workflow_loads_dictionary_indexed_collection_documents_without_role_rec
         models=InvestigationModels(
             analysis_model=_FakeModel(
                 RequestAnalysis(
-                    objective="AI 엔지니어 기술 조사",
-                    deliverable="주요 기술 요약",
-                    purpose=InvestigationPurpose.COLLECT,
-                    constraints=InvestigationConstraints(
-                        occupation_query="AI 엔지니어",
-                        sites=["wanted"],
+                        objective="AI 엔지니어 기술 조사",
+                        deliverable="주요 기술 요약",
+                        purpose=InvestigationPurpose.COLLECT,
+                        evidence_policy=EvidencePolicy.WEB_REQUIRED,
+                        constraints=InvestigationConstraints(
+                            occupation_query="AI 엔지니어",
+                            sites=["wanted"],
                     ),
                 )
             ),
@@ -1065,7 +1114,116 @@ def test_workflow_loads_dictionary_indexed_collection_documents_without_role_rec
     assert result["valid_ids"] == [1]
     assert result["investigation"]["collection_document_ids"] == [1]
     assert result["documents"][0]["position"] == "AI 엔지니어"
-    assert validation_model.calls == 0
+    assert validation_model.calls == 1
+
+
+def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_path):
+    from langchain_core.messages import AIMessage
+
+    from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
+
+    db_path = tmp_path / "jobs.db"
+    db = Database(db_path)
+    stale_id = db.upsert(
+        "https://example.com/jobs/stale-qa-automation",
+        {
+            "company_name": "기존회사",
+            "position": "QA 자동화 엔지니어",
+            "source_platform": "wanted",
+        },
+    )
+
+    class CollectionTool:
+        def invoke(self, _arguments):
+            collected_id = db.upsert(
+                "https://example.com/jobs/current-qa-lead",
+                {
+                    "company_name": "현재회사",
+                    "position": "QA 팀장",
+                    "source_platform": "wanted",
+                },
+            )
+            return json.dumps(
+                {
+                    "persisted_count": 1,
+                    "persistence_validation": {
+                        "persisted_items": [
+                            {"job_id": collected_id, "operation": "created"}
+                        ]
+                    },
+                },
+                ensure_ascii=False,
+            )
+
+    validation_model = _FakeModel(
+        EvidenceValidation(
+            decisions=[
+                RequirementEvidenceDecision(
+                    requirement_id="current_qa_automation",
+                    matching_document_ids=[],
+                    reason="QA 팀장은 QA 자동화 엔지니어 공고가 아니다.",
+                )
+            ]
+        )
+    )
+    workflow = InvestigationWorkflow(
+        db_path=db_path,
+        models=InvestigationModels(
+            analysis_model=_FakeModel(
+                RequestAnalysis(
+                    objective="현재 QA 자동화 엔지니어 공고 확인",
+                    deliverable="현재 웹에서 확인한 공고",
+                    purpose=InvestigationPurpose.COLLECT,
+                    evidence_policy=EvidencePolicy.WEB_REQUIRED,
+                    constraints=InvestigationConstraints(sites=["wanted"]),
+                )
+            ),
+            evidence_model=_FakeModel(
+                EvidencePlan(
+                    requirements=[
+                        EvidenceRequirement(
+                            requirement_id="current_qa_automation",
+                            description="현재 QA 자동화 엔지니어 공고",
+                            required_sites=["wanted"],
+                            required_fields=["position"],
+                        )
+                    ]
+                )
+            ),
+            validation_model=validation_model,
+            action_model=_FakeModel(
+                InvestigationActionPlan(
+                    steps=[
+                        InvestigationPlanStep(
+                            step_id="collect_current_qa",
+                            action="현재 QA 자동화 공고 수집",
+                            tool_name="realtime_scraping",
+                            arguments={
+                                "query": "QA 자동화 엔지니어",
+                                "site": "wanted",
+                            },
+                            purpose="현재 웹 결과 확인",
+                        )
+                    ]
+                )
+            ),
+            answer_model=_FakeModel(
+                AIMessage(content="현재 수집 결과에서 정확히 일치하는 공고를 찾지 못했습니다.")
+            ),
+        ),
+        capabilities=_test_capabilities(),
+        collection_tool=CollectionTool(),
+    )
+
+    result = workflow.run(
+        "원티드에서 QA 자동화 엔지니어 공고를 직접 확인해줘"
+    )
+
+    assert validation_model.calls == 1
+    assert result["valid_ids"] == []
+    assert result["documents"] == []
+    assert stale_id not in result["investigation"]["evidence_document_ids"]
+    assert result["investigation"]["collection_document_ids"] != [stale_id]
 
 
 def test_chat_service_uses_investigation_workflow_for_production_path():

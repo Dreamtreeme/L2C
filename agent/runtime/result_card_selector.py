@@ -42,6 +42,10 @@ class ResultCardSelection(BaseModel):
     """검색 결과 여부와 수집 순서대로 고른 카드 목록."""
 
     is_result_list: bool = False
+    is_loading: bool = Field(
+        False,
+        description="공고 제목 대신 스켈레톤·자리표시자만 보여 결과가 아직 로딩 중인지 여부",
+    )
     needs_refinement: bool = False
     refinement_reason: str = ""
     refinement_action: Literal["click", "type", "none"] = "none"
@@ -196,6 +200,9 @@ def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
     )
     instruction = (
         "현재 화면이 채용공고 검색 결과 목록인지 판단하고, 실제로 보이는 공고 중 수집할 카드를 고르십시오. "
+        "공고 카드 자리에 회색 스켈레톤·자리표시자만 반복되고 실제 공고 제목이 아직 보이지 않으면 is_loading을 true로 "
+        "설정하고, is_result_list와 needs_refinement를 false로 두며 cards를 비우십시오. 로딩 중에는 검색어가 틀렸다고 "
+        "판단하거나 검색 조건을 바꾸지 마십시오. "
         "사용자 검색어가 직무를 나타내면 공고 제목의 직무 정체성이 직접 일치해야 합니다. 기술 스택이나 업무 일부의 "
         "일치는 직무가 일치한 공고 사이의 순위 판단에만 사용하고, 제목이 다른 직무를 나타내는 공고를 직접 일치로 "
         "간주하지 마십시오. 검색어가 기술 자체만을 요구한 경우에만 제목 또는 기술 표기의 직접 일치를 사용하십시오. "
@@ -390,6 +397,12 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
             "available_result_count": available_count,
             "count_evidence": count_evidence,
             "count_confidence": count_confidence,
+        }
+    if selection.get("is_loading"):
+        return None, {
+            "attempted": True,
+            "reason": "screen_loading",
+            "model": _selector_model_name(),
         }
     if not selection.get("is_result_list"):
         return None, {"attempted": True, "reason": "not_result_list", **availability}

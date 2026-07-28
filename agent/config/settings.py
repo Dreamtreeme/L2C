@@ -52,6 +52,12 @@ class PathSettings(SectionSettings):
 
 class ModelSettings(SectionSettings):
     commander_model: str = Field("gemini-3.6-flash", validation_alias="COMMANDER_MODEL")
+    commander_max_output_tokens: int = Field(
+        4096,
+        ge=0,
+        le=65536,
+        validation_alias="COMMANDER_MAX_OUTPUT_TOKENS",
+    )
     worker_reasoning_model: str | None = Field(None, validation_alias="VISION_WORKER_REASONING_MODEL")
     worker_reasoning_thinking_level: str = Field(
         "low",

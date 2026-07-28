@@ -1761,6 +1761,71 @@ def test_reflex_node_rejects_non_atomic_recipe(monkeypatch):
     assert result["reflex_trace"]["reject_reasons"] == {"non_atomic_recipe": 1}
 
 
+def test_reflex_node_rejects_implausible_text_input_before_action(monkeypatch, tmp_path):
+    from PIL import Image, ImageDraw
+    from agent.vision.screen_signature import compute_target_roi_signature
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    saved = tmp_path / "saved-compact-icon.png"
+    current = tmp_path / "current-compact-icon.png"
+    for path in [saved, current]:
+        image = Image.new("RGB", (200, 120), "white")
+        ImageDraw.Draw(image).rectangle([10, 10, 40, 40], fill="black")
+        image.save(path)
+    roi_signature = compute_target_roi_signature(saved, [10, 10, 40, 40], [200, 120])
+
+    class FakeStore:
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-invalid-input",
+                    SiteRecipe(
+                        site="wanted",
+                        goal="goal",
+                        steps=[
+                            RecipeStep(
+                                seq=0,
+                                action="type_in_marker",
+                                page_role="home",
+                                replay_mode="parameterized",
+                                roi_signature=roi_signature,
+                                target={
+                                    "text": "검색",
+                                    "marker_type": "icon",
+                                    "bbox_ratio": [0.05, 0.0833, 0.2, 0.3333],
+                                    "center_ratio": [0.125, 0.2083],
+                                },
+                                param={"text": "AI", "slot_name": "query"},
+                                slot_refs=["query"],
+                            )
+                        ],
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
+
+    result = reflex_node(
+        {
+            "goal": "AI 공고",
+            "current_url": "https://www.wanted.co.kr",
+            "current_page_role": "home",
+            "screen_signature": {"size": [200, 120]},
+            "recent_images": [current],
+            "current_markers": [
+                {"id": 7, "bbox": [10, 10, 40, 40], "type": "icon", "text": "검색"}
+            ],
+            "recipe_params": {"site": "wanted", "query": "AI"},
+        }
+    )
+
+    assert "pending_action" not in result
+    assert result["reflex_trace"]["hit"] is False
+    assert result["reflex_trace"]["reject_reasons"] == {
+        "implausible_text_input_target": 1
+    }
+
+
 def test_reflex_node_does_not_synthesize_enter_after_search_input(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
     from agent.vision.screen_signature import compute_target_roi_signature
@@ -3795,6 +3860,18 @@ def test_candidate_reviewer_retries_when_promotable_review_omits_step_intent():
     ]
     assert review["decision"] == "accept"
     assert [item["seq"] for item in review["skill_metadata"]["step_intents"]] == [1, 2]
+
+
+def test_promotion_prompt_treats_safe_steps_independently_from_failed_path():
+    from agent.recipe.candidate_reviewer import _promotion_policy
+
+    policy = _promotion_policy(True)
+
+    assert "evaluated per step" in policy
+    assert "also contains mistakes" in policy
+    assert "only when no target step is safe" in policy
+    assert "A screen change alone is not success" in policy
+    assert "classify the abandoned branch steps as reasoning" in policy
 
 
 def test_candidate_reviewer_rejects_partial_promotion_after_correction_retry():

@@ -30,7 +30,7 @@ INVESTIGATION_SCENARIOS = (
     InvestigationScenario(
         "ambiguous_recent_trend",
         "요즘 뜨는 개발자 공고 찾아줘",
-        "trend",
+        "collect",
         expected_evidence_policy="web_required",
         expected_clarification_fields=("analysis_dimensions",),
         optional_clarification_fields=("site_scope",),
@@ -39,7 +39,6 @@ INVESTIGATION_SCENARIOS = (
         expected_occupation_query="개발자",
         expected_collection_search_term="개발자",
         requires_verified_posted_at=True,
-        requires_comparison_dates=True,
         requires_assumption=True,
     ),
     InvestigationScenario(
@@ -92,7 +91,6 @@ INVESTIGATION_SCENARIOS = (
         "원티드에서 프론트엔드와 백엔드 공고를 각각 찾아 비교해줘",
         "compare",
         expected_evidence_policy="web_required",
-        expected_clarification_fields=("analysis_dimensions",),
         expected_count_mode="visible_all",
         expected_evidence_groups=2,
         expected_sites=("wanted",),

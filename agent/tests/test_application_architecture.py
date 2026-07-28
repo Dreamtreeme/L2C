@@ -1342,6 +1342,42 @@ def test_lightweight_output_limit_supports_environment_and_explicit_override(mon
     model_clients.clear_model_client_cache()
 
 
+def test_investigation_models_apply_commander_output_limit(monkeypatch):
+    from agent.application import model_clients
+    from agent.config import clear_settings_cache
+    from agent.graph.investigation_workflow import InvestigationModels
+
+    calls = []
+
+    def fake_structured(model, schema, **kwargs):
+        calls.append(("structured", model, schema, kwargs))
+        return object()
+
+    def fake_chat(model, **kwargs):
+        calls.append(("chat", model, None, kwargs))
+        return object()
+
+    monkeypatch.setenv("COMMANDER_MAX_OUTPUT_TOKENS", "3072")
+    monkeypatch.setattr(model_clients, "get_structured_google_model", fake_structured)
+    monkeypatch.setattr(model_clients, "get_google_chat_model", fake_chat)
+    clear_settings_cache()
+
+    models = InvestigationModels()
+    models.analysis()
+    models.evidence()
+    models.taxonomy()
+    models.action()
+    models.validation()
+    models.answer()
+
+    assert len(calls) == 6
+    assert {
+        item[3]["max_output_tokens"]
+        for item in calls
+    } == {3072}
+    clear_settings_cache()
+
+
 def test_google_model_clients_cache_thinking_levels_separately(monkeypatch):
     from agent.application import model_clients
     from agent.config import clear_settings_cache
