@@ -20,7 +20,7 @@ def _state(image_path: Path) -> dict:
     }
 
 
-def test_result_card_selector_builds_queue_and_first_click(tmp_path, monkeypatch):
+def test_result_card_selector_builds_queue_for_executor_click(tmp_path, monkeypatch):
     from PIL import Image
     from agent.runtime import result_card_selector as selector
 
@@ -44,9 +44,8 @@ def test_result_card_selector_builds_queue_and_first_click(tmp_path, monkeypatch
 
     assert trace["reason"] == "cards_selected"
     assert trace["marker_ids"] == [10, 20]
-    assert [call.name for call in request.tool_calls] == ["set_result_card_queue", "click_marker"]
+    assert [call.name for call in request.tool_calls] == ["set_result_card_queue"]
     assert request.tool_calls[0].args["cards"][0]["company"] == "회사 A"
-    assert request.tool_calls[1].args["marker_id"] == 10
 
 
 def test_result_card_selector_carries_generic_result_count_evidence(tmp_path, monkeypatch):
@@ -142,7 +141,7 @@ def test_result_card_selector_handles_visible_all_without_fixed_count(tmp_path, 
 
     assert trace["reason"] == "cards_selected"
     assert trace["card_count"] == 2
-    assert [call.name for call in request.tool_calls] == ["set_result_card_queue", "click_marker"]
+    assert [call.name for call in request.tool_calls] == ["set_result_card_queue"]
 
 
 def test_result_card_selector_handles_visible_all_enum(tmp_path):

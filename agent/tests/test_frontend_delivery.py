@@ -16,13 +16,13 @@ def test_root_serves_react_build_when_available(tmp_path, monkeypatch):
     assert "react-workspace" in response.text
 
 
-def test_root_falls_back_to_legacy_static_page(tmp_path, monkeypatch):
+def test_root_reports_missing_frontend_build(tmp_path, monkeypatch):
     from agent import web_server
 
     missing_index = Path(tmp_path) / "missing" / "index.html"
     monkeypatch.setattr(web_server, "frontend_index_path", missing_index)
 
-    response = TestClient(web_server.app).get("/", follow_redirects=False)
+    response = TestClient(web_server.app).get("/")
 
-    assert response.status_code == 307
-    assert response.headers["location"] == "/static/index.html"
+    assert response.status_code == 503
+    assert "프론트엔드 빌드가 없습니다" in response.json()["detail"]

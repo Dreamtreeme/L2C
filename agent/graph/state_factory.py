@@ -26,6 +26,7 @@ def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
         "current_page_role": "",
         "current_url_stale": True,
         "low_information_screen": False,
+        "low_information_capture_count": 0,
         "current_markers": [],
         "action_history": [],
         "recent_images": [],
@@ -63,6 +64,7 @@ def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
         "page_policy_trace": {},
         "detail_ocr_buffer": {},
         "detail_followup_required": {},
+        "detail_return_pending": {},
         "pending_human_approval": False,
         "human_approval_request": {},
     }

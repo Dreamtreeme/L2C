@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.config import get_settings
 from agent.graph.action_request import build_action_request
 from agent.graph.state import GraphState
 from agent.graph.worker_state import count_mode_from_state, target_count_from_state
@@ -11,6 +12,7 @@ from agent.runtime.duplicate_job_policy import existing_job_url_trace
 from agent.runtime.result_card_queue import (
     queue_replay_after_return,
     result_card_queue_scope_complete,
+    return_action_from_transition,
     skip_active_result_card,
 )
 from agent.runtime.site_context import looks_like_job_detail_url
@@ -21,6 +23,34 @@ def select_deterministic_action_node(state: GraphState) -> dict[str, Any]:
     """중복 공고와 목록 복귀 큐를 검사해 원자 행동 하나를 선택한다."""
 
     if state.get("pending_action") is not None:
+        return {}
+    if state.get("low_information_screen"):
+        capture_count = int(state.get("low_information_capture_count") or 0)
+        max_cycles = get_settings().vision.low_information_max_capture_cycles
+        if capture_count >= max_cycles:
+            request = build_action_request(
+                "screen_policy",
+                "stop after repeated low-information captures",
+                [
+                    {
+                        "name": "finish_task",
+                        "args": {
+                            "result": (
+                                "브라우저 화면이 준비되지 않아 현재까지 확보한 정보만으로 "
+                                "수집을 종료했습니다."
+                            )
+                        },
+                        "id": "screen_policy_low_information_stop",
+                    }
+                ],
+            )
+            return {
+                "pending_action": request,
+                "page_policy_trace": {
+                    "policy": "low_information_stop",
+                    "capture_count": capture_count,
+                },
+            }
         return {}
 
     observed_transition = dict(state.get("observed_transition", {}) or {})
@@ -124,6 +154,9 @@ def select_deterministic_action_node(state: GraphState) -> dict[str, Any]:
             memory = dict(state.get("result_page_memory", {}) or {})
             saved_signature = dict(memory.get("screen_signature", {}) or {})
             merged_signature = {**saved_signature, **signature}
+            return_action = return_action_from_transition(observed_transition)
+            if return_action:
+                memory["return_action"] = return_action
             logger.info(
                 "Result card queue action selected",
                 queue_id=trace.get("queue_id", ""),
@@ -140,7 +173,9 @@ def select_deterministic_action_node(state: GraphState) -> dict[str, Any]:
                 "current_markers": selected_markers,
                 "screen_signature": merged_signature,
                 "current_page_role": "search",
+                "result_page_memory": memory,
                 "queue_replay_trace": trace,
+                "detail_return_pending": {},
             }
 
     return {

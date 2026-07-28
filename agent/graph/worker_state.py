@@ -5,17 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from agent.graph.state import GraphState
-from agent.runtime.job_collection import job_list_value
+from agent.runtime.job_collection import job_count
 from agent.runtime.site_context import infer_site_page_role
 
 
 def extracted_job_count(extracted_jd: dict[str, Any]) -> int:
-    jobs = job_list_value(extracted_jd)
-    if isinstance(jobs, list):
-        return len([job for job in jobs if isinstance(job, dict) and job])
-    if isinstance(jobs, dict):
-        return 1
-    return 1 if extracted_jd else 0
+    return job_count(extracted_jd)
 
 
 def target_count_from_state(state: GraphState) -> int:
@@ -60,9 +55,26 @@ def detail_key_from_state(state: GraphState) -> str:
     return "|".join(part for part in (company, title) if part)
 
 
+def detail_return_pending_for_url(
+    state: GraphState,
+    current_url: str | None = None,
+) -> dict[str, Any]:
+    """현재 상세 URL에서 완료 후 목록 복귀가 남아 있는지 반환한다."""
+
+    pending = dict(state.get("detail_return_pending", {}) or {})
+    pending_url = str(pending.get("url") or "").strip()
+    resolved_url = str(
+        current_url if current_url is not None else state.get("current_url") or ""
+    ).strip()
+    if not pending_url or pending_url != resolved_url:
+        return {}
+    return pending
+
+
 __all__ = [
     "count_mode_from_state",
     "detail_key_from_state",
+    "detail_return_pending_for_url",
     "extracted_job_count",
     "infer_current_page_role",
     "target_count_from_state",

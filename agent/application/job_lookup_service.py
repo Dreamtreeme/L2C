@@ -12,7 +12,7 @@ from agent.runtime.job_identity import (
     canonical_position_title,
     source_card_key,
 )
-from agent.sites.loader import get_site_entry
+from agent.sites.loader import SiteProfileError, load_site_profile
 from agent.utils.logger import logger
 
 
@@ -85,8 +85,8 @@ def find_job_ids_by_card_identities(
     if not keys or not site_host:
         return [None] * len(keys)
     try:
-        site_entry = get_site_entry(site_host)
-    except Exception:
+        site_entry = load_site_profile(site_host)
+    except SiteProfileError:
         return [None] * len(keys)
     source_platform = str(site_entry.source_platform or "").strip().casefold()
     site_domains = {

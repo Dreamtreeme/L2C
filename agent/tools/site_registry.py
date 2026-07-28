@@ -13,8 +13,6 @@ def _site_entry_payload(profile: SiteProfile) -> dict[str, object]:
         "domains": list(profile.domains),
         "base_url": profile.base_url,
         "enabled": profile.enabled,
-        "runner": profile.runner,
-        "classic_adapter": profile.classic_adapter,
     }
 
 
@@ -22,8 +20,7 @@ def _site_entry_payload(profile: SiteProfile) -> dict[str, object]:
 def list_collection_sites(enabled_only: bool = True) -> str:
     """
     지휘자가 실시간 채용공고 수집에 사용할 수 있는 사이트 목록을 조회합니다.
-    classic 어댑터와 동일한 5개 사이트(wanted, jobkorea, saramin, worknet, rocketpunch)를
-    slug/base_url/domain/classic_adapter 정보와 함께 JSON으로 반환합니다.
+    등록된 프로필에서 slug, 공식 주소, 도메인을 JSON으로 반환합니다.
     """
     try:
         from agent.sites import list_supported_sites

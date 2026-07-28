@@ -9,8 +9,18 @@ from typing import Any
 _TARGET_ACTIONS = {"click_marker", "type_in_marker"}
 _BLOCKING_FEEDBACK_LABELS = {"wrong_target", "no_effect", "loop_risk", "error"}
 _BLOCKING_RESULT_STATUSES = {"error", "skipped"}
-_BLOCKING_TRANSITION_REASONS = {"reflex_no_screen_change", "transition_timeout"}
-_CODE_MANAGED_TRANSITION_SOURCES = {"page_policy"}
+_BLOCKING_TRANSITION_REASONS = {
+    "no_screen_change",
+    "reflex_no_screen_change",
+    "transition_timeout",
+}
+_CODE_MANAGED_TRANSITION_SOURCES = {
+    "page_policy": "managed_by_page_policy",
+    "card_queue": "managed_by_card_queue",
+    "duplicate_job_policy": "managed_by_duplicate_policy",
+    "screen_policy": "managed_by_screen_policy",
+    "reflex": "already_managed_by_reflex",
+}
 
 
 def _seq(value: Any) -> int | None:
@@ -73,8 +83,9 @@ def evaluate_candidate_step_evidence(candidate: dict[str, Any]) -> dict[int, dic
             reason = str(observation.get("reason") or "").strip()
             if source:
                 transition_sources.append(source)
-            if source in _CODE_MANAGED_TRANSITION_SOURCES:
-                reasons.append("managed_by_page_policy")
+            managed_reason = _CODE_MANAGED_TRANSITION_SOURCES.get(source)
+            if managed_reason:
+                reasons.append(managed_reason)
             if reason in _BLOCKING_TRANSITION_REASONS:
                 reasons.append(reason)
 

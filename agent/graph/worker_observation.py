@@ -95,6 +95,11 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
 
     raw_signature = raw_screen_phash_signature(image_path) if pending else {}
     low_information = bool(capture_quality.get("low_information"))
+    low_information_capture_count = (
+        int(state.get("low_information_capture_count") or 0) + 1
+        if low_information
+        else 0
+    )
     capture_sequence, capture_id = _next_capture_identity(state)
     logger.info(
         "Worker screen captured",
@@ -108,11 +113,19 @@ def capture_screen_node(state: GraphState) -> dict[str, Any]:
         "current_screenshot": str(image_path),
         "capture_quality": capture_quality,
         "raw_screen_signature": raw_signature,
+        "analysis_mode": "",
         "ocr_complete": False,
         "recent_images": [str(image_path)],
         "current_url": current_url,
         "current_url_stale": current_url_stale,
         "low_information_screen": low_information,
+        "low_information_capture_count": low_information_capture_count,
+        # 새 캡처의 OCR이 끝나기 전에는 직전 화면 인식을 재사용하지 않는다.
+        "ui_context": "",
+        "current_markers": [],
+        "marked_image": "",
+        "screen_signature": {},
+        "current_page_role": "",
     }
 
 

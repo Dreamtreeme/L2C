@@ -1,13 +1,13 @@
-import json
 import asyncio
+import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pathlib import Path
 
 from agent.config import get_settings
 
@@ -72,15 +72,10 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-L2C-Operation"],
 )
 
-# React 빌드가 없을 때는 기존 단일 HTML 화면을 개발용 폴백으로 사용합니다.
-static_dir = Path(__file__).resolve().parent / "static"
 frontend_dist_dir = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 frontend_index_path = frontend_dist_dir / "index.html"
 frontend_assets_dir = frontend_dist_dir / "assets"
-static_dir.mkdir(parents=True, exist_ok=True)
 
-# 기존 정적 화면과 React 빌드 자산을 서로 다른 경로로 제공합니다.
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 if frontend_assets_dir.is_dir():
     app.mount(
         "/assets",
@@ -125,10 +120,14 @@ def _effective_chat_query(
     return "[최근 대화 문맥]\n" + "\n\n".join(turns) + f"\n\n[현재 사용자 요청]\n{query}"
 
 @app.get("/")
-async def redirect_to_index():
+async def serve_frontend_index():
     if frontend_index_path.is_file():
         return FileResponse(frontend_index_path)
-    return RedirectResponse(url="/static/index.html")
+    raise HTTPException(
+        status_code=503,
+        detail="프론트엔드 빌드가 없습니다. scripts/run_web_app.ps1로 실행하십시오.",
+    )
+
 
 @app.get("/api/jobs/{job_id}")
 async def get_job_detail(job_id: int):

@@ -9,17 +9,23 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from agent.recipe.page_context import normalize_page_role, page_role_family
+from agent.recipe.page_context import normalize_page_role
 from agent.recipe.payload_sanitizer import strip_replay_runtime_fields
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.utils.model_dump import dump_model
 from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 from shared.schema.skill_schema import RecipeSkillMetadata
+
+
+_RECIPE_SCHEMA_VERSION = 3
+_INITIALIZED_DB_PATHS: set[Path] = set()
+_SCHEMA_LOCK = threading.RLock()
 
 
 class RecipeStore:
@@ -31,7 +37,11 @@ class RecipeStore:
             db_path = DB_PATH
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        cache_key = self.db_path.resolve()
+        with _SCHEMA_LOCK:
+            if cache_key not in _INITIALIZED_DB_PATHS:
+                self._ensure_schema()
+                _INITIALIZED_DB_PATHS.add(cache_key)
 
     @contextmanager
     def _conn(self):
@@ -45,7 +55,23 @@ class RecipeStore:
 
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
-            self._drop_legacy_recipe_tables(conn)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recipe_store_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            version_row = conn.execute(
+                "SELECT value FROM recipe_store_meta WHERE key='schema_version'"
+            ).fetchone()
+            try:
+                current_version = int(version_row["value"]) if version_row else 0
+            except (TypeError, ValueError):
+                current_version = 0
+            needs_migration = current_version != _RECIPE_SCHEMA_VERSION
+
             row = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='recipes'"
             ).fetchone()
@@ -78,8 +104,18 @@ class RecipeStore:
             if "metadata_json" not in columns:
                 conn.execute("ALTER TABLE recipes ADD COLUMN metadata_json TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_recipes_site ON recipes(site)")
-            conn.execute("DELETE FROM recipes WHERE recipe_key NOT LIKE 'roi2#%'")
-            self._purge_steps_missing_new_required_fields(conn)
+            if needs_migration:
+                self._drop_legacy_recipe_tables(conn)
+                conn.execute("DELETE FROM recipes WHERE recipe_key NOT LIKE 'roi3#%'")
+                self._purge_steps_missing_new_required_fields(conn)
+                conn.execute(
+                    """
+                    INSERT INTO recipe_store_meta(key, value)
+                    VALUES('schema_version', ?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                    """,
+                    (str(_RECIPE_SCHEMA_VERSION),),
+                )
 
     @staticmethod
     def _drop_legacy_recipe_tables(conn: sqlite3.Connection) -> None:
@@ -92,10 +128,10 @@ class RecipeStore:
                 conn.execute(f'DROP TABLE "{name}"')
 
     @staticmethod
-    def _target_step_has_new_required_fields(step: dict[str, Any]) -> bool:
+    def _step_has_required_replay_fields(step: dict[str, Any]) -> bool:
         action = str(step.get("action") or "")
         if action not in {"click_marker", "type_in_marker"}:
-            return True
+            return False
         return bool(normalize_page_role(step.get("page_role")) and step.get("roi_signature"))
 
     @classmethod
@@ -107,7 +143,7 @@ class RecipeStore:
             except Exception:
                 steps = []
             if not isinstance(steps, list) or not all(
-                isinstance(step, dict) and cls._target_step_has_new_required_fields(step)
+                isinstance(step, dict) and cls._step_has_required_replay_fields(step)
                 for step in steps
             ):
                 conn.execute("DELETE FROM recipes WHERE recipe_key=?", (row["recipe_key"],))
@@ -149,10 +185,10 @@ class RecipeStore:
         meta = RecipeStore._metadata_dict(metadata)
         target = step.get("target") if isinstance(step.get("target"), dict) else {}
         payload = {
-            "key_version": 2,
+            "key_version": _RECIPE_SCHEMA_VERSION,
             "site": site or "",
             "task_category": normalize_task_category(meta.get("task_category")),
-            "page_role_family": page_role_family(step.get("page_role")),
+            "page_role": normalize_page_role(step.get("page_role")),
             "url_template": step.get("url_template") or "",
             "action": step.get("action") or "",
             "component": step.get("component") or "",
@@ -161,7 +197,7 @@ class RecipeStore:
             "target_region": target.get("region") or "",
         }
         digest = hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-        return f"roi2#{digest}"
+        return f"roi3#{digest}"
 
     def _upsert_recipe_steps(
         self,
@@ -180,7 +216,7 @@ class RecipeStore:
         ]
         if not steps:
             return False
-        if not all(self._target_step_has_new_required_fields(step) for step in steps):
+        if not all(self._step_has_required_replay_fields(step) for step in steps):
             return False
         recipe_key = self._recipe_key_for_step(site, steps[0], metadata=metadata)
 

@@ -171,20 +171,9 @@ class set_result_card_queue(BaseModel):
     cards: Optional[List[Dict[str, Any]]] = Field(
         None,
         description=(
-            "수집할 공고 카드 목록. 각 항목에는 marker_id와 title/target_label, company를 가능한 만큼 넣으십시오. "
+            "수집할 공고 카드 목록. 각 항목에는 현재 캡처의 marker_id와 title/target_label, company를 가능한 만큼 넣으십시오. "
             "현재 화면에 보이는 카드만 넣어야 합니다."
         ),
-    )
-    titles: Optional[List[str]] = Field(
-        None,
-        description=(
-            "cards 객체를 만들기 어려울 때만 사용합니다. 현재 화면에 보이는 수집 대상 공고 제목 목록입니다. "
-            "executor는 OCR 마커 텍스트와 정확히 대응되는 제목만 큐에 저장합니다."
-        ),
-    )
-    companies: Optional[List[str]] = Field(
-        None,
-        description="titles와 같은 순서로 대응되는 회사명 목록입니다. 모르면 생략하십시오.",
     )
     available_result_count: Optional[int] = Field(
         None,

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from agent.config import get_settings
 from agent.recipe.text_utils import site_of
+from agent.runtime.job_collection import job_items as _job_items
 from agent.recipe.task_category import normalize_task_category
 from agent.utils.job_fields import JOB_FIELD_ALIASES, deterministic_report_item, first_present, summary_text
 from agent.utils.model_dump import dump_model
@@ -32,19 +33,6 @@ class ReportJobSummaryItem(BaseModel):
 
 class ReportJobSummary(BaseModel):
     jobs: list[ReportJobSummaryItem] = Field(default_factory=list)
-
-
-def _looks_like_job_list(value: Any) -> bool:
-    return isinstance(value, list) and any(isinstance(item, dict) and item for item in value)
-
-
-def _job_items(extracted_jd: Any) -> list[dict[str, Any]]:
-    if not isinstance(extracted_jd, dict) or not extracted_jd:
-        return []
-    for value in extracted_jd.values():
-        if _looks_like_job_list(value):
-            return [item for item in value if isinstance(item, dict) and item]
-    return [extracted_jd] if extracted_jd else []
 
 
 def _empty_report_summary(jobs: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

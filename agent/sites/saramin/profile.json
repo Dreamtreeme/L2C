@@ -8,8 +8,6 @@
   "domains": ["saramin.co.kr", "www.saramin.co.kr"],
   "base_url": "https://www.saramin.co.kr",
   "enabled": true,
-  "runner": "vision_react",
-  "classic_adapter": "saramin",
   "default_query_target": "job search",
   "navigation_policy": {},
   "persistence_policy": {"require_detail_url_for_job_update": true},
@@ -32,25 +30,11 @@
     }
   },
   "collection_policy": {
-    "card_identity": ["job title", "company name"],
-    "visit_order": "top_to_bottom_visible_unvisited",
-    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "근무조건", "url"],
-    "finish_condition": "Requested trend sample size is reached or no useful unvisited cards remain."
-  },
-  "reflex_policy": {
-    "safe_actions": ["submit_search", "scroll_down", "go_back"],
-    "unsafe_actions": ["choose_job_card_without_title", "click_recommendation_as_job"],
-    "reason_after_hit": true
+    "required_fields": ["회사명", "직무명", "주요업무", "자격요건", "우대사항", "근무조건", "url"]
   },
   "tools": {
     "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_result_card_queue", "finish_task", "close_browser"],
-    "tool_rules": {"click_marker": "배지나 추천이 아니라 공고 제목 마커를 선택한다."},
-    "reflex": {
-      "enabled_by_profile": true,
-      "safe_replay_actions": ["type_in_marker", "press_key", "scroll", "go_back"],
-      "conditional_replay_actions": ["click_marker"],
-      "requires_reasoning_after_hit": true
-    }
+    "tool_rules": {"click_marker": "배지나 추천이 아니라 공고 제목 마커를 선택한다."}
   },
   "guidance": "보이는 공고를 직무명과 회사명으로 식별한다. 배지, 추천, 광고는 공고로 취급하지 않고 실제 상세 본문에서 확인한 사실만 수집한다."
 }

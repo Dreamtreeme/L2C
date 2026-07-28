@@ -229,8 +229,6 @@ def _build_site_goal(
     site_name = profile.display_name or profile.slug
     base_url = profile.base_url
     required_fields = _join_manual_items(profile.collection_policy.required_fields)
-    safe_reflex = _join_manual_items(profile.reflex_policy.safe_actions)
-    unsafe_reflex = _join_manual_items(profile.reflex_policy.unsafe_actions)
     site_skill = profile.guidance.strip()
     navigation = profile.navigation_policy
     start_url = str(navigation.start_url or base_url or "").strip()
@@ -305,8 +303,6 @@ def _build_site_goal(
         f"{confirmed_request_section}"
         f"{task_context_section}"
         f"[필수 수집 필드]\n{required_fields}\n\n"
-        f"[Reflex 안전 액션]\n{safe_reflex}\n\n"
-        f"[Reflex 금지/주의 액션]\n{unsafe_reflex}\n\n"
         f"[선택된 사이트 스킬]\n{site_skill}"
     )
 
@@ -677,6 +673,16 @@ def _schedule_recipe_candidate_promotion(candidate_id: str) -> bool:
     return schedule_recipe_candidate_promotion(candidate_id)
 
 
+def _recipe_candidate_run_is_complete(submission: dict) -> bool:
+    """정상 종료한 전체 작업만 반복탐색 후보로 사용할 수 있는지 확인한다."""
+
+    return bool(
+        submission.get("run_status") == "finished"
+        and submission.get("is_finished")
+        and not submission.get("hit_recursion_limit")
+    )
+
+
 def persist_accepted_worker_result(worker_result: dict, review: dict, source: str = "realtime_scraping") -> tuple[int, dict, dict, str]:
     """검토가 허용한 유효 수집 데이터를 저장하고 제출 상태를 갱신한다."""
     from agent.application.run_context import raise_if_cancelled
@@ -723,12 +729,24 @@ def persist_accepted_worker_result(worker_result: dict, review: dict, source: st
         source=source,
     )
     learning_mode = _recipe_learning_mode()
-    if learning_mode != "off" and review.get("decision") == "accept":
+    candidate_run_complete = _recipe_candidate_run_is_complete(submission)
+    if (
+        learning_mode != "off"
+        and review.get("decision") == "accept"
+        and candidate_run_complete
+    ):
         candidate_id = _commit_recipe_candidate(submission, review, source, submission_id, learning_mode)
         if candidate_id:
             submission["recipe_candidate_id"] = candidate_id
             submission["recipe_learning_mode"] = learning_mode
             _schedule_recipe_candidate_promotion(candidate_id)
+    elif learning_mode != "off" and review.get("decision") == "accept":
+        logger.info(
+            "[realtime_scraping] Recipe candidate skipped: run_status=%s is_finished=%s hit_recursion_limit=%s",
+            submission.get("run_status"),
+            bool(submission.get("is_finished")),
+            bool(submission.get("hit_recursion_limit")),
+        )
     return persisted_count, submission, review, submission_id
 
 

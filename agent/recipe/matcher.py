@@ -88,13 +88,14 @@ def _target_semantic_label(target: Any) -> str:
     )
 
 
-def is_replayable_step(step: Any, params: dict | None = None) -> bool:
-    """Return whether a cached step has enough generic data to replay."""
+def is_replayable_step(step: Any) -> bool:
+    """저장된 대상 행동이 ROI 재생에 필요한 정보를 갖췄는지 확인한다."""
+
     if _step_get(step, "replay_mode", "reasoning") == "reasoning":
         return False
     action = _step_get(step, "action")
     if action not in {"click_marker", "type_in_marker"}:
-        return True
+        return False
     if not normalize_page_role(_step_get(step, "page_role", "")):
         return False
     target = _step_get(step, "target")

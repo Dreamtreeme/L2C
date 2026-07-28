@@ -7,7 +7,7 @@ from typing import Any
 from agent.config import get_settings
 from agent.recipe.text_utils import normalize_text
 from agent.utils.model_dump import dump_model
-from agent.vision.marker_geometry import marker_center_ratio
+from agent.vision.marker_geometry import bbox_to_ratio, marker_bbox, marker_center_ratio
 from agent.vision.screen_signature import (
     compute_roi_signature,
     hamming_distance,
@@ -160,14 +160,38 @@ def _distance(left: list[float], right: list[float]) -> float:
     return ((left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2) ** 0.5
 
 
+def _bbox_ratio(target: Any) -> list[float]:
+    bbox = _target_get(target, "bbox_ratio") or []
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return []
+    try:
+        return [float(value) for value in bbox]
+    except (TypeError, ValueError):
+        return []
+
+
+def _bbox_iou(left: list[float], right: list[float]) -> float:
+    if len(left) != 4 or len(right) != 4:
+        return 0.0
+    intersection_width = max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
+    intersection_height = max(0.0, min(left[3], right[3]) - max(left[1], right[1]))
+    intersection = intersection_width * intersection_height
+    left_area = max(0.0, left[2] - left[0]) * max(0.0, left[3] - left[1])
+    right_area = max(0.0, right[2] - right[0]) * max(0.0, right[3] - right[1])
+    union = left_area + right_area - intersection
+    return intersection / union if union > 0 else 0.0
+
+
 def match_target_by_ratio(target: Any, markers: list[dict[str, Any]], screen_size: list[int]) -> int | None:
-    """저장된 중심과 허용 반경 안에서 가장 가까운 마커를 선택한다."""
+    """저장 좌표와 종류·형상이 가장 잘 맞는 현재 마커를 선택한다."""
 
     target_center = _target_center_ratio(target)
     if len(target_center) != 2 or not screen_size or len(screen_size) != 2:
         return None
     max_distance = get_settings().reflex.target_center_max_distance
-    scored: list[tuple[float, int]] = []
+    target_bbox = _bbox_ratio(target)
+    target_type = normalize_text(_target_get(target, "marker_type")).casefold()
+    scored: list[tuple[float, float, int, str]] = []
     for marker in markers or []:
         if not isinstance(marker, dict):
             continue
@@ -177,11 +201,23 @@ def match_target_by_ratio(target: Any, markers: list[dict[str, Any]], screen_siz
         distance = _distance(target_center, current_center)
         if distance > max_distance:
             continue
-        scored.append((distance, int(marker.get("id") or 0)))
+        try:
+            marker_id = int(marker.get("id"))
+        except (TypeError, ValueError):
+            continue
+        current_bbox = bbox_to_ratio(marker_bbox(marker), screen_size)
+        marker_type = normalize_text(marker.get("type")).casefold()
+        scored.append((_bbox_iou(target_bbox, current_bbox), distance, marker_id, marker_type))
     if not scored:
         return None
-    scored.sort(key=lambda item: (item[0], item[1]))
-    return scored[0][1]
+    same_type = [item for item in scored if target_type and item[3] == target_type]
+    candidates = same_type or scored
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    if len(candidates) > 1:
+        first, second = candidates[:2]
+        if abs(first[0] - second[0]) < 1e-9 and abs(first[1] - second[1]) < 1e-9:
+            return None
+    return candidates[0][2]
 
 
 def match_step_by_screen_signature(

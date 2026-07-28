@@ -45,29 +45,12 @@ class PageGuidance(SiteModel):
 
 
 class CollectionPolicy(SiteModel):
-    card_identity: tuple[str, ...]
-    visit_order: str
     required_fields: tuple[str, ...]
-    finish_condition: str
-
-
-class ReflexPolicy(SiteModel):
-    safe_actions: tuple[str, ...]
-    unsafe_actions: tuple[str, ...]
-    reason_after_hit: bool = True
-
-
-class ToolReplayPolicy(SiteModel):
-    enabled_by_profile: bool = True
-    safe_replay_actions: tuple[str, ...] = ()
-    conditional_replay_actions: tuple[str, ...] = ()
-    requires_reasoning_after_hit: bool = True
 
 
 class ToolPolicy(SiteModel):
     allowed_tools: tuple[str, ...]
     tool_rules: dict[str, str] = Field(default_factory=dict)
-    reflex: ToolReplayPolicy = Field(default_factory=ToolReplayPolicy)
 
     @model_validator(mode="after")
     def validate_tool_names(self) -> "ToolPolicy":
@@ -92,14 +75,11 @@ class SiteProfile(SiteModel):
     domains: tuple[str, ...]
     base_url: str
     enabled: bool = True
-    runner: str = "vision_react"
-    classic_adapter: str = ""
     default_query_target: str = "job search"
     navigation_policy: NavigationPolicy = Field(default_factory=NavigationPolicy)
     persistence_policy: PersistencePolicy = Field(default_factory=PersistencePolicy)
     page_guidance: dict[str, PageGuidance]
     collection_policy: CollectionPolicy
-    reflex_policy: ReflexPolicy
     tools: ToolPolicy
     guidance: str = ""
     capabilities: dict[str, str] = Field(default_factory=dict)
@@ -154,7 +134,6 @@ __all__ = [
     "NavigationPolicy",
     "PageGuidance",
     "PersistencePolicy",
-    "ReflexPolicy",
     "SiteProfile",
     "ToolPolicy",
 ]

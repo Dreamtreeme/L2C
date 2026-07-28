@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from agent.recipe.text_utils import normalize_text, site_of
-from agent.sites.loader import get_site_entry
+from agent.sites.loader import SiteProfileError, load_site_profile
 
 
 _COMPANY_DESIGNATORS = (
@@ -43,8 +43,8 @@ def source_card_key(site_url: str, company_name: Any, position: Any) -> str:
     if not company_key or not position_key:
         return ""
     try:
-        site = get_site_entry(site_of(site_url)).slug.strip().casefold()
-    except Exception:
+        site = load_site_profile(site_of(site_url)).slug.strip().casefold()
+    except SiteProfileError:
         site = site_of(site_url)
     if not site:
         return ""

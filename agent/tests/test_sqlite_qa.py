@@ -330,7 +330,8 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
         ("부분수집컴퍼니",),
     ).fetchone()
     candidate_row = conn.execute(
-        "SELECT status, steps_json FROM recipe_candidates ORDER BY updated_at DESC LIMIT 1"
+        "SELECT status, steps_json FROM recipe_candidates WHERE keyword = ? ORDER BY updated_at DESC LIMIT 1",
+        ("부분수집컴퍼니",),
     ).fetchone()
     conn.close()
     assert row is not None
@@ -340,11 +341,7 @@ def test_realtime_scraping_persists_partial_state_on_recursion_limit(setup_test_
     submission_payload = json.loads(submission_row[1])
     assert [step["action"] for step in submission_payload["recorded_steps"]] == ["click_marker", "go_back", "scroll"]
     assert "state_key" not in submission_payload["recorded_steps"][0]
-    assert candidate_row is not None
-    assert candidate_row[0] == "pending_review"
-    candidate_steps = json.loads(candidate_row[1])
-    assert [step["action"] for step in candidate_steps] == ["click_marker", "go_back", "scroll"]
-    assert all("state_key" not in step for step in candidate_steps)
+    assert candidate_row is None
 
 def test_url_stale_flag_for_actions(monkeypatch):
 
@@ -526,7 +523,7 @@ def test_update_extracted_info_does_not_auto_scroll_when_detail_incomplete(monke
     assert result["current_markers"] == []
 
 
-def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targets(monkeypatch):
+def test_update_extracted_info_reuses_learned_return_when_more_targets_remain(monkeypatch):
 
     calls = []
 
@@ -541,8 +538,10 @@ def test_update_extracted_info_auto_goes_back_when_detail_complete_and_more_targ
         "current_markers": [],
         "current_url": "https://www.wanted.co.kr/wd/12345",
         "current_url_stale": False,
-        "reflex_state_key": "state-detail",
         "recipe_params": {"target_count": 2},
+        "result_page_memory": {
+            "return_action": {"name": "go_back", "args": {}}
+        },
         "extracted_jd": {},
         "is_finished": False,
         "collected_data": [],

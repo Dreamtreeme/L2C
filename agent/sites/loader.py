@@ -76,12 +76,6 @@ def load_site_profile(site: str) -> SiteProfile:
     raise SiteProfileError(f"지원하지 않는 사이트입니다: {site}")
 
 
-def get_site_entry(site: str) -> SiteProfile:
-    """이전 이름의 조회 함수도 동일한 타입 객체를 반환한다."""
-
-    return load_site_profile(site)
-
-
 def get_official_site_url(site: str) -> str:
     return load_site_profile(site).base_url.rstrip("/")
 
@@ -102,7 +96,6 @@ __all__ = [
     "SiteProfileError",
     "clear_site_profile_cache",
     "get_official_site_url",
-    "get_site_entry",
     "list_supported_sites",
     "load_site_profile",
     "validate_site_profiles",

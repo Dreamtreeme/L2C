@@ -230,6 +230,12 @@ class VisionSettings(SectionSettings):
     page_blank_min_dominant_ratio: float = Field(0.98, ge=0, le=1, validation_alias="VISION_PAGE_BLANK_MIN_DOMINANT_RATIO")
     page_capture_retry_sec: float = Field(0.4, ge=0, le=30, validation_alias="VISION_PAGE_CAPTURE_RETRY_SEC")
     page_ready_timeout_sec: float = Field(15.0, gt=0, le=300, validation_alias="VISION_PAGE_READY_TIMEOUT_SEC")
+    low_information_max_capture_cycles: int = Field(
+        2,
+        ge=1,
+        le=10,
+        validation_alias="VISION_LOW_INFORMATION_MAX_CAPTURE_CYCLES",
+    )
     url_key_pause_sec: float = Field(0.015, ge=0, le=2, validation_alias="VISION_URL_KEY_PAUSE_SEC")
     url_copy_wait_sec: float = Field(0.015, ge=0, le=2, validation_alias="VISION_URL_COPY_WAIT_SEC")
     url_copy_timeout_sec: float = Field(0.25, gt=0, le=10, validation_alias="VISION_URL_COPY_TIMEOUT_SEC")
@@ -306,10 +312,6 @@ class OcrSettings(SectionSettings):
 
 class ReflexSettings(SectionSettings):
     enabled: bool = Field(True, validation_alias="REFLEX_ENABLED")
-    compound_search_submit_enabled: bool = Field(
-        True,
-        validation_alias="REFLEX_COMPOUND_SEARCH_SUBMIT_ENABLED",
-    )
     roi_phash_max_distance: int = Field(22, ge=0, le=64, validation_alias="REFLEX_ROI_PHASH_MAX_DISTANCE")
     target_center_max_distance: float = Field(0.065, ge=0, le=1, validation_alias="REFLEX_TARGET_CENTER_MAX_DISTANCE")
     no_effect_phash_max_distance: int = Field(2, ge=0, le=64, validation_alias="REFLEX_NO_EFFECT_PHASH_MAX_DISTANCE")

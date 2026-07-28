@@ -11,7 +11,8 @@ import json
 from typing import Any, Callable
 
 from agent.config import get_settings
-from agent.recipe.page_context import infer_page_role_from_url_and_texts, normalize_page_role
+from agent.recipe.page_context import normalize_page_role
+from agent.runtime.site_context import infer_site_page_role
 from agent.recipe.promotion_policy import compact_step_evidence_verdicts, evaluate_candidate_step_evidence
 from agent.recipe.task_category import normalize_task_category
 from agent.utils.model_dump import dump_model
@@ -360,7 +361,7 @@ def _page_role_map_from_candidate(candidate: dict[str, Any]) -> dict[int, str]:
         result_args = result.get("args") if isinstance(result.get("args"), dict) else {}
         marker_texts = before.get("marker_texts") if isinstance(before.get("marker_texts"), list) else []
         page_role = normalize_page_role(
-            infer_page_role_from_url_and_texts(str(before.get("url") or ""), marker_texts)
+            infer_site_page_role(str(before.get("url") or ""), marker_texts)
             or args.get("page_role")
             or result_args.get("page_role")
         )
@@ -383,6 +384,12 @@ def _promotable_replay_steps(
     target_actions = {"click_marker", "type_in_marker"}
     page_roles = dict(page_roles or {})
     evidence_verdicts = dict(evidence_verdicts or {})
+    metadata = dict(review.get("skill_metadata") or {})
+    declared_inputs = {
+        str(item.get("name") or "").strip()
+        for item in (metadata.get("inputs") or [])
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
 
     for raw_step in source_steps or []:
         if not isinstance(raw_step, dict):
@@ -418,6 +425,28 @@ def _promotable_replay_steps(
             if not step.get("roi_signature"):
                 skipped.append({"seq": seq, "action": action, "reason": "roi_signature_missing"})
                 continue
+            if action == "type_in_marker" and replay_mode == "parameterized":
+                slot_refs = [
+                    str(item).strip()
+                    for item in (step.get("slot_refs") or [])
+                    if str(item).strip()
+                ]
+                param = step.get("param") if isinstance(step.get("param"), dict) else {}
+                param_slot = str(param.get("slot_name") or param.get("slot") or "").strip()
+                if (
+                    len(slot_refs) != 1
+                    or not param_slot
+                    or param_slot != slot_refs[0]
+                    or param_slot not in declared_inputs
+                ):
+                    skipped.append(
+                        {
+                            "seq": seq,
+                            "action": action,
+                            "reason": "parameter_slot_contract_missing",
+                        }
+                    )
+                    continue
             replay_steps.append(step)
             continue
         skipped.append({"seq": seq, "action": action, "reason": "non_target_action"})

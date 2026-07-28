@@ -5,7 +5,6 @@ def test_site_registry_lists_existing_profiles():
     slugs = {site.slug for site in sites}
 
     assert {"wanted", "jobkorea", "saramin", "worknet", "rocketpunch"}.issubset(slugs)
-    assert all(site.runner == "vision_react" for site in sites)
 
 
 def test_official_site_urls_resolve_from_slug_name_and_domain():
@@ -131,16 +130,19 @@ def test_load_site_profile_returns_typed_contract():
     assert "click_marker" in profile.tools.allowed_tools
     assert "finish_detail_reading" in profile.tools.allowed_tools
     assert "set_result_card_queue" in profile.tools.allowed_tools
-    assert profile.reflex_policy.reason_after_hit is True
+    assert profile.collection_policy.required_fields
 
 
-def test_all_site_profiles_define_reflex_boundaries():
+def test_all_site_profiles_define_collection_and_tool_contracts():
     from agent.sites import list_supported_sites, load_site_profile
 
     for profile in list_supported_sites():
         loaded = load_site_profile(profile.slug)
-        assert loaded.reflex_policy.safe_actions
-        assert loaded.reflex_policy.unsafe_actions
+        payload = loaded.model_dump()
+        assert loaded.collection_policy.required_fields
+        assert loaded.tools.allowed_tools
+        assert "reflex_policy" not in payload
+        assert "reflex" not in payload["tools"]
 
 
 def test_all_site_profiles_define_role_scoped_guidance():
@@ -306,7 +308,7 @@ def test_realtime_scraping_goal_includes_task_context():
     assert "blocked_actions" in goal
 
 
-def test_commander_site_tools_expose_classic_sites():
+def test_commander_site_tools_expose_registered_sites():
     import json
     from agent.tools.site_registry import list_collection_sites
 
@@ -316,8 +318,7 @@ def test_commander_site_tools_expose_classic_sites():
     slugs = [site["slug"] for site in sites]
 
     assert slugs == ["wanted", "jobkorea", "saramin", "worknet", "rocketpunch"]
-    assert all(site["runner"] == "vision_react" for site in sites)
-    assert all(site["classic_adapter"] == site["slug"] for site in sites)
+    assert all("base_url" in site for site in sites)
 
 
 def test_commander_site_profile_tool_returns_single_profile():
@@ -328,7 +329,6 @@ def test_commander_site_profile_tool_returns_single_profile():
     data = json.loads(result)
 
     assert data["site"]["slug"] == "jobkorea"
-    assert data["site"]["classic_adapter"] == "jobkorea"
     assert data["profile"]["slug"] == "jobkorea"
     assert "click_marker" in data["profile"]["tools"]["allowed_tools"]
     assert "잡코리아" in data["profile"]["guidance"]

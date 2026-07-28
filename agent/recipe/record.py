@@ -22,10 +22,6 @@ _RECORDED_ACTIONS = _TARGET_ACTIONS | {
 }
 
 
-def _squash(s) -> str:
-    return normalize_text(s).lower().replace(" ", "")
-
-
 def _marker(markers, marker_id):
     for m in markers or []:
         if isinstance(m, dict) and m.get("id") == marker_id:
@@ -120,7 +116,6 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             return
         markers = state.get("current_markers", []) or []
         url = state.get("current_url", "") or ""
-        goal = state.get("goal", "") or ""
         slot_name = normalize_text(args.get("slot_name"))
         screen_signature = dict(state.get("screen_signature", {}) or {})
         observed_page_role = normalize_page_role(state.get("current_page_role"))
@@ -197,7 +192,7 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
                 step["param"] = {"text": val}
                 if slot_name:
                     step["param"]["slot_name"] = slot_name
-                step["is_param"] = bool(slot_name) or (bool(val) and _squash(val) in _squash(goal))
+                step["is_param"] = bool(slot_name)
             elif action_name == "scroll":
                 step["value"] = args.get("direction", "down")
                 step["param"] = {
@@ -220,18 +215,3 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
         recorded_steps.append(step)
     except Exception as e:
         logger.debug("reflex record_ui_step skipped", error=str(e))
-
-
-def commit_if_finished(recorded_steps, state, current_url) -> None:
-    """Defer active Reflex promotion to commander-reviewed worker submissions."""
-    try:
-        steps = list(recorded_steps or [])
-        if not steps:
-            return
-        logger.info(
-            "reflex recipe promotion deferred to worker submission review",
-            steps=len(steps),
-            current_url=current_url,
-        )
-    except Exception as e:
-        logger.debug("reflex commit_if_finished skipped", error=str(e))

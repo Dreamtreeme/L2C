@@ -428,7 +428,6 @@ def test_action_node_allows_type_then_enter_chain(monkeypatch):
         "current_markers": [{"id": 1, "bbox": [10, 20, 110, 80], "text": "검색"}],
         "current_url": "https://www.wanted.co.kr",
         "current_url_stale": False,
-        "reflex_state_key": "state-home",
         "extracted_jd": {},
         "is_finished": False,
         "collected_data": [],
@@ -441,7 +440,7 @@ def test_action_node_allows_type_then_enter_chain(monkeypatch):
                     "name": "press_key",
                     "args": {"key": "enter"},
                     "id": "2",
-                    "metadata": {"transition_source": "reflex_compound"},
+                    "metadata": {"transition_source": "autonomous"},
                 },
             ],
         ),
@@ -450,7 +449,7 @@ def test_action_node_allows_type_then_enter_chain(monkeypatch):
     assert calls == ["type_in_marker", "press_key"]
     assert [a["status"] for a in result["action_history"]] == ["success", "success"]
     assert result["action_history"][1]["args"] == {"key": "enter"}
-    assert result["pending_transition"]["source"] == "reflex_compound"
+    assert result["pending_transition"]["source"] == "autonomous"
     assert result["last_action_result"].screen_changed is True
 
 
@@ -697,7 +696,7 @@ def test_action_node_allows_repeat_after_navigation_without_state_key_guard(monk
     assert result["last_action_result"].screen_changed is True
     assert result["current_url_stale"] is True
 
-def test_action_node_records_policy_go_back_step(monkeypatch):
+def test_action_node_records_learned_result_return_step(monkeypatch):
 
     recorded_actions = []
 
@@ -725,6 +724,9 @@ def test_action_node_records_policy_go_back_step(monkeypatch):
             "current_markers": [],
             "recipe_params": {"target_count": 2},
             "result_card_queue": [{"queue_id": "card-2", "status": "pending"}],
+            "result_page_memory": {
+                "return_action": {"name": "go_back", "args": {}}
+            },
             "active_result_card": {"queue_id": "card-1"},
             "extracted_jd": {},
             "detail_ocr_buffer": {},
@@ -828,7 +830,69 @@ def test_detail_completion_does_not_repeat_failed_return_action(monkeypatch):
     ]
     assert result["action_history"][0]["detail_policy"] == "return_requires_reasoning"
     assert result["action_history"][0]["failed_return_action"] == "go_back"
+    assert result["detail_return_pending"]["url"] == "https://www.jobkorea.co.kr/Recruit/GI_Read/1"
     assert result["last_action_result"].screen_changed is False
+
+
+def test_detail_return_pending_blocks_repeated_detail_processing(monkeypatch):
+    monkeypatch.setattr(
+        worker_execution,
+        "_dispatch_state",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("완료한 상세 OCR을 다시 정제하면 안 됩니다.")
+        ),
+    )
+    url = "https://www.wanted.co.kr/wd/1"
+
+    result = worker_execution.action_node(
+        {
+            "current_url": url,
+            "current_url_stale": False,
+            "detail_return_pending": {
+                "url": url,
+                "reason": "detail_complete",
+                "pending_count": 1,
+            },
+            "action_history": [],
+            "extracted_jd": {},
+            "collected_data": [],
+            "error_count": 0,
+            "pending_action": _action_request(
+                tool_calls=[
+                    {
+                        "name": "finish_detail_reading",
+                        "args": {"page_role": "job_detail", "detail_complete": True},
+                        "id": "repeat-detail-finish",
+                    }
+                ],
+            ),
+        }
+    )
+
+    action = result["action_history"][0]
+    assert action["status"] == "skipped"
+    assert action["reason"] == "detail_return_pending"
+    assert result["detail_return_pending"]["url"] == url
+
+
+def test_reasoning_prompt_requires_navigation_after_detail_completion():
+    url = "https://www.wanted.co.kr/wd/1"
+
+    context = worker_reasoning._compact_detail_return_context(
+        {
+            "current_url": url,
+            "detail_return_pending": {
+                "url": url,
+                "pending_count": 1,
+            },
+        },
+        url,
+    )
+
+    assert "상세 수집 완료 후 목록 복귀 대기" in context
+    assert "finish_detail_reading" in context
+    assert "go_back" in context
+    assert "scroll" in context
 
 
 def test_action_node_finishes_after_last_visible_result_card(monkeypatch):

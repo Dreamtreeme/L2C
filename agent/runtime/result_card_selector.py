@@ -14,10 +14,11 @@ from agent.graph.action_request import build_action_request
 from agent.graph.state import GraphState
 from agent.recipe.page_context import normalize_page_role
 from agent.runtime.action_validation import text_input_target_rejection
+from agent.runtime.job_collection import job_count
 from agent.runtime.result_card_queue import (
     card_queue_enabled,
+    completed_result_card_count,
     result_card_queue_scope_complete,
-    terminal_result_card_count,
 )
 from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
@@ -75,13 +76,7 @@ def _count_mode(state: GraphState) -> str:
 
 
 def _collected_count(state: GraphState) -> int:
-    extracted = state.get("extracted_jd") or {}
-    if not isinstance(extracted, dict) or not extracted:
-        return 0
-    for value in extracted.values():
-        if isinstance(value, list):
-            return sum(1 for item in value if isinstance(item, dict) and item)
-    return 1
+    return job_count(state.get("extracted_jd") or {})
 
 
 def should_select_result_cards(state: GraphState) -> bool:
@@ -357,7 +352,7 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
     target_count = _target_count(state)
     resolved_count = max(
         _collected_count(state),
-        terminal_result_card_count(list(state.get("result_card_queue") or [])),
+        completed_result_card_count(list(state.get("result_card_queue") or [])),
     )
     remaining_count = (
         target_count - resolved_count
@@ -488,7 +483,6 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
     if not cards:
         return None, {"attempted": True, "reason": "no_valid_card", **availability}
 
-    first = cards[0]
     request = build_action_request(
         "card_selector",
         f"selected {len(cards)} visible result card(s)",
@@ -502,28 +496,13 @@ def select_result_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
                 },
                 "id": "card_selector_queue",
             },
-            {
-                "name": "click_marker",
-                "args": {
-                    "marker_id": first["marker_id"],
-                    "target_label": first["title"],
-                    "target_role": "job_card",
-                    "target_component": "job_card_title",
-                    "page_role": "search",
-                    "risk_level": "safe_navigation",
-                    "needs_user_confirmation": False,
-                    "reason": "작업 큐의 첫 번째 공고 상세 페이지를 엽니다.",
-                    "expected_after": "선택한 공고의 상세 페이지가 열린다.",
-                },
-                "id": "card_selector_click",
-            },
         ],
     )
     logger.info(
         "Result card selector prepared queue",
         card_count=len(cards),
-        first_marker_id=first["marker_id"],
-        first_title=first["title"],
+        first_marker_id=cards[0]["marker_id"],
+        first_title=cards[0]["title"],
     )
     return request, {
         "attempted": True,

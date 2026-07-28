@@ -15,12 +15,18 @@ from agent.graph.action_request import (
 from agent.graph.state import GraphState
 from agent.graph.tool_schema import ACTION_TOOL_SCHEMAS as _ACTION_TOOL_SCHEMAS
 from agent.graph.worker_execution_policy import compact_action_args as _compact_action_args
+from agent.graph.worker_state import (
+    detail_return_pending_for_url as _detail_return_pending_for_url,
+)
 from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT
 from agent.runtime.action_validation import IMPLAUSIBLE_TEXT_INPUT_TARGET
 from agent.runtime.detail_runtime import (
     compact_detail_ocr_buffer_context as _compact_detail_ocr_buffer_context,
 )
-from agent.runtime.job_collection import job_list_value as _job_list_value
+from agent.runtime.job_collection import (
+    job_count as _job_count,
+    job_items as _job_items,
+)
 from agent.runtime.result_card_queue import pending_result_cards as _pending_result_cards
 from agent.runtime.result_card_selector import select_result_cards as _select_result_cards
 from agent.runtime.site_context import site_runtime_guidance as _site_runtime_guidance
@@ -188,12 +194,7 @@ def _safety_page_role_contract() -> str:
 
 def _collected_job_count(extracted_jd: Any) -> int:
     """현재 누적 데이터에서 수집된 공고 개수를 계산한다."""
-    if not isinstance(extracted_jd, dict) or not extracted_jd:
-        return 0
-    for value in extracted_jd.values():
-        if isinstance(value, list) and any(isinstance(item, dict) and item for item in value):
-            return sum(1 for item in value if isinstance(item, dict) and item)
-    return 1
+    return _job_count(extracted_jd)
 
 
 def _clip_prompt_text(value: Any, max_chars: int = 160) -> str:
@@ -274,14 +275,7 @@ def _job_summary_for_prompt(job: dict) -> dict[str, Any]:
 
 
 def _job_items_for_prompt(extracted_jd: Any) -> list[dict]:
-    if not isinstance(extracted_jd, dict) or not extracted_jd:
-        return []
-    jobs = _job_list_value(extracted_jd)
-    if isinstance(jobs, dict):
-        jobs = [jobs]
-    if isinstance(jobs, list):
-        return [job for job in jobs if isinstance(job, dict) and job]
-    return [extracted_jd] if extracted_jd else []
+    return _job_items(extracted_jd)
 
 
 def _current_job_for_prompt(jobs: list[dict], current_url: str) -> dict | None:
@@ -381,6 +375,20 @@ def _compact_result_card_queue_context(state: GraphState) -> str:
         f"- pending_count: {pending_count}\n"
         f"- cards: {json.dumps(compact, ensure_ascii=False, separators=(',', ':'))}\n"
         "- 큐가 있으면 상세 수집 완료 후 다음 카드 선택은 executor가 처리합니다. 같은 목록에서 다음 카드를 다시 고르지 마십시오.\n\n"
+    )
+
+
+def _compact_detail_return_context(state: GraphState, current_url: str) -> str:
+    pending = _detail_return_pending_for_url(state, current_url)
+    if not pending:
+        return ""
+    return (
+        "상세 수집 완료 후 목록 복귀 대기:\n"
+        "- 현재 공고의 상세 OCR 정제와 큐 완료 처리는 이미 성공했습니다.\n"
+        "- 같은 공고에서 finish_detail_reading, scroll, 본문 펼치기, 정보 추출을 반복하지 마십시오.\n"
+        "- 현재 탭 상태를 보고 go_back, close_current_tab, switch_tab 중 맞는 원자 행동 하나로 "
+        "검색 결과 화면에 복귀하십시오.\n"
+        f"- 남은 목표/대기 카드 수: {pending.get('pending_count', 0)}\n\n"
     )
 
 
@@ -500,6 +508,7 @@ def _build_reasoning_messages(
         f"{collection_context}"
         f"{_compact_result_availability_context(state)}"
         f"{_compact_result_card_queue_context(state)}"
+        f"{_compact_detail_return_context(state, current_url)}"
         f"{_compact_detail_ocr_buffer_context(state, current_url)}"
         f"{transition_context}"
         f"{result_refinement_context}"
@@ -634,4 +643,3 @@ def reasoning_node(state: GraphState) -> Dict[str, Any]:
         result["error_count"] = state.get("error_count", 0) + error_increment
 
     return result
-

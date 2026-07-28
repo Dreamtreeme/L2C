@@ -1108,6 +1108,41 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
     assert perception_called == []
 
 
+def test_worker_startup_does_not_run_graph_with_invalid_initial_screen(monkeypatch):
+    from agent.application.worker_execution_service import (
+        WorkerStartScreenError,
+        prepare_worker_start_screen,
+    )
+    from agent.graph import worker_resources
+    from agent.sites import load_site_profile
+
+    class FakeSomEngine:
+        def ensure_ocr_worker_ready(self):
+            return None
+
+    class FakePerception:
+        som_engine = FakeSomEngine()
+
+    class FakeActionTools:
+        perception = FakePerception()
+
+        def open_browser(self, url="", current_url="", site=""):
+            return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
+
+    def fail_start_observation(_state):
+        raise ValueError("invalid capture")
+
+    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
+    monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
+    _patch_start_observation(monkeypatch, fail_start_observation)
+
+    with pytest.raises(WorkerStartScreenError, match="invalid capture"):
+        prepare_worker_start_screen(
+            {"current_url": "", "action_history": []},
+            load_site_profile("wanted"),
+        )
+
+
 def test_worker_startup_opens_once_and_delegates_blank_wait_to_perception(monkeypatch):
     from agent.application.worker_execution_service import prepare_worker_start_screen
     from agent.graph import worker_resources

@@ -12,15 +12,6 @@ from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox
 
 
-def env_enabled(name: str, default: bool = True) -> bool:
-    values = {
-        "VISION_DETAIL_SECTION_CONTEXT_ENABLED": get_settings().vision.detail_section_context_enabled,
-        "VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED": get_settings().vision.detail_lightweight_marked_image_enabled,
-        "VISION_DETAIL_OCR_BUFFER_ENABLED": get_settings().vision.detail_ocr_buffer_enabled,
-    }
-    return values.get(name, default)
-
-
 def marker_prompt_rank(marker: dict) -> tuple[int, int, int]:
     """의미를 추측하지 않고 화면 읽기 순서로 마커를 정렬한다."""
 
@@ -183,7 +174,7 @@ def detail_reveal_controls(current_url: str) -> list[str]:
 
 
 def detail_lightweight_marked_image_enabled() -> bool:
-    return env_enabled("VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED", True)
+    return get_settings().vision.detail_lightweight_marked_image_enabled
 
 
 def draw_detail_lightweight_marker(draw: Any, marker: dict, color: tuple[int, int, int], font: Any) -> None:
@@ -288,7 +279,7 @@ def build_detail_section_context(markers: list[dict]) -> str:
 
 
 def detail_ocr_buffer_enabled() -> bool:
-    return env_enabled("VISION_DETAIL_OCR_BUFFER_ENABLED", True)
+    return get_settings().vision.detail_ocr_buffer_enabled
 
 
 def detail_buffer_line_key(text: str) -> str:
@@ -515,10 +506,8 @@ __all__ = [
     "detail_lightweight_marked_image_enabled",
     "detail_lines_for_buffer",
     "detail_ocr_buffer_enabled",
-    "detail_page_policy_enabled",
     "detail_reveal_controls",
     "draw_detail_lightweight_marker",
-    "env_enabled",
     "group_text_markers_into_lines",
     "is_icon_marker",
     "is_probable_detail_noise_line",

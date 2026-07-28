@@ -16,6 +16,7 @@ from agent.graph.worker_recording import record_execution_node
 from agent.graph.worker_selection import select_deterministic_action_node
 from agent.graph.worker_transition import evaluate_transition_node
 from agent.graph.worker_execution import action_node
+from agent.graph.worker_state import detail_return_pending_for_url
 from agent.runtime.reflex_runtime import reflex_node
 from agent.observability.graph_events import graph_step
 from agent.utils.logger import logger
@@ -33,6 +34,8 @@ def _request_source(state: GraphState) -> str:
 def route_after_start(state: GraphState) -> str:
     """준비된 시작 화면은 선택 단계로, 없으면 기존 LLM 시작 경로로 보낸다."""
 
+    if state.get("low_information_screen"):
+        return "selection"
     if state.get("ocr_complete") or (
         state.get("current_markers")
         and state.get("current_page_role")
@@ -54,12 +57,14 @@ def route_after_selection(state: GraphState) -> str:
     if state.get("pending_action") is not None:
         return "action"
     if state.get("low_information_screen"):
-        return "reasoning"
+        return "capture"
 
     if state.get("transition_status") == "pending" and state.get("ocr_complete"):
         return "capture"
     if not state.get("ocr_complete"):
         return "ocr" if state.get("ocr_required") else "reasoning"
+    if detail_return_pending_for_url(state):
+        return "reasoning"
     if state.get("detail_followup_required"):
         return "reasoning"
     if state.get("transition_status") == "unknown" and (

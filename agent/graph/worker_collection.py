@@ -27,10 +27,14 @@ def apply_observation_node(state: GraphState) -> dict[str, Any]:
     detail_followup = dict(state.get("detail_followup_required", {}) or {})
     if detail_followup and detail_followup.get("url") != current_url:
         detail_followup = {}
+    detail_return_pending = dict(state.get("detail_return_pending", {}) or {})
+    if detail_return_pending and detail_return_pending.get("url") != current_url:
+        detail_return_pending = {}
 
     return {
         "detail_ocr_buffer": detail_buffer,
         "detail_followup_required": detail_followup,
+        "detail_return_pending": detail_return_pending,
     }
 
 

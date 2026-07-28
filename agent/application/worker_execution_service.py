@@ -16,8 +16,13 @@ from agent.application.run_contracts import RunPhase
 from agent.observability.graph_events import forward_graph_event
 from agent.utils.logger import logger
 
+
 class OcrWorkerReadinessError(RuntimeError):
     """첫 화면 로직 전에 OCR 작업자를 준비하지 못한 경우."""
+
+
+class WorkerStartScreenError(RuntimeError):
+    """브라우저 첫 화면을 유효한 작업자 상태로 준비하지 못한 경우."""
 
 
 def _ensure_ocr_ready(action_tools: Any) -> float:
@@ -221,11 +226,13 @@ def prepare_worker_start_screen(
         )
         raise
     except Exception as exc:
-        logger.warning(
-            "Worker start screen preparation failed; falling back to reasoning",
+        logger.error(
+            "Worker start screen preparation failed",
             error=str(exc),
         )
-        return initial_state
+        raise WorkerStartScreenError(
+            f"작업자 시작 화면을 준비하지 못했습니다: {exc}"
+        ) from exc
 
 
 def execute_worker_graph(
@@ -293,6 +300,7 @@ __all__ = [
     "OcrWorkerReadinessError",
     "prepare_worker_start_screen",
     "run_graph_with_last_state",
+    "WorkerStartScreenError",
     "worker_preopen_enabled",
     "worker_start_url",
 ]

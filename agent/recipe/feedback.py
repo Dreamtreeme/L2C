@@ -9,7 +9,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agent.recipe.text_utils import normalize_text, site_of
+from agent.recipe.text_utils import site_of
+from agent.runtime.job_collection import job_count
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
 from agent.vision.marker_geometry import bbox_to_ratio, center_ratio_from_bbox
@@ -109,6 +110,7 @@ def _target_snapshot(state: dict, action_name: str, args: dict[str, Any]) -> dic
     target = {
         "marker_id": marker.get("id"),
         "text": marker.get("text", ""),
+        "marker_type": marker.get("type", ""),
         "bbox": marker.get("bbox", []),
     }
     signature = dict(state.get("screen_signature", {}) or {})
@@ -125,37 +127,26 @@ def _target_snapshot(state: dict, action_name: str, args: dict[str, Any]) -> dic
     return target
 
 
-def _text_in_goal(value: str, goal: str) -> bool:
-    value_key = normalize_text(value).lower().replace(" ", "")
-    goal_key = normalize_text(goal).lower().replace(" ", "")
-    return bool(value_key and goal_key and value_key in goal_key)
-
-
-def _parameter_candidates(action_name: str, args: dict[str, Any], goal: str) -> list[ParameterCandidate]:
+def _parameter_candidates(action_name: str, args: dict[str, Any]) -> list[ParameterCandidate]:
     candidates: list[ParameterCandidate] = []
     if action_name == "type_in_marker":
         value = str(args.get("text") or "").strip()
         if value:
             slot_name = str(args.get("slot_name") or "").strip()
-            candidates.append(
-                ParameterCandidate(
-                    slot_candidate=slot_name or ("query" if _text_in_goal(value, goal) else "text_input"),
-                    value=value,
-                    reason=str(args.get("reason") or "")
-                    or ("typed text overlaps user goal" if _text_in_goal(value, goal) else "typed text may vary by run"),
-                    confidence=0.65 if slot_name else (0.45 if _text_in_goal(value, goal) else 0.25),
+            if slot_name:
+                candidates.append(
+                    ParameterCandidate(
+                        slot_candidate=slot_name,
+                        value=value,
+                        reason=str(args.get("reason") or "") or "explicit runtime input slot",
+                        confidence=0.8,
+                    )
                 )
-            )
     return candidates
 
 
 def _extracted_job_count(extracted_jd: Any) -> int:
-    if not isinstance(extracted_jd, dict):
-        return 0
-    jobs = extracted_jd.get("공고목록")
-    if isinstance(jobs, list):
-        return len(jobs)
-    return 1 if extracted_jd else 0
+    return job_count(extracted_jd)
 
 
 def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, Any]) -> ActionFeedback:
@@ -198,7 +189,7 @@ def record_action_episode(
 ) -> None:
     """피드백 기록(feedback episode)을 하나 추가한다. 실패해도 실행을 막지 않는다."""
     try:
-        goal = state.get("goal", "") or ""
+        goal = str(state.get("goal") or "")
         target = enriched_result.get("target") or _target_snapshot(state, action_name, args)
         proposal = ActionProposal(
             action=action_name,
@@ -210,7 +201,7 @@ def record_action_episode(
             component_candidate=args.get("target_component") or args.get("component_candidate"),
             target_role_candidate=args.get("target_role") or args.get("target_role_candidate"),
             expected_after=str(args.get("expected_after") or ""),
-            parameter_candidates=_parameter_candidates(action_name, args, goal),
+            parameter_candidates=_parameter_candidates(action_name, args),
             fixed_candidate=action_name in {"scroll", "press_key", "go_back"},
         )
         before = {

@@ -7,6 +7,9 @@ from typing import Any
 from agent.config import get_settings
 from agent.graph.action_request import ActionRequest, build_action_request
 from agent.graph.state import GraphState
+from agent.recipe.phash_replay import anchor_overlap, match_target_by_ratio
+from agent.recipe.text_utils import normalize_text
+from agent.runtime.job_collection import job_count
 from agent.runtime.site_context import looks_like_job_detail_url
 from agent.vision.marker_geometry import (
     bbox_from_ratio,
@@ -14,6 +17,7 @@ from agent.vision.marker_geometry import (
     center_ratio_from_bbox,
     screen_size_from_signature,
 )
+from agent.vision.screen_signature import hamming_distance
 
 
 def marker_by_id(markers: list[dict], marker_id: int | None) -> dict | None:
@@ -35,16 +39,6 @@ def queue_card_label(card: dict) -> str:
     return ""
 
 
-def text_list_arg(args: dict, key: str) -> list[str]:
-    value = args.get(key)
-    if isinstance(value, str):
-        text = value.strip()
-        return [text] if text else []
-    if not isinstance(value, list):
-        return []
-    return [text for item in value if (text := str(item or "").strip())]
-
-
 def result_card_entries_from_args(args: dict) -> list[dict]:
     """도구 입력을 카드 후보 목록으로 통일한다."""
 
@@ -54,48 +48,14 @@ def result_card_entries_from_args(args: dict) -> list[dict]:
         for raw in cards:
             if isinstance(raw, dict):
                 entries.append(dict(raw))
-            elif isinstance(raw, str) and raw.strip():
-                entries.append({"title": raw.strip()})
         if entries:
             return entries
-
-    titles = text_list_arg(args, "titles") or text_list_arg(args, "target_labels")
-    companies = text_list_arg(args, "companies")
-    entries = []
-    for index, title in enumerate(titles):
-        entry = {"title": title}
-        if index < len(companies):
-            entry["company"] = companies[index]
-        entries.append(entry)
-    return entries
+    return []
 
 
 def queue_match_text(value: Any) -> str:
-    try:
-        from agent.recipe.text_utils import normalize_text
-
-        text = normalize_text(value)
-    except Exception:
-        text = str(value or "").strip()
+    text = normalize_text(value)
     return text.casefold().replace(" ", "")
-
-
-def marker_by_label(markers: list[dict], label: str, used_marker_ids: set[int]) -> dict | None:
-    label_key = queue_match_text(label)
-    if not label_key:
-        return None
-    for marker in markers or []:
-        if not isinstance(marker, dict):
-            continue
-        try:
-            marker_id = int(marker.get("id"))
-        except (TypeError, ValueError):
-            marker_id = -1
-        if marker_id in used_marker_ids:
-            continue
-        if queue_match_text(marker.get("text")) == label_key:
-            return marker
-    return None
 
 
 def _target_count_from_state(state: GraphState) -> int:
@@ -104,15 +64,6 @@ def _target_count_from_state(state: GraphState) -> int:
         return max(0, int(params.get("target_count") or 0))
     except (TypeError, ValueError):
         return 0
-
-
-def _collected_job_count(extracted_jd: Any) -> int:
-    if not isinstance(extracted_jd, dict) or not extracted_jd:
-        return 0
-    for value in extracted_jd.values():
-        if isinstance(value, list) and any(isinstance(item, dict) and item for item in value):
-            return sum(1 for item in value if isinstance(item, dict) and item)
-    return 1
 
 
 def normalize_result_card_queue(args: dict, state: GraphState, current_url: str) -> tuple[list[dict], dict]:
@@ -131,11 +82,10 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
         (queue_match_text(item.get("title")), queue_match_text(item.get("company")))
         for item in queue
     }
-    used_marker_ids: set[int] = set()
     target_count = _target_count_from_state(state)
     resolved_count = max(
-        _collected_job_count(state.get("extracted_jd", {}) or {}),
-        terminal_result_card_count(queue),
+        job_count(state.get("extracted_jd", {}) or {}),
+        completed_result_card_count(queue),
     )
     remaining = (
         target_count - resolved_count
@@ -154,18 +104,10 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
             marker_id = None
         marker = marker_by_id(markers, marker_id)
         label = queue_card_label(raw) or (str(marker.get("text") or "").strip() if marker else "")
-        if marker is None and label:
-            marker = marker_by_label(markers, label, used_marker_ids)
-            if marker:
-                try:
-                    marker_id = int(marker.get("id"))
-                except (TypeError, ValueError):
-                    marker_id = None
+        if marker is None:
+            continue
         if not label:
             continue
-        if marker_id is not None:
-            used_marker_ids.add(marker_id)
-
         bbox = marker.get("bbox") if marker else raw.get("bbox")
         if not isinstance(bbox, list) or len(bbox) != 4:
             bbox = []
@@ -214,6 +156,7 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
                     "bbox_ratio": bbox_ratio or [],
                     "center_ratio": center_ratio or [],
                     "evidence_texts": evidence_texts[:6],
+                    "marker_type": str(marker.get("type") or ""),
                 },
             }
         )
@@ -224,6 +167,11 @@ def normalize_result_card_queue(args: dict, state: GraphState, current_url: str)
         "screenshot": str((state.get("recent_images") or [""])[-1] or "") if state.get("recent_images") else "",
         "marked_image": state.get("marked_image", "") or "",
     }
+    previous_return_action = dict(
+        (state.get("result_page_memory") or {}).get("return_action") or {}
+    )
+    if previous_return_action:
+        memory["return_action"] = previous_return_action
     return queue, memory
 
 
@@ -233,16 +181,6 @@ def pending_result_cards(queue: list[dict]) -> list[dict]:
         for item in queue or []
         if isinstance(item, dict) and str(item.get("status") or "pending") == "pending"
     ]
-
-
-def terminal_result_card_count(queue: list[dict]) -> int:
-    """수집 완료 또는 DB 중복으로 현재 큐 처리가 끝난 카드 수를 반환한다."""
-
-    return sum(
-        1
-        for item in queue or []
-        if isinstance(item, dict) and str(item.get("status") or "") in {"done", "skipped"}
-    )
 
 
 def completed_result_card_count(queue: list[dict]) -> int:
@@ -271,7 +209,7 @@ def result_card_queue_scope_complete(
         return False
     if str(count_mode or "").strip().lower() == "visible_all":
         return True
-    return target_count > 0 and terminal_result_card_count(queue) >= target_count
+    return target_count > 0 and completed_result_card_count(queue) >= target_count
 
 
 def same_queue_card(item: dict, args: dict) -> bool:
@@ -379,21 +317,15 @@ def queue_return_screen_matches(
             "saved_size": saved_size,
             "current_size": current_size,
         }
-    try:
-        from agent.recipe.phash_replay import anchor_overlap
-        from agent.vision.screen_signature import hamming_distance
-
-        distance = hamming_distance(saved_phash, current_phash)
-        overlap = (
-            anchor_overlap(
-                saved_signature.get("anchors") or [],
-                (current_signature or {}).get("anchors") or [],
-            )
-            if require_anchors
-            else None
+    distance = hamming_distance(saved_phash, current_phash)
+    overlap = (
+        anchor_overlap(
+            saved_signature.get("anchors") or [],
+            (current_signature or {}).get("anchors") or [],
         )
-    except Exception as exc:
-        return False, {"reason": "phash_compare_failed", "error": str(exc)}
+        if require_anchors
+        else None
+    )
 
     settings = get_settings().reflex
     max_distance = settings.card_queue_return_phash_max_distance
@@ -420,6 +352,38 @@ def queue_return_screen_matches(
     }
 
 
+def normalized_return_action(value: Any) -> dict[str, Any]:
+    """목록 복귀에 성공한 원자 행동만 재사용 가능한 형태로 정규화한다."""
+
+    if not isinstance(value, dict):
+        return {}
+    name = str(value.get("name") or value.get("action") or "").strip()
+    if name not in {"go_back", "close_current_tab", "switch_tab"}:
+        return {}
+    args = value.get("args") if isinstance(value.get("args"), dict) else {}
+    if name == "switch_tab":
+        direction = str(args.get("direction") or "").strip()
+        if direction not in {"next", "previous"}:
+            return {}
+        return {"name": name, "args": {"direction": direction}}
+    return {"name": name, "args": {}}
+
+
+def return_action_from_transition(observed_transition: dict) -> dict[str, Any]:
+    step = (
+        observed_transition.get("step")
+        if isinstance(observed_transition.get("step"), dict)
+        else {}
+    )
+    args = step.get("args") if isinstance(step.get("args"), dict) else {}
+    return normalized_return_action(
+        {
+            "name": observed_transition.get("action"),
+            "args": args,
+        }
+    )
+
+
 def queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> tuple[int | None, list[dict], dict]:
     target = dict(item.get("target") or {})
     target.setdefault("text", item.get("title", ""))
@@ -427,20 +391,17 @@ def queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> t
     target.setdefault("bbox_ratio", item.get("bbox_ratio") or [])
     target.setdefault("center_ratio", item.get("center_ratio") or [])
     target.setdefault("evidence_texts", item.get("evidence_texts") or [])
-    try:
-        from agent.recipe.phash_replay import match_target_by_ratio
-
-        marker_id = match_target_by_ratio(target, markers, screen_size_from_signature(signature))
-        if marker_id is not None:
-            return marker_id, markers, {"reason": "current_marker_ratio_match"}
-    except Exception as exc:
-        ratio_error = str(exc)
-    else:
-        ratio_error = ""
+    marker_id = match_target_by_ratio(
+        target,
+        markers,
+        screen_size_from_signature(signature),
+    )
+    if marker_id is not None:
+        return marker_id, markers, {"reason": "current_marker_ratio_match"}
 
     bbox = bbox_from_ratio(item.get("bbox_ratio") or [], screen_size_from_signature(signature))
     if bbox == [0, 0, 0, 0]:
-        return None, markers, {"reason": "cached_bbox_missing", "ratio_error": ratio_error}
+        return None, markers, {"reason": "cached_bbox_missing"}
     next_id = max(
         [int(marker.get("id") or 0) for marker in markers or [] if isinstance(marker, dict)] + [-1]
     ) + 1
@@ -453,7 +414,6 @@ def queue_marker_for_item(item: dict, markers: list[dict], signature: dict) -> t
     return next_id, [*markers, synthetic], {
         "reason": "synthetic_marker_from_cached_bbox",
         "bbox": bbox,
-        "ratio_error": ratio_error,
     }
 
 
@@ -539,8 +499,8 @@ __all__ = [
     "complete_active_result_card",
     "mark_result_card_active",
     "marker_by_id",
-    "marker_by_label",
     "normalize_result_card_queue",
+    "normalized_return_action",
     "pending_result_cards",
     "result_card_queue_scope_complete",
     "queue_card_label",
@@ -548,10 +508,9 @@ __all__ = [
     "queue_match_text",
     "queue_replay_after_return",
     "queue_return_screen_matches",
+    "return_action_from_transition",
     "result_card_click_matches_queue",
     "result_card_entries_from_args",
     "same_queue_card",
     "skip_active_result_card",
-    "terminal_result_card_count",
-    "text_list_arg",
 ]

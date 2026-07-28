@@ -26,14 +26,15 @@ from agent.runtime.job_content import (
 )
 from agent.runtime.job_identity import source_card_key as _source_card_key
 from agent.runtime.result_card_queue import (
+    completed_result_card_count as _completed_result_card_count,
     complete_active_result_card as _complete_active_result_card,
     mark_result_card_active as _mark_result_card_active,
     marker_by_id as _marker_by_id,
     normalize_result_card_queue as _normalize_result_card_queue,
     pending_result_cards as _pending_result_cards,
+    normalized_return_action as _normalized_return_action,
     result_card_queue_scope_complete as _result_card_queue_scope_complete,
     result_card_click_matches_queue as _result_card_click_matches_queue,
-    terminal_result_card_count as _terminal_result_card_count,
 )
 from agent.runtime.transition_runtime import latest_no_effect_transition as _latest_no_effect_transition
 from agent.utils.logger import logger
@@ -57,6 +58,7 @@ from agent.graph.worker_resources import (
 )
 from agent.graph.worker_state import (
     count_mode_from_state as _count_mode_from_state,
+    detail_return_pending_for_url as _detail_return_pending_for_url,
     extracted_job_count as _extracted_job_count,
     target_count_from_state as _target_count_from_state,
 )
@@ -346,6 +348,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
     active_result_card = dict(state.get("active_result_card", {}) or {})
     detail_ocr_buffer = dict(state.get("detail_ocr_buffer", {}) or {})
     detail_followup_required = dict(state.get("detail_followup_required", {}) or {})
+    detail_return_pending = dict(state.get("detail_return_pending", {}) or {})
     screen_changed    = False
     chain_boundary    = False
     previous_ui_action: str | None = None
@@ -612,6 +615,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "go_back",
     }
     STATE_ACTIONS = {"update_extracted_info", "finish_detail_reading", "set_result_card_queue"}
+    RETURN_ACTIONS = {"go_back", "close_current_tab", "switch_tab"}
 
     for idx, tool_call in enumerate(action_request.tool_calls):
         action_name = tool_call.name
@@ -636,6 +640,32 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         policy_action_request: ActionRequest | None = None
 
         try:
+            return_pending = _detail_return_pending_for_url(
+                {
+                    **state,
+                    "detail_return_pending": detail_return_pending,
+                    "current_url": current_url,
+                },
+                current_url,
+            )
+            if return_pending and (
+                action_name in STATE_ACTIONS
+                or action_name in UI_ACTIONS
+                and action_name not in RETURN_ACTIONS
+            ):
+                append_guard_result(
+                    action_name,
+                    args,
+                    before_snapshot,
+                    "skipped",
+                    "detail_return_pending",
+                    (
+                        "상세 수집이 이미 완료되었습니다. 같은 공고를 더 읽지 말고 "
+                        "검색 결과 화면으로 복귀해야 합니다."
+                    ),
+                    step_start,
+                )
+                break
             if chain_boundary:
                 append_guard_result(
                     action_name,
@@ -830,7 +860,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         target_count=_target_count_from_state(state),
                     ):
                         is_finished = True
-                        resolved_count = _terminal_result_card_count(result_card_queue)
+                        resolved_count = _completed_result_card_count(result_card_queue)
                         collected_data.append(
                             f"Auto-finished after resolving {resolved_count} existing result card(s)."
                         )
@@ -859,30 +889,45 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                         pending_cards = _pending_result_cards(result_card_queue)
                         resolved_count = max(
                             collected_count,
-                            _terminal_result_card_count(result_card_queue),
+                            _completed_result_card_count(result_card_queue),
                         )
                         if pending_cards or (target_count > 0 and resolved_count < target_count):
+                            detail_return_pending = {
+                                "url": current_url,
+                                "reason": "detail_complete",
+                                "pending_count": len(pending_cards),
+                                "completed_action_seq": action_seq,
+                            }
                             no_effect_return = _latest_no_effect_transition(state)
-                            if no_effect_return.get("action") in {
-                                "go_back",
-                                "close_current_tab",
-                                "switch_tab",
-                            }:
+                            return_action = _normalized_return_action(
+                                result_page_memory.get("return_action")
+                            )
+                            failed_return_action = str(
+                                no_effect_return.get("action") or ""
+                            )
+                            if (
+                                not return_action
+                                or failed_return_action == return_action.get("name")
+                            ):
                                 # 실패가 확인된 복귀 방식을 자동 반복하지 않고 LLM이 다른 원자 도구를 고르게 합니다.
                                 result["detail_policy"] = "return_requires_reasoning"
-                                result["failed_return_action"] = no_effect_return.get("action")
+                                if failed_return_action:
+                                    result["failed_return_action"] = failed_return_action
                             else:
+                                return_name = str(return_action["name"])
+                                return_args = {
+                                    **dict(return_action.get("args") or {}),
+                                    "reason": "이전에 확인된 검색 결과 복귀 행동을 재사용합니다.",
+                                    "expected_after": "검색 결과 목록이 표시된다.",
+                                }
                                 policy_action_request = build_action_request(
                                     "page_policy",
-                                    "detail_complete_more_items",
+                                    "reuse_confirmed_result_return_action",
                                     [
                                         {
-                                            "name": "go_back",
-                                            "args": {
-                                                "reason": "detail page complete and more result cards remain",
-                                                "expected_after": "job result list is visible",
-                                            },
-                                            "id": "detail_policy_go_back",
+                                            "name": return_name,
+                                            "args": return_args,
+                                            "id": f"detail_policy_{return_name}",
                                         }
                                     ],
                                 )
@@ -909,9 +954,10 @@ def action_node(state: GraphState) -> Dict[str, Any]:
                     collected_count = _extracted_job_count(current_jd)
                     resolved_count = max(
                         collected_count,
-                        _terminal_result_card_count(result_card_queue),
+                        _completed_result_card_count(result_card_queue),
                     )
                     if target_count > 0 and resolved_count >= target_count:
+                        detail_return_pending = {}
                         is_finished = True
                         collected_data.append(
                             f"Auto-finished after collecting target_count={target_count} jobs."
@@ -1060,6 +1106,7 @@ def action_node(state: GraphState) -> Dict[str, Any]:
         "page_policy_trace": {},
         "detail_ocr_buffer": detail_ocr_buffer,
         "detail_followup_required": detail_followup_required,
+        "detail_return_pending": detail_return_pending,
         "pending_human_approval": pending_human_approval,
         "human_approval_request": human_approval_request,
     }

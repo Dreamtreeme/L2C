@@ -40,16 +40,21 @@ def test_operations_api_previews_and_requires_confirmation_header(monkeypatch, t
     assert applied.json()["dry_run"] is False
 
 
-def test_operations_ui_sanitizes_output_and_exposes_retention_controls():
+def test_react_ui_sanitizes_output_and_exposes_retention_controls():
     from pathlib import Path
 
-    html_path = Path(__file__).resolve().parents[1] / "static" / "index.html"
-    html = html_path.read_text(encoding="utf-8")
+    frontend_src = Path(__file__).resolve().parents[2] / "frontend" / "src"
+    message_source = (frontend_src / "components" / "MessageItem.tsx").read_text(
+        encoding="utf-8"
+    )
+    operations_source = (
+        frontend_src / "components" / "OperationsDrawer.tsx"
+    ).read_text(encoding="utf-8")
+    api_source = (frontend_src / "lib" / "api.ts").read_text(encoding="utf-8")
 
-    assert "DOMPurify.sanitize" in html
-    assert 'id="ops-panel"' in html
-    assert "X-L2C-Operation" in html
-    assert 'onclick="showJobDetail' not in html
+    assert "DOMPurify.sanitize" in message_source
+    assert "applyRetention" in operations_source
+    assert "X-L2C-Operation" in api_source
 
 
 def test_retention_is_dry_run_by_default_and_preserves_referenced_artifacts(tmp_path):

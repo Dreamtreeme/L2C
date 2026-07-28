@@ -7,7 +7,7 @@ from typing import Any
 from agent.graph.action_request import ActionRequest
 from agent.graph.state import GraphState
 from agent.recipe.feedback import record_action_episode
-from agent.recipe.record import commit_if_finished, record_ui_step
+from agent.recipe.record import record_ui_step
 
 
 def record_execution_node(state: GraphState) -> dict[str, Any]:
@@ -46,12 +46,6 @@ def record_execution_node(state: GraphState) -> dict[str, Any]:
             seq,
         )
 
-    if state.get("is_finished"):
-        commit_if_finished(
-            list(state.get("recorded_steps", []) or []) + recorded_steps,
-            state,
-            str(state.get("current_url") or ""),
-        )
     return {
         "execution_records": [],
         "recorded_steps": recorded_steps,

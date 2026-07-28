@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from agent.config import get_settings
 from agent.graph.action_request import build_action_request
 from agent.graph.state import GraphState
 from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
@@ -53,6 +52,8 @@ def reflex_action_args(step: dict, marker_id: int | None, params: dict | None = 
         if not slot_name:
             slot_refs = step.get("slot_refs") or []
             slot_name = slot_refs[0] if slot_refs else ""
+        if step.get("replay_mode") == "parameterized" and not slot_name:
+            return None
         text = params.get(slot_name) if slot_name else None
         if slot_name and step.get("replay_mode") == "parameterized" and not text:
             return None
@@ -63,61 +64,7 @@ def reflex_action_args(step: dict, marker_id: int | None, params: dict | None = 
         if slot_name:
             args["slot_name"] = slot_name
         return args
-    if action == "scroll":
-        args = {
-            "direction": param.get("direction") or value or "down",
-            "amount": param.get("amount") or "page",
-            **trace_args,
-        }
-        if param.get("targeted"):
-            if marker_id is None:
-                return None
-            args["marker_id"] = marker_id
-        return args
-    if action == "press_key":
-        key = param.get("key") or value
-        return {"key": key, **trace_args} if key else None
-    if action == "go_back":
-        return dict(trace_args)
     return None
-
-
-def reflex_compound_search_submit_enabled() -> bool:
-    return get_settings().reflex.compound_search_submit_enabled
-
-
-def step_should_append_enter_after_type(step: dict, args: dict) -> bool:
-    """검색 입력 Reflex 뒤에 Enter를 같은 행동 묶음으로 붙일지 판정한다."""
-
-    if not reflex_compound_search_submit_enabled() or step.get("action") != "type_in_marker":
-        return False
-    slot_refs = [str(item).casefold() for item in (step.get("slot_refs") or [])]
-    param = step.get("param") if isinstance(step.get("param"), dict) else {}
-    slot_name = str(
-        args.get("slot_name") or param.get("slot_name") or param.get("slot") or ""
-    ).casefold()
-    component = str(step.get("component") or args.get("target_component") or "").casefold()
-    target_role = str(step.get("target_role") or args.get("target_role") or "").casefold()
-    page_role = str(step.get("page_role") or args.get("page_role") or "").casefold()
-    has_query_slot = slot_name in {"query", "keyword", "search_query"} or bool(
-        {"query", "keyword", "search_query"} & set(slot_refs)
-    )
-    looks_like_search_input = (
-        "search" in component or "search" in target_role or page_role == "search_overlay"
-    )
-    return has_query_slot and looks_like_search_input
-
-
-def compound_enter_args_from_type_args(args: dict) -> dict:
-    """검색어 입력 직후 실행할 Enter 행동 인자를 만든다."""
-
-    return {
-        "key": "enter",
-        "page_role": args.get("page_role") or "search_overlay",
-        "reason": "검색 입력 레시피와 같은 묶음으로 검색을 실행합니다.",
-        "expected_after": "검색 결과 화면 또는 결과 탭이 표시된다.",
-        "risk_level": "safe_navigation",
-    }
 
 
 def missing_required_recipe_inputs(recipe: Any, params: dict) -> list[str]:
@@ -271,7 +218,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                         else ""
                     ),
                 }
-                if not is_replayable_step(step, params=params):
+                if not is_replayable_step(step):
                     record_rejection(recipe_key, "not_replayable", step_trace)
                     candidate_valid = False
                     break
@@ -283,7 +230,7 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                     record_rejection(recipe_key, "page_role_mismatch", step_trace)
                     candidate_valid = False
                     break
-                if action not in {"click_marker", "type_in_marker", "scroll"}:
+                if action not in {"click_marker", "type_in_marker"}:
                     record_rejection(recipe_key, "non_roi_action", step_trace)
                     candidate_valid = False
                     break
@@ -318,29 +265,6 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
                 contract = step.get("transition_contract")
                 if contract:
                     transition_contracts[call_id] = dict(contract)
-                if step_should_append_enter_after_type(step, args):
-                    enter_call_id = f"{call_id}_enter"
-                    enter_args = compound_enter_args_from_type_args(args)
-                    tool_calls.append(
-                        {
-                            "name": "press_key",
-                            "args": enter_args,
-                            "id": enter_call_id,
-                            "metadata": {"transition_source": "reflex_compound"},
-                        }
-                    )
-                    tool_call_traces[enter_call_id] = {
-                        "seq": step.get("seq"),
-                        "action": "press_key",
-                        "page_role": enter_args.get("page_role", ""),
-                        "current_page_role": current_page_role,
-                        "replay_mode": "compound",
-                        "match_mode": "same_screen_chain",
-                        "compound_parent_tool_call_id": call_id,
-                        "compound_parent_action": action,
-                        "accepted": True,
-                        "tool_call_id": enter_call_id,
-                    }
             if candidate_valid and tool_calls:
                 selected = (
                     recipe_key,
@@ -414,11 +338,8 @@ def reflex_node(state: GraphState) -> dict[str, Any]:
 
 
 __all__ = [
-    "compound_enter_args_from_type_args",
     "missing_required_recipe_inputs",
     "reflex_action_args",
-    "reflex_compound_search_submit_enabled",
     "reflex_node",
     "reflex_trace_args",
-    "step_should_append_enter_after_type",
 ]

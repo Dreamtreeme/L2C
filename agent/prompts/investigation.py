@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from agent.sites import list_supported_sites
 from shared.schema.agent_contract import EVIDENCE_FIELDS
 
 
 def request_analysis_prompt(now: datetime) -> str:
+    supported_sites = ", ".join(profile.slug for profile in list_supported_sites())
     return f"""당신은 채용 정보 조사를 시작하기 전 사용자 요청을 명확하게 만드는 지휘자입니다.
 현재 날짜는 {now.date().isoformat()}입니다.
 
@@ -64,7 +66,7 @@ def request_analysis_prompt(now: datetime) -> str:
 - '뜨는', '유망한'처럼 평가 기준이 문장에 없는 표현은 사이트 범위 질문으로 대신하지 말고 analysis_dimensions 질문으로 기준을 확정하십시오.
 - 전체 시장의 트렌드를 요청했는데 사이트 범위가 결과를 크게 바꾸면 site_scope도 별도 질문으로 확정할 수 있습니다.
 - 오늘은 현재 날짜 하루로 확정하십시오. 지난달처럼 명확한 달력 표현도 현재 날짜를 기준으로 계산하십시오.
-- sites에는 wanted, jobkorea, saramin, worknet, rocketpunch slug만 사용하십시오. 표시명은 넣지 마십시오.
+- sites에는 현재 활성화된 다음 slug만 사용하십시오: {supported_sites}. 표시명은 넣지 마십시오.
 - 사용자가 말하지 않은 지역, 경력, 고용형태를 한국·무관 같은 값으로 채우지 말고 빈 값으로 두십시오.
 - 사용자가 명시한 직무는 constraints.occupation_query에 원문 표현으로 보존하십시오.
 - 사용자가 IT, 제조, 의료처럼 업무 기능 기준의 넓은 직무 영역을 명시한 경우에만 occupation_domain_query에 원문 표현을 보존하십시오.

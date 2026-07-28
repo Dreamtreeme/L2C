@@ -38,6 +38,7 @@ class GraphState(TypedDict, total=False):
 
     # 로딩/빈 화면이라 OCR과 LLM 판단을 건너뛰어야 하는지 여부
     low_information_screen: bool
+    low_information_capture_count: int
 
     # 원본 마커 데이터 (ID 매핑용)
     current_markers: List[Dict[str, Any]]
@@ -128,6 +129,9 @@ class GraphState(TypedDict, total=False):
 
     # [Detail Source Follow-up] 본문이 부족해 원문 이동 또는 추가 공개가 필요한 상태
     detail_followup_required: Dict[str, Any]
+
+    # [Detail Return] 상세 수집을 마친 뒤 검색 결과 화면으로 복귀해야 하는 상태
+    detail_return_pending: Dict[str, Any]
 
     # [HITL] Stop autonomous execution before sensitive or irreversible steps
     pending_human_approval: bool
