@@ -45,6 +45,7 @@ def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
         "reflex_trace": {},
         "followup_action_trace": {},
         "reflex_transition_contracts": {},
+        "reflex_action_set": {},
         "reflex_blocked_recipe_keys": [],
         "recipe_params": {},
         "job_collection_contract": {

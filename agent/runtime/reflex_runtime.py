@@ -92,9 +92,20 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
     def miss(_elapsed: float, reason: str = "", trace: dict | None = None) -> dict[str, Any]:
         reflex_trace = dict(trace or {})
         reflex_trace.update({"hit": False, "reason": reason or reflex_trace.get("reason", "")})
+        active_set = dict(state.get("reflex_action_set", {}) or {})
+        blocked_keys = [
+            str(key)
+            for key in (state.get("reflex_blocked_recipe_keys") or [])
+            if str(key)
+        ]
+        active_recipe_key = str(active_set.get("recipe_key") or "")
+        if active_recipe_key and active_recipe_key not in blocked_keys:
+            blocked_keys.append(active_recipe_key)
         return {
             "reflex_trace": reflex_trace,
             "reflex_transition_contracts": {},
+            "reflex_action_set": {},
+            "reflex_blocked_recipe_keys": blocked_keys,
         }
 
     try:
@@ -132,6 +143,14 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             if site
             else []
         )
+        active_set = dict(state.get("reflex_action_set", {}) or {})
+        active_recipe_key = str(active_set.get("recipe_key") or "")
+        if active_recipe_key:
+            recipe_candidates = [
+                item
+                for item in recipe_candidates
+                if str(item[0]) == active_recipe_key
+            ]
 
         if not recipe_candidates:
             elapsed = time.perf_counter() - started
@@ -201,15 +220,32 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
                 record_rejection(recipe_key, "empty_recipe")
                 continue
 
+            step_count = len(recipe.steps)
+            step_index = (
+                int(active_set.get("next_step_index") or 0)
+                if recipe_key == active_recipe_key
+                else 0
+            )
+            if step_index < 0 or step_index >= step_count:
+                rejected_count += 1
+                record_rejection(
+                    recipe_key,
+                    "action_set_step_out_of_range",
+                )
+                continue
+
             tool_calls = []
             transition_contracts: dict[str, dict] = {}
             tool_call_traces: dict[str, dict[str, Any]] = {}
             candidate_valid = True
-            for index, recipe_step in enumerate(recipe.steps):
+            for index, recipe_step in [
+                (step_index, recipe.steps[step_index])
+            ]:
                 step = dump_model(recipe_step)
                 action = step.get("action")
                 step_trace: dict[str, Any] = {
                     "seq": step.get("seq"),
+                    "step_index": index,
                     "action": action,
                     "page_role": step.get("page_role", ""),
                     "current_page_role": current_page_role,
@@ -315,17 +351,39 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             )
 
         recipe_key, recipe, tool_calls, transition_contracts, tool_call_traces = selected
+        selected_call = tool_calls[0]
+        selected_trace = tool_call_traces[selected_call["id"]]
+        step_index = int(selected_trace.get("step_index") or 0)
+        step_count = len(recipe.steps)
+        action_set_state = (
+            {
+                "recipe_key": recipe_key,
+                "next_step_index": step_index + 1,
+                "step_count": step_count,
+                "actions": [
+                    str(item.action)
+                    for item in recipe.steps
+                ],
+            }
+            if step_count > 1
+            else {}
+        )
         request = build_action_request(
             "reflex",
             (
-                "cached action set"
-                if len(tool_calls) > 1
+                "cached action set step"
+                if step_count > 1
                 else "cached atomic action"
             ),
             tool_calls,
             metadata=(
-                {"execution_unit": "transition_action_set"}
-                if len(tool_calls) > 1
+                {
+                    "execution_unit": "transition_action_set",
+                    "recipe_key": recipe_key,
+                    "step_index": step_index,
+                    "step_count": step_count,
+                }
+                if step_count > 1
                 else None
             ),
         )
@@ -334,6 +392,11 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             "Reflex hit",
             recipe_key=recipe_key[:24],
             actions=[call["name"] for call in tool_calls],
+            action_set_step=(
+                f"{step_index + 1}/{step_count}"
+                if step_count > 1
+                else ""
+            ),
             transition_contracts=len(transition_contracts),
             when_to_use=getattr(
                 getattr(recipe, "skill_metadata", None),
@@ -349,11 +412,18 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             "task_category": requested_task_category,
             "actions": [call["name"] for call in tool_calls],
             "tool_calls": tool_call_traces,
+            "action_set_step_index": (
+                step_index if step_count > 1 else None
+            ),
+            "action_set_step_count": (
+                step_count if step_count > 1 else None
+            ),
         }
         return {
             "pending_action": request,
             "reflex_trace": reflex_trace,
             "reflex_transition_contracts": transition_contracts,
+            "reflex_action_set": action_set_state,
         }
     except Exception as exc:
         elapsed = time.perf_counter() - started

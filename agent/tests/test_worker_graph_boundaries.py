@@ -40,7 +40,7 @@ def _execution_state(request, **overrides):
     return state
 
 
-def test_multiple_calls_are_limited_to_reflex_transition_action_set():
+def test_action_request_rejects_multiple_calls_from_every_source():
     calls = [
         {
             "name": "type_in_marker",
@@ -57,14 +57,13 @@ def test_multiple_calls_are_limited_to_reflex_transition_action_set():
     with pytest.raises(ValueError):
         build_action_request("llm", "잘못된 복수 행동", calls)
 
-    request = build_action_request(
-        "reflex",
-        "검증된 행동 세트",
-        calls,
-        metadata={"execution_unit": "transition_action_set"},
-    )
-
-    assert len(request.tool_calls) == 2
+    with pytest.raises(ValueError):
+        build_action_request(
+            "reflex",
+            "행동 세트도 현재 단계 하나만 요청해야 함",
+            calls,
+            metadata={"execution_unit": "transition_action_set"},
+        )
 
 
 def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
@@ -92,6 +91,51 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
         == "execution"
     )
     assert route_after_reflex({}) == "reasoning"
+
+
+def test_active_reflex_action_set_keeps_selection_for_reflex(monkeypatch):
+    from agent.graph import worker_selection
+
+    monkeypatch.setenv("REFLEX_ENABLED", "1")
+    monkeypatch.setattr(
+        worker_selection,
+        "select_followup_after_transition",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("행동 세트 중간에 후속 전략을 조회하면 안 됩니다.")
+        ),
+    )
+
+    result = worker_selection.selection_node(
+        {
+            "ocr_complete": True,
+            "transition_result": {
+                "status": "ready",
+                "action": "type_in_marker",
+            },
+            "reflex_action_set": {
+                "recipe_key": "recipe-search-set",
+                "next_step_index": 1,
+                "step_count": 2,
+            },
+        }
+    )
+
+    assert result["followup_action_trace"] == {}
+    assert (
+        route_after_selection(
+            {
+                **result,
+                "ocr_complete": True,
+                "transition_result": {"status": "ready"},
+                "reflex_action_set": {
+                    "recipe_key": "recipe-search-set",
+                    "next_step_index": 1,
+                    "step_count": 2,
+                },
+            }
+        )
+        == "reflex"
+    )
 
 
 def test_transition_requires_collection_only_after_ocr():

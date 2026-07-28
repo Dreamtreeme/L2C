@@ -60,9 +60,9 @@ tags:
 5. 저장된 `roi_signature.crop_rect_ratio`로 현재 스크린샷의 같은 ROI를 crop하고 pHash 거리를 검사한다.
 6. ROI가 맞으면 저장된 target 비율에 가까운 현재 OCR marker를 찾는다.
 7. 단일 행동이면 `click_marker` 또는 `type_in_marker` 호출 하나를 만든다.
-8. 같은 화면에서 연속으로 성공한 `type_in_marker -> click_marker`이면 두 ROI를 모두 검증한 뒤 하나의 행동 세트로 실행한다.
-9. 행동 세트의 물리 행동은 각각 기록하고, 화면 전환은 마지막 제출 클릭 뒤 한 번만 판정한다.
-10. 전환 계약이 `unknown`이면 reasoning으로 폴백하고 같은 run 안에서 해당 `recipe_key`를 차단한다.
+8. 같은 화면에서 연속으로 성공한 `type_in_marker -> click_marker`이면 첫 단계 ROI만 검증하고 실행한 뒤 `reflex_action_set`에 다음 단계 번호를 저장한다.
+9. 다음 캡처와 OCR에서 중간 전환 계약과 다음 단계 ROI를 검증하고, LLM 호출 없이 같은 세트의 다음 행동을 실행한다.
+10. 마지막 단계가 성공하면 행동 세트 상태를 지운다. 중간 전환이나 다음 ROI가 실패하면 세트를 지우고 reasoning으로 폴백하며 같은 run 안에서 해당 `recipe_key`를 차단한다.
 
 ## 승격 정책
 
@@ -76,7 +76,8 @@ Critic은 의미 판단을 담당한다. 코드는 후보를 포장하고 필수
 
 LLM이 한 번에 여러 행동을 생성하는 것은 허용하지 않는다. 행동 세트는 승격된
 기록에서 같은 `page_role`과 `url_template`을 가진 연속 입력·제출 단계에만
-결정론적으로 적용한다.
+결정론적으로 적용한다. `ActionRequest`는 행동 세트에서도 현재 캡처로 검증한
+도구 호출 하나만 담는다.
 
 ## 실패 처리
 

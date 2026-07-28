@@ -46,11 +46,11 @@ class ToolCallRequest(BaseModel):
 
 
 class ActionRequest(BaseModel):
-    """현재 화면 캡처를 근거로 실행할 원자 행동 또는 검증된 행동 세트."""
+    """현재 화면 캡처를 근거로 실행할 원자 행동."""
 
     source: str
     summary: str = ""
-    tool_calls: list[ToolCallRequest] = Field(default_factory=list, max_length=2)
+    tool_calls: list[ToolCallRequest] = Field(default_factory=list, max_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("source")
@@ -63,18 +63,6 @@ class ActionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_tool_contracts(self) -> "ActionRequest":
-        if len(self.tool_calls) > 1:
-            action_names = [call.name for call in self.tool_calls]
-            if (
-                self.source != "reflex"
-                or self.metadata.get("execution_unit")
-                != "transition_action_set"
-                or action_names
-                != ["type_in_marker", "click_marker"]
-            ):
-                raise ValueError(
-                    "복수 도구 호출은 ROI로 검증된 Reflex 입력·클릭 행동 세트만 허용됩니다."
-                )
         for call in self.tool_calls:
             schema = ACTION_TOOL_SCHEMAS.get(call.name)
             if schema is None:

@@ -24,6 +24,26 @@ def _blocked_recipe_keys(state: GraphState) -> list[str]:
     ]
 
 
+def _reflex_action_set_after_transition(
+    state: GraphState,
+    *,
+    source: str,
+    status: str,
+) -> dict[str, Any]:
+    """중간 성공은 유지하고 마지막 성공이나 실패는 행동 세트를 정리한다."""
+
+    action_set = dict(state.get("reflex_action_set", {}) or {})
+    if not action_set or source != "reflex":
+        return action_set
+    if status == "unknown":
+        return {}
+    next_step_index = int(action_set.get("next_step_index") or 0)
+    step_count = int(action_set.get("step_count") or 0)
+    if status == "ready" and step_count > 0 and next_step_index >= step_count:
+        return {}
+    return action_set
+
+
 def _reused_observation(
     state: GraphState,
     pending: dict[str, Any],
@@ -223,6 +243,11 @@ def transition_node(state: GraphState) -> dict[str, Any]:
             ),
             "transition_records": [record],
             "transition_probe_unchanged": False,
+            "reflex_action_set": _reflex_action_set_after_transition(
+                state,
+                source=str(request.get("source") or ""),
+                status="unknown",
+            ),
         }
 
     image_path = str(state.get("current_screenshot") or "")
@@ -277,6 +302,11 @@ def transition_node(state: GraphState) -> dict[str, Any]:
                 ),
                 "transition_records": [record],
                 "reflex_blocked_recipe_keys": blocked_keys,
+                "reflex_action_set": _reflex_action_set_after_transition(
+                    state,
+                    source=source,
+                    status="unknown",
+                ),
                 **reused_observation,
             }
 
@@ -383,6 +413,11 @@ def transition_node(state: GraphState) -> dict[str, Any]:
         ),
         "transition_records": [record],
         "reflex_blocked_recipe_keys": blocked_keys,
+        "reflex_action_set": _reflex_action_set_after_transition(
+            state,
+            source=source,
+            status=status,
+        ),
         "transition_probe_unchanged": False,
     }
 

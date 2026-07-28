@@ -102,6 +102,13 @@ def selection_node(state: GraphState) -> dict[str, Any]:
             }
         return {}
 
+    if state.get("reflex_action_set"):
+        return {
+            "followup_action_trace": {},
+            "job_card_replay_trace": {},
+            "job_page_policy_trace": {},
+        }
+
     transition_result = dict(state.get("transition_result", {}) or {})
     current_url = str(state.get("current_url") or "")
     active_card = dict(state.get("active_job_card", {}) or {})

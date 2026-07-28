@@ -129,6 +129,9 @@ class GraphState(TypedDict, total=False):
     # Reflex 도구 호출별 행동 후 전환 계약
     reflex_transition_contracts: Dict[str, Any]
 
+    # 여러 관찰에 걸쳐 이어서 실행할 Reflex 행동 세트의 다음 단계
+    reflex_action_set: Dict[str, Any]
+
     # 같은 작업에서 전환 검증에 실패해 다시 쓰지 않을 레시피 키
     reflex_blocked_recipe_keys: List[str]
 

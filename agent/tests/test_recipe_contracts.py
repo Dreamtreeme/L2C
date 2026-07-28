@@ -483,19 +483,23 @@ def test_reflex_replays_input_and_submit_as_one_action_set(
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
-    screenshot = tmp_path / "action-set.png"
-    image = Image.new("RGB", (240, 120), "white")
-    draw = ImageDraw.Draw(image)
-    draw.rectangle([10, 10, 130, 40], fill="black")
-    draw.rectangle([160, 10, 220, 40], fill="gray")
-    image.save(screenshot)
+    input_screen = tmp_path / "action-set-input.png"
+    input_image = Image.new("RGB", (240, 120), "white")
+    input_draw = ImageDraw.Draw(input_image)
+    input_draw.rectangle([10, 10, 130, 40], fill="black")
+    input_image.save(input_screen)
+    submit_screen = tmp_path / "action-set-submit.png"
+    submit_image = Image.new("RGB", (240, 120), "white")
+    submit_draw = ImageDraw.Draw(submit_image)
+    submit_draw.rectangle([160, 10, 220, 40], fill="gray")
+    submit_image.save(submit_screen)
     input_signature = compute_target_roi_signature(
-        screenshot,
+        input_screen,
         [10, 10, 130, 40],
         [240, 120],
     )
     submit_signature = compute_target_roi_signature(
-        screenshot,
+        submit_screen,
         [160, 10, 220, 40],
         [240, 120],
     )
@@ -556,19 +560,46 @@ def test_reflex_replays_input_and_submit_as_one_action_set(
         "agent.recipe.store.RecipeStore",
         lambda: FakeStore(),
     )
-    result = reflex_node(
+    first = reflex_node(
         {
             "goal": "AI 엔지니어 공고",
             "current_url": "https://www.saramin.co.kr/zf_user/",
             "current_page_role": "home",
             "screen_signature": {"size": [240, 120]},
-            "recent_images": [screenshot],
+            "recent_images": [input_screen],
             "current_markers": [
                 {
                     "id": 7,
                     "bbox": [10, 10, 130, 40],
                     "text": "검색어",
                 },
+            ],
+            "recipe_params": {
+                "site": "saramin",
+                "task_category": "검색",
+                "query": "AI 엔지니어",
+            },
+        }
+    )
+
+    assert first["reflex_trace"]["hit"] is True
+    assert first["pending_action"].summary == "cached action set step"
+    assert len(first["pending_action"].tool_calls) == 1
+    assert first["pending_action"].tool_calls[0].name == "type_in_marker"
+    assert (
+        first["pending_action"].tool_calls[0].args["text"]
+        == "AI 엔지니어"
+    )
+    assert first["reflex_action_set"]["next_step_index"] == 1
+
+    second = reflex_node(
+        {
+            "goal": "AI 엔지니어 공고",
+            "current_url": "https://www.saramin.co.kr/zf_user/",
+            "current_page_role": "home",
+            "screen_signature": {"size": [240, 120]},
+            "recent_images": [submit_screen],
+            "current_markers": [
                 {
                     "id": 8,
                     "bbox": [160, 10, 220, 40],
@@ -580,20 +611,70 @@ def test_reflex_replays_input_and_submit_as_one_action_set(
                 "task_category": "검색",
                 "query": "AI 엔지니어",
             },
+            "reflex_action_set": first["reflex_action_set"],
         }
     )
 
-    assert "pending_action" in result, result
-    calls = result["pending_action"].tool_calls
+    assert second["reflex_trace"]["hit"] is True
+    assert len(second["pending_action"].tool_calls) == 1
+    assert second["pending_action"].tool_calls[0].name == "click_marker"
+    assert second["pending_action"].tool_calls[0].args["marker_id"] == 8
+    assert second["reflex_action_set"]["next_step_index"] == 2
 
-    assert result["reflex_trace"]["hit"] is True
-    assert result["pending_action"].summary == "cached action set"
-    assert [call.name for call in calls] == [
-        "type_in_marker",
-        "click_marker",
-    ]
-    assert calls[0].args["text"] == "AI 엔지니어"
-    assert calls[1].args["marker_id"] == 8
+
+def test_reflex_action_set_is_cleared_only_after_final_transition():
+    base_state = {
+        "ocr_complete": True,
+        "current_url": "https://www.saramin.co.kr/zf_user/search",
+        "current_screenshot": "",
+        "current_capture_id": "capture:0002",
+        "current_markers": [
+            {"id": 1, "bbox": [0, 0, 20, 20], "text": "검색 결과"},
+        ],
+        "screen_signature": {},
+        "transition_request": {
+            "action": "click_marker",
+            "source": "reflex",
+            "recipe_key": "recipe-search-set",
+            "before_url": "https://www.saramin.co.kr/zf_user/",
+            "started_at": time.time(),
+            "contract": {
+                "common_ready_cues": [
+                    {
+                        "kind": "text_any",
+                        "values": ["검색 결과"],
+                    }
+                ],
+                "timeout_sec": 8.0,
+            },
+        },
+    }
+
+    intermediate = worker_transition.transition_node(
+        {
+            **base_state,
+            "reflex_action_set": {
+                "recipe_key": "recipe-search-set",
+                "next_step_index": 1,
+                "step_count": 2,
+            },
+        }
+    )
+    completed = worker_transition.transition_node(
+        {
+            **base_state,
+            "reflex_action_set": {
+                "recipe_key": "recipe-search-set",
+                "next_step_index": 2,
+                "step_count": 2,
+            },
+        }
+    )
+
+    assert intermediate["transition_result"]["status"] == "ready"
+    assert intermediate["reflex_action_set"]["next_step_index"] == 1
+    assert completed["transition_result"]["status"] == "ready"
+    assert completed["reflex_action_set"] == {}
 
 
 def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
