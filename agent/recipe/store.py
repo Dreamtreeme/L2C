@@ -23,7 +23,9 @@ from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 from shared.schema.skill_schema import RecipeSkillMetadata
 
 
-_RECIPE_SCHEMA_VERSION = 3
+_RECIPE_STORE_SCHEMA_VERSION = 4
+_RECIPE_KEY_VERSION = 3
+_RECIPE_KEY_PREFIX = "roi3#"
 _INITIALIZED_DB_PATHS: set[Path] = set()
 _SCHEMA_LOCK = threading.RLock()
 
@@ -70,7 +72,7 @@ class RecipeStore:
                 current_version = int(version_row["value"]) if version_row else 0
             except (TypeError, ValueError):
                 current_version = 0
-            needs_migration = current_version != _RECIPE_SCHEMA_VERSION
+            needs_migration = current_version != _RECIPE_STORE_SCHEMA_VERSION
 
             row = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='recipes'"
@@ -106,15 +108,19 @@ class RecipeStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_recipes_site ON recipes(site)")
             if needs_migration:
                 self._drop_legacy_recipe_tables(conn)
-                conn.execute("DELETE FROM recipes WHERE recipe_key NOT LIKE 'roi3#%'")
+                conn.execute(
+                    "DELETE FROM recipes WHERE recipe_key NOT LIKE ?",
+                    (f"{_RECIPE_KEY_PREFIX}%",),
+                )
                 self._purge_steps_missing_new_required_fields(conn)
+                self._normalize_recipe_keys(conn)
                 conn.execute(
                     """
                     INSERT INTO recipe_store_meta(key, value)
                     VALUES('schema_version', ?)
                     ON CONFLICT(key) DO UPDATE SET value=excluded.value
                     """,
-                    (str(_RECIPE_SCHEMA_VERSION),),
+                    (str(_RECIPE_STORE_SCHEMA_VERSION),),
                 )
 
     @staticmethod
@@ -155,6 +161,81 @@ class RecipeStore:
                     (json.dumps(cleaned_steps, ensure_ascii=False), row["recipe_key"]),
                 )
 
+    @classmethod
+    def _normalize_recipe_keys(cls, conn: sqlite3.Connection) -> None:
+        """현재 키 규칙으로 다시 묶어 같은 원자 행동의 중복 레시피를 합친다."""
+
+        rows = conn.execute(
+            "SELECT recipe_key, site, goal, steps_json, metadata_json, success_count, created_at, updated_at "
+            "FROM recipes"
+        ).fetchall()
+        normalized: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            try:
+                steps = json.loads(row["steps_json"] or "[]")
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except Exception:
+                continue
+            if (
+                not isinstance(steps, list)
+                or len(steps) != 1
+                or not isinstance(steps[0], dict)
+                or not cls._step_has_required_replay_fields(steps[0])
+                or not isinstance(metadata, dict)
+            ):
+                continue
+
+            step = strip_replay_runtime_fields(steps[0])
+            recipe_key = cls._recipe_key_for_step(row["site"], step, metadata=metadata)
+            candidate = {
+                "recipe_key": recipe_key,
+                "site": row["site"],
+                "goal": row["goal"] or "",
+                "steps_json": json.dumps([step], ensure_ascii=False),
+                "metadata_json": json.dumps(metadata, ensure_ascii=False),
+                "success_count": int(row["success_count"] or 0),
+                "created_at": row["created_at"] or "",
+                "updated_at": row["updated_at"] or "",
+            }
+            previous = normalized.get(recipe_key)
+            if previous is None:
+                normalized[recipe_key] = candidate
+                continue
+
+            total_success_count = previous["success_count"] + candidate["success_count"]
+            created_at = min(previous["created_at"], candidate["created_at"])
+            updated_at = max(previous["updated_at"], candidate["updated_at"])
+            winner = candidate if candidate["updated_at"] >= previous["updated_at"] else previous
+            normalized[recipe_key] = {
+                **winner,
+                "success_count": total_success_count,
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+
+        conn.execute("DELETE FROM recipes")
+        conn.executemany(
+            """
+            INSERT INTO recipes (
+                recipe_key, site, goal, steps_json, metadata_json,
+                success_count, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    item["recipe_key"],
+                    item["site"],
+                    item["goal"],
+                    item["steps_json"],
+                    item["metadata_json"],
+                    item["success_count"],
+                    item["created_at"],
+                    item["updated_at"],
+                )
+                for item in normalized.values()
+            ],
+        )
+
     @staticmethod
     def _dump_json(payload: Any) -> str:
         return json.dumps(payload or {}, ensure_ascii=False)
@@ -184,8 +265,9 @@ class RecipeStore:
 
         meta = RecipeStore._metadata_dict(metadata)
         target = step.get("target") if isinstance(step.get("target"), dict) else {}
+        replay_mode = str(step.get("replay_mode") or "")
         payload = {
-            "key_version": _RECIPE_SCHEMA_VERSION,
+            "key_version": _RECIPE_KEY_VERSION,
             "site": site or "",
             "task_category": normalize_task_category(meta.get("task_category")),
             "page_role": normalize_page_role(step.get("page_role")),
@@ -193,11 +275,15 @@ class RecipeStore:
             "action": step.get("action") or "",
             "component": step.get("component") or "",
             "target_role": step.get("target_role") or "",
-            "slot_refs": sorted(str(item) for item in step.get("slot_refs") or []),
+            "slot_refs": (
+                sorted(str(item) for item in step.get("slot_refs") or [])
+                if replay_mode == "parameterized"
+                else []
+            ),
             "target_region": target.get("region") or "",
         }
         digest = hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-        return f"roi3#{digest}"
+        return f"{_RECIPE_KEY_PREFIX}{digest}"
 
     def _upsert_recipe_steps(
         self,

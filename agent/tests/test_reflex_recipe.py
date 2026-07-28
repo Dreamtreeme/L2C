@@ -1366,14 +1366,126 @@ def test_recipe_key_ignores_layout_measurements_but_keeps_exact_page_role():
         **moved_step,
         "page_role": "search_overlay",
     }
+    fixed_with_slot = {
+        **base_step,
+        "replay_mode": "fixed",
+        "slot_refs": ["query"],
+    }
+    fixed_without_slot = {
+        **base_step,
+        "replay_mode": "fixed",
+        "slot_refs": [],
+    }
+    parameterized_query = {
+        **base_step,
+        "action": "type_in_marker",
+        "replay_mode": "parameterized",
+        "slot_refs": ["query"],
+    }
+    parameterized_location = {
+        **parameterized_query,
+        "slot_refs": ["location"],
+    }
 
     first = RecipeStore._recipe_key_for_step("wanted", base_step, {"task_category": "검색"})
     second = RecipeStore._recipe_key_for_step("wanted", moved_step, {"task_category": "검색"})
     overlay = RecipeStore._recipe_key_for_step("wanted", overlay_step, {"task_category": "검색"})
+    fixed_first = RecipeStore._recipe_key_for_step(
+        "wanted", fixed_with_slot, {"task_category": "검색"}
+    )
+    fixed_second = RecipeStore._recipe_key_for_step(
+        "wanted", fixed_without_slot, {"task_category": "검색"}
+    )
+    query_input = RecipeStore._recipe_key_for_step(
+        "wanted", parameterized_query, {"task_category": "검색"}
+    )
+    location_input = RecipeStore._recipe_key_for_step(
+        "wanted", parameterized_location, {"task_category": "검색"}
+    )
 
     assert first.startswith("roi3#")
     assert first == second
     assert first != overlay
+    assert fixed_first == fixed_second
+    assert query_input != location_input
+
+
+def test_recipe_store_migration_merges_duplicate_fixed_action_keys(tmp_path):
+    import json
+
+    from agent.recipe.store import RecipeStore
+
+    db_path = tmp_path / "recipes.db"
+    step = {
+        "seq": 1,
+        "url_template": "wanted.co.kr/",
+        "page_role": "home",
+        "action": "click_marker",
+        "component": "search_button",
+        "target_role": "button",
+        "target": {"region": "top-right"},
+        "roi_signature": {"phash": "0" * 16},
+        "replay_mode": "fixed",
+    }
+    metadata = {"task_category": "검색"}
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE recipe_store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO recipe_store_meta(key, value) VALUES('schema_version', '3')")
+    conn.execute(
+        """
+        CREATE TABLE recipes (
+            recipe_key TEXT PRIMARY KEY,
+            site TEXT NOT NULL,
+            goal TEXT,
+            steps_json TEXT NOT NULL,
+            metadata_json TEXT,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO recipes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "roi3#fixed-with-slot",
+            "wanted",
+            "old goal",
+            json.dumps([{**step, "slot_refs": ["query"]}], ensure_ascii=False),
+            json.dumps(metadata, ensure_ascii=False),
+            2,
+            "2026-01-01T00:00:00",
+            "2026-01-01T00:00:00",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO recipes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "roi3#fixed-without-slot",
+            "wanted",
+            "new goal",
+            json.dumps([{**step, "slot_refs": []}], ensure_ascii=False),
+            json.dumps(metadata, ensure_ascii=False),
+            1,
+            "2026-01-02T00:00:00",
+            "2026-01-02T00:00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    rows = RecipeStore(db_path).get_by_site("wanted")
+
+    assert len(rows) == 1
+    assert rows[0]["goal"] == "new goal"
+    assert rows[0]["success_count"] == 3
+    assert rows[0]["steps"][0]["slot_refs"] == []
+    conn = sqlite3.connect(db_path)
+    schema_version = conn.execute(
+        "SELECT value FROM recipe_store_meta WHERE key='schema_version'"
+    ).fetchone()[0]
+    conn.close()
+    assert schema_version == "4"
 
 
 def test_recipe_store_recreates_old_state_key_schema_without_legacy_tables(tmp_path):
@@ -3574,6 +3686,97 @@ def test_candidate_reviewer_records_review_without_active_promotion(tmp_path):
     assert review["decision"] == "accept"
     assert candidate["status"] == "accepted"
     assert recipes == []
+
+
+def test_candidate_reviewer_retries_when_promotable_review_omits_step_intent():
+    from agent.recipe.candidate_reviewer import review_candidate
+
+    candidate = {
+        "candidate_id": "candidate-contract-retry",
+        "site": "wanted",
+        "steps": [
+            {"seq": 1, "action": "click_marker"},
+            {"seq": 2, "action": "type_in_marker"},
+        ],
+        "payload": {},
+    }
+    calls = []
+
+    def critic(payload):
+        calls.append(payload)
+        step_intents = [
+            {"seq": 1, "action": "click_marker", "replay_mode": "fixed"},
+        ]
+        if payload.get("critic_correction"):
+            step_intents.append(
+                {"seq": 2, "action": "type_in_marker", "replay_mode": "reasoning"}
+            )
+        return {
+            "decision": "accept",
+            "reasons": ["reviewed every target action"],
+            "promote_to_active_recipe": True,
+            "skill_metadata": {"step_intents": step_intents},
+            "confidence": 0.9,
+        }
+
+    review = review_candidate(
+        candidate,
+        critic=critic,
+        allow_promotion=True,
+    )
+
+    assert calls[0]["required_step_intents"] == [
+        {"seq": 1, "action": "click_marker"},
+        {"seq": 2, "action": "type_in_marker"},
+    ]
+    assert calls[1]["critic_correction"]["errors"] == [
+        "missing seq=2 action=type_in_marker"
+    ]
+    assert review["decision"] == "accept"
+    assert [item["seq"] for item in review["skill_metadata"]["step_intents"]] == [1, 2]
+
+
+def test_candidate_reviewer_rejects_partial_promotion_after_correction_retry():
+    from agent.recipe.candidate_reviewer import review_candidate
+
+    candidate = {
+        "candidate_id": "candidate-contract-failure",
+        "site": "wanted",
+        "steps": [
+            {"seq": 1, "action": "click_marker"},
+            {"seq": 2, "action": "type_in_marker"},
+        ],
+        "payload": {},
+    }
+    call_count = 0
+
+    def critic(_payload):
+        nonlocal call_count
+        call_count += 1
+        return {
+            "decision": "accept",
+            "reasons": ["incomplete response"],
+            "promote_to_active_recipe": True,
+            "skill_metadata": {
+                "step_intents": [
+                    {"seq": 1, "action": "click_marker", "replay_mode": "fixed"}
+                ]
+            },
+            "confidence": 0.9,
+        }
+
+    review = review_candidate(
+        candidate,
+        critic=critic,
+        allow_promotion=True,
+    )
+
+    assert call_count == 2
+    assert review["decision"] == "revise"
+    assert review["promote_to_active_recipe"] is False
+    assert review["reasons"] == [
+        "critic_step_intent_contract_failed: missing seq=2 action=type_in_marker"
+    ]
 
 
 def test_candidate_reviewer_promote_requires_roi_signature(tmp_path):
