@@ -155,18 +155,43 @@ def evaluate_job_records(actual: Any, reference: Any | None = None) -> dict[str,
 
 
 def evaluate_collection_summary(result: Any) -> dict[str, Any]:
+    from agent.runtime.site_context import (
+        looks_like_job_detail_url,
+        persistence_policy_for_url,
+    )
+
     payload = result if isinstance(result, dict) else {}
     target = max(0, int(payload.get("target_count") or 0))
     collected = max(0, int(payload.get("item_count") or payload.get("collected_count") or 0))
     persisted = max(0, int(payload.get("persisted_count") or 0))
     validation = payload.get("persistence_validation") or {}
-    persisted_ids = {
-        int(item["job_id"])
+    persisted_items = [
+        item
         for item in validation.get("persisted_items", [])
         if isinstance(item, dict)
-        and str(item.get("job_id") or "").isdigit()
+    ]
+    persisted_ids = {
+        int(item["job_id"])
+        for item in persisted_items
+        if str(item.get("job_id") or "").isdigit()
         and int(item["job_id"]) > 0
     }
+    detail_url_items = [
+        item
+        for item in persisted_items
+        if persistence_policy_for_url(str(item.get("url") or "")).get(
+            "require_detail_url_for_job_update"
+        )
+    ]
+    valid_detail_urls = sum(
+        looks_like_job_detail_url(str(item.get("url") or ""))
+        for item in detail_url_items
+    )
+    source_url_integrity = (
+        valid_detail_urls / len(detail_url_items)
+        if detail_url_items
+        else 1.0
+    )
     observed_ids = {
         int(job_id)
         for job_id in (payload.get("observed_job_ids") or [])
@@ -184,9 +209,12 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
         "resolved_count": resolved,
         "target_fulfillment": round(min(1.0, resolved / target), 6) if target else None,
         "persistence_rate": round(min(1.0, persisted / collected), 6) if collected else 0.0,
+        "detail_url_checked_count": len(detail_url_items),
+        "detail_url_valid_count": valid_detail_urls,
+        "source_url_integrity": round(source_url_integrity, 6),
         "accepted": accepted,
         "finished": bool(payload.get("is_finished")),
-        "passed": bool(accepted and target_met),
+        "passed": bool(accepted and target_met and source_url_integrity == 1.0),
     }
 
 

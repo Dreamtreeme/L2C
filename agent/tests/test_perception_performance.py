@@ -158,6 +158,107 @@ def test_capture_screen_reuses_region_for_wait(monkeypatch, tmp_path):
     assert region_calls["count"] == 1
 
 
+def test_address_bar_url_copy_retries_after_new_tab_focus_delay(monkeypatch):
+    from agent.tools.perception import PerceptionEngine
+
+    class FakeClipboard:
+        def __init__(self):
+            self.value = ""
+
+        def copy(self, value):
+            self.value = value
+
+        def paste(self):
+            return self.value
+
+    class FakePyAutoGUI:
+        def __init__(self, clipboard):
+            self.clipboard = clipboard
+            self.hotkeys = []
+            self.copy_count = 0
+
+        def hotkey(self, *keys):
+            self.hotkeys.append(keys)
+            if keys[-1] == "c":
+                self.copy_count += 1
+                if self.copy_count == 2:
+                    self.clipboard.value = "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=1"
+
+    engine = object.__new__(PerceptionEngine)
+    clipboard = FakeClipboard()
+    pyautogui = FakePyAutoGUI(clipboard)
+    activation_count = {"value": 0}
+
+    def activate_browser():
+        activation_count["value"] += 1
+        return {"left": 0, "top": 0, "width": 100, "height": 100}
+
+    monkeypatch.setattr(engine, "_get_browser_region", activate_browser)
+    monkeypatch.setattr("agent.tools.perception.time.sleep", lambda _seconds: None)
+
+    url = engine._copy_address_bar_url(
+        pyautogui,
+        clipboard,
+        modifier="ctrl",
+        key_pause=0.05,
+        copy_wait=0.01,
+        copy_timeout=0,
+        max_attempts=2,
+    )
+
+    assert url.endswith("rec_idx=1")
+    assert activation_count["value"] == 2
+    assert pyautogui.hotkeys == [
+        ("ctrl", "l"),
+        ("ctrl", "c"),
+        ("ctrl", "l"),
+        ("ctrl", "c"),
+    ]
+
+
+def test_address_bar_url_copy_returns_empty_after_bounded_attempts(monkeypatch):
+    from agent.tools.perception import PerceptionEngine
+
+    class FakeClipboard:
+        def copy(self, _value):
+            pass
+
+        def paste(self):
+            return ""
+
+    class FakePyAutoGUI:
+        def __init__(self):
+            self.hotkeys = []
+
+        def hotkey(self, *keys):
+            self.hotkeys.append(keys)
+
+    engine = object.__new__(PerceptionEngine)
+    pyautogui = FakePyAutoGUI()
+    activation_count = {"value": 0}
+
+    def activate_browser():
+        activation_count["value"] += 1
+        return None
+
+    monkeypatch.setattr(engine, "_get_browser_region", activate_browser)
+    monkeypatch.setattr("agent.tools.perception.time.sleep", lambda _seconds: None)
+
+    url = engine._copy_address_bar_url(
+        pyautogui,
+        FakeClipboard(),
+        modifier="ctrl",
+        key_pause=0,
+        copy_wait=0.01,
+        copy_timeout=0,
+        max_attempts=2,
+    )
+
+    assert url == ""
+    assert activation_count["value"] == 2
+    assert pyautogui.hotkeys.count(("ctrl", "c")) == 2
+
+
 def test_screen_quality_distinguishes_blank_body_from_content(monkeypatch, tmp_path):
     from PIL import ImageDraw
     from agent.tools.perception import PerceptionEngine

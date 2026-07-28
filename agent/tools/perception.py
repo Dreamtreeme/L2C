@@ -399,6 +399,7 @@ class PerceptionEngine:
 
     def get_current_url(self) -> str:
         """활성 브라우저의 주소창 URL을 클립보드 경유로 읽습니다."""
+        url = ""
         try:
             import platform
             import pyautogui
@@ -410,20 +411,18 @@ class PerceptionEngine:
             key_pause = settings.url_key_pause_sec
             copy_wait = settings.url_copy_wait_sec
             copy_timeout = settings.url_copy_timeout_sec
+            copy_attempts = settings.url_copy_attempts
             pyautogui.PAUSE = min(old_pause, key_pause)
             try:
-                pyperclip.copy("")
-                pyautogui.hotkey(modifier, "l")
-                pyautogui.hotkey(modifier, "c")
-                deadline = time.monotonic() + max(0.0, copy_timeout)
-                url = ""
-                while True:
-                    url = (pyperclip.paste() or "").strip()
-                    if url.startswith(("http://", "https://")):
-                        break
-                    if time.monotonic() >= deadline:
-                        break
-                    time.sleep(max(0.005, copy_wait))
+                url = self._copy_address_bar_url(
+                    pyautogui,
+                    pyperclip,
+                    modifier=modifier,
+                    key_pause=key_pause,
+                    copy_wait=copy_wait,
+                    copy_timeout=copy_timeout,
+                    max_attempts=copy_attempts,
+                )
             finally:
                 self.release_address_bar_focus(pyautogui, key_pause=key_pause)
                 pyautogui.PAUSE = old_pause
@@ -432,6 +431,48 @@ class PerceptionEngine:
                 return url
         except Exception as e:
             logger.debug("Failed to read current browser URL", error=str(e))
+        return ""
+
+    def _copy_address_bar_url(
+        self,
+        pyautogui_module,
+        pyperclip_module,
+        *,
+        modifier: str,
+        key_pause: float,
+        copy_wait: float,
+        copy_timeout: float,
+        max_attempts: int,
+    ) -> str:
+        """주소창 선택이나 클립보드 반영이 늦을 때 동일한 물리 입력을 제한적으로 재시도한다."""
+        max_attempts = max(1, int(max_attempts))
+        for attempt in range(1, max_attempts + 1):
+            # 새 탭 전환 직후에도 입력 대상이 브라우저임을 다시 보장한다.
+            self._get_browser_region()
+            pyperclip_module.copy("")
+            if key_pause > 0:
+                time.sleep(key_pause)
+            pyautogui_module.hotkey(modifier, "l")
+            if key_pause > 0:
+                time.sleep(key_pause)
+            pyautogui_module.hotkey(modifier, "c")
+
+            deadline = time.monotonic() + max(0.0, copy_timeout)
+            while True:
+                url = (pyperclip_module.paste() or "").strip()
+                if url.startswith(("http://", "https://")):
+                    if attempt > 1:
+                        logger.info("Browser URL copy recovered", attempt=attempt)
+                    return url
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(max(0.005, copy_wait))
+
+            logger.debug(
+                "Browser URL copy attempt failed",
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
         return ""
 
     def release_address_bar_focus(self, pyautogui_module=None, key_pause: float = 0.02) -> None:

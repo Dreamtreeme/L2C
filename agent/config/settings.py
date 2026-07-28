@@ -236,9 +236,10 @@ class VisionSettings(SectionSettings):
         le=10,
         validation_alias="VISION_LOW_INFORMATION_MAX_CAPTURE_CYCLES",
     )
-    url_key_pause_sec: float = Field(0.015, ge=0, le=2, validation_alias="VISION_URL_KEY_PAUSE_SEC")
+    url_key_pause_sec: float = Field(0.05, ge=0, le=2, validation_alias="VISION_URL_KEY_PAUSE_SEC")
     url_copy_wait_sec: float = Field(0.015, ge=0, le=2, validation_alias="VISION_URL_COPY_WAIT_SEC")
     url_copy_timeout_sec: float = Field(0.25, gt=0, le=10, validation_alias="VISION_URL_COPY_TIMEOUT_SEC")
+    url_copy_attempts: int = Field(2, ge=1, le=5, validation_alias="VISION_URL_COPY_ATTEMPTS")
     som_crop_fallback_top_px: int = Field(140, ge=0, le=2000, validation_alias="VISION_SOM_CROP_FALLBACK_TOP_PX")
     som_crop_scan_min_y: int = Field(80, ge=0, le=2000, validation_alias="VISION_SOM_CROP_SCAN_MIN_Y")
     som_crop_scan_max_y: int = Field(320, ge=1, le=4000, validation_alias="VISION_SOM_CROP_SCAN_MAX_Y")

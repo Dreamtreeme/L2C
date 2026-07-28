@@ -88,3 +88,45 @@ def test_collection_quality_counts_existing_database_jobs_as_resolved():
     assert collection["resolved_count"] == 2
     assert collection["target_fulfillment"] == 1.0
     assert collection["passed"] is True
+
+
+def test_collection_quality_rejects_search_url_saved_as_saramin_job():
+    from benchmark.quality_eval import evaluate_collection_summary
+
+    base = {
+        "target_count": 1,
+        "item_count": 1,
+        "persisted_count": 1,
+        "review": {"decision": "accept"},
+        "is_finished": True,
+    }
+    search_url_result = {
+        **base,
+        "persistence_validation": {
+            "persisted_items": [
+                {
+                    "job_id": 1,
+                    "url": "https://www.saramin.co.kr/zf_user/search?searchword=ML",
+                }
+            ]
+        },
+    }
+    detail_url_result = {
+        **base,
+        "persistence_validation": {
+            "persisted_items": [
+                {
+                    "job_id": 2,
+                    "url": "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=2",
+                }
+            ]
+        },
+    }
+
+    failed = evaluate_collection_summary(search_url_result)
+    passed = evaluate_collection_summary(detail_url_result)
+
+    assert failed["source_url_integrity"] == 0.0
+    assert failed["passed"] is False
+    assert passed["source_url_integrity"] == 1.0
+    assert passed["passed"] is True
