@@ -1552,6 +1552,14 @@ def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch
         first_perception = runtime.get_perception()
         first_actions = runtime.get_action_tools()
         assert runtime.ocr_worker_pid == 7007
+        assert runtime.resource_snapshot() == {
+            "closed": False,
+            "initialized": True,
+            "ocr_worker_pid": 7007,
+            "browser_window_bound": False,
+            "ui_model_variant_count": 0,
+            "graph_initialized": False,
+        }
 
     runtime.close_browser_after_run()
 
@@ -1591,6 +1599,7 @@ def test_vision_runtime_reuses_bound_ui_model(monkeypatch):
     assert first_model is bound_model
     assert second_model is bound_model
     assert calls == [[schemas["click_marker"]]]
+    assert runtime.resource_snapshot()["ui_model_variant_count"] == 1
 
     runtime.close()
 

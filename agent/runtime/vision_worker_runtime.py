@@ -70,6 +70,21 @@ class VisionWorkerRuntime:
         worker = getattr(som_engine, "_ocr_worker", None)
         return int(worker.pid) if worker is not None and worker.poll() is None else None
 
+    def resource_snapshot(self) -> dict[str, Any]:
+        """장기 실행 자원의 재사용 여부를 외부 관측용 값으로 반환한다."""
+
+        with self._resource_lock:
+            perception = self._perception
+            browser_window_id = getattr(perception, "_browser_window_id", None)
+            return {
+                "closed": self._closed,
+                "initialized": self.is_initialized,
+                "ocr_worker_pid": self.ocr_worker_pid,
+                "browser_window_bound": bool(browser_window_id),
+                "ui_model_variant_count": len(self._ui_models),
+                "graph_initialized": self._graph is not None,
+            }
+
     def get_perception(self) -> Any:
         with self._resource_lock:
             self._require_open()

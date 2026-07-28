@@ -63,6 +63,39 @@ def _database_jobs(db_path: Path) -> list[dict[str, Any]]:
         ]
 
 
+def _run_chat_request(client: Any, *, query: str, conversation_id: str) -> dict[str, Any]:
+    final_payload: dict[str, Any] = {}
+    event_payloads: list[dict[str, Any]] = []
+    error = ""
+    with client.stream(
+        "POST",
+        "/api/chat",
+        json={
+            "query": query,
+            "conversation_id": conversation_id,
+        },
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if not line:
+                continue
+            print(line)
+            event = _frame_payload(line, "EVENT")
+            if event is not None:
+                event_payloads.append(event)
+            final = _frame_payload(line, "FINAL")
+            if final is not None:
+                final_payload = final
+            failure = _frame_payload(line, "ERROR")
+            if failure is not None:
+                error = str(failure.get("message") or failure)
+    return {
+        "final": final_payload,
+        "events": event_payloads,
+        "error": error,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the complete L2C product chat E2E.")
     parser.add_argument("--query", required=True)
@@ -99,28 +132,14 @@ def main() -> int:
             from agent.web_server import app
 
             with TestClient(app) as client:
-                with client.stream(
-                    "POST",
-                    "/api/chat",
-                    json={
-                        "query": args.query,
-                        "conversation_id": args.conversation_id,
-                    },
-                ) as response:
-                    response.raise_for_status()
-                    for line in response.iter_lines():
-                        if not line:
-                            continue
-                        print(line)
-                        event = _frame_payload(line, "EVENT")
-                        if event is not None:
-                            event_payloads.append(event)
-                        final = _frame_payload(line, "FINAL")
-                        if final is not None:
-                            final_payload = final
-                        failure = _frame_payload(line, "ERROR")
-                        if failure is not None:
-                            error = str(failure.get("message") or failure)
+                request_result = _run_chat_request(
+                    client,
+                    query=args.query,
+                    conversation_id=args.conversation_id,
+                )
+                final_payload = dict(request_result["final"])
+                event_payloads = list(request_result["events"])
+                error = str(request_result["error"] or "")
         except Exception as exc:
             error = str(exc)
             print(f"PRODUCT_E2E_ERROR={error}")
