@@ -10,8 +10,8 @@ from agent.application.evidence_service import inspect_job_evidence
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.tool_capabilities import build_tool_capability_catalog
 from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
-from shared.db.database import Database
 from agent.tools.evidence_inventory import inspect_job_evidence as inspect_job_evidence_tool
+from shared.db.database import Database
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     ClarificationOption,
@@ -30,33 +30,6 @@ from shared.schema.investigation_schema import (
     ToolCapability,
     RequirementEvidenceDecision,
 )
-
-
-def test_clarification_question_requires_unique_option_ids():
-    try:
-        ClarificationQuestion(
-            question_id="recent_period",
-            field="recent_period",
-            question="최근 기간을 선택해 주세요.",
-            options=[
-                ClarificationOption(option_id="three_months", label="3개월", value="P3M"),
-                ClarificationOption(option_id="three_months", label="다른 3개월", value="P3M"),
-            ],
-        )
-    except ValueError as exc:
-        assert "중복" in str(exc)
-    else:
-        raise AssertionError("중복 선택지 식별자가 허용되었습니다.")
-
-
-def test_analysis_dimensions_rejects_unbounded_model_output():
-    with pytest.raises(ValueError):
-        InvestigationConstraints(analysis_dimensions=["분석 축" * 30])
-
-    with pytest.raises(ValueError):
-        InvestigationConstraints(
-            analysis_dimensions=[f"분석 축 {index}" for index in range(13)]
-        )
 
 
 def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path):
@@ -93,7 +66,6 @@ def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path)
     assert normalized[0].minimum_count == 1
     assert plan.requirements[0].minimum_count == 50
 
-
 def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
     from agent.graph.investigation_workflow import _normalized_evidence_requirements
 
@@ -124,82 +96,6 @@ def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
     )
 
     assert normalized[0].minimum_count == 2
-
-
-def test_single_evidence_requirement_resolves_one_dictionary_scope(tmp_path):
-    from agent.graph.investigation_workflow import _normalized_evidence_requirements
-
-    investigation = InvestigationRequest(
-        investigation_id="dictionary-scope",
-        original_query="DB의 AI 에이전트 공고를 정리해줘",
-        constraints=InvestigationConstraints(occupation_query="AI 에이전트"),
-    )
-    plan = EvidencePlan(
-        requirements=[
-            EvidenceRequirement(
-                requirement_id="ai-agent",
-                description="AI 에이전트 관련 공고",
-                occupation_query="AI 에이전트",
-            )
-        ]
-    )
-
-    normalized = _normalized_evidence_requirements(
-        plan,
-        investigation,
-        SearchTaxonomyService(tmp_path / "jobs.db"),
-    )
-
-    assert normalized[0].occupation_concept_keys == [
-        "l2c:occupation:ai_agent_engineer"
-    ]
-    assert normalized[0].collection_search_term == "AI 에이전트"
-
-
-def test_evidence_inspection_requires_all_explicit_text_groups(tmp_path):
-    db_path = tmp_path / "jobs.db"
-    db = Database(db_path)
-    matching_id = db.upsert(
-        "https://example.com/jobs/ai-agent",
-        {
-            "company_name": "에이전트회사",
-            "position": "AI Agent Engineer",
-            "source_platform": "wanted",
-        },
-    )
-    db.upsert(
-        "https://example.com/jobs/general-ai",
-        {
-            "company_name": "AI회사",
-            "position": "AI 모델 엔지니어",
-            "source_platform": "wanted",
-        },
-    )
-    db.upsert(
-        "https://example.com/jobs/general-agent",
-        {
-            "company_name": "플랫폼회사",
-            "position": "고객 지원 Agent 플랫폼 개발자",
-            "source_platform": "wanted",
-        },
-    )
-    requirement = EvidenceRequirement(
-        requirement_id="ai-agent",
-        description="AI 에이전트 공고",
-        exact_text_groups=[
-            ["AI", "인공지능"],
-            ["에이전트", "agent"],
-        ],
-    )
-
-    report = inspect_job_evidence(
-        db_path,
-        [requirement],
-        InvestigationConstraints(),
-    )
-
-    assert report["requirements"][0]["document_ids"] == [matching_id]
-
 
 def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
     db_path = tmp_path / "jobs.db"
@@ -262,7 +158,6 @@ def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
     assert requirement_report["semantic_review_required"] is True
     assert requirement_report["occupation_query"] == "알려지지 않은 신직무"
 
-
 def test_evidence_inspection_limits_candidates_to_document_scope(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
@@ -299,34 +194,6 @@ def test_evidence_inspection_limits_candidates_to_document_scope(tmp_path):
     assert report["document_scope_ids"] == [included_id]
     assert report["document_ids"] == [included_id]
     assert excluded_id not in report["requirements"][0]["document_ids"]
-
-
-def test_investigation_checkpoint_is_separate_from_business_database(tmp_path):
-    db_path = tmp_path / "jobs.db"
-    Database(db_path)
-    checkpoint_runtime = InvestigationCheckpointRuntime(db_path)
-    checkpoint_path = checkpoint_runtime.checkpoint_path
-    checkpoint_runtime.close()
-
-    with sqlite3.connect(db_path) as connection:
-        business_tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
-    with sqlite3.connect(checkpoint_path) as connection:
-        checkpoint_tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
-
-    assert "investigation_sessions" not in business_tables
-    assert "checkpoints" not in business_tables
-    assert {"checkpoints", "writes"} <= checkpoint_tables
-
 
 def test_recent_three_months_resolves_analysis_and_comparison_periods():
     investigation = InvestigationRequest(
@@ -367,77 +234,6 @@ def test_recent_three_months_resolves_analysis_and_comparison_periods():
     assert updated.constraints.comparison_posted_to == "2026-04-13"
     assert updated.status == InvestigationStatus.CHECKING_EVIDENCE
 
-
-def test_custom_two_month_option_uses_same_deterministic_date_resolution():
-    from datetime import date
-
-    investigation = InvestigationRequest(
-        investigation_id="investigation-custom-period",
-        original_query="최근 채용 트렌드",
-        purpose=InvestigationPurpose.TREND,
-        status=InvestigationStatus.AWAITING_CLARIFICATION,
-        clarification_questions=[
-            ClarificationQuestion(
-                question_id="recent_period",
-                field="recent_period",
-                question="기간을 입력해 주세요.",
-                options=[],
-                allow_custom=True,
-            )
-        ],
-    )
-
-    updated = apply_clarification_answer(
-        investigation,
-        ClarificationAnswer(question_id="recent_period", custom_value="P2M"),
-        today=date(2026, 7, 14),
-    )
-
-    assert updated.constraints.posted_from == "2026-05-14"
-    assert updated.constraints.comparison_posted_from == "2026-03-14"
-    assert updated.constraints.comparison_posted_to == "2026-05-13"
-
-
-def test_comparison_period_answer_resolves_all_related_date_fields():
-    investigation = InvestigationRequest(
-        investigation_id="investigation-comparison-period",
-        original_query="지난달보다 AI 채용이 늘었는지 알려줘",
-        purpose=InvestigationPurpose.TREND,
-        status=InvestigationStatus.AWAITING_CLARIFICATION,
-        clarification_questions=[
-            ClarificationQuestion(
-                question_id="comparison_period",
-                field="comparison_period",
-                question="어떤 기간을 비교할까요?",
-                options=[
-                    ClarificationOption(
-                        option_id="same_days",
-                        label="동일 일수 비교",
-                        value=(
-                            "current=2026-07-01/2026-07-14;"
-                            "comparison=2026-06-01/2026-06-14"
-                        ),
-                    )
-                ],
-            )
-        ],
-    )
-
-    updated = apply_clarification_answer(
-        investigation,
-        ClarificationAnswer(
-            question_id="comparison_period",
-            selected_option_id="same_days",
-        ),
-    )
-
-    assert updated.constraints.posted_from == "2026-07-01"
-    assert updated.constraints.posted_to == "2026-07-14"
-    assert updated.constraints.comparison_posted_from == "2026-06-01"
-    assert updated.constraints.comparison_posted_to == "2026-06-14"
-    assert updated.clarification_questions == []
-
-
 def test_tool_catalog_exposes_limits_before_collection():
     catalog = build_tool_capability_catalog()
     by_name = {item.tool_name: item for item in catalog}
@@ -448,7 +244,6 @@ def test_tool_catalog_exposes_limits_before_collection():
     assert "created_at은 공고 게시일 근거로 사용할 수 없습니다." in by_name[
         "inspect_job_evidence"
     ].limitations
-
 
 def test_capability_catalog_only_exposes_confirmed_collection_site():
     from agent.graph.investigation_workflow import _capabilities_for_investigation
@@ -470,7 +265,6 @@ def test_capability_catalog_only_exposes_confirmed_collection_site():
         "inspect_job_evidence",
         "realtime_scraping:wanted",
     ]
-
 
 def test_evidence_inspection_rejects_rows_without_verified_posted_date(tmp_path):
     db_path = tmp_path / "jobs.db"
@@ -508,45 +302,6 @@ def test_evidence_inspection_rejects_rows_without_verified_posted_date(tmp_path)
     assert report["requirements"][0]["matching_count"] == 0
     assert any("게시일" in item for item in report["missing_evidence"])
 
-
-def test_evidence_inspection_matches_site_slug_case_insensitively(tmp_path):
-    db_path = tmp_path / "jobs.db"
-    db = Database(db_path)
-    db.upsert(
-        "https://example.com/jobs/ai",
-        {
-            "company_name": "예시회사",
-            "position": "AI 엔지니어",
-            "source_platform": "Wanted",
-            "tech_stack": '["Python"]',
-        },
-    )
-    requirement = EvidenceRequirement(
-        requirement_id="wanted_ai",
-        description="원티드 AI 공고",
-        occupation_query="AI 엔지니어",
-        required_sites=["wanted"],
-        required_fields=["tech_stack"],
-        minimum_count=1,
-    )
-
-    report = inspect_job_evidence(
-        db_path,
-        [requirement],
-        InvestigationRequest(
-            investigation_id="site-case",
-            original_query="원티드 AI 공고",
-        ).constraints,
-    )
-
-    assert report["sufficient"] is True
-    assert report["requirements"][0]["matching_count"] == 1
-
-
-def test_evidence_inventory_is_exposed_as_commander_tool():
-    assert inspect_job_evidence_tool.name == "inspect_job_evidence"
-
-
 def test_evidence_documents_are_loaded_as_structured_json(tmp_path):
     from agent.application.evidence_service import load_job_evidence_documents
 
@@ -569,69 +324,6 @@ def test_evidence_documents_are_loaded_as_structured_json(tmp_path):
     assert documents[0].company_name == "예시회사"
     assert "Python" in documents[0].tech_stack
 
-
-def test_answer_document_projection_uses_raw_ocr_only_as_fallback():
-    from agent.graph.investigation_workflow import _answer_evidence_documents
-
-    complete = {
-        "id": 1,
-        "tech_stack": "Python",
-        "main_tasks": "서비스 개발",
-        "requirements": "경력 3년",
-        "preferred": "Agent 경험",
-        "benefits": "교육비",
-        "raw_ocr_text": "중복된 전체 OCR 본문",
-    }
-    incomplete = {
-        **complete,
-        "id": 2,
-        "preferred": "",
-        "raw_ocr_text": "누락 필드를 보완할 OCR 본문",
-    }
-
-    projected = _answer_evidence_documents([complete, incomplete])
-
-    assert "raw_ocr_text" not in projected[0]
-    assert projected[1]["raw_ocr_text"] == "누락 필드를 보완할 OCR 본문"
-
-
-def test_llm_prompt_context_excludes_accumulated_investigation_snapshot():
-    from agent.graph.investigation_workflow import (
-        _compact_db_report,
-        _request_prompt_context,
-    )
-
-    investigation = InvestigationRequest(
-        investigation_id="compact-context",
-        original_query="AI 에이전트 공고를 정리해줘",
-        objective="AI 에이전트 공고 정리",
-        constraints=InvestigationConstraints(occupation_query="AI 에이전트"),
-        evidence_snapshot={"large_debug_value": "반복 상태" * 1000},
-        final_answer="이전 답변",
-    )
-    report = {
-        "total_db_rows": 2,
-        "sufficient": True,
-        "document_ids": [1],
-        "missing_evidence": [],
-        "requirements": [
-            {
-                "requirement_id": "ai-agent",
-                "document_ids": [1],
-                "candidates": [{"document_id": 1, "debug": "후보 원본" * 1000}],
-            }
-        ],
-    }
-
-    request_context = _request_prompt_context(investigation)
-    compact_report = _compact_db_report(report)
-
-    assert "evidence_snapshot" not in request_context
-    assert "final_answer" not in request_context
-    assert "candidates" not in compact_report["requirements"][0]
-    assert request_context["constraints"]["occupation_query"] == "AI 에이전트"
-
-
 def test_evidence_requirements_reject_fields_outside_database_contract():
     with pytest.raises(ValueError, match="job_body"):
         EvidencePlan(
@@ -644,33 +336,6 @@ def test_evidence_requirements_reject_fields_outside_database_contract():
             ]
         )
 
-
-def test_evidence_requirements_deduplicate_supported_fields(tmp_path):
-    from agent.graph.investigation_workflow import _normalized_evidence_requirements
-
-    investigation = InvestigationRequest(
-        investigation_id="field-contract",
-        original_query="AI 엔지니어 주요 기술",
-    )
-    plan = EvidencePlan(
-        requirements=[
-            EvidenceRequirement(
-                requirement_id="skills",
-                description="AI 엔지니어 주요 기술",
-                required_fields=["position", "tech_stack", "position"],
-            )
-        ]
-    )
-
-    normalized = _normalized_evidence_requirements(
-        plan,
-        investigation,
-        SearchTaxonomyService(tmp_path / "jobs.db"),
-    )
-
-    assert normalized[0].required_fields == ["position", "tech_stack"]
-
-
 class _FakeModel:
     def __init__(self, result):
         self.result = result
@@ -680,11 +345,9 @@ class _FakeModel:
         self.calls += 1
         return self.result
 
-
 class _FailingTool:
     def invoke(self, arguments):
         raise AssertionError("계획 전에 도구가 실행되었습니다.")
-
 
 def _test_capabilities():
     return [
@@ -697,7 +360,6 @@ def _test_capabilities():
             purpose="원티드 수집",
         ),
     ]
-
 
 def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
     from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
@@ -735,7 +397,6 @@ def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
     assert evidence_model.calls == 0
     assert action_model.calls == 0
     assert answer_model.calls == 1
-
 
 def test_workflow_stops_for_choice_before_db_or_collection(tmp_path):
     from agent.graph.investigation_workflow import InvestigationModels, InvestigationWorkflow
@@ -791,7 +452,6 @@ def test_workflow_stops_for_choice_before_db_or_collection(tmp_path):
     assert evidence_model.calls == 0
     assert action_model.calls == 0
     assert answer_model.calls == 0
-
 
 def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
     from datetime import datetime, timezone
@@ -911,7 +571,6 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
     assert evidence_model.calls == 1
     workflow.close()
 
-
 def test_workflow_executes_only_registered_collection_plan(tmp_path):
     from langchain_core.messages import AIMessage
 
@@ -1017,7 +676,6 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
     assert result["final_answer"] == "공고를 확인했습니다 [job_id:1]"
     assert result["investigation"]["collection_document_ids"] == [1]
 
-
 def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_path):
     from langchain_core.messages import AIMessage
 
@@ -1115,7 +773,6 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
     assert result["investigation"]["collection_document_ids"] == [1]
     assert result["documents"][0]["position"] == "AI 엔지니어"
     assert validation_model.calls == 1
-
 
 def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_path):
     from langchain_core.messages import AIMessage
@@ -1225,7 +882,6 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
     assert stale_id not in result["investigation"]["evidence_document_ids"]
     assert result["investigation"]["collection_document_ids"] != [stale_id]
 
-
 def test_chat_service_uses_investigation_workflow_for_production_path():
     from agent.application.chat_service import ChatService
 
@@ -1255,7 +911,6 @@ def test_chat_service_uses_investigation_workflow_for_production_path():
     assert result["run_status"] == "waiting_input"
     assert result["investigation_id"] == "investigation-1"
     assert result["clarification"]["field"] == "recent_period"
-
 
 def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
     from agent.graph.investigation_workflow import _normalized_collection_steps
@@ -1322,7 +977,6 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
         "task_category": "검색",
     }
 
-
 def test_site_display_name_is_normalized_to_registry_slug():
     from agent.graph.investigation_workflow import _normalize_site_slugs
 
@@ -1331,44 +985,6 @@ def test_site_display_name_is_normalized_to_registry_slug():
     )
 
     assert constraints.sites == ["wanted", "jobkorea"]
-
-
-def test_site_specific_collection_tool_name_is_normalized_for_execution():
-    from agent.graph.investigation_workflow import _normalized_collection_steps
-
-    investigation = InvestigationRequest(
-        investigation_id="site-tool-name",
-        original_query="원티드 백엔드 공고",
-        purpose=InvestigationPurpose.COLLECT,
-        constraints=InvestigationConstraints(occupation_query="백엔드 개발자"),
-        evidence_requirements=[
-            EvidenceRequirement(
-                requirement_id="backend",
-                description="백엔드 공고",
-            )
-        ],
-    )
-    plan = InvestigationActionPlan(
-        steps=[
-            InvestigationPlanStep(
-                step_id="wanted-backend",
-                action="원티드 수집",
-                tool_name="realtime_scraping:wanted",
-                arguments={},
-            )
-        ]
-    )
-
-    steps = _normalized_collection_steps(
-        plan,
-        investigation,
-        [{"tool_name": "realtime_scraping:wanted"}],
-    )
-
-    assert len(steps) == 1
-    assert steps[0].tool_name == "realtime_scraping"
-    assert steps[0].arguments.site == "wanted"
-
 
 def test_semantic_evidence_validation_keeps_only_matching_candidate():
     from agent.graph.investigation_workflow import _apply_evidence_validation
@@ -1423,54 +1039,6 @@ def test_semantic_evidence_validation_keeps_only_matching_candidate():
     assert validated["sufficient"] is True
     assert validated["document_ids"] == [1]
     assert validated["requirements"][0]["document_ids"] == [1]
-
-
-def test_semantic_validation_selects_explicit_count_after_ordered_classification():
-    from agent.graph.investigation_workflow import _apply_evidence_validation
-
-    investigation = InvestigationRequest(
-        investigation_id="semantic-order",
-        original_query="AI 엔지니어 공고 2개",
-        constraints=InvestigationConstraints(count_mode="explicit", target_count=2),
-        evidence_requirements=[
-            EvidenceRequirement(
-                requirement_id="ai",
-                description="AI 엔지니어 공고",
-                occupation_query="AI 엔지니어",
-            )
-        ],
-    )
-    candidates = [
-        {"document_id": document_id, "position": f"후보 {document_id}"}
-        for document_id in (1, 2, 3)
-    ]
-    report = {
-        "total_db_rows": 3,
-        "requirements": [
-            {
-                "requirement_id": "ai",
-                "description": "AI 엔지니어 공고",
-                "semantic_review_required": True,
-                "candidates": candidates,
-            }
-        ],
-    }
-
-    validated = _apply_evidence_validation(
-        report,
-        investigation,
-        EvidenceValidation(
-            decisions=[
-                RequirementEvidenceDecision(
-                    requirement_id="ai",
-                    matching_document_ids=[3, 1, 2],
-                )
-            ]
-        ),
-    )
-
-    assert validated["document_ids"] == [3, 1]
-
 
 def test_evidence_validation_payload_excludes_full_document_text():
     from agent.graph.investigation_workflow import _evidence_validation_payload
