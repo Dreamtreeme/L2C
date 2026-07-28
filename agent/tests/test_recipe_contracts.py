@@ -321,6 +321,87 @@ def test_recipe_store_scopes_by_site_and_task_category(tmp_path):
     assert store.get_site_recipes("saramin", task_category="검색") == []
 
 
+def test_recipe_store_groups_input_and_submit_click(tmp_path):
+    from agent.recipe.store import RecipeStore
+
+    store = RecipeStore(tmp_path / "action-set.db")
+    saved = store.commit_recipe(
+        "saramin",
+        "검색",
+        [
+            {
+                "seq": 1,
+                "url_template": "saramin.co.kr/zf_user/",
+                "page_role": "home",
+                "action": "type_in_marker",
+                "replay_mode": "parameterized",
+                "slot_refs": ["query"],
+                "param": {"slot_name": "query"},
+                "target": {"text": "검색어"},
+                "roi_signature": {"phash": "0" * 16},
+            },
+            {
+                "seq": 2,
+                "url_template": "saramin.co.kr/zf_user/",
+                "page_role": "home",
+                "action": "click_marker",
+                "replay_mode": "fixed",
+                "target": {"text": "검색"},
+                "roi_signature": {"phash": "1" * 16},
+            },
+        ],
+        metadata={"task_category": "검색"},
+    )
+
+    recipes = store.get_by_site("saramin")
+
+    assert saved == 1
+    assert len(recipes) == 1
+    assert [
+        step["action"]
+        for step in recipes[0]["steps"]
+    ] == ["type_in_marker", "click_marker"]
+
+
+def test_recipe_store_does_not_group_actions_from_different_pages(tmp_path):
+    from agent.recipe.store import RecipeStore
+
+    store = RecipeStore(tmp_path / "separate-actions.db")
+    saved = store.commit_recipe(
+        "saramin",
+        "검색",
+        [
+            {
+                "seq": 1,
+                "url_template": "saramin.co.kr/zf_user/",
+                "page_role": "home",
+                "action": "type_in_marker",
+                "replay_mode": "parameterized",
+                "slot_refs": ["query"],
+                "param": {"slot_name": "query"},
+                "target": {"text": "검색어"},
+                "roi_signature": {"phash": "0" * 16},
+            },
+            {
+                "seq": 2,
+                "url_template": "saramin.co.kr/zf_user/search",
+                "page_role": "search",
+                "action": "click_marker",
+                "replay_mode": "fixed",
+                "target": {"text": "검색"},
+                "roi_signature": {"phash": "1" * 16},
+            },
+        ],
+        metadata={"task_category": "검색"},
+    )
+
+    recipes = store.get_by_site("saramin")
+
+    assert saved == 2
+    assert len(recipes) == 2
+    assert all(len(recipe["steps"]) == 1 for recipe in recipes)
+
+
 def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
     from PIL import Image, ImageDraw
 
@@ -391,6 +472,128 @@ def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
     assert call.args["marker_id"] == 7
     assert call.args["text"] == "AI 엔지니어"
     assert len(result["pending_action"].tool_calls) == 1
+
+
+def test_reflex_replays_input_and_submit_as_one_action_set(
+    monkeypatch,
+    tmp_path,
+):
+    from PIL import Image, ImageDraw
+
+    from agent.vision.screen_signature import compute_target_roi_signature
+    from shared.schema.recipe_schema import RecipeStep, SiteRecipe
+
+    screenshot = tmp_path / "action-set.png"
+    image = Image.new("RGB", (240, 120), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle([10, 10, 130, 40], fill="black")
+    draw.rectangle([160, 10, 220, 40], fill="gray")
+    image.save(screenshot)
+    input_signature = compute_target_roi_signature(
+        screenshot,
+        [10, 10, 130, 40],
+        [240, 120],
+    )
+    submit_signature = compute_target_roi_signature(
+        screenshot,
+        [160, 10, 220, 40],
+        [240, 120],
+    )
+
+    class FakeStore:
+        def get_site_recipes(self, site, task_category=None):
+            return [
+                (
+                    "recipe-search-set",
+                    SiteRecipe(
+                        site=site,
+                        goal="검색",
+                        steps=[
+                            RecipeStep(
+                                seq=1,
+                                action="type_in_marker",
+                                page_role="home",
+                                url_template="saramin.co.kr/zf_user/",
+                                replay_mode="parameterized",
+                                roi_signature=input_signature,
+                                target={
+                                    "text": "검색어",
+                                    "bbox_ratio": [
+                                        0.0417,
+                                        0.0833,
+                                        0.5417,
+                                        0.3333,
+                                    ],
+                                    "center_ratio": [0.2917, 0.2083],
+                                },
+                                param={"slot_name": "query"},
+                                slot_refs=["query"],
+                            ),
+                            RecipeStep(
+                                seq=2,
+                                action="click_marker",
+                                page_role="home",
+                                url_template="saramin.co.kr/zf_user/",
+                                replay_mode="fixed",
+                                roi_signature=submit_signature,
+                                target={
+                                    "text": "검색",
+                                    "bbox_ratio": [
+                                        0.6667,
+                                        0.0833,
+                                        0.9167,
+                                        0.3333,
+                                    ],
+                                    "center_ratio": [0.7917, 0.2083],
+                                },
+                            ),
+                        ],
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr(
+        "agent.recipe.store.RecipeStore",
+        lambda: FakeStore(),
+    )
+    result = reflex_node(
+        {
+            "goal": "AI 엔지니어 공고",
+            "current_url": "https://www.saramin.co.kr/zf_user/",
+            "current_page_role": "home",
+            "screen_signature": {"size": [240, 120]},
+            "recent_images": [screenshot],
+            "current_markers": [
+                {
+                    "id": 7,
+                    "bbox": [10, 10, 130, 40],
+                    "text": "검색어",
+                },
+                {
+                    "id": 8,
+                    "bbox": [160, 10, 220, 40],
+                    "text": "검색",
+                },
+            ],
+            "recipe_params": {
+                "site": "saramin",
+                "task_category": "검색",
+                "query": "AI 엔지니어",
+            },
+        }
+    )
+
+    assert "pending_action" in result, result
+    calls = result["pending_action"].tool_calls
+
+    assert result["reflex_trace"]["hit"] is True
+    assert result["pending_action"].summary == "cached action set"
+    assert [call.name for call in calls] == [
+        "type_in_marker",
+        "click_marker",
+    ]
+    assert calls[0].args["text"] == "AI 엔지니어"
+    assert calls[1].args["marker_id"] == 8
 
 
 def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):

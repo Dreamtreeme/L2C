@@ -38,7 +38,9 @@ tags:
 
 ## Active Recipe 기준
 
-활성 레시피는 다음 조건을 만족하는 클릭/입력 단계만 저장한다.
+활성 레시피는 다음 조건을 만족하는 클릭/입력 단계를 저장한다. 입력만으로는
+화면 전환이 일어나지 않고 바로 다음 제출 클릭까지 실행해야 전환되는 경우에는
+두 단계를 하나의 `transition_action_set`으로 저장한다.
 
 - `site`: 사이트 식별자.
 - `task_category`: 검색, 로그인, 결제, 사이트 탐색 같은 작업 분류.
@@ -57,8 +59,10 @@ tags:
 4. 각 후보 step에 대해 `page_role`이 현재 화면과 맞는지 확인한다.
 5. 저장된 `roi_signature.crop_rect_ratio`로 현재 스크린샷의 같은 ROI를 crop하고 pHash 거리를 검사한다.
 6. ROI가 맞으면 저장된 target 비율에 가까운 현재 OCR marker를 찾는다.
-7. 통과하면 `click_marker` 또는 `type_in_marker` 도구 호출을 만들어 `execution_node`가 기존 실행 경로로 처리한다.
-8. 전환 계약이 `unknown`이면 reasoning으로 폴백하고 같은 run 안에서 해당 `recipe_key`를 차단한다.
+7. 단일 행동이면 `click_marker` 또는 `type_in_marker` 호출 하나를 만든다.
+8. 같은 화면에서 연속으로 성공한 `type_in_marker -> click_marker`이면 두 ROI를 모두 검증한 뒤 하나의 행동 세트로 실행한다.
+9. 행동 세트의 물리 행동은 각각 기록하고, 화면 전환은 마지막 제출 클릭 뒤 한 번만 판정한다.
+10. 전환 계약이 `unknown`이면 reasoning으로 폴백하고 같은 run 안에서 해당 `recipe_key`를 차단한다.
 
 ## 승격 정책
 
@@ -69,6 +73,10 @@ Critic은 의미 판단을 담당한다. 코드는 후보를 포장하고 필수
 - `reasoning`: 현재 화면, 현재 결과, 방문 여부, 목표 개수에 따라 판단해야 하는 단계.
 
 공고 제목 클릭은 기본적으로 `reasoning`이다. 검색 열기, 검색어 입력, 검색 제출처럼 반복 증거가 있는 컨트롤만 active recipe 후보가 된다. 상세 펼치기 자동 클릭은 현재 사이트 `page_guidance.reveal_controls`에 선언된 OCR 라벨과 정확히 일치할 때만 허용한다.
+
+LLM이 한 번에 여러 행동을 생성하는 것은 허용하지 않는다. 행동 세트는 승격된
+기록에서 같은 `page_role`과 `url_template`을 가진 연속 입력·제출 단계에만
+결정론적으로 적용한다.
 
 ## 실패 처리
 

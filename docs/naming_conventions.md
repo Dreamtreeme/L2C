@@ -33,6 +33,7 @@ tags:
 | `active_recipe` | 경험 기반 탐색에서 실제 재생 가능한 활성 레시피 |
 | `recipe_step` | 레시피 안의 단일 행동 단계 |
 | `replay_step` | Critic이 fixed/parameterized로 승인한 재생 단계 |
+| `transition_action_set` | 입력처럼 단독으로 전환을 만들지 못하는 준비 행동과 제출 행동을 묶은 Reflex 실행 단위 |
 | `task_category` | 검색, 로그인, 결제, 사이트 탐색 같은 작업 카테고리 |
 | `page_role` | home, search, job_detail, popup처럼 replay 적용 범위를 나누는 화면 역할 |
 | `recipe_key` | active recipe row의 DB 식별자. `site`, `task_category`, `page_role`, ROI/target 정보로 계산 |

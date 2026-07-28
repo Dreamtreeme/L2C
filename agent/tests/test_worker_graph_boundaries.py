@@ -1,3 +1,5 @@
+import pytest
+
 from agent.graph import (
     worker_execution,
     worker_execution_dispatch,
@@ -36,6 +38,33 @@ def _execution_state(request, **overrides):
     }
     state.update(overrides)
     return state
+
+
+def test_multiple_calls_are_limited_to_reflex_transition_action_set():
+    calls = [
+        {
+            "name": "type_in_marker",
+            "args": {"marker_id": 1, "text": "AI 엔지니어"},
+            "id": "input",
+        },
+        {
+            "name": "click_marker",
+            "args": {"marker_id": 2},
+            "id": "submit",
+        },
+    ]
+
+    with pytest.raises(ValueError):
+        build_action_request("llm", "잘못된 복수 행동", calls)
+
+    request = build_action_request(
+        "reflex",
+        "검증된 행동 세트",
+        calls,
+        metadata={"execution_unit": "transition_action_set"},
+    )
+
+    assert len(request.tool_calls) == 2
 
 
 def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):

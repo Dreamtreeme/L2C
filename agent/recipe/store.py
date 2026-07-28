@@ -17,6 +17,7 @@ from typing import Any
 
 from agent.recipe.page_context import normalize_page_role
 from agent.recipe.payload_sanitizer import strip_replay_runtime_fields
+from agent.recipe.replay_actions import group_replay_action_sets
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.utils.model_dump import dump_model
 from shared.schema.recipe_schema import (
@@ -187,6 +188,40 @@ class RecipeStore:
         return f"{_RECIPE_KEY_PREFIX}{digest}"
 
     @staticmethod
+    def _recipe_key_for_action_set(
+        site: str,
+        steps: list[dict[str, Any]],
+        metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
+    ) -> str:
+        """행동 세트를 구성하는 원자 단계 키로 안정적인 레시피 키를 만든다."""
+
+        if len(steps) == 1:
+            return RecipeStore._recipe_key_for_step(
+                site,
+                steps[0],
+                metadata=metadata,
+            )
+        payload = {
+            "key_version": _RECIPE_KEY_VERSION,
+            "action_set": [
+                RecipeStore._recipe_key_for_step(
+                    site,
+                    step,
+                    metadata=metadata,
+                )
+                for step in steps
+            ],
+        }
+        digest = hashlib.sha1(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        return f"{_RECIPE_KEY_PREFIX}{digest}"
+
+    @staticmethod
     def _followup_key_for_strategy(
         strategy: dict[str, Any],
     ) -> str:
@@ -244,24 +279,35 @@ class RecipeStore:
         except (TypeError, ValueError):
             return None
 
-    def _upsert_recipe_steps(
+    def _upsert_recipe_action_set(
         self,
         site: str,
         goal: str,
-        step: dict,
+        steps: list[dict[str, Any]],
         metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
     ) -> bool:
-        """같은 ROI 레시피 키의 원자 행동을 저장하거나 갱신한다."""
+        """같은 ROI 레시피 키의 행동 세트를 저장하거나 갱신한다."""
 
-        if not isinstance(step, dict):
+        if not steps:
             return False
-        replay_step = strip_replay_runtime_fields(step)
-        if not self._step_has_required_replay_fields(replay_step):
+        replay_steps = [
+            strip_replay_runtime_fields(step)
+            for step in steps
+            if isinstance(step, dict)
+        ]
+        if len(replay_steps) != len(steps) or not all(
+            self._step_has_required_replay_fields(step)
+            for step in replay_steps
+        ):
             return False
-        recipe_key = self._recipe_key_for_step(site, replay_step, metadata=metadata)
+        recipe_key = self._recipe_key_for_action_set(
+            site,
+            replay_steps,
+            metadata=metadata,
+        )
 
         now = datetime.now().isoformat(timespec="seconds")
-        steps_payload = json.dumps([replay_step], ensure_ascii=False)
+        steps_payload = json.dumps(replay_steps, ensure_ascii=False)
         metadata_payload = self._dump_json(self._metadata_dict(metadata))
         with self._conn() as conn:
             row = conn.execute("SELECT 1 FROM recipes WHERE recipe_key=?", (recipe_key,)).fetchone()
@@ -288,13 +334,16 @@ class RecipeStore:
         steps: list[dict],
         metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
     ) -> int:
-        """성공 후보의 재생 가능한 행동을 ROI 레시피 단위로 저장한다."""
+        """성공 후보의 재생 가능한 행동을 전환 단위 행동 세트로 저장한다."""
 
         saved = 0
-        for step in steps or []:
-            if not isinstance(step, dict):
-                continue
-            if self._upsert_recipe_steps(site, goal, dict(step), metadata=metadata):
+        for action_set in group_replay_action_sets(steps):
+            if self._upsert_recipe_action_set(
+                site,
+                goal,
+                action_set,
+                metadata=metadata,
+            ):
                 saved += 1
         return saved
 
@@ -328,15 +377,38 @@ class RecipeStore:
         replay_steps: list[dict],
         metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
     ) -> int:
-        """한 후보가 만든 기존 ROI 레시피를 지우고 승인된 재생 단계만 교체 저장한다."""
+        """한 후보의 기존 ROI 레시피를 지우고 승인된 행동 세트만 교체 저장한다."""
         metadata_dict = self._metadata_dict(metadata)
-        recipe_keys = sorted(
-            {
-                self._recipe_key_for_step(site, step, metadata=metadata_dict)
-                for step in [*(source_steps or []), *(replay_steps or [])]
-                if isinstance(step, dict) and step.get("roi_signature")
+        source_step_keys = {
+            self._recipe_key_for_step(
+                site,
+                strip_replay_runtime_fields(step),
+                metadata=metadata_dict,
+            )
+            for step in [*(source_steps or []), *(replay_steps or [])]
+            if isinstance(step, dict) and step.get("roi_signature")
+        }
+        recipe_keys: list[str] = []
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT recipe_key, steps_json, metadata_json "
+                "FROM recipes WHERE site=?",
+                (site,),
+            ).fetchall()
+        for row in rows:
+            stored_steps = json.loads(row["steps_json"] or "[]")
+            stored_metadata = json.loads(row["metadata_json"] or "{}")
+            stored_step_keys = {
+                self._recipe_key_for_step(
+                    site,
+                    step,
+                    metadata=stored_metadata,
+                )
+                for step in stored_steps
+                if isinstance(step, dict)
             }
-        )
+            if source_step_keys & stored_step_keys:
+                recipe_keys.append(str(row["recipe_key"]))
         if recipe_keys:
             placeholders = ",".join("?" for _ in recipe_keys)
             with self._conn() as conn:
