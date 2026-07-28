@@ -3,7 +3,7 @@
 import json
 import os
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 

@@ -624,38 +624,3 @@ def review_and_apply_candidate(
 def _process_mode(mode: str | None) -> str:
     normalized = (mode or "review").strip().lower()
     return normalized if normalized in {"review", "promote"} else "review"
-
-
-def process_recipe_candidates(
-    limit: int = 5,
-    mode: str = "review",
-    status: str = "pending_replay",
-    db_path=None,
-    critic: CriticFn | None = None,
-) -> dict[str, Any]:
-    """저장된 후보(recipe_candidates)를 비평가 게이트(Critic gate)에 넘긴다.
-
-    스크립트 계층은 상태(status)로 후보 행만 고르고, 품질 판단은 하지 않는다.
-    """
-    from agent.recipe.candidate_store import RecipeCandidateStore
-
-    normalized_mode = _process_mode(mode)
-    safe_limit = max(0, int(limit or 0))
-    candidates = RecipeCandidateStore(db_path).list_recent(limit=safe_limit, status=status or None)
-    results = [
-        review_and_apply_candidate(
-            candidate["candidate_id"],
-            db_path=db_path,
-            critic=critic,
-            mode=normalized_mode,
-        )
-        for candidate in candidates
-    ]
-    return {
-        "mode": normalized_mode,
-        "status": status,
-        "requested_limit": safe_limit,
-        "candidate_count": len(candidates),
-        "processed_count": len(results),
-        "results": results,
-    }

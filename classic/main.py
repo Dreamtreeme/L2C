@@ -106,7 +106,7 @@ def _phase(name: str):
 
 
 def cmd_extract(args: argparse.Namespace) -> int:
-    """Playwright 브라우저를 통한 텍스트 추출 및 캡처."""
+    """Playwright 브라우저를 통한 DOM 텍스트 추출."""
     from classic.automation.capture import capture_and_extract_dom
 
     logger.info(f"▶ extract URL={args.url}")
@@ -124,8 +124,8 @@ def cmd_extract(args: argparse.Namespace) -> int:
     t0 = time.time()
 
     try:
-        with _phase("[1/2] Playwright DOM 추출 및 캡처"):
-            screenshot_path, dom_raw = capture_and_extract_dom(url=args.url, save_name=slug)
+        with _phase("[1/2] Playwright DOM 추출"):
+            dom_raw = capture_and_extract_dom(url=args.url)
 
         with _phase(f"[2/2] LLM 텍스트 정제 ({args.model or OLLAMA_MODEL})"):
             from classic.extractor.llm_engine import LLMEngine
@@ -152,12 +152,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
         )
         logger.info(f"JSON 백업 → {json_path}")
 
-        job_id = db.upsert(
-            url=args.url,
-            data=data,
-            screenshot_path=str(screenshot_path) if screenshot_path else None,
-            ocr_text_path=None,
-        )
+        job_id = db.upsert(url=args.url, data=data)
 
         elapsed = time.time() - t0
         logger.info(f"✅ 완료 (db.id={job_id}, 총 {elapsed:.1f}s)")

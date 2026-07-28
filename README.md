@@ -294,7 +294,6 @@ L2C/
 │   ├── graph/            LangGraph 연결, 상태, 도구 스키마, 핵심 노드
 │   ├── runtime/          전환·상세 OCR·카드 큐·Reflex 결정론적 런타임
 │   ├── prompts/          지휘자 프롬프트 (commander)
-│   ├── credentials/      .env 자격증명 관리 매니저
 │   ├── tools/            화면 인식(Perception)·물리 제어·실시간 수집 도구
 │   ├── sites/            지휘자용 사이트 프로필과 매뉴얼 JSON
 │   ├── recipe/           Reflex Recipe 기록·매칭·재생 보조 모듈
@@ -312,11 +311,9 @@ L2C/
 │   ├── jobs.db           수집 결과 SQLite DB 파일
 │   └── *.md/*.json       정합성 비교 리포트 및 추출 결과 캐시
 │
-├── docs/               추가 설계 관련 문서
-│   ├── design_decisions.md  기술적 설계 결정
-│   └── lessons_learned.md   트러블슈팅 및 교훈
-│
-└── scratch/            임시 테스트 및 수동 검증용 샌드박스 스크립트 (GUI 테스트, 개별 워크플로우 시뮬레이션 등)
+└── docs/               추가 설계 관련 문서
+    ├── design_decisions.md  기술적 설계 결정
+    └── lessons_learned.md   트러블슈팅 및 교훈
 ```
 
 ## 기술 스택
@@ -354,27 +351,20 @@ cd L2C
 .\setup.cmd
 
 # setup.cmd가 만든 .env에 GEMINI_API_KEY를 설정
-.\.venv-app\Scripts\Activate.ps1
 
 # 분할된 비전 작업자 그래프는 VISION_AGENT_RECURSION_LIMIT=180 기본값으로 실행
+
+# 로컬 Chat UI와 백엔드 실행
+.\run.cmd
 
 # Classic 방식 — URL 직접 입력
 python -m classic.main extract https://www.wanted.co.kr/wd/350432
 
-# Agent 방식 — 자연어 명령 (수집)
-python -m agent.main "ai 엔지니어 신입 공고 모아줘"
-
-# Agent 방식 — 자연어 질의 (적재 DB SQLite 조회)
-python -m agent.main "수집된 공고 중 신입 가능한 곳 알려줘"
-
-# 웹 Q&A 서버
-uvicorn agent.web_server:app --reload
-
 # 기본 회귀 테스트 (외부 API와 물리 브라우저 E2E 제외)
-python -m pytest -q
+.\scripts\test.cmd
 
 # 실제 외부 API 테스트를 명시적으로 포함
-python -m pytest -m external -q
+.\scripts\test.cmd -m external
 
 # 두 방식 비교. 실패 시 정상 데이터를 임의로 채우지 않음
 python -m benchmark.run_compare_jd

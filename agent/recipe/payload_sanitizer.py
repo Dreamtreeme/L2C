@@ -5,12 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-STATE_DEBUG_FIELDS = {
-    "state_key",
-    "reflex_state_key",
-    "state_anchors",
-    "before_state_key",
-    "page_state_key",
+FULL_SCREEN_SIGNATURE_FIELDS = {
     "screen_signature",
 }
 
@@ -25,17 +20,17 @@ REPLAY_RUNTIME_FIELDS = {
 }
 
 
-def strip_state_debug_fields(value: Any) -> Any:
-    """저장용 payload에서 화면상태 키와 전체 화면 디버그 서명을 제거한다."""
+def strip_full_screen_signatures(value: Any) -> Any:
+    """저장용 payload에서 ROI 재생에 필요 없는 전체 화면 서명을 제거한다."""
 
     if isinstance(value, dict):
         return {
-            key: strip_state_debug_fields(child)
+            key: strip_full_screen_signatures(child)
             for key, child in value.items()
-            if key not in STATE_DEBUG_FIELDS
+            if key not in FULL_SCREEN_SIGNATURE_FIELDS
         }
     if isinstance(value, list):
-        return [strip_state_debug_fields(item) for item in value]
+        return [strip_full_screen_signatures(item) for item in value]
     return value
 
 

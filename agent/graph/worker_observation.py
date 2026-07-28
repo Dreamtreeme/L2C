@@ -222,33 +222,4 @@ def analyze_screen_node(state: GraphState) -> dict[str, Any]:
     }
 
 
-def observe_screen_cycle(state: GraphState) -> dict[str, Any]:
-    """초기 화면 준비와 노드 단위 테스트에서 한 관찰 사이클을 합성한다."""
-
-    from agent.graph.worker_collection import apply_observation_node
-    from agent.graph.worker_selection import select_deterministic_action_node
-    from agent.graph.worker_transition import evaluate_transition_node
-
-    working = dict(state)
-    updates: dict[str, Any] = {}
-
-    def apply(result: dict[str, Any]) -> None:
-        working.update(result)
-        updates.update(result)
-
-    apply(capture_screen_node(working))
-    apply(evaluate_transition_node(working))
-    apply(select_deterministic_action_node(working))
-    if working.get("pending_action") is not None or working.get("low_information_screen"):
-        return updates
-    if not working.get("ocr_required"):
-        return updates
-
-    apply(analyze_screen_node(working))
-    apply(evaluate_transition_node(working))
-    apply(apply_observation_node(working))
-    apply(select_deterministic_action_node(working))
-    return updates
-
-
-__all__ = ["analyze_screen_node", "capture_screen_node", "observe_screen_cycle"]
+__all__ = ["analyze_screen_node", "capture_screen_node"]

@@ -86,15 +86,10 @@ def validate_site_profiles() -> tuple[SiteProfile, ...]:
     return _all_profiles()
 
 
-def clear_site_profile_cache() -> None:
-    _all_profiles.cache_clear()
-
-
 __all__ = [
     "PROFILE_FILE_NAME",
     "SITES_DIR",
     "SiteProfileError",
-    "clear_site_profile_cache",
     "get_official_site_url",
     "list_supported_sites",
     "load_site_profile",

@@ -94,7 +94,6 @@ def _effective_chat_query(
     registry = get_run_registry()
     if resume_run_id:
         previous = registry.get(resume_run_id)
-        previous_result = dict((previous or {}).get("result") or {})
         if previous and previous.get("status") == RunStatus.CANCELLED.value:
             return (
                 f"[취소된 사용자 요청]\n{previous.get('user_query') or previous.get('query', '')}\n\n"

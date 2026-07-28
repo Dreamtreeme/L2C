@@ -197,4 +197,4 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ""
 Write-Host "L2C 설치가 완료됐습니다."
 Write-Host "수집 실행 전 .env의 GEMINI_API_KEY를 설정하세요."
-Write-Host "실행: .\.venv-app\Scripts\python.exe -m agent.main `"ai 엔지니어 신입 공고 모아줘`""
+Write-Host "실행: .\run.cmd"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from agent.recipe.payload_sanitizer import strip_state_debug_fields
+from agent.recipe.payload_sanitizer import strip_full_screen_signatures
 from agent.recipe.sqlite_store import SQLiteStore
 from shared.db.reflex_schema import (
     RECIPE_CANDIDATES_INDEX_SQL,
@@ -33,7 +33,7 @@ class RecipeCandidateStore(SQLiteStore):
         review = review or {}
         if review.get("decision") != "accept" or not review.get("recipe_candidate"):
             return ""
-        clean_submission = strip_state_debug_fields(submission)
+        clean_submission = strip_full_screen_signatures(submission)
         steps = [step for step in clean_submission.get("recorded_steps", []) or [] if isinstance(step, dict)]
         if not steps:
             return ""
@@ -136,11 +136,6 @@ class RecipeCandidateStore(SQLiteStore):
             )
             return result.rowcount
 
-    def claim_next_review(self) -> dict[str, Any] | None:
-        """가장 오래 대기한 후보 하나를 원자적으로 선점한다."""
-
-        return self.claim_review()
-
     def claim_review(self, candidate_id: str | None = None) -> dict[str, Any] | None:
         """대기열의 다음 후보 또는 명시한 후보를 원자적으로 선점한다."""
 
@@ -228,8 +223,8 @@ class RecipeCandidateStore(SQLiteStore):
 
     def _row_to_item(self, row) -> dict[str, Any]:
         item = dict(row)
-        item["steps"] = strip_state_debug_fields(self.load_json(item.pop("steps_json", ""), []))
-        item["payload"] = strip_state_debug_fields(self.load_json(item.pop("payload_json", ""), {}))
+        item["steps"] = strip_full_screen_signatures(self.load_json(item.pop("steps_json", ""), []))
+        item["payload"] = strip_full_screen_signatures(self.load_json(item.pop("payload_json", ""), {}))
         item["review"] = self.load_json(item.pop("review_json", ""), {})
         item["validation"] = self.load_json(item.pop("validation_json", ""), {})
         return item

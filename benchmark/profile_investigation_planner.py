@@ -138,7 +138,6 @@ def main() -> int:
     parser.add_argument("--db", type=Path, default=ROOT / "data" / "jobs.db")
     parser.add_argument("--max-concurrency", type=int, default=3)
     args = parser.parse_args()
-    import shared.config  # noqa: F401 - 로컬 환경변수 로드를 보장한다.
 
     result = run_benchmark(
         model_name=args.model,

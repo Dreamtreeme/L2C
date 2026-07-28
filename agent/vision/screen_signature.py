@@ -10,10 +10,8 @@ from typing import Any
 from PIL import Image
 
 from agent.vision.marker_geometry import (
-    bbox_to_ratio,
     center_ratio_from_bbox,
     marker_bbox,
-    marker_center_ratio,
     ratio_rect_to_pixels,
     roi_rect_around_bbox,
 )

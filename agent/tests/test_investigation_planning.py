@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 
 import pytest
 
@@ -9,8 +8,6 @@ from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.tool_capabilities import build_tool_capability_catalog
-from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
-from agent.tools.evidence_inventory import inspect_job_evidence as inspect_job_evidence_tool
 from shared.db.database import Database
 from shared.schema.investigation_schema import (
     ClarificationAnswer,

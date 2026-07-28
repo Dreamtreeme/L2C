@@ -143,18 +143,6 @@ class Database:
                     except sqlite3.OperationalError as e:
                         logger.debug(f"컬럼 '{col}' 추가 건너뜀: {e}")
             
-            # content_hash UNIQUE 인덱스 생성 보장
-            # 반사 레시피(recipes)에 스킬 메타데이터 컬럼(metadata_json)을 보강한다.
-            recipe_columns = [
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(recipes)").fetchall()
-            ]
-            if "metadata_json" not in recipe_columns:
-                try:
-                    conn.execute("ALTER TABLE recipes ADD COLUMN metadata_json TEXT")
-                except sqlite3.OperationalError as e:
-                    logger.debug(f"recipes.metadata_json 추가 건너뜀: {e}")
-
             link_columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(job_concept_links)").fetchall()

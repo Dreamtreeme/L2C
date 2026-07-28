@@ -10,13 +10,11 @@ import json
 import logging
 import re
 import time
-from pathlib import Path
 
 import ollama
 
 from shared.config import (
     EXTRACTION_PROMPT,
-    LLM_NUM_PREDICT,
     LLM_TEMPERATURE,
     OLLAMA_HOST,
     OLLAMA_MODEL,

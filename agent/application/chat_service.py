@@ -37,18 +37,10 @@ def validate_citations(answer: str, valid_ids: list[int]) -> str:
 
 
 class ChatService:
-    """웹과 CLI가 공유하는 유일한 사용자 요청 진입점."""
+    """로컬 API가 사용하는 사용자 요청 애플리케이션 서비스."""
 
-    def __init__(self, investigation_workflow: Any = None):
+    def __init__(self, investigation_workflow: Any):
         self._investigation_workflow = investigation_workflow
-
-    def _get_investigation_workflow(self):
-        if self._investigation_workflow is None:
-            import shared.config as config
-            from agent.graph.investigation_workflow import InvestigationWorkflow
-
-            self._investigation_workflow = InvestigationWorkflow(db_path=config.DB_PATH)
-        return self._investigation_workflow
 
     def close(self) -> None:
         """서비스가 소유한 조사 체크포인트 연결을 닫는다."""
@@ -136,7 +128,9 @@ class ChatService:
             emit_run_event("planning_started", RunPhase.PLANNING, "질문을 분석하고 있습니다.")
             try:
                 raise_if_cancelled()
-                workflow_result = self._get_investigation_workflow().run(
+                if self._investigation_workflow is None:
+                    raise RuntimeError("이미 종료된 채팅 서비스입니다.")
+                workflow_result = self._investigation_workflow.run(
                     query,
                     conversation_id=conversation_id,
                     investigation_id=investigation_id,

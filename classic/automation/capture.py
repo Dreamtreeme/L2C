@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
-from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -27,9 +25,7 @@ from .sites import resolve_adapter
 logger = logging.getLogger(__name__)
 
 
-def capture_and_extract_dom(
-    url: str, save_name: str | None = None
-) -> tuple[Path | None, dict]:
+def capture_and_extract_dom(url: str) -> dict:
     """URL에서 채용공고 본문을 추출.
 
     1. URL → 사이트 어댑터 매칭
@@ -37,13 +33,7 @@ def capture_and_extract_dom(
     3. 어댑터.extract(page)에 위임
     4. {company_name, position, full_text} dict 반환
     """
-    from zoneinfo import ZoneInfo
-
     logger.info(f"[capture_and_extract_dom] URL={url}")
-
-    if save_name is None:
-        kst_now = datetime.now(ZoneInfo("Asia/Seoul"))
-        save_name = f"classic_{kst_now.strftime('%Y%m%d_%H%M%S')}"
 
     adapter = resolve_adapter(url)
     logger.info(f"사이트 어댑터: {adapter.name}")
@@ -90,5 +80,4 @@ def capture_and_extract_dom(
         finally:
             browser.close()
 
-    # 스크린샷 저장은 현재 미구현. 시그니처 호환을 위해 None 반환.
-    return None, dom_data
+    return dom_data

@@ -45,23 +45,6 @@ def find_job_id_by_url(url: str, *, db_path: str | Path | None = None) -> int | 
     return int(row[0]) if row else None
 
 
-def find_job_id_by_card_identity(
-    company_name: Any,
-    position: Any,
-    site_url: str,
-    *,
-    db_path: str | Path | None = None,
-) -> int | None:
-    """같은 사이트에서 회사명과 공고 제목이 정확히 같은 저장 공고를 찾는다."""
-
-    matches = find_job_ids_by_card_identities(
-        [(company_name, position)],
-        site_url,
-        db_path=db_path,
-    )
-    return matches[0] if matches else None
-
-
 def find_job_ids_by_card_identities(
     identities: list[tuple[Any, Any]],
     site_url: str,
@@ -148,7 +131,6 @@ def find_job_ids_by_card_identities(
 
 
 __all__ = [
-    "find_job_id_by_card_identity",
     "find_job_ids_by_card_identities",
     "find_job_id_by_url",
 ]

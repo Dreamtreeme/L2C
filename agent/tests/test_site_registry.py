@@ -308,32 +308,6 @@ def test_realtime_scraping_goal_includes_task_context():
     assert "blocked_actions" in goal
 
 
-def test_commander_site_tools_expose_registered_sites():
-    import json
-    from agent.tools.site_registry import list_collection_sites
-
-    result = list_collection_sites.invoke({"enabled_only": True})
-    data = json.loads(result)
-    sites = data["sites"]
-    slugs = [site["slug"] for site in sites]
-
-    assert slugs == ["wanted", "jobkorea", "saramin", "worknet", "rocketpunch"]
-    assert all("base_url" in site for site in sites)
-
-
-def test_commander_site_profile_tool_returns_single_profile():
-    import json
-    from agent.tools.site_registry import get_collection_site_profile
-
-    result = get_collection_site_profile.invoke({"site": "jobkorea"})
-    data = json.loads(result)
-
-    assert data["site"]["slug"] == "jobkorea"
-    assert data["profile"]["slug"] == "jobkorea"
-    assert "click_marker" in data["profile"]["tools"]["allowed_tools"]
-    assert "잡코리아" in data["profile"]["guidance"]
-
-
 def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
     from agent.sites import load_site_profile
     from agent.tools.realtime_scraping import _build_site_goal
@@ -355,11 +329,12 @@ def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
 
 def test_realtime_scraping_extracts_user_search_intent_with_llm(monkeypatch):
     from agent.sites import load_site_profile
-    from agent.tools.realtime_scraping import SearchIntent, _extract_search_intent
+    from agent.tools.realtime_scraping import _extract_search_intent
+    from shared.schema.collection_intent import CollectionIntent
 
     class FakeStructuredLLM:
         def invoke(self, messages):
-            return SearchIntent(search_keyword="ai\uc751\uc6a9\uc5d4\uc9c0\ub2c8\uc5b4", target_count=8)
+            return CollectionIntent(search_keyword="ai\uc751\uc6a9\uc5d4\uc9c0\ub2c8\uc5b4", target_count=8)
 
     class FakeLLM:
         def __init__(self, *args, **kwargs):

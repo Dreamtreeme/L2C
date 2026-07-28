@@ -88,7 +88,6 @@ class ModelSettings(SectionSettings):
     recipe_critic_model: str | None = Field(None, validation_alias="VISION_RECIPE_CRITIC_MODEL")
     ollama_host: str = Field("http://localhost:11434", validation_alias="OLLAMA_HOST")
     ollama_model: str = Field("qwen3:8b", validation_alias="OLLAMA_MODEL")
-    ollama_num_predict: int = Field(2048, ge=1, le=65536, validation_alias="LLM_NUM_PREDICT")
     detail_ollama_num_predict: int = Field(
         2048,
         ge=1,

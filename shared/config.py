@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from agent.config import get_settings
-from agent.config.settings import BASE_DIR
 
 _SETTINGS = get_settings()
 
@@ -35,7 +34,6 @@ WORKNET_API_KEY = (
     else ""
 )
 LLM_TEMPERATURE = _SETTINGS.models.llm_temperature
-LLM_NUM_PREDICT = _SETTINGS.models.ollama_num_predict
 
 # ── LLM 프롬프트 ───────────────────────────────────────────
 EXTRACTION_PROMPT = """당신은 채용공고 텍스트 정제 전문가입니다.

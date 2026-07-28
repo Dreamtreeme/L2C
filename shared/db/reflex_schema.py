@@ -127,6 +127,7 @@ def ensure_recipe_candidate_queue_schema(conn) -> None:
     for sql in RECIPE_CANDIDATES_QUEUE_INDEX_SQL:
         conn.execute(sql)
 
+
 REFLEX_MEMORY_SCHEMA = "\n".join(
     [
         FEEDBACK_EPISODES_TABLE_SQL,

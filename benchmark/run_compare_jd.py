@@ -30,7 +30,7 @@ from classic.extractor.llm_engine import LLMEngine
 def _run_classic(target_url: str) -> tuple[dict[str, Any], str, float]:
     started = time.perf_counter()
     try:
-        _, dom_raw = capture_and_extract_dom(target_url)
+        dom_raw = capture_and_extract_dom(target_url)
         full_text = dom_raw.get("full_text", "")
         if not full_text:
             raise ValueError("Playwright DOM에서 텍스트를 추출하지 못했습니다.")

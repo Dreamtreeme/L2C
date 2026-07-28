@@ -164,11 +164,6 @@ class RunContext:
         if failure_code:
             self.failure_code = str(failure_code)
 
-    def add_trace_metadata(self, **metadata: Any) -> None:
-        self.trace_metadata.update(
-            {str(key): value for key, value in metadata.items() if value is not None}
-        )
-
     def record_step(
         self,
         component: str,

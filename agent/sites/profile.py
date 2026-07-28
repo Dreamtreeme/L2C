@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -122,12 +121,6 @@ class SiteProfile(SiteModel):
         if raw in candidates or host in self.domains:
             return True
         return any(raw.endswith(domain) or host.endswith("." + domain) for domain in self.domains)
-
-    def prompt_payload(self) -> dict[str, Any]:
-        """LLM에 전달할 때 런타임 내부 필드를 제외한 구조화 선언을 반환한다."""
-
-        return self.model_dump(mode="json")
-
 
 __all__ = [
     "CollectionPolicy",

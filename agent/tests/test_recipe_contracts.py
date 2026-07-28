@@ -154,39 +154,48 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
         lambda _path: {"phash": "0" * 16, "size": [800, 600]},
     )
 
-    result = worker_observation.observe_screen_cycle(
-        {
-            "worker_run_id": "worker-no-effect",
-            "worker_attempt_index": 0,
-            "current_capture_id": "worker-no-effect:attempt:00:capture:0004",
-            "capture_sequence": 4,
-            "current_screenshot": str(screenshot),
-            "current_url": "https://example.com/jobs",
-            "current_url_stale": False,
-            "current_markers": [
-                {"id": 1, "bbox": [10, 20, 200, 60], "text": "검색"},
-            ],
-            "ui_context": "검색",
-            "marked_image": str(screenshot),
-            "screen_signature": {"phash": "0" * 16, "size": [800, 600]},
-            "current_page_role": "search",
-            "analysis_mode": "full",
-            "ocr_complete": True,
-            "reflex_blocked_recipe_keys": [],
-            "pending_transition": {
-                "action": "click_marker",
-                "action_seq": 3,
-                "from_capture_id": "worker-no-effect:attempt:00:capture:0004",
-                "source": "reflex",
-                "recipe_key": "roi#search",
-                "before_url": "https://example.com/jobs",
-                "before_phash": "0" * 16,
-                "before_screenshot": str(screenshot),
-                "started_at": time.time(),
-                "contract": {},
-            },
-        }
-    )
+    from agent.graph.worker_selection import select_deterministic_action_node
+
+    working = {
+        "worker_run_id": "worker-no-effect",
+        "worker_attempt_index": 0,
+        "current_capture_id": "worker-no-effect:attempt:00:capture:0004",
+        "capture_sequence": 4,
+        "current_screenshot": str(screenshot),
+        "current_url": "https://example.com/jobs",
+        "current_url_stale": False,
+        "current_markers": [
+            {"id": 1, "bbox": [10, 20, 200, 60], "text": "검색"},
+        ],
+        "ui_context": "검색",
+        "marked_image": str(screenshot),
+        "screen_signature": {"phash": "0" * 16, "size": [800, 600]},
+        "current_page_role": "search",
+        "analysis_mode": "full",
+        "ocr_complete": True,
+        "reflex_blocked_recipe_keys": [],
+        "pending_transition": {
+            "action": "click_marker",
+            "action_seq": 3,
+            "from_capture_id": "worker-no-effect:attempt:00:capture:0004",
+            "source": "reflex",
+            "recipe_key": "roi#search",
+            "before_url": "https://example.com/jobs",
+            "before_phash": "0" * 16,
+            "before_screenshot": str(screenshot),
+            "started_at": time.time(),
+            "contract": {},
+        },
+    }
+    result = {}
+    for node in (
+        worker_observation.capture_screen_node,
+        worker_transition.evaluate_transition_node,
+        select_deterministic_action_node,
+    ):
+        update = node(working)
+        working.update(update)
+        result.update(update)
 
     assert result["transition_reason"] == "reflex_no_screen_change"
     assert result["ocr_complete"] is True

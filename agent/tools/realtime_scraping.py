@@ -8,7 +8,6 @@ from langchain_core.tools import tool
 from agent.config import get_settings
 from agent.sites.profile import SiteProfile
 from agent.application.job_persistence_service import (
-    normalize_job_for_persistence as _normalize_job_for_persistence,
     persist_collected_data_with_report as _persist_collected_data_with_report,
 )
 from agent.application.worker_execution_service import (
@@ -16,11 +15,8 @@ from agent.application.worker_execution_service import (
     execute_worker_graph as _execute_worker_graph,
     prepare_worker_start_screen as _prepare_worker_start_screen,
     run_graph_with_last_state as _run_graph_with_last_state,
-    worker_preopen_enabled as _worker_preopen_enabled,
-    worker_start_url as _worker_start_url,
 )
 from agent.recipe.task_category import DEFAULT_SEARCH_TASK_CATEGORY, normalize_task_category
-from agent.runtime.job_collection import job_list_value as _job_list_value
 from agent.utils.model_dump import dump_model
 from shared.schema.collection_intent import (
     CollectionCountMode,
@@ -29,8 +25,6 @@ from shared.schema.collection_intent import (
 )
 
 logger = logging.getLogger(__name__)
-
-SearchIntent = CollectionIntent
 
 
 def _normalize_target_count(value: Any) -> int:
@@ -103,7 +97,6 @@ def _extract_search_intent(raw_query: str, profile: SiteProfile) -> dict[str, An
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
         from agent.application.model_clients import get_structured_google_model
-        from shared.config import BASE_DIR  # noqa: F401 - .env 로드를 보장한다.
 
         from agent.application.model_policy import lightweight_model_name
 

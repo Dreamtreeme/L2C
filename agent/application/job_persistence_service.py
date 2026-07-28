@@ -261,25 +261,8 @@ def persist_collected_data_with_report(
     }
 
 
-def persist_collected_data(
-    extracted_jd: dict,
-    keyword: str,
-    collection_intent: dict[str, Any] | None = None,
-) -> int:
-    """기존 호출자용 저장 건수 반환 인터페이스."""
-
-    return int(
-        persist_collected_data_with_report(
-            extracted_jd,
-            keyword,
-            collection_intent=collection_intent,
-        )["persisted_count"]
-    )
-
-
 __all__ = [
     "normalization_mode",
     "normalize_job_for_persistence",
-    "persist_collected_data",
     "persist_collected_data_with_report",
 ]

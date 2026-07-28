@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from agent.recipe.payload_sanitizer import strip_state_debug_fields
+from agent.recipe.payload_sanitizer import strip_full_screen_signatures
 from agent.recipe.sqlite_store import SQLiteStore
 from shared.db.reflex_schema import (
     FEEDBACK_EPISODES_INDEX_SQL,
@@ -35,7 +35,7 @@ class FeedbackStore(SQLiteStore):
         source: str = "vision_run",
         review_attempt: int = 0,
     ) -> int:
-        clean = [strip_state_debug_fields(episode) for episode in episodes or [] if isinstance(episode, dict)]
+        clean = [strip_full_screen_signatures(episode) for episode in episodes or [] if isinstance(episode, dict)]
         if not clean:
             return 0
         run_id = run_id or f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
@@ -96,6 +96,6 @@ class FeedbackStore(SQLiteStore):
         out = []
         for row in rows:
             item = dict(row)
-            item["payload"] = strip_state_debug_fields(self.load_json(item.pop("payload_json", ""), {}))
+            item["payload"] = strip_full_screen_signatures(self.load_json(item.pop("payload_json", ""), {}))
             out.append(item)
         return out

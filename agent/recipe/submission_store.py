@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from agent.recipe.payload_sanitizer import strip_state_debug_fields
+from agent.recipe.payload_sanitizer import strip_full_screen_signatures
 from agent.recipe.sqlite_store import SQLiteStore
 from shared.db.reflex_schema import WORKER_SUBMISSIONS_INDEX_SQL, WORKER_SUBMISSIONS_TABLE_SQL
 
@@ -24,7 +24,7 @@ class SubmissionStore(SQLiteStore):
         source: str = "vision_worker",
     ) -> str:
         review = review or {}
-        clean_submission = strip_state_debug_fields(submission)
+        clean_submission = strip_full_screen_signatures(submission)
         run_id = clean_submission.get("run_id") or "run-unknown"
         attempt = int(clean_submission.get("review_attempt") or 0)
         submission_id = f"{run_id}:{attempt}"
@@ -65,7 +65,7 @@ class SubmissionStore(SQLiteStore):
 
     def _row_to_item(self, row: Any) -> dict[str, Any]:
         item = dict(row)
-        item["payload"] = strip_state_debug_fields(
+        item["payload"] = strip_full_screen_signatures(
             self.load_json(item.pop("payload_json", ""), {})
         )
         item["review"] = self.load_json(item.pop("review_json", ""), {})

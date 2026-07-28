@@ -23,7 +23,6 @@ from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 from shared.schema.skill_schema import RecipeSkillMetadata
 
 
-_RECIPE_STORE_SCHEMA_VERSION = 4
 _RECIPE_KEY_VERSION = 3
 _RECIPE_KEY_PREFIX = "roi3#"
 _INITIALIZED_DB_PATHS: set[Path] = set()
@@ -57,32 +56,25 @@ class RecipeStore:
 
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS recipe_store_meta (
-                    key   TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-                """
-            )
-            version_row = conn.execute(
-                "SELECT value FROM recipe_store_meta WHERE key='schema_version'"
-            ).fetchone()
-            try:
-                current_version = int(version_row["value"]) if version_row else 0
-            except (TypeError, ValueError):
-                current_version = 0
-            needs_migration = current_version != _RECIPE_STORE_SCHEMA_VERSION
-
             row = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='recipes'"
             ).fetchone()
             if row:
-                columns = [
+                columns = {
                     item["name"]
                     for item in conn.execute("PRAGMA table_info(recipes)").fetchall()
-                ]
-                if "recipe_key" not in columns:
+                }
+                required_columns = {
+                    "recipe_key",
+                    "site",
+                    "goal",
+                    "steps_json",
+                    "metadata_json",
+                    "success_count",
+                    "created_at",
+                    "updated_at",
+                }
+                if not required_columns.issubset(columns):
                     conn.execute("DROP TABLE recipes")
 
             conn.execute(
@@ -99,39 +91,11 @@ class RecipeStore:
                 )
                 """
             )
-            columns = {
-                item["name"]
-                for item in conn.execute("PRAGMA table_info(recipes)").fetchall()
-            }
-            if "metadata_json" not in columns:
-                conn.execute("ALTER TABLE recipes ADD COLUMN metadata_json TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_recipes_site ON recipes(site)")
-            if needs_migration:
-                self._drop_legacy_recipe_tables(conn)
-                conn.execute(
-                    "DELETE FROM recipes WHERE recipe_key NOT LIKE ?",
-                    (f"{_RECIPE_KEY_PREFIX}%",),
-                )
-                self._purge_steps_missing_new_required_fields(conn)
-                self._normalize_recipe_keys(conn)
-                conn.execute(
-                    """
-                    INSERT INTO recipe_store_meta(key, value)
-                    VALUES('schema_version', ?)
-                    ON CONFLICT(key) DO UPDATE SET value=excluded.value
-                    """,
-                    (str(_RECIPE_STORE_SCHEMA_VERSION),),
-                )
-
-    @staticmethod
-    def _drop_legacy_recipe_tables(conn: sqlite3.Connection) -> None:
-        rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'recipes_legacy_%'"
-        ).fetchall()
-        for row in rows:
-            name = row["name"]
-            if isinstance(name, str) and name.startswith("recipes_legacy_"):
-                conn.execute(f'DROP TABLE "{name}"')
+            conn.execute(
+                "DELETE FROM recipes WHERE recipe_key NOT LIKE ?",
+                (f"{_RECIPE_KEY_PREFIX}%",),
+            )
 
     @staticmethod
     def _step_has_required_replay_fields(step: dict[str, Any]) -> bool:
@@ -139,102 +103,6 @@ class RecipeStore:
         if action not in {"click_marker", "type_in_marker"}:
             return False
         return bool(normalize_page_role(step.get("page_role")) and step.get("roi_signature"))
-
-    @classmethod
-    def _purge_steps_missing_new_required_fields(cls, conn: sqlite3.Connection) -> None:
-        rows = conn.execute("SELECT recipe_key, steps_json FROM recipes").fetchall()
-        for row in rows:
-            try:
-                steps = json.loads(row["steps_json"] or "[]")
-            except Exception:
-                steps = []
-            if not isinstance(steps, list) or not all(
-                isinstance(step, dict) and cls._step_has_required_replay_fields(step)
-                for step in steps
-            ):
-                conn.execute("DELETE FROM recipes WHERE recipe_key=?", (row["recipe_key"],))
-                continue
-            cleaned_steps = strip_replay_runtime_fields(steps)
-            if cleaned_steps != steps:
-                conn.execute(
-                    "UPDATE recipes SET steps_json=? WHERE recipe_key=?",
-                    (json.dumps(cleaned_steps, ensure_ascii=False), row["recipe_key"]),
-                )
-
-    @classmethod
-    def _normalize_recipe_keys(cls, conn: sqlite3.Connection) -> None:
-        """현재 키 규칙으로 다시 묶어 같은 원자 행동의 중복 레시피를 합친다."""
-
-        rows = conn.execute(
-            "SELECT recipe_key, site, goal, steps_json, metadata_json, success_count, created_at, updated_at "
-            "FROM recipes"
-        ).fetchall()
-        normalized: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            try:
-                steps = json.loads(row["steps_json"] or "[]")
-                metadata = json.loads(row["metadata_json"] or "{}")
-            except Exception:
-                continue
-            if (
-                not isinstance(steps, list)
-                or len(steps) != 1
-                or not isinstance(steps[0], dict)
-                or not cls._step_has_required_replay_fields(steps[0])
-                or not isinstance(metadata, dict)
-            ):
-                continue
-
-            step = strip_replay_runtime_fields(steps[0])
-            recipe_key = cls._recipe_key_for_step(row["site"], step, metadata=metadata)
-            candidate = {
-                "recipe_key": recipe_key,
-                "site": row["site"],
-                "goal": row["goal"] or "",
-                "steps_json": json.dumps([step], ensure_ascii=False),
-                "metadata_json": json.dumps(metadata, ensure_ascii=False),
-                "success_count": int(row["success_count"] or 0),
-                "created_at": row["created_at"] or "",
-                "updated_at": row["updated_at"] or "",
-            }
-            previous = normalized.get(recipe_key)
-            if previous is None:
-                normalized[recipe_key] = candidate
-                continue
-
-            total_success_count = previous["success_count"] + candidate["success_count"]
-            created_at = min(previous["created_at"], candidate["created_at"])
-            updated_at = max(previous["updated_at"], candidate["updated_at"])
-            winner = candidate if candidate["updated_at"] >= previous["updated_at"] else previous
-            normalized[recipe_key] = {
-                **winner,
-                "success_count": total_success_count,
-                "created_at": created_at,
-                "updated_at": updated_at,
-            }
-
-        conn.execute("DELETE FROM recipes")
-        conn.executemany(
-            """
-            INSERT INTO recipes (
-                recipe_key, site, goal, steps_json, metadata_json,
-                success_count, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    item["recipe_key"],
-                    item["site"],
-                    item["goal"],
-                    item["steps_json"],
-                    item["metadata_json"],
-                    item["success_count"],
-                    item["created_at"],
-                    item["updated_at"],
-                )
-                for item in normalized.values()
-            ],
-        )
 
     @staticmethod
     def _dump_json(payload: Any) -> str:
@@ -374,44 +242,6 @@ class RecipeStore:
                     (site, *recipe_keys),
                 )
         return self.commit_recipe(site, goal, replay_steps, metadata=metadata)
-
-    def _row_to_recipe(self, row: sqlite3.Row) -> SiteRecipe:
-        steps = [RecipeStep(**step) for step in json.loads(row["steps_json"] or "[]")]
-        metadata = RecipeSkillMetadata(**json.loads(row["metadata_json"] or "{}"))
-        return SiteRecipe(
-            site=row["site"],
-            goal=row["goal"] or "",
-            steps=steps,
-            skill_metadata=metadata,
-            success_count=row["success_count"] or 0,
-            updated_at=row["updated_at"] or "",
-        )
-
-    def get_recipe(
-        self,
-        recipe_key: str,
-        *,
-        site: str | None = None,
-        task_category: str | None = None,
-    ) -> SiteRecipe | None:
-        """recipe_key에 해당하는 활성 레시피를 site/task_category 조건으로 조회한다."""
-        conditions = ["recipe_key=?"]
-        params: list[Any] = [recipe_key]
-        if site:
-            conditions.append("site=?")
-            params.append(site)
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT recipe_key, site, goal, steps_json, metadata_json, success_count, updated_at "
-                f"FROM recipes WHERE {' AND '.join(conditions)}",
-                params,
-            ).fetchone()
-        if not row:
-            return None
-        recipe = self._row_to_recipe(row)
-        if not self._metadata_matches_task_category(recipe.skill_metadata, task_category):
-            return None
-        return recipe
 
     def get_by_site(self, site: str):
         with self._conn() as conn:
