@@ -24,6 +24,32 @@ class _DetailObservation(BaseModel):
         ),
     )
 
+    @field_validator("observed_fields", mode="before")
+    @classmethod
+    def normalize_observed_field_values(
+        cls,
+        values: Any,
+    ) -> Any:
+        """복수 근거 목록을 도구 계약의 짧은 근거 문자열로 합친다."""
+
+        if not isinstance(values, dict):
+            return values
+        normalized: Dict[str, str] = {}
+        for field, value in values.items():
+            items = (
+                value
+                if isinstance(value, (list, tuple, set))
+                else [value]
+            )
+            evidence = "; ".join(
+                str(item).strip()
+                for item in items
+                if str(item).strip()
+            )
+            if evidence:
+                normalized[str(field)] = evidence
+        return normalized
+
     @field_validator("observed_fields")
     @classmethod
     def validate_observed_fields(

@@ -438,6 +438,53 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
     assert extracted["공고목록"][0]["position"] == "iOS 개발자"
 
 
+def test_detail_action_args_compaction_is_idempotent():
+    from agent.graph.worker_execution_policy import compact_action_args
+
+    args = {
+        "page_role": "job_detail",
+        "observed_fields": {
+            "requirements": "Python",
+            "main_tasks": "API 개발",
+        },
+        "page_exhausted": True,
+    }
+
+    compacted = compact_action_args("finish_detail_reading", args)
+
+    assert compact_action_args(
+        "finish_detail_reading",
+        compacted,
+    ) == compacted
+
+
+def test_detail_observation_accepts_multiple_evidence_lines():
+    from agent.graph.action_request import build_action_request
+
+    request = build_action_request(
+        "llm",
+        "",
+        [
+            {
+                "id": "finish",
+                "name": "finish_detail_reading",
+                "args": {
+                    "observed_fields": {
+                        "main_tasks": [
+                            "API 개발",
+                            "성능 최적화",
+                        ]
+                    }
+                },
+            }
+        ],
+    )
+
+    assert request.tool_calls[0].args["observed_fields"] == {
+        "main_tasks": "API 개발; 성능 최적화"
+    }
+
+
 def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
     monkeypatch,
 ):

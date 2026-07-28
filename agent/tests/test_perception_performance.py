@@ -339,11 +339,11 @@ def test_screen_quality_preserves_sparse_search_ui(monkeypatch, tmp_path):
     image.paste((45, 58, 65), (0, 0, 800, 185))
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle((290, 220, 510, 260), radius=8, fill=(245, 245, 245))
-    draw.rectangle((300, 232, 430, 237), fill=(120, 120, 120))
+    draw.rectangle((300, 232, 400, 240), fill=(150, 150, 150))
     for row in range(4):
         y = 300 + row * 35
-        draw.rectangle((300, y, 355, y + 7), fill=(60, 60, 60))
-        draw.rectangle((440, y, 495, y + 7), fill=(60, 60, 60))
+        draw.rectangle((300, y, 360, y + 7), fill=(80, 80, 80))
+        draw.rectangle((440, y, 500, y + 7), fill=(80, 80, 80))
     image.save(image_path)
 
     engine = object.__new__(PerceptionEngine)
@@ -354,6 +354,7 @@ def test_screen_quality_preserves_sparse_search_ui(monkeypatch, tmp_path):
 
     quality = engine.screen_quality(image_path)
 
+    assert quality["dominant_ratio"] < 0.97
     assert quality["low_information"] is False
 
 

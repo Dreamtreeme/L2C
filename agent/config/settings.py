@@ -232,7 +232,7 @@ class VisionSettings(SectionSettings):
     page_quality_sample_width: int = Field(240, ge=32, le=4096, validation_alias="VISION_PAGE_QUALITY_SAMPLE_WIDTH")
     page_blank_max_stddev: float = Field(12.0, ge=0, le=255, validation_alias="VISION_PAGE_BLANK_MAX_STDDEV")
     page_blank_max_edge_mean: float = Field(3.0, ge=0, le=255, validation_alias="VISION_PAGE_BLANK_MAX_EDGE_MEAN")
-    page_blank_min_dominant_ratio: float = Field(0.96, ge=0, le=1, validation_alias="VISION_PAGE_BLANK_MIN_DOMINANT_RATIO")
+    page_blank_min_dominant_ratio: float = Field(0.97, ge=0, le=1, validation_alias="VISION_PAGE_BLANK_MIN_DOMINANT_RATIO")
     page_capture_retry_sec: float = Field(0.4, ge=0, le=30, validation_alias="VISION_PAGE_CAPTURE_RETRY_SEC")
     page_ready_timeout_sec: float = Field(15.0, gt=0, le=300, validation_alias="VISION_PAGE_READY_TIMEOUT_SEC")
     low_information_max_capture_cycles: int = Field(
