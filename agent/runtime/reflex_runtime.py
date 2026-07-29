@@ -157,8 +157,11 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
 
     try:
         from agent.recipe.matcher import is_replayable_step
-        from agent.recipe.page_context import normalize_page_role, page_role_matches
-        from agent.recipe.phash_replay import match_step_by_screen_signature
+        from agent.recipe.page_context import normalize_page_role
+        from agent.recipe.phash_replay import (
+            match_step_by_screen_signature,
+            screen_context_signature_match,
+        )
         from agent.recipe.store import RecipeStore
         from agent.recipe.text_utils import recipe_url_scope_matches, url_template
 
@@ -216,10 +219,11 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
         last_reject_reason = ""
         reject_reason_priority = {
             "capture_size_mismatch": 100,
+            "screen_context_signature_missing": 100,
             "roi_phash_distance": 90,
+            "screen_context_phash_distance": 90,
             "target_ratio_miss": 75,
             "url_scope_mismatch": 65,
-            "page_role_mismatch": 40,
         }
         reject_reason_score = -1
         reject_reason_counts: dict[str, int] = {}
@@ -323,16 +327,27 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
                     active_recipe_key
                     and action in CONTEXTUAL_REPLAY_ACTIONS
                 )
-                if (
-                    not contextual_continuation
-                    and not page_role_matches(
-                        step.get("page_role", ""),
-                        current_page_role,
+                if contextual_continuation:
+                    context_match = screen_context_signature_match(
+                        dict(step.get("screen_context_signature") or {}),
+                        dict(state.get("screen_signature") or {}),
                     )
-                ):
-                    record_rejection(recipe_key, "page_role_mismatch", step_trace)
-                    candidate_valid = False
-                    break
+                    step_trace["phash"] = context_match
+                    step_trace["match_mode"] = (
+                        context_match.get("mode")
+                        or "screen_context_phash"
+                    )
+                    if not context_match.get("matched"):
+                        record_rejection(
+                            recipe_key,
+                            str(
+                                context_match.get("reason")
+                                or "screen_context_mismatch"
+                            ),
+                            step_trace,
+                        )
+                        candidate_valid = False
+                        break
                 if (
                     action in CONTEXTUAL_REPLAY_ACTIONS
                     and not active_recipe_key
@@ -384,7 +399,7 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
                             candidate_valid = False
                             break
                     step_trace["marker_id"] = marker_id
-                else:
+                elif step_trace["match_mode"] == "none":
                     step_trace["match_mode"] = "active_recipe_context"
                 args = _reflex_action_args(step, marker_id, params=params)
                 if args is None:

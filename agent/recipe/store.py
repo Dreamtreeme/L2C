@@ -159,14 +159,13 @@ class RecipeStore:
     @staticmethod
     def _step_has_required_replay_fields(step: dict[str, Any]) -> bool:
         action = str(step.get("action") or "")
-        if not normalize_page_role(step.get("page_role")):
-            return False
         if action in TARGET_REPLAY_ACTIONS:
             return bool(step.get("roi_signature"))
         if action in CONTEXTUAL_REPLAY_ACTIONS:
             return bool(
                 str(step.get("replay_mode") or "") == "fixed"
                 and step.get("transition_contract")
+                and step.get("screen_context_signature")
             )
         return False
 
@@ -626,8 +625,6 @@ class RecipeStore:
 
         requested_task = normalize_task_category(task_category)
         requested_component = str(trigger_component or "").strip()
-        requested_trigger_role = normalize_page_role(trigger_page_role)
-        requested_page_role = normalize_page_role(page_role)
         for row in rows:
             try:
                 strategy = FollowupActionStrategy(
@@ -646,20 +643,6 @@ class RecipeStore:
                 requested_component
                 and strategy.trigger.component
                 and strategy.trigger.component != requested_component
-            ):
-                continue
-            if (
-                requested_trigger_role
-                and strategy.trigger.page_role
-                and normalize_page_role(strategy.trigger.page_role)
-                != requested_trigger_role
-            ):
-                continue
-            if (
-                requested_page_role
-                and strategy.page_role
-                and normalize_page_role(strategy.page_role)
-                != requested_page_role
             ):
                 continue
             if (

@@ -135,6 +135,44 @@ def test_roi_replay_rejects_step_without_roi_signature():
     assert trace["reason"] == "roi_signature_missing"
 
 
+def test_contextual_step_records_and_matches_screen_context():
+    from agent.recipe.phash_replay import screen_context_signature_match
+    from agent.recipe.record import record_ui_step
+
+    steps: list[dict] = []
+    record_ui_step(
+        steps,
+        {
+            "current_url": "https://www.wanted.co.kr",
+            "current_page_role": "search_overlay",
+            "screen_signature": {
+                "algorithm": "phash-dct64-v1",
+                "phash": "a" * 16,
+                "size": [1921, 2088],
+            },
+            "current_markers": [],
+        },
+        "press_key",
+        {"key": "enter", "page_role": "search_overlay"},
+        2,
+    )
+
+    saved = steps[0]["screen_context_signature"]
+    matched = screen_context_signature_match(
+        saved,
+        {"phash": "a" * 16, "size": [1921, 2088]},
+    )
+    rejected = screen_context_signature_match(
+        saved,
+        {"phash": "5" * 16, "size": [1921, 2088]},
+    )
+
+    assert saved["phash"] == "a" * 16
+    assert matched["matched"] is True
+    assert rejected["matched"] is False
+    assert rejected["reason"] == "screen_context_phash_distance"
+
+
 def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     from PIL import Image
 
@@ -603,7 +641,10 @@ def test_reflex_replays_selected_recipe_path_in_order(
 ):
     from PIL import Image, ImageDraw
 
-    from agent.vision.screen_signature import compute_target_roi_signature
+    from agent.vision.screen_signature import (
+        compute_screen_signature,
+        compute_target_roi_signature,
+    )
     from shared.schema.recipe_schema import RecipeStep, SiteRecipe
 
     input_screen = tmp_path / "recipe-path-input.png"
@@ -625,6 +666,14 @@ def test_reflex_replays_selected_recipe_path_in_order(
         submit_screen,
         [160, 10, 220, 40],
         [240, 120],
+    )
+    input_screen_context = compute_screen_signature(
+        input_screen,
+        [],
+    )
+    submit_screen_context = compute_screen_signature(
+        submit_screen,
+        [],
     )
 
     class FakeStore:
@@ -681,6 +730,7 @@ def test_reflex_replays_selected_recipe_path_in_order(
                                 url_template="saramin.co.kr/zf_user/",
                                 replay_mode="fixed",
                                 param={"key": "enter"},
+                                screen_context_signature=submit_screen_context,
                                 expected_after="검색 결과가 표시된다.",
                                 transition_contract={
                                     "common_ready_cues": [
@@ -704,8 +754,8 @@ def test_reflex_replays_selected_recipe_path_in_order(
         {
             "goal": "AI 엔지니어 공고",
             "current_url": "https://www.saramin.co.kr/zf_user/",
-            "current_page_role": "home",
-            "screen_signature": {"size": [240, 120]},
+            "current_page_role": "search",
+            "screen_signature": input_screen_context,
             "recent_images": [input_screen],
             "current_markers": [
                 {
@@ -765,10 +815,9 @@ def test_reflex_replays_selected_recipe_path_in_order(
         {
             "goal": "AI 엔지니어 공고",
             "current_url": "https://www.saramin.co.kr/zf_user/",
-            # 앞 단계 전환이 검증된 활성 경로의 문맥 행동은
-            # 일시적으로 달라진 화면 역할 이름 때문에 중단하지 않는다.
+            # 화면 역할 이름이 달라도 자율탐색 때 기록한 화면과 같으면 재생한다.
             "current_page_role": "search",
-            "screen_signature": {"size": [240, 120]},
+            "screen_signature": submit_screen_context,
             "recent_images": [submit_screen],
             "current_markers": [],
             "recipe_params": {
@@ -784,6 +833,11 @@ def test_reflex_replays_selected_recipe_path_in_order(
     assert third["pending_action"].tool_calls[0].name == "press_key"
     assert third["pending_action"].tool_calls[0].args["key"] == "enter"
     assert third["active_reflex_recipe"]["next_step_index"] == 3
+    third_step_trace = next(
+        iter(third["reflex_trace"]["tool_calls"].values())
+    )
+    assert third_step_trace["match_mode"] == "screen_context_phash"
+    assert third_step_trace["phash"]["distance"] == 0
 
 
 def test_active_reflex_recipe_is_cleared_only_after_final_transition():
@@ -1228,6 +1282,10 @@ def test_contextual_followup_is_promoted_and_selected(tmp_path):
                 "declared_page_role": "search_overlay",
                 "action": "press_key",
                 "param": {"key": "enter"},
+                "screen_context_signature": {
+                    "phash": "2" * 16,
+                    "size": [1920, 1080],
+                },
                 "expected_after": "검색 결과가 표시된다.",
             },
         ]
@@ -1355,6 +1413,37 @@ def test_contextual_followup_is_promoted_and_selected(tmp_path):
         {
             "current_url": "https://www.wanted.co.kr/search",
             "current_page_role": "home",
+            "screen_signature": {
+                "phash": "2" * 16,
+                "size": [1920, 1080],
+            },
+            "recipe_params": {"task_category": "검색"},
+        },
+        {
+            "status": "ready",
+            "action": "type_in_marker",
+            "step": {
+                "component": "search_input",
+                "page_role": "home",
+            },
+        },
+        db_path=db_path,
+    )
+
+    assert trace["hit"] is True
+    assert request is not None
+    assert request.source == "followup_strategy"
+    assert request.tool_calls[0].name == "press_key"
+    assert request.tool_calls[0].args["key"] == "enter"
+
+    rejected_request, rejected_trace = select_followup_after_transition(
+        {
+            "current_url": "https://www.wanted.co.kr/search",
+            "current_page_role": "search_overlay",
+            "screen_signature": {
+                "phash": "d" * 16,
+                "size": [1920, 1080],
+            },
             "recipe_params": {"task_category": "검색"},
         },
         {
@@ -1368,11 +1457,8 @@ def test_contextual_followup_is_promoted_and_selected(tmp_path):
         db_path=db_path,
     )
 
-    assert trace["hit"] is True
-    assert request is not None
-    assert request.source == "followup_strategy"
-    assert request.tool_calls[0].name == "press_key"
-    assert request.tool_calls[0].args["key"] == "enter"
+    assert rejected_request is None
+    assert rejected_trace["reason"] == "screen_context_phash_distance"
 
 
 def test_queue_phash_match_records_return_transition(monkeypatch):
@@ -1517,6 +1603,10 @@ def test_detail_completion_promotes_go_back_followup(tmp_path):
             "declared_page_role": "job_detail",
             "action": "go_back",
             "param": {},
+            "screen_context_signature": {
+                "phash": "3" * 16,
+                "size": [1920, 1080],
+            },
             "expected_after": "검색 결과 목록이 표시된다.",
         }
     )
@@ -1620,6 +1710,10 @@ def test_detail_completion_promotes_go_back_followup(tmp_path):
         {
             "current_url": "https://www.wanted.co.kr/wd/999",
             "current_page_role": "job_detail",
+            "screen_signature": {
+                "phash": "3" * 16,
+                "size": [1920, 1080],
+            },
             "recipe_params": {"task_category": "검색"},
         },
         trigger_action="finish_detail_reading",

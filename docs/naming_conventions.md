@@ -36,11 +36,12 @@ tags:
 | `stable_recipe_path` | 한 성공 실행에서 연속 검증된 행동의 순서가 보존된 Reflex 저장·실행 단위 |
 | `active_reflex_recipe` | 한 번 선택한 안정 경로의 레시피 키, 다음 단계 번호, 전체 단계 수를 보관하는 작업 상태 |
 | `task_category` | 검색, 로그인, 결제, 사이트 탐색 같은 작업 카테고리 |
-| `page_role` | home, search, job_detail, popup처럼 replay 적용 범위를 나누는 화면 역할 |
+| `page_role` | home, search, job_detail, popup처럼 행동 당시 화면을 설명하는 관측 메타데이터 |
 | `recipe_key` | active recipe row의 DB 식별자. `site`, `task_category`와 전체 단계의 순서·의미로 계산 |
 | `recipe_params` | 반복 실행 시 주입되는 런타임 입력값 |
 | `screen_signature` | 현재 전체 화면 관찰 서명. 기본 replay 판단용 이름으로 쓰지 않는다 |
 | `roi_signature` | 타깃 주변 crop의 pHash 서명. active replay 판단의 기준 |
+| `screen_context_signature` | 좌표 없는 행동 직전 화면의 축약 pHash 서명. 해당 단계의 active replay 판단 기준 |
 | `target_snapshot` | 특정 행동 대상의 text, bbox, ratio, label 등 관찰 스냅샷 |
 | `job_card_queue` | 채용 검색 결과에서 수집할 공고 카드 작업 큐 |
 | `job_results_memory` | 공고 카드 큐를 만든 검색 결과 화면의 복귀 검증용 기억 |
@@ -154,7 +155,7 @@ tags:
 - `recipe`: 단독 사용 금지. `recipe_candidate`, `active_recipe`, `site_recipe`, `recipe_step` 중 하나를 쓴다.
 - `metadata`: 단독 사용 지양. `skill_metadata`, `target_metadata`, `promotion_metadata`처럼 범위를 붙인다.
 - `signature`: 단독 사용 지양. `screen_signature`, `roi_signature`로 구분한다.
-- `state_key`: 새 active recipe 코드에서 사용하지 않는다. 저장/조회는 `recipe_key`, `site`, `task_category`, `page_role`, `roi_signature` 기준으로 한다.
+- `state_key`: 새 active recipe 코드에서 사용하지 않는다. 저장/조회는 `recipe_key`, `site`, `task_category`, URL 범위와 단계별 `roi_signature` 또는 `screen_context_signature`를 기준으로 한다.
 - `similar`, `similarity`: active replay 기본 경로에는 쓰지 않는다. ROI replay는 `roi_phash_distance`, `target_ratio_miss`처럼 명확한 실패 사유를 쓴다.
 - `data`, `info`, `item`: 지역 범위가 5줄 이상이면 더 구체적인 이름으로 바꾼다.
 
@@ -191,7 +192,7 @@ def test_candidate_promotion_skips_non_target_action():
 1. [완료] `target_snapshot` 생성 로직을 `agent/vision/target_snapshot.py`로 공통화한다.
 2. [완료] `nodes.py`를 책임별 `worker_*` 모듈로 분리하고 원본 파일을 삭제한다.
 3. [완료] `candidate_reviewer.py`에서 promotion 로직을 `candidate_promotion.py`로 분리한다.
-4. [완료] `RecipeStore` 조회를 `recipe_key + site + task_category + page_role + roi_signature` 기준으로 정리한다.
+4. [완료] `RecipeStore` 조회를 `recipe_key + site + task_category + URL 범위 + 단계별 화면 서명` 기준으로 정리한다.
 5. [완료] `investigation_workflow.py`를 조립부와 요청·근거·수집·답변 노드로 분리한다.
 6. [완료] 모델 변환과 좌표 계산을 `utils/model_dump.py`, `vision/marker_geometry.py`, `vision/target_snapshot.py`로 통합한다.
 7. [완료] `realtime_scraping.py`에서 요청 생성, 작업자 실행과 제출물 처리를 분리한다.

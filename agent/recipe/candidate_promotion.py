@@ -313,6 +313,9 @@ def _followup_strategy(
         "url_template": str(step.get("url_template") or ""),
         "action": action,
         "param": param,
+        "screen_context_signature": dict(
+            step.get("screen_context_signature") or {}
+        ),
         "expected_after": str(step.get("expected_after") or ""),
         "transition_contract": dict(contract or {}),
     }
@@ -523,19 +526,16 @@ def _promotable_followup_strategies(
                 }
             )
             continue
-        page_role = _followup_page_role(
-            step,
-            page_roles.get(seq, ""),
-        )
-        if not page_role:
+        if not step.get("screen_context_signature"):
             skipped.append(
                 {
                     "seq": seq,
                     "action": action,
-                    "reason": "page_role_missing",
+                    "reason": "screen_context_signature_missing",
                 }
             )
             continue
+        page_role = _followup_page_role(step, page_roles.get(seq, ""))
         strategy = _followup_strategy(
             candidate,
             step,

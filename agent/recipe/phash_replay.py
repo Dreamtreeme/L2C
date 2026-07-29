@@ -71,7 +71,11 @@ def capture_context_match(
     """반응형 레이아웃이 달라질 정도의 캡처 크기 차이를 먼저 차단한다."""
 
     saved_context = dict(saved.get("capture_context") or {})
-    saved_size = _capture_size(saved_context.get("size") or saved.get("source_size"))
+    saved_size = _capture_size(
+        saved_context.get("size")
+        or saved.get("source_size")
+        or saved.get("size")
+    )
     current_context = dict((current_signature or {}).get("capture_context") or {})
     current_size = _capture_size(current_context.get("size") or (current_signature or {}).get("size"))
     if not current_size and current_image_path:
@@ -143,6 +147,54 @@ def roi_signature_match(
         "max_distance": max_distance,
         "mode": "roi_phash",
         "crop_rect_ratio": crop_rect_ratio,
+    }
+
+
+def screen_context_signature_match(
+    saved: dict[str, Any],
+    current_signature: dict[str, Any],
+) -> dict[str, Any]:
+    """좌표 없는 행동 직전 화면이 자율탐색 기록과 같은지 확인한다."""
+
+    saved_phash = str((saved or {}).get("phash") or "")
+    current_phash = str((current_signature or {}).get("phash") or "")
+    if not saved_phash or not current_phash:
+        return {
+            "matched": False,
+            "reason": "screen_context_signature_missing",
+            "distance": None,
+            "mode": "screen_context_phash",
+        }
+    context_result = capture_context_match(
+        dict(saved or {}),
+        dict(current_signature or {}),
+        "",
+    )
+    if not context_result.get("matched"):
+        return {
+            **context_result,
+            "distance": None,
+            "mode": "screen_context_phash",
+        }
+    distance = hamming_distance(saved_phash, current_phash)
+    if distance is None:
+        return {
+            "matched": False,
+            "reason": "screen_context_phash_missing",
+            "distance": None,
+            "mode": "screen_context_phash",
+        }
+    max_distance = get_settings().reflex.screen_context_phash_max_distance
+    return {
+        "matched": distance <= max_distance,
+        "reason": (
+            "screen_context_matched"
+            if distance <= max_distance
+            else "screen_context_phash_distance"
+        ),
+        "distance": distance,
+        "max_distance": max_distance,
+        "mode": "screen_context_phash",
     }
 
 

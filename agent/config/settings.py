@@ -324,6 +324,12 @@ class ReflexSettings(SectionSettings):
     no_effect_phash_max_distance: int = Field(2, ge=0, le=64, validation_alias="REFLEX_NO_EFFECT_PHASH_MAX_DISTANCE")
     visual_change_pixel_threshold: int = Field(8, ge=0, le=255, validation_alias="REFLEX_VISUAL_CHANGE_PIXEL_THRESHOLD")
     visual_change_min_ratio: float = Field(0.03, ge=0, le=1, validation_alias="REFLEX_VISUAL_CHANGE_MIN_RATIO")
+    screen_context_phash_max_distance: int = Field(
+        16,
+        ge=0,
+        le=64,
+        validation_alias="REFLEX_SCREEN_CONTEXT_PHASH_MAX_DISTANCE",
+    )
     job_card_return_phash_max_distance: int = Field(16, ge=0, le=64, validation_alias="VISION_JOB_CARD_RETURN_PHASH_MAX_DISTANCE")
     job_card_return_min_anchor_overlap: float = Field(0.20, ge=0, le=1, validation_alias="VISION_JOB_CARD_RETURN_MIN_ANCHOR_OVERLAP")
     job_card_queue_enabled: bool = Field(True, validation_alias="VISION_JOB_CARD_QUEUE_ENABLED")

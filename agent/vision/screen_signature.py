@@ -253,3 +253,24 @@ def compute_screen_signature(image_path: str | Path, markers: list[dict[str, Any
         "anchors": anchor_texts(markers),
     }
     return signature
+
+
+def compact_screen_context_signature(
+    screen_signature: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """경험 기반 탐색에 필요한 화면 비교 필드만 보존한다."""
+
+    signature = dict(screen_signature or {})
+    phash = str(signature.get("phash") or "")
+    size = signature.get("size")
+    if not phash or not isinstance(size, (list, tuple)) or len(size) != 2:
+        return {}
+    out = {
+        "algorithm": str(signature.get("algorithm") or "phash-dct64-v1"),
+        "phash": phash,
+        "size": [int(size[0]), int(size[1])],
+    }
+    capture_context = dict(signature.get("capture_context") or {})
+    if capture_context:
+        out["capture_context"] = capture_context
+    return out

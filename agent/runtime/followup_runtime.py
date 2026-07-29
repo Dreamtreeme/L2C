@@ -7,6 +7,7 @@ from typing import Any
 from agent.graph.action_request import ActionRequest, build_action_request
 from agent.graph.state import GraphState
 from agent.recipe.page_context import normalize_page_role
+from agent.recipe.phash_replay import screen_context_signature_match
 from agent.recipe.store import RecipeStore
 from agent.recipe.task_category import normalize_task_category
 from agent.recipe.text_utils import url_template
@@ -74,6 +75,20 @@ def select_followup_action(
         }
 
     strategy_key, strategy = match
+    context_match = screen_context_signature_match(
+        dict(strategy.screen_context_signature or {}),
+        dict(state.get("screen_signature") or {}),
+    )
+    if not context_match.get("matched"):
+        return None, {
+            "hit": False,
+            "reason": str(
+                context_match.get("reason")
+                or "screen_context_mismatch"
+            ),
+            "strategy_key": strategy_key,
+            "screen_context": context_match,
+        }
     allowed_keys = _ACTION_PARAMETER_KEYS.get(strategy.action)
     if allowed_keys is None:
         return None, {
@@ -128,6 +143,7 @@ def select_followup_action(
         "task_category": task_category,
         "trigger": trigger,
         "action": strategy.action,
+        "screen_context": context_match,
     }
 
 

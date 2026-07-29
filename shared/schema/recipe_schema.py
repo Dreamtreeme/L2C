@@ -59,6 +59,10 @@ class RecipeStep(BaseModel):
 
     seq: int = Field(..., description="단계 순서(step index)")
     roi_signature: Dict[str, Any] = Field(default_factory=dict, description="타깃 주변 ROI pHash 서명(ROI signature)")
+    screen_context_signature: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="좌표 없는 행동 직전의 화면 pHash 서명(screen context signature)",
+    )
     url_template: str = Field("", description="URL 템플릿(url template)")
     page_role: str = Field("", description="행동을 기록한 화면 역할(page role)")
     observed_page_role: str = Field("", description="코드가 관찰한 화면 역할(observed page role)")
@@ -102,6 +106,10 @@ class FollowupActionStrategy(BaseModel):
     url_template: str = Field("", description="후속 행동을 기록한 URL 템플릿(url template)")
     action: str = Field(..., description="후속 도구 이름(follow-up action)")
     param: Dict[str, Any] = Field(default_factory=dict, description="도구 실행 인자(action parameters)")
+    screen_context_signature: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="후속 행동 직전의 화면 pHash 서명(screen context signature)",
+    )
     expected_after: str = Field("", description="행동 뒤 기대 화면 변화(expected after)")
     transition_contract: TransitionContract
     success_count: int = Field(1, ge=0, description="성공 누적 횟수(success count)")

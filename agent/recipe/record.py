@@ -8,13 +8,17 @@ from __future__ import annotations
 from agent.recipe.matcher import marker_ordinal, marker_region
 from agent.recipe.page_context import normalize_page_role
 from agent.recipe.replay_actions import (
+    CONTEXTUAL_REPLAY_ACTIONS,
     RECORDED_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
 from agent.recipe.text_utils import normalize_text, url_template
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox, marker_center
-from agent.vision.screen_signature import compute_target_roi_signature
+from agent.vision.screen_signature import (
+    compact_screen_context_signature,
+    compute_target_roi_signature,
+)
 from agent.vision.target_snapshot import build_marker_target_snapshot, marker_by_id
 
 def _has_letter(text: str) -> bool:
@@ -207,6 +211,12 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
         elif action_name == "switch_tab":
             step["value"] = args.get("direction")
             step["param"] = {"direction": step["value"]}
+        if action_name in CONTEXTUAL_REPLAY_ACTIONS:
+            context_signature = compact_screen_context_signature(
+                screen_signature
+            )
+            if context_signature:
+                step["screen_context_signature"] = context_signature
         recorded_steps.append(step)
     except Exception as e:
         logger.debug("reflex record_ui_step skipped", error=str(e))
