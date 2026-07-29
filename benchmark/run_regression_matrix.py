@@ -12,11 +12,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_MATRIX = Path(__file__).with_name("e2e_regression_matrix.json")
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+from agent.observability.reflex_paths import summarize_reflex_paths
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -43,6 +44,7 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
     experience_preconditions = dict(
         payload.get("experience_guided_preconditions") or {}
     )
+    reflex_paths = summarize_reflex_paths(steps)
     return {
         "status": payload.get("status"),
         "quality_passed": bool(quality.get("passed")),
@@ -70,6 +72,7 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
             and item.get("action_source") == "reflex"
             for item in steps
         ),
+        **reflex_paths,
         "queue_count": sum(
             item.get("stage") == "selection"
             and item.get("action_source") == "job_card_queue"

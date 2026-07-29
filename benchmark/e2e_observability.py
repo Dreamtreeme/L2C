@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.observability.stages import stage_for_component
+from agent.observability.reflex_paths import summarize_reflex_paths
 
 
 def _as_int(value: Any) -> int:
@@ -100,6 +101,7 @@ def build_e2e_observability(summary: dict[str, Any]) -> dict[str, Any]:
     reasoning_calls = sum(
         1 for item in llm_calls if item.get("component") == "vision_reasoning"
     )
+    reflex_paths = summarize_reflex_paths(steps)
 
     return {
         "outcome": outcome,
@@ -130,6 +132,7 @@ def build_e2e_observability(summary: dict[str, Any]) -> dict[str, Any]:
             int(passed) if failed_steps else None
         ),
         "reflex_hits": reflex_hits,
+        **reflex_paths,
         "queue_replay_hits": queue_replay_hits,
         "followup_hits": followup_hits,
         "internal_failure_codes": sorted(
@@ -162,6 +165,14 @@ def build_langsmith_feedback(observability: dict[str, Any]) -> list[dict[str, An
         "recovered_failure_count",
         "recovery_success",
         "reflex_hits",
+        "reflex_step_hit_count",
+        "reflex_path_started_count",
+        "reflex_path_completed_count",
+        "reflex_path_failed_count",
+        "reflex_path_mid_failure_count",
+        "reflex_path_fallback_count",
+        "reflex_path_incomplete_count",
+        "reflex_path_completion_rate",
         "queue_replay_hits",
         "followup_hits",
     )

@@ -260,6 +260,7 @@ class WorkerExecutionContext:
                 (self.state.get("reflex_trace", {}) or {}).get("recipe_key")
                 or ""
             )
+        request_metadata = dict(self.action_request.metadata or {})
         recent_images = self.state.get("recent_images", []) or []
         self.transition_request = {
             "action_seq": action_sequence,
@@ -272,6 +273,8 @@ class WorkerExecutionContext:
             "expected_after": str(args.get("expected_after") or ""),
             "source": source,
             "recipe_key": recipe_key,
+            "recipe_step_index": request_metadata.get("step_index"),
+            "recipe_step_count": request_metadata.get("step_count"),
             "strategy_key": strategy_key,
             "tool_call_id": tool_call_id,
             "step": self.transition_step(

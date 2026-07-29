@@ -19,6 +19,10 @@ from agent.graph.worker_transition import transition_node
 from agent.graph.worker_execution import execution_node
 from agent.graph.worker_state import return_to_job_results_for_url
 from agent.observability.graph_events import graph_step
+from agent.observability.reflex_paths import (
+    reflex_selection_observation,
+    reflex_transition_observation,
+)
 from agent.utils.logger import logger
 
 
@@ -157,6 +161,10 @@ def _instrument_node(name: str, node: Callable[[GraphState], dict[str, Any]]):
                 ]
             if name == "ocr" and isinstance(result, dict):
                 observation["analysis_mode"] = str(result.get("analysis_mode") or "full")
+            if name == "reflex" and isinstance(result, dict):
+                observation.update(reflex_selection_observation(result))
+            if name == "transition" and isinstance(result, dict):
+                observation.update(reflex_transition_observation(result))
             if name == "reasoning":
                 observation["reasoning_mode"] = (
                     "card_selection" if action_source == "card_selector" else "general"

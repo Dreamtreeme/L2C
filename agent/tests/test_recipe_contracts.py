@@ -3,6 +3,7 @@ import time
 from agent.graph import (
     worker_execution_dispatch,
     worker_observation,
+    worker_selection,
     worker_transition,
 )
 from agent.graph.worker_reflex import reflex_node
@@ -764,7 +765,9 @@ def test_reflex_replays_selected_recipe_path_in_order(
         {
             "goal": "AI 엔지니어 공고",
             "current_url": "https://www.saramin.co.kr/zf_user/",
-            "current_page_role": "home",
+            # 앞 단계 전환이 검증된 활성 경로의 문맥 행동은
+            # 일시적으로 달라진 화면 역할 이름 때문에 중단하지 않는다.
+            "current_page_role": "search",
             "screen_signature": {"size": [240, 120]},
             "recent_images": [submit_screen],
             "current_markers": [],
@@ -1723,6 +1726,59 @@ def test_target_phash_wait_skips_capture_until_match(monkeypatch):
         "ocr_complete": False,
         "transition_probe_unchanged": True,
     }
+
+
+def test_target_phash_timeout_falls_back_to_ocr_once():
+    request = {
+        "action": "go_back",
+        "source": "llm",
+        "pending_target_phash": "0" * 16,
+        "pending_target_max_distance": 9,
+        "started_at": time.time() - 2.0,
+        "attempts": 2,
+        "contract": {"timeout_sec": 1.0},
+    }
+
+    transition = worker_transition.transition_node(
+        {
+            "transition_request": request,
+            "transition_probe_unchanged": True,
+            "ocr_complete": False,
+        }
+    )
+    assert transition["transition_request"] == {}
+    assert transition["transition_result"]["status"] == "unknown"
+    assert transition["transition_result"]["needs_ocr"] is True
+
+    selection = worker_selection.selection_node(
+        {
+            "current_url": "https://www.wanted.co.kr/search",
+            "ocr_complete": False,
+            "raw_screen_signature": {
+                "phash": "f" * 16,
+                "size": [1000, 1000],
+            },
+            "transition_request": {},
+            "transition_result": transition["transition_result"],
+            "job_card_queue": [
+                {
+                    "queue_id": "card-2",
+                    "status": "pending",
+                    "title": "두 번째 iOS 개발자",
+                    "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+                }
+            ],
+            "job_results_memory": {
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
+                },
+            },
+            "active_job_card": {},
+        }
+    )
+
+    assert "transition_request" not in selection
 
 
 def test_candidate_promotion_blocks_no_effect_step(tmp_path):

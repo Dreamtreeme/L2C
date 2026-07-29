@@ -133,6 +133,19 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             if str(key)
         ]
         active_recipe_key = str(active_recipe.get("recipe_key") or "")
+        if active_recipe_key:
+            reflex_trace.update(
+                {
+                    "recipe_key": active_recipe_key,
+                    "recipe_step_index": int(
+                        active_recipe.get("next_step_index") or 0
+                    ),
+                    "recipe_step_count": int(
+                        active_recipe.get("step_count") or 0
+                    ),
+                    "path_failed": True,
+                }
+            )
         if active_recipe_key and active_recipe_key not in blocked_keys:
             blocked_keys.append(active_recipe_key)
         return {
@@ -306,7 +319,17 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
                     record_rejection(recipe_key, "url_scope_mismatch", step_trace)
                     candidate_valid = False
                     break
-                if not page_role_matches(step.get("page_role", ""), current_page_role):
+                contextual_continuation = bool(
+                    active_recipe_key
+                    and action in CONTEXTUAL_REPLAY_ACTIONS
+                )
+                if (
+                    not contextual_continuation
+                    and not page_role_matches(
+                        step.get("page_role", ""),
+                        current_page_role,
+                    )
+                ):
                     record_rejection(recipe_key, "page_role_mismatch", step_trace)
                     candidate_valid = False
                     break
@@ -465,10 +488,10 @@ def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
             "actions": [call["name"] for call in tool_calls],
             "tool_calls": tool_call_traces,
             "recipe_step_index": (
-                step_index if step_count > 1 else None
+                step_index
             ),
             "recipe_step_count": (
-                step_count if step_count > 1 else None
+                step_count
             ),
         }
         return {

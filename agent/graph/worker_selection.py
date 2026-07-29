@@ -233,6 +233,7 @@ def selection_node(state: GraphState) -> dict[str, Any]:
             and return_action
             and not ocr_complete
             and trace.get("reason") == "phash_mismatch"
+            and not transition_result.get("needs_ocr")
         ):
             memory = dict(state.get("job_results_memory", {}) or {})
             saved_signature = dict(memory.get("screen_signature", {}) or {})

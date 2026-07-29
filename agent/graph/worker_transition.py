@@ -233,13 +233,16 @@ def transition_node(state: GraphState) -> dict[str, Any]:
             visual_change_ratio=0.0,
             ocr_skipped=True,
         )
+        target_phash_timed_out = bool(
+            request.get("pending_target_phash")
+        )
         return {
             "transition_request": {},
             "transition_result": _transition_result(
                 request,
                 status="unknown",
                 reason="transition_timeout",
-                needs_ocr=False,
+                needs_ocr=target_phash_timed_out,
             ),
             "transition_records": [record],
             "transition_probe_unchanged": False,
