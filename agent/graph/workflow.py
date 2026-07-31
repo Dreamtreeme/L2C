@@ -18,6 +18,7 @@ from agent.graph.worker_selection import selection_node
 from agent.graph.worker_transition import transition_node
 from agent.graph.worker_execution import execution_node
 from agent.graph.worker_state import return_to_job_results_for_url
+from agent.graph.worker_state_contract import current_observation_matches_capture
 from agent.observability.graph_events import graph_step
 from agent.observability.reflex_paths import (
     reflex_selection_observation,
@@ -40,7 +41,7 @@ def route_after_start(state: GraphState) -> str:
 
     if state.get("low_information_screen"):
         return "selection"
-    if state.get("ocr_complete") or (
+    if current_observation_matches_capture(state) or (
         state.get("current_markers")
         and state.get("current_page_role")
         and state.get("recent_images")
@@ -52,7 +53,11 @@ def route_after_start(state: GraphState) -> str:
 def route_after_transition(state: GraphState) -> str:
     """OCR 완료 관찰만 수집 상태에 반영하고 나머지는 바로 선택한다."""
 
-    return "collection" if state.get("ocr_complete") else "selection"
+    return (
+        "collection"
+        if current_observation_matches_capture(state)
+        else "selection"
+    )
 
 
 def route_after_selection(state: GraphState) -> str:
@@ -66,7 +71,7 @@ def route_after_selection(state: GraphState) -> str:
     transition_result = dict(state.get("transition_result", {}) or {})
     if transition_result.get("status") == "pending":
         return "capture"
-    if not state.get("ocr_complete"):
+    if not current_observation_matches_capture(state):
         return (
             "ocr"
             if transition_result.get("needs_ocr")
@@ -82,7 +87,6 @@ def route_after_selection(state: GraphState) -> str:
         in {
             "page_policy",
             "duplicate_job_policy",
-            "followup_strategy",
         }
         or transition_result.get("reason")
         in {"no_screen_change", "reflex_no_screen_change"}

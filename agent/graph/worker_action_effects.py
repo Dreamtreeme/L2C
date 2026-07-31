@@ -15,7 +15,6 @@ from agent.graph.worker_state import (
     extracted_job_count,
     target_count_from_state,
 )
-from agent.runtime.followup_runtime import select_followup_action
 from agent.runtime.job_card_queue import (
     activate_job_card,
     complete_active_job_card,
@@ -68,10 +67,6 @@ def execute_ui_action(
 
     context.screen_changed = context.screen_changed or screen_changed
     if screen_changed:
-        contract = (
-            call_metadata.get("transition_contract")
-            or context.reflex_transition_contracts.get(tool_call_id)
-        )
         transition_source = (
             context.action_request.source
             if context.action_request.source in DIRECT_SCREEN_ACTION_SOURCES
@@ -84,7 +79,6 @@ def execute_ui_action(
             action_sequence,
             action_name,
             args,
-            contract,
             transition_source,
             tool_call_id,
             str(call_metadata.get("strategy_key") or ""),
@@ -196,25 +190,7 @@ def _confirmed_job_results_return_action(
     result: dict[str, Any],
 ) -> ActionRequest | None:
     no_effect_return = latest_no_effect_transition(context.state)
-    followup_request, followup_trace = select_followup_action(
-        {
-            **context.state,
-            "current_url": context.current_url,
-            "current_page_role": "job_detail",
-        },
-        trigger_action="finish_detail_reading",
-        trigger_page_role="job_detail",
-        page_role="job_detail",
-        current_url=context.current_url,
-    )
     failed_return_action = str(no_effect_return.get("action") or "")
-    if followup_request is not None:
-        followup_name = str(followup_request.tool_calls[0].name)
-        if failed_return_action != followup_name:
-            result["detail_policy"] = "reuse_contextual_followup"
-            result["followup_strategy"] = followup_trace
-            return followup_request
-
     return_action = normalized_return_action(
         context.job_results_memory.get("return_action")
     )

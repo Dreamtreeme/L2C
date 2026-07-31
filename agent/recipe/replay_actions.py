@@ -26,47 +26,32 @@ RECORDED_REPLAY_ACTIONS = (
 )
 
 
-def _step_sequence(step: dict[str, Any]) -> int:
-    """정렬할 수 없는 단계 번호는 기록 앞쪽의 기본값으로 처리한다."""
-
-    try:
-        return int(step.get("seq") or 0)
-    except (TypeError, ValueError):
-        return 0
+def _action_value(action: Any, key: str, default: Any = None) -> Any:
+    if isinstance(action, dict):
+        return action.get(key, default)
+    return getattr(action, key, default)
 
 
-def split_stable_replay_paths(
-    steps: list[dict[str, Any]],
-) -> list[list[dict[str, Any]]]:
-    """연속해서 승인된 단계를 순서가 보존된 안정 경로로 나눈다."""
+def is_supported_recipe_action_group(actions: list[Any]) -> bool:
+    """중간 화면 관찰 없이 실행해도 되는 최소 행동 묶음인지 확인한다."""
 
-    ordered = [
-        dict(step)
-        for step in sorted(
-            (item for item in steps or [] if isinstance(item, dict)),
-            key=_step_sequence,
-        )
-    ]
-    paths: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
-
-    def finish_current() -> None:
-        nonlocal current
-        while current and str(current[0].get("action") or "") not in TARGET_REPLAY_ACTIONS:
-            current.pop(0)
-        if current:
-            paths.append(current)
-        current = []
-
-    previous_seq: int | None = None
-    for step in ordered:
-        seq = _step_sequence(step)
-        if current and previous_seq is not None and seq != previous_seq + 1:
-            finish_current()
-        current.append(step)
-        previous_seq = seq
-    finish_current()
-    return paths
+    if len(actions) == 1:
+        return str(_action_value(actions[0], "action") or "") in REVIEWABLE_REPLAY_ACTIONS
+    if len(actions) != 2:
+        return False
+    first, second = actions
+    if (
+        str(_action_value(first, "action") or "") != "type_in_marker"
+        or str(_action_value(second, "action") or "") != "press_key"
+    ):
+        return False
+    param = _action_value(second, "param", {})
+    if not isinstance(param, dict):
+        return False
+    return str(param.get("key") or "").strip().casefold() in {
+        "enter",
+        "return",
+    }
 
 
 __all__ = [
@@ -74,5 +59,5 @@ __all__ = [
     "RECORDED_REPLAY_ACTIONS",
     "REVIEWABLE_REPLAY_ACTIONS",
     "TARGET_REPLAY_ACTIONS",
-    "split_stable_replay_paths",
+    "is_supported_recipe_action_group",
 ]

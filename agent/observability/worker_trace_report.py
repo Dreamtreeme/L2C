@@ -199,7 +199,7 @@ def build_worker_trace(submission: dict[str, Any]) -> dict[str, Any]:
         ),
         "review_decision": str(submission.get("review_decision") or ""),
         "step_count": len(steps),
-        "recipe_step_count": len(recorded_by_seq),
+        "recorded_action_count": len(recorded_by_seq),
         "transition_count": sum(len(items) for items in transitions_by_seq.values()),
         "capture_count": len(capture_ids),
         "capture_mismatch_count": capture_mismatches,
@@ -222,7 +222,7 @@ def render_worker_trace(trace: dict[str, Any]) -> str:
         ),
         (
             f"행동: {trace.get('step_count', 0)}개"
-            f" / 레시피 기록 {trace.get('recipe_step_count', 0)}개"
+            f" / 레시피 기록 {trace.get('recorded_action_count', 0)}개"
             f" / 전환 관찰 {trace.get('transition_count', 0)}개"
             f" / 캡처 {trace.get('capture_count', 0)}개"
         ),

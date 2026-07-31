@@ -10,6 +10,7 @@ from agent.recipe.page_context import normalize_page_role
 from agent.recipe.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     RECORDED_REPLAY_ACTIONS,
+    REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
 from agent.recipe.text_utils import normalize_text, url_template
@@ -20,6 +21,7 @@ from agent.vision.screen_signature import (
     compute_target_roi_signature,
 )
 from agent.vision.target_snapshot import build_marker_target_snapshot, marker_by_id
+
 
 def _has_letter(text: str) -> bool:
     return any(ch.isalpha() for ch in text or "")
@@ -35,6 +37,25 @@ def _text_counts(markers: list[dict]) -> dict[str, int]:
         if key:
             counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def _recorded_replay_mode(
+    action_name: str,
+    args: dict,
+    slot_name: str,
+) -> str:
+    """모델이 선언한 재사용 방식이 행동 계약과 맞을 때만 보존한다."""
+
+    mode = normalize_text(args.get("replay_mode")).casefold()
+    if action_name not in REVIEWABLE_REPLAY_ACTIONS:
+        return "reasoning"
+    if mode == "parameterized":
+        return (
+            "parameterized"
+            if action_name == "type_in_marker" and slot_name
+            else "reasoning"
+        )
+    return "fixed" if mode == "fixed" else "reasoning"
 
 
 
@@ -101,6 +122,8 @@ def _evidence_texts_for_marker(
             max_dy=max_dy,
         )
     return [item[-1] for item in scored[:max_items]]
+
+
 def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
     """UI 액션 디스패치 직후 호출. recorded_steps에 in-place append (예외 안전)."""
     try:
@@ -112,31 +135,44 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
         screen_signature = dict(state.get("screen_signature", {}) or {})
         observed_page_role = normalize_page_role(state.get("current_page_role"))
         declared_page_role = normalize_page_role(args.get("page_role"))
+        page_role = observed_page_role or declared_page_role
+        context_signature = compact_screen_context_signature(
+            screen_signature
+        )
         step = {
             "seq": seq,
             "decision_capture_id": str(state.get("current_capture_id") or ""),
             "url_template": url_template(url),
-            "page_role": observed_page_role or declared_page_role,
+            "page_role": page_role,
             "observed_page_role": observed_page_role,
             "declared_page_role": declared_page_role,
+            "before_state": {
+                "capture_id": str(
+                    state.get("current_capture_id") or ""
+                ),
+                "url_template": url_template(url),
+                "page_role": page_role,
+                "screen_context_signature": context_signature,
+            },
             "action": action_name,
             "target": None,
             "value": None,
             "param": {},
             "is_param": False,
             "expected_after": normalize_text(args.get("expected_after")),
-            "transition_contract": None,
             "intent": normalize_text(args.get("reason")),
             "target_role": normalize_text(args.get("target_role") or args.get("target_role_candidate")),
             "component": normalize_text(args.get("target_component") or args.get("component_candidate")),
             "slot_refs": [slot_name] if slot_name else [],
-            "fixed": action_name in {
-                "scroll",
-                "press_key",
-                "go_back",
-                "close_current_tab",
-                "switch_tab",
-            },
+            "risk_level": normalize_text(args.get("risk_level")),
+            "needs_user_confirmation": bool(
+                args.get("needs_user_confirmation")
+            ),
+            "replay_mode": _recorded_replay_mode(
+                action_name,
+                args,
+                slot_name,
+            ),
         }
         if action_name in TARGET_REPLAY_ACTIONS or (
             action_name == "scroll" and args.get("marker_id") is not None
@@ -212,9 +248,6 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             step["value"] = args.get("direction")
             step["param"] = {"direction": step["value"]}
         if action_name in CONTEXTUAL_REPLAY_ACTIONS:
-            context_signature = compact_screen_context_signature(
-                screen_signature
-            )
             if context_signature:
                 step["screen_context_signature"] = context_signature
         recorded_steps.append(step)

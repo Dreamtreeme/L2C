@@ -37,9 +37,21 @@ class RunCancelled(RuntimeError):
     """사용자가 현재 실행의 중단을 요청했습니다."""
 
 
+class RunDeadlineExceeded(TimeoutError):
+    """전체 사용자 요청의 실행 제한시간을 초과했습니다."""
+
+
+class ModelRequestTimeout(TimeoutError):
+    """단일 외부 모델 요청의 제한시간을 초과했습니다."""
+
+
 def _failure_code(exc: BaseException) -> str:
     if isinstance(exc, RunCancelled):
         return "run_cancelled"
+    if isinstance(exc, RunDeadlineExceeded):
+        return "run_deadline_exceeded"
+    if isinstance(exc, ModelRequestTimeout):
+        return "model_request_timeout"
     if isinstance(exc, TimeoutError):
         return "timeout"
     return type(exc).__name__.removesuffix("Error").casefold() + "_error"
@@ -94,6 +106,7 @@ class RunContext:
     query: str = ""
     event_sink: RunEventSink | None = None
     started_at: float = field(default_factory=time.perf_counter)
+    deadline_monotonic: float | None = None
     usage_callback: UsageMetadataCallbackHandler | None = None
     trace_metadata: dict[str, Any] = field(default_factory=dict)
     trace_tags: list[str] = field(default_factory=list)
@@ -251,6 +264,14 @@ class RunContext:
         return {
             "run_id": self.run_id,
             "duration_sec": round(max(0.0, time.perf_counter() - self.started_at), 6),
+            "deadline_remaining_sec": (
+                round(
+                    max(0.0, self.deadline_monotonic - time.perf_counter()),
+                    6,
+                )
+                if self.deadline_monotonic is not None
+                else None
+            ),
             "steps": steps,
             "llm": {
                 "totals": normalize_usage(totals),
@@ -292,6 +313,13 @@ def raise_if_cancelled() -> None:
 
     if get_run_registry().is_cancel_requested(context.run_id):
         raise RunCancelled(f"run cancelled: {context.run_id}")
+    if (
+        context.deadline_monotonic is not None
+        and time.perf_counter() >= context.deadline_monotonic
+    ):
+        raise RunDeadlineExceeded(
+            f"run deadline exceeded: {context.run_id}"
+        )
 
 
 @contextmanager
@@ -303,6 +331,7 @@ def run_context(
     prefix: str = "run",
     metadata: dict[str, Any] | None = None,
     tags: list[str] | None = None,
+    deadline_sec: float | None = None,
 ) -> Iterator[tuple[RunContext, bool]]:
     """중첩 호출이면 기존 문맥을 재사용하고, 최상위 호출만 새 문맥을 만든다."""
 
@@ -316,12 +345,22 @@ def run_context(
         return
 
     resolved_run_id = run_id or new_run_id(prefix)
+    if deadline_sec is None:
+        from agent.config import get_settings
+
+        deadline_sec = get_settings().execution.run_deadline_sec
+    resolved_deadline_sec = max(0.0, float(deadline_sec))
     with get_usage_metadata_callback() as usage_callback:
         context = RunContext(
             run_id=resolved_run_id,
             query=query,
             event_sink=event_sink,
             usage_callback=usage_callback,
+            deadline_monotonic=(
+                time.perf_counter() + resolved_deadline_sec
+                if resolved_deadline_sec > 0
+                else None
+            ),
             trace_metadata=dict(metadata or {}),
             trace_tags=[str(tag) for tag in (tags or []) if str(tag)],
         )
@@ -540,6 +579,79 @@ def _supports_invoke_config(runnable: Any) -> bool:
     )
 
 
+def _is_timeout_exception(exc: BaseException) -> bool:
+    names = {
+        type(item).__name__.casefold()
+        for item in type(exc).mro()
+    }
+    if any("timeout" in name for name in names):
+        return True
+    text = str(exc).casefold()
+    return "timed out" in text or "deadline exceeded" in text
+
+
+def _is_transient_model_exception(exc: BaseException) -> bool:
+    """연결·사용량 제한·공급자 일시 장애만 재시도 대상으로 분류한다."""
+
+    if _is_timeout_exception(exc):
+        return True
+    names = {
+        type(item).__name__.casefold()
+        for item in type(exc).mro()
+    }
+    transient_names = {
+        "connectionerror",
+        "connecterror",
+        "networkerror",
+        "ratelimiterror",
+        "resourceexhausted",
+        "serviceunavailable",
+        "toomanyrequestserror",
+    }
+    if names & transient_names:
+        return True
+    status_code = getattr(exc, "status_code", None)
+    try:
+        status_code = int(status_code)
+    except (TypeError, ValueError):
+        status_code = 0
+    return status_code in {408, 409, 429, 500, 502, 503, 504}
+
+
+def invoke_direct_model_with_policy(
+    runnable: Any,
+    inputs: Any,
+    component: str,
+    *,
+    execution_role: str,
+) -> Any:
+    """LangChain 밖 모델에도 역할별 재시도와 timeout 오류 계약을 적용한다."""
+
+    from agent.application.model_policy import model_execution_policy
+
+    policy = model_execution_policy(execution_role)
+    for attempt in range(policy.retries + 1):
+        raise_if_cancelled()
+        try:
+            result = runnable.invoke(inputs)
+        except Exception as exc:
+            can_retry = (
+                attempt < policy.retries
+                and _is_transient_model_exception(exc)
+            )
+            if can_retry:
+                time.sleep(min(0.25 * (2**attempt), 1.0))
+                continue
+            if _is_timeout_exception(exc):
+                raise ModelRequestTimeout(
+                    f"{component} model request timed out"
+                ) from exc
+            raise
+        raise_if_cancelled()
+        return result
+    raise RuntimeError(f"{component} model invocation ended without a result")
+
+
 def _stream_result(
     runnable: Any,
     inputs: Any,
@@ -611,6 +723,10 @@ def invoke_with_metrics(
                 success=False,
                 error=str(exc),
             )
+        if _is_timeout_exception(exc):
+            raise ModelRequestTimeout(
+                f"{component} model request timed out"
+            ) from exc
         raise
 
     duration = time.perf_counter() - started
@@ -665,9 +781,12 @@ def record_external_llm_usage(
 __all__ = [
     "RunContext",
     "RunCancelled",
+    "RunDeadlineExceeded",
+    "ModelRequestTimeout",
     "current_run_context",
     "emit_run_event",
     "invoke_with_metrics",
+    "invoke_direct_model_with_policy",
     "measure_step",
     "normalize_usage",
     "observe_external_llm_call",

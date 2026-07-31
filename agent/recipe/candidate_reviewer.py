@@ -1,9 +1,4 @@
-"""반사 레시피 후보 비평가 게이트(RecipeCandidateReview).
-
-이 모듈은 후보 증거(candidate evidence)를 포장하고 비평가(Critic)의 판정을
-적용한다. 대상 품질, 일반화 가능성, 재사용 가능성 같은 의미 판단은 코드에서
-직접 하지 않는다.
-"""
+"""자율탐색이 제안한 Reflex 단계를 제거만 하는 Critic 게이트."""
 
 from __future__ import annotations
 
@@ -11,10 +6,7 @@ import json
 from typing import Any, Callable
 
 from agent.config import get_settings
-from agent.recipe.candidate_promotion import (
-    apply_candidate_promotion,
-    ensure_review_task_category,
-)
+from agent.recipe.candidate_promotion import apply_candidate_promotion
 from agent.recipe.promotion_policy import compact_step_evidence_verdicts
 from agent.recipe.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
@@ -35,11 +27,14 @@ def _critic_evidence_text_limit() -> int:
 def _reviewable_action_specs(
     steps: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """자율탐색이 재사용 후보로 명시한 단계만 Critic 검토 대상으로 삼는다."""
+
     specs: list[dict[str, Any]] = []
     for step in steps or []:
         if (
             not isinstance(step, dict)
             or step.get("action") not in REVIEWABLE_REPLAY_ACTIONS
+            or step.get("replay_mode") not in {"fixed", "parameterized"}
         ):
             continue
         try:
@@ -68,6 +63,7 @@ def _feedback_evidence_seqs(
             isinstance(step, dict)
             and step.get("action") in CONTEXTUAL_REPLAY_ACTIONS
             and str(step.get("seq", "")).lstrip("-").isdigit()
+            and int(step["seq"]) in reviewable_seqs
         )
     }
     episode_seqs = sorted(
@@ -202,30 +198,8 @@ def _fallback_review(reason: str) -> dict[str, Any]:
             decision="revise",
             reasons=[reason],
             feedback_to_worker="Candidate review could not be completed. Re-submit with clearer worker evidence.",
-            promote_to_active_recipe=False,
             confidence=0.0,
         )
-    )
-
-
-def _promotion_policy(allow_promotion: bool) -> str:
-    if allow_promotion:
-        return (
-            "Evaluate each action's replay safety independently, then preserve consecutive approved actions as one "
-            "ordered stable recipe path. Set promote_to_active_recipe=true when at least one fixed/parameterized "
-            "path can be replayed safely. Classify every unsafe, abandoned, recovery, or state-dependent action as "
-            "reasoning; such an action becomes a hard path boundary and code must never stitch approved actions "
-            "across it. The code activates ROI-verifiable click/type steps and transition-verified contextual "
-            "actions in their recorded order. "
-            "Set promote_to_active_recipe=false only when no step is safe "
-            "for active replay. Do not maximize the number of promoted steps. A screen change alone is not success. "
-            "A step is reusable only when its expected result was achieved and it belongs to the causal path that "
-            "completed the task. If later actions abandoned that branch, reopened the start page, or used an "
-            "alternative route to recover, classify the abandoned branch steps as reasoning."
-        )
-    return (
-        "Active recipe promotion is disabled in this review, so promote_to_active_recipe is only "
-        "a recommendation signal."
     )
 
 
@@ -235,7 +209,9 @@ def _serialize_candidate_review_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def build_candidate_review_payload(candidate: dict[str, Any], allow_promotion: bool = False) -> dict[str, Any]:
+def build_candidate_review_payload(
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
     """후보 증거(candidate evidence)를 의미 판단 없이 비평가(Critic)에게 전달한다."""
     worker_submission = dict(candidate.get("payload", {}) or {})
     steps = [step for step in candidate.get("steps", []) or [] if isinstance(step, dict)]
@@ -245,7 +221,7 @@ def build_candidate_review_payload(candidate: dict[str, Any], allow_promotion: b
         steps,
         reviewable_seqs,
     )
-    required_step_intents = _reviewable_action_specs(steps)
+    required_step_verdicts = _reviewable_action_specs(steps)
     task_category = task_category_from_candidate(candidate)
     return {
         "candidate_id": candidate.get("candidate_id", "") or "",
@@ -264,11 +240,10 @@ def build_candidate_review_payload(candidate: dict[str, Any], allow_promotion: b
             evidence_seqs,
         ),
         "deterministic_step_validation": compact_step_evidence_verdicts(candidate),
-        "required_step_intents": required_step_intents,
+        "required_step_verdicts": required_step_verdicts,
         "skill_metadata_evidence": dict(worker_submission.get("skill_metadata_evidence", {}) or {}),
         "worker_execution": _compact_worker_execution(worker_submission),
         "commander_review": dict(candidate.get("review", {}) or {}),
-        "promotion_enabled": allow_promotion,
     }
 
 
@@ -276,53 +251,41 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     from langchain_core.messages import HumanMessage, SystemMessage
 
     from agent.application.model_policy import commander_model_name
+    from agent.prompts.trust_boundary import external_content_contract_en
 
     model_name = commander_model_name(
         "VISION_RECIPE_CRITIC_MODEL",
         "VISION_WORKER_REVIEW_MODEL",
     )
-    request_timeout = get_settings().recipe.critic_timeout_sec
-    promotion_policy = _promotion_policy(bool(payload.get("promotion_enabled")))
     from agent.application.model_clients import get_structured_google_model
 
     llm = get_structured_google_model(
         model_name,
         RecipeCandidateReview,
         temperature=0.0,
-        request_timeout=request_timeout,
-        retries=1,
+        execution_role="critic",
     )
     messages = [
         SystemMessage(
             content=(
-                "You are the Reflex Recipe Critic. The script layer only packaged evidence and did not judge "
-                "semantic quality. Review the candidate and return only RecipeCandidateReview. "
-                f"{promotion_policy} "
-                "When accepting, write concise skill_metadata that preserves the supplied task_category and explains when to use the recipe, which inputs "
-                "are variable, which steps are fixed, parameterized, or require reasoning, and how replay success "
-                "or fallback should be verified. Every step_intent must include replay_mode, and reusable click/type steps must preserve page_role. Current search-result "
-                "card selection and target-count-dependent navigation require reasoning unless backed by an explicit "
-                "runtime slot or condition. "
-                "A press_key, go_back, close_current_tab, or switch_tab step may be fixed only as a contextual "
-                "follow-up to the immediately preceding successful action. It must have either a ready transition "
-                "record or a contract-missing record with deterministic visual-change evidence, and the review must "
-                "supply a transition contract. Never promote a global rule such as always press Enter or always go back. "
-                "Scroll remains reasoning because its distance and stopping point depend on the current screen. "
-                "required_step_intents is an output-completeness contract, not a replay recommendation. Return "
-                "exactly one skill_metadata.step_intents item for every listed seq/action. Never omit a non-reusable "
-                "step; classify it as replay_mode=reasoning. If critic_correction is present, fix every listed "
-                "contract error and return a new complete review. "
-                "Choosing a filter category and applying filters are current-request/current-state decisions unless "
-                "an explicit runtime slot or condition fully determines them. Parameterized filter text requires a "
-                "named runtime input and must not reuse the exploration value when that input is missing. "
-                "Judge every action independently. Overall task success does not make a wrong click reusable. Compare "
-                "deterministic_step_validation first. A step with eligible=false is blocked and must be reasoning. "
-                "feedback_evidence with the transition_observation for the same seq/action_seq; classify no-op clicks, "
-                "unrelated navigation, and actions without evidence for expected_after as reasoning. "
-                "Compile transition_records into transition_contracts keyed by recorded action seq for every "
-                "fixed/parameterized click, type, key, back, or tab action. Use only "
-                "OCR-verifiable cues that distinguish the post-action screen from feedback_evidence.before_marker_texts. "
-                "Generic headers visible before and after the action are not ready cues. Use only outcomes supported by observations."
+                external_content_contract_en()
+                + "\nYou are the Reflex Recipe Critic. Autonomous exploration already chose every action, argument, "
+                "input slot, target, page context, and replay_mode. You have pruning authority only. "
+                "Return only RecipeCandidateReview and never rewrite or synthesize executable metadata. "
+                "For every item in required_step_verdicts, return exactly one step_verdict with the same seq. "
+                "Set keep=false for wrong targets, no-op actions, abandoned or recovery branches, unstable "
+                "state-dependent choices, and steps whose expected result is not supported by the evidence. "
+                "A successful overall run does not make every step reusable. Evaluate deterministic_step_validation "
+                "first; eligible=false must always be keep=false. When execution_group_seqs is present, evaluate "
+                "the listed actions as one transition: a deferred_group_effect action is valid only because the "
+                "final group member verified the saved after-state. Do not reject that action merely because it "
+                "did not change the screen by itself. Preserve only steps that causally contributed to success and "
+                "can safely reuse the autonomous replay proposal. Pruning with keep=false does not by itself require "
+                "decision=revise; return decision=accept when the kept subset still forms a safe causal path. Use "
+                "decision=revise only when the recorded evidence or metadata cannot produce a valid path. "
+                "Do not repair a bad step, change "
+                "replay_mode, create input slots, create transition contracts, or replace an action. "
+                "If critic_correction is present, return one complete verdict list matching the required seq values."
             )
         ),
         HumanMessage(content=_serialize_candidate_review_payload(payload)),
@@ -332,20 +295,16 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     return _coerce_review(invoke_with_metrics(llm, messages, "recipe_critic"))
 
 
-def _step_intent_contract_errors(
+def _step_verdict_contract_errors(
     payload: dict[str, Any],
     review: dict[str, Any],
 ) -> list[str]:
-    """활성 승격 응답이 모든 대상 행동을 명시적으로 판정했는지 검사한다."""
+    """Critic이 후보를 추가하거나 빼지 않고 모두 판정했는지 검사한다."""
 
-    if (
-        not payload.get("promotion_enabled")
-        or review.get("decision") != "accept"
-        or not review.get("promote_to_active_recipe")
-    ):
+    if review.get("decision") != "accept":
         return []
 
-    items = list((review.get("skill_metadata") or {}).get("step_intents") or [])
+    items = list(review.get("step_verdicts") or [])
     by_seq: dict[int, list[dict[str, Any]]] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -357,52 +316,67 @@ def _step_intent_contract_errors(
         by_seq.setdefault(seq, []).append(item)
 
     errors: list[str] = []
-    for required in payload.get("required_step_intents") or []:
+    required_seqs = {
+        int(required["seq"])
+        for required in payload.get("required_step_verdicts") or []
+    }
+    for required in payload.get("required_step_verdicts") or []:
         seq = int(required["seq"])
-        expected_action = str(required.get("action") or "")
         matches = by_seq.get(seq, [])
         if not matches:
-            errors.append(f"missing seq={seq} action={expected_action}")
+            errors.append(
+                f"missing seq={seq} action={required.get('action') or ''}"
+            )
             continue
         if len(matches) != 1:
             errors.append(f"duplicate seq={seq} count={len(matches)}")
-            continue
-        actual_action = str(matches[0].get("action") or "")
-        if actual_action != expected_action:
-            errors.append(
-                f"action mismatch seq={seq} expected={expected_action} actual={actual_action}"
-            )
+    for seq in sorted(set(by_seq) - required_seqs):
+        errors.append(f"unexpected seq={seq}")
     return errors
 
 
 def review_candidate(
     candidate: dict[str, Any],
     critic: CriticFn | None = None,
-    allow_promotion: bool = False,
     raise_on_error: bool = False,
 ) -> dict[str, Any]:
-    payload = build_candidate_review_payload(candidate, allow_promotion=allow_promotion)
+    payload = build_candidate_review_payload(candidate)
+    if not payload.get("required_step_verdicts"):
+        return dump_model(
+            RecipeCandidateReview(
+                decision="reject",
+                reasons=["autonomous_replay_candidate_missing"],
+                feedback_to_worker=(
+                    "자율탐색 단계에 fixed 또는 parameterized 재사용 후보가 없습니다."
+                ),
+                confidence=1.0,
+            )
+        )
     try:
         invoke_critic = critic or _llm_review_candidate
         review = _coerce_review(invoke_critic(payload))
-        errors = _step_intent_contract_errors(payload, review)
+        errors = _step_verdict_contract_errors(payload, review)
         if not errors:
             return review
 
         corrected_payload = dict(payload)
         corrected_payload["critic_correction"] = {
-            "kind": "step_intent_contract",
+            "kind": "step_verdict_contract",
             "errors": errors,
             "instruction": (
-                "Return exactly one step_intent for every required seq/action. "
-                "Use replay_mode=reasoning for steps that must not be replayed."
+                "Return exactly one step_verdict for every required seq. "
+                "Use keep=false for steps that must not be replayed."
             ),
         }
         corrected_review = _coerce_review(invoke_critic(corrected_payload))
-        corrected_errors = _step_intent_contract_errors(corrected_payload, corrected_review)
+        corrected_errors = _step_verdict_contract_errors(
+            corrected_payload,
+            corrected_review,
+        )
         if corrected_errors:
             return _fallback_review(
-                "critic_step_intent_contract_failed: " + "; ".join(corrected_errors[:8])
+                "critic_step_verdict_contract_failed: "
+                + "; ".join(corrected_errors[:8])
             )
         return corrected_review
     except Exception as exc:
@@ -436,17 +410,20 @@ def review_and_apply_candidate(
 
     normalized_mode = _process_mode(mode)
     allow_promotion = normalized_mode == "promote"
-    review = ensure_review_task_category(
-        review_candidate(
-            candidate,
-            critic=critic,
-            allow_promotion=allow_promotion,
-            raise_on_error=raise_on_critic_error,
-        ),
+    review = review_candidate(
         candidate,
+        critic=critic,
+        raise_on_error=raise_on_critic_error,
     )
-    promotion = {"enabled": allow_promotion, "promoted": False, "saved_count": 0, "promoted_step_count": 0, "skipped_steps": []}
-    if allow_promotion and review.get("decision") == "accept" and review.get("promote_to_active_recipe"):
+    promotion = {
+        "enabled": allow_promotion,
+        "promoted": False,
+        "saved_count": 0,
+        "promoted_action_count": 0,
+        "promoted_transition_count": 0,
+        "skipped_steps": [],
+    }
+    if allow_promotion and review.get("decision") == "accept":
         promotion = apply_candidate_promotion(
             candidate,
             review,

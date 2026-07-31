@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS recipes (
     recipe_key    TEXT PRIMARY KEY,
     site          TEXT NOT NULL,
     goal          TEXT,
-    steps_json    TEXT NOT NULL,
+    path_json     TEXT NOT NULL,
     metadata_json TEXT,
     success_count INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL,

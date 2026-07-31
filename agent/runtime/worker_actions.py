@@ -50,7 +50,6 @@ DIRECT_SCREEN_ACTION_SOURCES = frozenset(
         "job_card_queue",
         "page_policy",
         "duplicate_job_policy",
-        "followup_strategy",
     }
 )
 

@@ -145,10 +145,22 @@ def auto_finish_on_target_enabled() -> bool:
 
 
 def sensitive_action_reason(
-    _state: GraphState,
+    state: GraphState,
     action_name: str,
     args: dict[str, Any],
+    *,
+    source: str = "",
 ) -> str:
+    from agent.runtime.action_permissions import task_permission_reason
+
+    permission_reason = task_permission_reason(
+        state,
+        action_name,
+        args,
+        source=source,
+    )
+    if permission_reason:
+        return permission_reason
     if action_name in {
         "close_browser",
         "close_current_tab",

@@ -5,8 +5,11 @@ from __future__ import annotations
 
 def build_detail_extraction_system_prompt(base_instruction: str) -> str:
     """실행 경로와 벤치마크가 공유하는 상세 OCR 정제 지침을 만든다."""
+    from agent.prompts.trust_boundary import external_content_contract_ko
+
     return (
-        f"{base_instruction.strip()} "
+        f"{base_instruction.strip()}\n"
+        f"{external_content_contract_ko()}\n"
         "북마크, 브라우저 메뉴, 보상 배지, 추천인 현금, 로그인 문구 같은 주변 UI 노이즈는 무시하십시오. "
         "채용 도메인에서 명확한 OCR 혼동은 문맥으로 보정하십시오. 예를 들어 Swift, Xcode, 앱 개발, 모바일 문맥에서 "
         "'ios', 'i0S', 'j0s', '10s'처럼 보이는 토큰은 직무명과 기술스택에서 'iOS'로 정규화하십시오. "

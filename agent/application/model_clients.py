@@ -93,9 +93,18 @@ def get_google_chat_model(
     retries: int | None = None,
     max_output_tokens: int | None = None,
     thinking_level: str | None = None,
+    execution_role: str | None = None,
 ) -> Any:
     """동일 설정의 Gemini 클라이언트를 한 번만 생성한다."""
 
+    if execution_role:
+        from agent.application.model_policy import model_execution_policy
+
+        execution_policy = model_execution_policy(execution_role)
+        if request_timeout is None:
+            request_timeout = execution_policy.request_timeout_sec
+        if retries is None:
+            retries = execution_policy.retries
     normalized_timeout = None if request_timeout is None else float(request_timeout)
     normalized_retries = None if retries is None else max(0, int(retries))
     model_name = str(model).strip()
@@ -154,9 +163,18 @@ def get_structured_google_model(
     retries: int | None = None,
     max_output_tokens: int | None = None,
     thinking_level: str | None = None,
+    execution_role: str | None = None,
 ) -> Any:
     """동일 모델과 출력 스키마의 구조화 클라이언트를 재사용한다."""
 
+    if execution_role:
+        from agent.application.model_policy import model_execution_policy
+
+        execution_policy = model_execution_policy(execution_role)
+        if request_timeout is None:
+            request_timeout = execution_policy.request_timeout_sec
+        if retries is None:
+            retries = execution_policy.retries
     normalized_timeout = None if request_timeout is None else float(request_timeout)
     normalized_retries = None if retries is None else max(0, int(retries))
     model_name = str(model).strip()
@@ -187,6 +205,7 @@ def get_structured_google_model(
                 retries=normalized_retries,
                 max_output_tokens=normalized_max_output_tokens,
                 thinking_level=normalized_thinking_level,
+                execution_role=execution_role,
             ).with_structured_output(schema)
             _GOOGLE_STRUCTURED_CLIENTS[key] = client
         return client

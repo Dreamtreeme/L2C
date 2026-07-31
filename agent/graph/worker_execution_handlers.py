@@ -98,7 +98,7 @@ def _record_failed_call(
 def execute_action_request(
     context: WorkerExecutionContext,
 ) -> WorkerExecutionContext:
-    """검증된 요청의 원자 행동을 순서대로 실행한다."""
+    """검증된 요청의 물리 행동을 선언된 순서대로 실행한다."""
 
     for tool_call in context.action_request.tool_calls:
         action_name = tool_call.name
@@ -214,6 +214,13 @@ def execute_action_request(
                 tool_call_id=tool_call.id,
                 call_metadata=call_metadata,
             )
+            if context.action_request.source == "reflex":
+                context.transition_request = {
+                    **dict(context.transition_request or {}),
+                    "source": "reflex",
+                    "execution_failed": True,
+                    "failed_action": action_name,
+                }
             break
 
     return context

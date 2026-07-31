@@ -13,20 +13,23 @@ class TransitionRequest(TypedDict, total=False):
     expected_after: str
     source: str
     recipe_key: str
+    recipe_transition_index: int
+    recipe_transition_count: int
+    transition_actions: List[str]
+    expected_after_state: Dict[str, Any]
+    after_state_match: Dict[str, Any]
     strategy_key: str
     tool_call_id: str
     step: Dict[str, Any]
     before_url: str
-    before_phash: str
+    before_url_template: str
     before_screenshot: str
-    pending_screen_phash: str
-    pending_screenshot: str
     pending_target_phash: str
     pending_target_max_distance: int
     started_at: float
     attempts: int
-    contract: Dict[str, Any]
-    params: Dict[str, Any]
+    execution_failed: bool
+    failed_action: str
 
 
 class TransitionResult(TransitionRequest, total=False):
@@ -48,6 +51,7 @@ class GraphState(TypedDict, total=False):
     worker_run_id: str
     worker_attempt_index: int
     current_capture_id: str
+    ocr_capture_id: str
     capture_sequence: int
 
     # 사용자의 원래 목표 명령
@@ -123,12 +127,6 @@ class GraphState(TypedDict, total=False):
     # 직전 Reflex 후보 선택과 실패 원인
     reflex_trace: Dict[str, Any]
 
-    # 직전 문맥 후속 행동의 조회와 선택 결과
-    followup_action_trace: Dict[str, Any]
-
-    # Reflex 도구 호출별 행동 후 전환 계약
-    reflex_transition_contracts: Dict[str, Any]
-
     # 한 번 선택한 Reflex 안정 경로의 키와 다음 실행 단계
     active_reflex_recipe: Dict[str, Any]
 
@@ -171,6 +169,9 @@ class GraphState(TypedDict, total=False):
 
     # 상세 수집 뒤 공고 검색 결과 화면으로 복귀해야 하는 상태
     return_to_job_results: Dict[str, Any]
+
+    # 현재 수집 작업에서 실행기가 허용할 도구, 도메인과 입력값
+    action_permission_contract: Dict[str, Any]
 
     # 민감하거나 되돌릴 수 없는 행동 전 사용자 승인을 기다리는 상태
     pending_human_approval: bool

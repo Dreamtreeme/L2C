@@ -24,7 +24,6 @@ from shared.schema.feedback_schema import (
     ActionObservation,
     ActionProposal,
     FeedbackEpisode,
-    ParameterCandidate,
 )
 
 def _message_text(content: Any) -> str:
@@ -83,24 +82,6 @@ def _compact_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
             "payload_preview": _preview_value(data),
         }
     return dict(args or {})
-
-
-def _parameter_candidates(action_name: str, args: dict[str, Any]) -> list[ParameterCandidate]:
-    candidates: list[ParameterCandidate] = []
-    if action_name == "type_in_marker":
-        value = str(args.get("text") or "").strip()
-        if value:
-            slot_name = str(args.get("slot_name") or "").strip()
-            if slot_name:
-                candidates.append(
-                    ParameterCandidate(
-                        slot_candidate=slot_name,
-                        value=value,
-                        reason=str(args.get("reason") or "") or "explicit runtime input slot",
-                        confidence=0.8,
-                    )
-                )
-    return candidates
 
 
 def _extracted_job_count(extracted_jd: Any) -> int:
@@ -163,14 +144,13 @@ def record_action_episode(
             component_candidate=args.get("target_component") or args.get("component_candidate"),
             target_role_candidate=args.get("target_role") or args.get("target_role_candidate"),
             expected_after=str(args.get("expected_after") or ""),
-            parameter_candidates=_parameter_candidates(action_name, args),
-            fixed_candidate=action_name in {"scroll", "press_key", "go_back"},
         )
         before = {
             "capture_id": str(before_snapshot.get("capture_id") or ""),
             "url": before_snapshot.get("url", ""),
             "screenshot": before_snapshot.get("screenshot", ""),
             "marked_image": before_snapshot.get("marked_image", ""),
+            "page_role": str(state.get("current_page_role") or ""),
             "screen_signature": dict(before_snapshot.get("screen_signature", {}) or {}),
             "marker_texts": [
                 str(marker.get("text") or "")

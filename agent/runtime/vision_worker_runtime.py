@@ -128,6 +128,7 @@ class VisionWorkerRuntime:
                     worker_reasoning_model_name(),
                     temperature=0.1,
                     thinking_level=worker_reasoning_thinking_level(),
+                    execution_role="worker_reasoning",
                 )
                 self._ui_models[tool_names] = model.bind_tools(
                     [tool_schemas[name] for name in tool_names]

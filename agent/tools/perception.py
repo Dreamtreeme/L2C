@@ -226,7 +226,7 @@ class PerceptionEngine:
     ) -> Path:
         """
         큰 화면 흔들림이 잦아든 뒤 브라우저 창 영역을 캡처합니다.
-        페이지의 실제 로딩 완료 여부는 이후 전환 계약 검사에서 판단합니다.
+        행동 후 변화 시작과 안정화 시간은 OpenCV 프레임 비교로 판단합니다.
 
         Args:
             filename: 저장할 파일명. 입력하지 않으면 타임스탬프 기반 자동 생성.
@@ -298,21 +298,6 @@ class PerceptionEngine:
         region = self._get_browser_region()
         return self._wait_stable.wait_for_change(
             reference_image_path,
-            region=region,
-        )
-
-    def wait_for_transition_phash_change(
-        self,
-        reference_phash: str,
-        *,
-        max_wait_sec: float | None = None,
-    ) -> bool:
-        """전환 재검사에서는 pHash가 바뀔 때까지만 메모리 화면을 확인합니다."""
-
-        region = self._get_browser_region()
-        return self._wait_stable.wait_for_phash_change(
-            reference_phash,
-            max_wait_sec=max_wait_sec,
             region=region,
         )
 

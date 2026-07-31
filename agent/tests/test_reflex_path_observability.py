@@ -10,9 +10,9 @@ def test_reflex_path_observation_tracks_start_and_completion() -> None:
         {
             "reflex_trace": {
                 "hit": True,
-                "recipe_key": "path4#abc",
-                "recipe_step_index": 0,
-                "recipe_step_count": 2,
+                "recipe_key": "path6#abc",
+                "recipe_transition_index": 0,
+                "recipe_transition_count": 2,
             }
         }
     )
@@ -21,9 +21,9 @@ def test_reflex_path_observation_tracks_start_and_completion() -> None:
             "transition_result": {
                 "source": "reflex",
                 "status": "ready",
-                "recipe_key": "path4#abc",
-                "recipe_step_index": 1,
-                "recipe_step_count": 2,
+                "recipe_key": "path6#abc",
+                "recipe_transition_index": 1,
+                "recipe_transition_count": 2,
             }
         }
     )
@@ -39,9 +39,9 @@ def test_reflex_path_observation_tracks_mid_path_fallback() -> None:
                 "hit": False,
                 "reason": "roi_phash_distance",
                 "path_failed": True,
-                "recipe_key": "path4#abc",
-                "recipe_step_index": 1,
-                "recipe_step_count": 3,
+                "recipe_key": "path6#abc",
+                "recipe_transition_index": 1,
+                "recipe_transition_count": 3,
             }
         }
     )
@@ -57,29 +57,29 @@ def test_reflex_path_summary_separates_step_hits_from_path_completion() -> None:
             "component": "graph:reflex",
             "action_source": "reflex",
             "reflex_path_event": "started",
-            "reflex_path_step_index": 0,
+            "reflex_path_transition_index": 0,
         },
         {
             "component": "graph:transition",
-            "reflex_path_event": "step_completed",
-            "reflex_path_step_index": 0,
+            "reflex_path_event": "transition_completed",
+            "reflex_path_transition_index": 0,
         },
         {
             "component": "graph:reflex",
             "action_source": "reflex",
-            "reflex_path_event": "step_selected",
-            "reflex_path_step_index": 1,
+            "reflex_path_event": "transition_selected",
+            "reflex_path_transition_index": 1,
         },
         {
             "component": "graph:transition",
             "reflex_path_event": "completed",
-            "reflex_path_step_index": 1,
+            "reflex_path_transition_index": 1,
         },
     ]
 
     summary = summarize_reflex_paths(steps)
 
-    assert summary["reflex_step_hit_count"] == 2
+    assert summary["reflex_transition_hit_count"] == 2
     assert summary["reflex_path_started_count"] == 1
     assert summary["reflex_path_completed_count"] == 1
     assert summary["reflex_path_completion_rate"] == 1.0

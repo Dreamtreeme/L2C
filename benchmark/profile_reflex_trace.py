@@ -46,7 +46,6 @@ def profile_summary(path: Path) -> dict[str, Any]:
     durations: dict[str, list[float]] = defaultdict(list)
     reflex_hits = 0
     queue_replay_hits = 0
-    followup_hits = 0
     perception_modes: Counter[str] = Counter()
     reasoning_modes: Counter[str] = Counter()
 
@@ -71,8 +70,6 @@ def profile_summary(path: Path) -> dict[str, Any]:
             reflex_hits += 1
         if component == "selection" and action_source == "job_card_queue":
             queue_replay_hits += 1
-        if component == "execution" and action_source == "followup_strategy":
-            followup_hits += 1
         if component == "ocr":
             perception_modes[str(item.get("analysis_mode") or "full")] += 1
         if component == "reasoning":
@@ -110,7 +107,6 @@ def profile_summary(path: Path) -> dict[str, Any]:
         "quality": payload.get("quality", {}),
         "reflex_hits": reflex_hits,
         "queue_replay_hits": queue_replay_hits,
-        "followup_hits": followup_hits,
         "perception_modes": dict(perception_modes),
         "reasoning_modes": dict(reasoning_modes),
     }
@@ -143,7 +139,6 @@ def _print_report(report: dict[str, Any]) -> None:
         _print_stats_group("llm_calls", report["llm_calls"])
     print(f"reflex_hits: {report.get('reflex_hits', 0)}")
     print(f"queue_replay_hits: {report.get('queue_replay_hits', 0)}")
-    print(f"followup_hits: {report.get('followup_hits', 0)}")
     print(f"perception_modes: {report.get('perception_modes', {})}")
     print(f"reasoning_modes: {report.get('reasoning_modes', {})}")
 

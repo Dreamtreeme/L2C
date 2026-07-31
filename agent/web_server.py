@@ -1,11 +1,12 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -60,6 +61,32 @@ cors_origins = [
 allowed_hosts = [
     host for host in get_settings().browser.local_api_allowed_hosts if host
 ]
+
+
+def _is_loopback_client(host: str) -> bool:
+    normalized = str(host or "").strip().casefold()
+    if normalized in {"testclient", "localhost"}:
+        return True
+    try:
+        return ip_address(normalized.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+@app.middleware("http")
+async def reject_non_loopback_client(request: Request, call_next):
+    """수동 외부 바인딩에서도 원격 제어 요청은 실행하지 않는다."""
+
+    client_host = request.client.host if request.client else ""
+    if not _is_loopback_client(client_host):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": "L2C API는 이 PC의 loopback 연결만 허용합니다.",
+            },
+        )
+    return await call_next(request)
+
 
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 

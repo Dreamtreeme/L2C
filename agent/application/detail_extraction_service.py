@@ -15,6 +15,14 @@ from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
 
 
+class ExternalModelHTTPError(RuntimeError):
+    """직접 HTTP 모델 호출의 상태 코드를 재시도 정책에 전달한다."""
+
+    def __init__(self, status_code: int, payload: str):
+        self.status_code = int(status_code)
+        super().__init__(f"HTTP {self.status_code}: {payload}")
+
+
 def _message_content(message: Any) -> str:
     content = getattr(message, "content", message)
     if isinstance(content, list):
@@ -34,7 +42,10 @@ class OllamaDetailExtractionLLM:
     def __init__(self, model_name: str):
         import ollama
         self.model_name = model_name
-        self.client = ollama.Client(host=get_settings().models.ollama_host)
+        self.client = ollama.Client(
+            host=get_settings().models.ollama_host,
+            timeout=get_settings().models.detail_openai_timeout_sec,
+        )
 
     @staticmethod
     def _response_content(response: Any) -> str:
@@ -198,7 +209,10 @@ class OpenAIDetailExtractionLLM:
             observation.set_usage(response_json.get("usage") or {})
             observation.set_output(status_code=int(response.status_code))
             if response.status_code >= 400:
-                raise RuntimeError(json.dumps(response_json, ensure_ascii=False)[:2000])
+                raise ExternalModelHTTPError(
+                    response.status_code,
+                    json.dumps(response_json, ensure_ascii=False)[:2000],
+                )
         parsed = repair_json(self._output_text(response_json), return_objects=True)
         return JobPosting.model_validate(parsed if isinstance(parsed, dict) else {})
 
@@ -233,6 +247,7 @@ def get_detail_extraction_llm() -> Any:
                 model_spec,
                 JobPosting,
                 temperature=0.0,
+                execution_role="detail",
             )
         _detail_extraction_llm_key = model_spec
     return _detail_extraction_llm
@@ -247,7 +262,7 @@ def clear_detail_extraction_model_cache() -> None:
 
 
 def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[str, Any]:
-    """상태의 OCR 버퍼를 공고 한 건으로 정제하고 카드 메타데이터를 보완한다."""
+    """상태의 OCR 버퍼를 공고 한 건으로 정제한다."""
 
     from agent.runtime.job_field_contract import (
         detail_coverage_status,
@@ -258,7 +273,6 @@ def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[st
     ocr_text = detail_buffer_text(buffer)
     if not ocr_text.strip():
         return {}
-    active_card = dict(state.get("active_job_card", {}) or {})
     required_fields = required_fields_from_state(state)
     coverage = detail_coverage_status(
         dict(state.get("job_detail_coverage", {}) or {}),
@@ -270,6 +284,8 @@ def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[st
                 "누적 OCR 본문에서 채용공고 1건을 JobPosting 스키마로 정리하십시오. "
                 "OCR에 없는 사실은 만들지 말고, 알 수 없는 필드는 비우십시오. "
                 "required_fields는 반드시 OCR과 field_evidence를 확인해 채우십시오. "
+                "카드 목록에서 추정한 회사명이나 직무명은 사실 근거로 사용하지 않습니다. "
+                "company_name과 position은 상세 OCR의 헤더 또는 본문 근거를 우선하십시오. "
                 "unavailable_fields는 공고가 제공하지 않는 것으로 이미 판정된 필드이므로 "
                 "추측해서 채우지 마십시오. 현재 상세 URL은 보존하십시오."
             )
@@ -278,7 +294,6 @@ def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[st
             content=json.dumps(
                 {
                     "current_url": current_url,
-                    "active_card": active_card,
                     "required_fields": required_fields,
                     "field_evidence": coverage["field_evidence"],
                     "unavailable_fields": coverage[
@@ -294,7 +309,16 @@ def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[st
     started = time.perf_counter()
     llm = get_detail_extraction_llm()
     if isinstance(llm, (OllamaDetailExtractionLLM, OpenAIDetailExtractionLLM)):
-        response = llm.invoke(messages)
+        from agent.application.run_context import (
+            invoke_direct_model_with_policy,
+        )
+
+        response = invoke_direct_model_with_policy(
+            llm,
+            messages,
+            "detail_extraction",
+            execution_role="detail",
+        )
     else:
         from agent.application.run_context import invoke_with_metrics
 
@@ -316,10 +340,6 @@ def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[st
     extracted = {key: value for key, value in extracted.items() if value not in (None, "", [], {})}
     if current_url and not extracted.get("url"):
         extracted["url"] = current_url
-    if active_card.get("title") and not (extracted.get("position") or extracted.get("직무명")):
-        extracted["position"] = active_card.get("title")
-    if active_card.get("company") and not (extracted.get("company_name") or extracted.get("회사명")):
-        extracted["company_name"] = active_card.get("company")
     # 구조화 결과와 별개로 실제 누적 OCR과 대표 화면을 출처 증거로 보존합니다.
     extracted["raw_ocr_text"] = ocr_text
     screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]

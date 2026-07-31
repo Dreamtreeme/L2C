@@ -51,7 +51,6 @@ class WorkerExecutionContext:
     screen_changed: bool = False
     transition_request: dict[str, Any] = field(default_factory=dict)
     next_pending_action: ActionRequest | None = None
-    reflex_transition_contracts: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_state(
@@ -109,9 +108,6 @@ class WorkerExecutionContext:
             ),
             return_to_job_results=dict(
                 state.get("return_to_job_results", {}) or {}
-            ),
-            reflex_transition_contracts=dict(
-                state.get("reflex_transition_contracts", {}) or {}
             ),
         )
 
@@ -180,11 +176,6 @@ class WorkerExecutionContext:
     def before_snapshot(self) -> dict[str, Any]:
         return state_snapshot_for_action(self.state, self.current_url)
 
-    def transition_parameters(self) -> dict[str, Any]:
-        params = dict(self.state.get("recipe_params", {}) or {})
-        params.setdefault("goal", self.state.get("goal", ""))
-        return params
-
     def transition_step(
         self,
         action_sequence: int,
@@ -249,7 +240,6 @@ class WorkerExecutionContext:
         action_sequence: int,
         action_name: str,
         args: dict[str, Any],
-        contract: dict[str, Any] | None,
         source: str,
         tool_call_id: str = "",
         strategy_key: str = "",
@@ -273,8 +263,29 @@ class WorkerExecutionContext:
             "expected_after": str(args.get("expected_after") or ""),
             "source": source,
             "recipe_key": recipe_key,
-            "recipe_step_index": request_metadata.get("step_index"),
-            "recipe_step_count": request_metadata.get("step_count"),
+            "recipe_transition_index": request_metadata.get(
+                "transition_index"
+            ),
+            "recipe_transition_count": request_metadata.get(
+                "transition_count"
+            ),
+            "expected_after_state": dict(
+                request_metadata.get("expected_after_state") or {}
+            ),
+            "before_url_template": str(
+                (
+                    request_metadata.get("before_state")
+                    if isinstance(
+                        request_metadata.get("before_state"),
+                        dict,
+                    )
+                    else {}
+                ).get("url_template")
+                or ""
+            ),
+            "transition_actions": list(
+                request_metadata.get("transition_actions") or []
+            ),
             "strategy_key": strategy_key,
             "tool_call_id": tool_call_id,
             "step": self.transition_step(
@@ -286,17 +297,11 @@ class WorkerExecutionContext:
             "before_url": self.current_url
             or self.state.get("current_url", "")
             or "",
-            "before_phash": str(
-                (self.state.get("screen_signature", {}) or {}).get("phash")
-                or ""
-            ),
             "before_screenshot": (
                 str(recent_images[-1]) if recent_images else ""
             ),
             "started_at": time.time(),
             "attempts": 0,
-            "contract": dict(contract or {}),
-            "params": self.transition_parameters(),
         }
 
     def enrich_result(
@@ -435,7 +440,6 @@ class WorkerExecutionContext:
                 action_sequence,
                 action_name,
                 args,
-                None,
                 "guard",
             )
         enriched = self.enrich_result(

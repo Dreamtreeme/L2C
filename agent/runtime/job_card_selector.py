@@ -127,6 +127,7 @@ def _get_job_card_selector_model() -> Any:
         _selector_model_name(),
         JobCardSelection,
         temperature=0.0,
+        execution_role="lightweight",
     )
 
 

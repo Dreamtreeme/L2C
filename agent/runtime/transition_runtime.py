@@ -1,4 +1,4 @@
-"""행동 전후 화면 전환을 pHash와 관찰 기록으로 검증한다."""
+"""행동 전후 프레임 변화와 저장 상태 검증에 필요한 관찰 기록을 만든다."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ from urllib.parse import parse_qsl, urlparse
 
 from agent.config import get_settings
 from agent.graph.state import GraphState
+from agent.recipe.text_utils import normalize_text, url_template
 from agent.utils.logger import logger
+from agent.vision.screen_signature import compact_screen_context_signature
 
 
 def raw_screen_phash_signature(image_path: str | os.PathLike) -> dict[str, Any]:
@@ -120,17 +122,17 @@ def transition_visual_change_ratio(
     if not before_image_path or not current_image_path:
         return None
     try:
-        from PIL import Image, ImageChops
+        from agent.vision.frame_compare import (
+            changed_pixel_ratio,
+            load_gray_frame,
+        )
 
-        target_size = (196, 212)
-        with Image.open(before_image_path) as before_image, Image.open(current_image_path) as current_image:
-            before = before_image.convert("L").resize(target_size)
-            current = current_image.convert("L").resize(target_size)
-            histogram = ImageChops.difference(before, current).histogram()
         intensity_threshold = get_settings().reflex.visual_change_pixel_threshold
-        intensity_threshold = min(255, max(0, intensity_threshold))
-        changed_pixels = sum(histogram[intensity_threshold + 1 :])
-        return changed_pixels / float(target_size[0] * target_size[1])
+        return changed_pixel_ratio(
+            load_gray_frame(before_image_path),
+            load_gray_frame(current_image_path),
+            intensity_threshold=intensity_threshold,
+        )
     except Exception as exc:
         logger.debug("transition visual change check skipped", error=str(exc))
         return None
@@ -140,7 +142,7 @@ def transition_has_visual_change(
     transition_request: dict[str, Any],
     current_image_path: str | os.PathLike,
 ) -> tuple[bool, float | None]:
-    """전체 pHash가 둔감한 부분 화면 전환을 전후 스크린샷으로 보완한다."""
+    """OpenCV 전후 프레임 비교로 화면 변화 시작 여부를 확인한다."""
 
     ratio = transition_visual_change_ratio(
         transition_request,
@@ -148,99 +150,6 @@ def transition_has_visual_change(
     )
     minimum_ratio = get_settings().reflex.visual_change_min_ratio
     return ratio is not None and ratio >= max(0.0, minimum_ratio), ratio
-
-
-def transition_no_effect_by_phash(
-    transition_request: dict[str, Any],
-    current_url: str,
-    raw_screen_signature: dict[str, Any],
-) -> tuple[bool, int | None]:
-    """OCR 전에 같은 URL과 거의 같은 pHash면 행동 효과 없음으로 판정한다."""
-
-    if not transition_request:
-        return False, None
-    source = str(transition_request.get("source") or "")
-    action = str(transition_request.get("action") or "")
-    if source not in {
-        "reflex",
-        "page_policy",
-        "job_card_queue",
-        "followup_strategy",
-        "autonomous",
-    }:
-        return False, None
-    if action not in {
-        "click_marker",
-        "press_key",
-        "go_back",
-        "close_current_tab",
-        "switch_tab",
-    }:
-        return False, None
-    before_url = str(transition_request.get("before_url") or "")
-    before_phash = str(transition_request.get("before_phash") or "")
-    current_phash = str(raw_screen_signature.get("phash") or "")
-    if not before_url or not current_url or before_url != current_url:
-        return False, None
-    if not before_phash or not current_phash:
-        return False, None
-    try:
-        from agent.vision.screen_signature import hamming_distance
-
-        distance = hamming_distance(before_phash, current_phash)
-    except Exception as exc:
-        logger.debug("transition phash no-effect check skipped", error=str(exc))
-        return False, None
-    max_distance = get_settings().reflex.no_effect_phash_max_distance
-    return distance is not None and distance <= max_distance, distance
-
-
-def transition_phash_distance(
-    transition_request: dict[str, Any],
-    current_url: str,
-    screen_signature: dict[str, Any],
-) -> tuple[bool, int | None, int]:
-    """같은 URL에서 전환 전후 pHash 거리를 계산한다."""
-
-    before_url = str(transition_request.get("before_url") or "")
-    before_phash = str(transition_request.get("before_phash") or "")
-    current_phash = str(screen_signature.get("phash") or "")
-    same_url = bool(before_url and current_url and before_url == current_url)
-    max_distance = get_settings().reflex.no_effect_phash_max_distance
-    if not same_url or not before_phash or not current_phash:
-        return same_url, None, max_distance
-    try:
-        from agent.vision.screen_signature import hamming_distance
-
-        return same_url, hamming_distance(before_phash, current_phash), max_distance
-    except Exception as exc:
-        logger.debug("transition phash distance skipped", error=str(exc))
-        return same_url, None, max_distance
-
-
-def visual_change_sufficient_components() -> set[str]:
-    return set(get_settings().reflex.visual_change_sufficient_components)
-
-
-def transition_accepts_visual_change(
-    transition_request: dict[str, Any],
-) -> bool:
-    """일부 UI step은 OCR cue보다 pHash 변화로 성공을 판정한다."""
-
-    source = str(transition_request.get("source") or "")
-    if source not in {"reflex", "page_policy"}:
-        return False
-    if str(transition_request.get("action") or "") != "click_marker":
-        return False
-    step = dict(transition_request.get("step", {}) or {})
-    args = step.get("args") if isinstance(step.get("args"), dict) else {}
-    labels = {
-        str(step.get("component") or "").casefold(),
-        str(step.get("target_role") or "").casefold(),
-        str(args.get("target_component") or "").casefold(),
-        str(args.get("target_role") or "").casefold(),
-    }
-    return bool(labels & visual_change_sufficient_components())
 
 
 def idempotent_control_components() -> set[str]:
@@ -300,12 +209,24 @@ def used_idempotent_recipe_keys_on_url(state: GraphState, current_url: str) -> s
 
 
 def transition_marker_texts(markers: list[dict[str, Any]]) -> list[str]:
-    try:
-        from agent.recipe.transition import marker_texts
+    """전환 로그에는 중복을 제거한 OCR 텍스트만 남긴다."""
 
-        return marker_texts(markers)
-    except Exception:
-        return []
+    seen: set[str] = set()
+    texts: list[str] = []
+    for marker in markers or []:
+        if not isinstance(marker, dict):
+            continue
+        value = normalize_text(marker.get("text"))
+        key = value.casefold().replace(" ", "")
+        if (
+            len(key) < 2
+            or key in seen
+            or value.startswith("상호작용 가능한 요소")
+        ):
+            continue
+        seen.add(key)
+        texts.append(value)
+    return texts
 
 
 def build_transition_observation(
@@ -321,12 +242,23 @@ def build_transition_observation(
     screenshot: str,
     marked_image: str,
     to_capture_id: str = "",
+    current_url: str = "",
+    page_role: str = "",
+    screen_signature: dict[str, Any] | None = None,
     phash_distance: int | None = None,
     visual_change_ratio: float | None = None,
     ocr_skipped: bool = False,
 ) -> dict[str, Any]:
     """행동 step과 관찰 결과를 한 묶음으로 만든다."""
 
+    after_state = {
+        "capture_id": str(to_capture_id or ""),
+        "url_template": url_template(str(current_url or "")),
+        "page_role": str(page_role or ""),
+        "screen_context_signature": compact_screen_context_signature(
+            screen_signature
+        ),
+    }
     return {
         "action_seq": transition_request.get("action_seq"),
         "action": transition_request.get("action", ""),
@@ -338,6 +270,18 @@ def build_transition_observation(
         "expected_after": transition_request.get("expected_after", ""),
         "source": source,
         "recipe_key": transition_request.get("recipe_key", ""),
+        "recipe_transition_index": transition_request.get(
+            "recipe_transition_index"
+        ),
+        "recipe_transition_count": transition_request.get(
+            "recipe_transition_count"
+        ),
+        "transition_actions": list(
+            transition_request.get("transition_actions") or []
+        ),
+        "after_state_match": dict(
+            transition_request.get("after_state_match") or {}
+        ),
         "attempt": attempt,
         "elapsed_sec": round(elapsed_sec, 3),
         "status": status,
@@ -350,6 +294,9 @@ def build_transition_observation(
         "marker_texts": transition_marker_texts(markers),
         "screenshot": str(screenshot),
         "marked_image": str(marked_image or ""),
+        "current_url": str(current_url or ""),
+        "page_role": str(page_role or ""),
+        "after_state": after_state,
     }
 
 
@@ -362,11 +309,7 @@ __all__ = [
     "latest_no_effect_transition",
     "raw_screen_phash_signature",
     "same_idempotent_page_scope",
-    "transition_accepts_visual_change",
     "transition_has_visual_change",
     "transition_marker_texts",
-    "transition_no_effect_by_phash",
-    "transition_phash_distance",
     "used_idempotent_recipe_keys_on_url",
-    "visual_change_sufficient_components",
 ]

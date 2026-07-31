@@ -118,6 +118,27 @@ def test_wait_stable_uses_supplied_region_without_window_lookup():
     assert perception.region_calls == 0
 
 
+def test_opencv_frame_compare_separates_change_ratio_and_stability():
+    import numpy as np
+
+    from agent.vision.frame_compare import (
+        changed_pixel_ratio,
+        mean_difference_percent,
+    )
+
+    before = np.zeros((200, 200), dtype=np.uint8)
+    after = before.copy()
+    after[50:150, 50:150] = 255
+
+    assert changed_pixel_ratio(
+        before,
+        after,
+        intensity_threshold=20,
+    ) > 0.2
+    assert mean_difference_percent(before, before) == 0.0
+    assert mean_difference_percent(before, after) > 20.0
+
+
 def test_capture_screen_reuses_region_for_wait(monkeypatch, tmp_path):
     from agent.tools.perception import PerceptionEngine
 
@@ -688,6 +709,8 @@ def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):
 
 
 def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
+    import numpy as np
+
     from agent.utils.wait_stable import WaitStable
 
     reference_path = tmp_path / "before.png"
@@ -697,8 +720,8 @@ def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
     wait_stable.perception = object()
     monkeypatch.setattr(
         wait_stable,
-        "_capture_memory_image",
-        lambda **_kwargs: Image.new("RGB", (200, 200), "black"),
+        "_capture_memory_frame",
+        lambda **_kwargs: np.zeros((200, 200), dtype=np.uint8),
     )
 
     assert wait_stable.wait_for_change(
@@ -710,10 +733,12 @@ def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
 
 
 def test_wait_stable_requires_consecutive_stable_frames(monkeypatch):
+    import numpy as np
+
     from agent.utils.wait_stable import WaitStable
 
-    white = Image.new("RGB", (200, 200), "white")
-    black = Image.new("RGB", (200, 200), "black")
+    white = np.full((200, 200), 255, dtype=np.uint8)
+    black = np.zeros((200, 200), dtype=np.uint8)
     frames = iter([white, white, black, black, black])
     capture_count = {"value": 0}
 
@@ -727,7 +752,7 @@ def test_wait_stable_requires_consecutive_stable_frames(monkeypatch):
 
     monkeypatch.setattr(
         wait_stable,
-        "_capture_memory_image",
+        "_capture_memory_frame",
         capture_frame,
     )
     monkeypatch.setattr(

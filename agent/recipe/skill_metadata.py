@@ -35,56 +35,40 @@ def _proposal_for_seq(feedback_episodes: list[dict[str, Any]]) -> dict[int, dict
     return proposals
 
 
-def _slot_refs(proposal: dict[str, Any], step: dict[str, Any]) -> list[str]:
-    refs = list(step.get("slot_refs") or [])
-    for candidate in proposal.get("parameter_candidates") or []:
-        if isinstance(candidate, dict):
-            refs.append(str(candidate.get("slot_candidate") or ""))
-    return _unique(refs)
+def _slot_refs(step: dict[str, Any]) -> list[str]:
+    return _unique(
+        [str(item) for item in (step.get("slot_refs") or [])]
+    )
 
 
-def _input_slots(feedback_episodes: list[dict[str, Any]], keyword: str, target_count: int) -> list[dict[str, Any]]:
+def _input_slots(
+    recorded_steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     slots: list[dict[str, Any]] = []
-    for episode in feedback_episodes or []:
-        proposal = episode.get("proposal") if isinstance(episode, dict) else {}
-        if not isinstance(proposal, dict):
+    for step in recorded_steps or []:
+        if not isinstance(step, dict):
             continue
-        for candidate in proposal.get("parameter_candidates") or []:
-            if not isinstance(candidate, dict):
-                continue
-            name = normalize_text(candidate.get("slot_candidate"))
+        param = (
+            step.get("param")
+            if isinstance(step.get("param"), dict)
+            else {}
+        )
+        for name in _slot_refs(step):
             if not name:
                 continue
             slots.append(
                 {
                     "name": name,
-                    "description": normalize_text(candidate.get("reason")),
-                    "observed_value": candidate.get("value"),
+                    "description": normalize_text(step.get("intent")),
+                    "observed_value": (
+                        param.get("text")
+                        if step.get("action") == "type_in_marker"
+                        else step.get("value")
+                    ),
                     "required": True,
-                    "source": "parameter_candidates",
+                    "source": "recorded_step",
                 }
             )
-
-    if keyword and not any(slot.get("name") == "query" for slot in slots):
-        slots.append(
-            {
-                "name": "query",
-                "description": "사용자 질의에서 추출된 검색어(search keyword)",
-                "observed_value": keyword,
-                "required": True,
-                "source": "worker_keyword",
-            }
-        )
-    if target_count > 0 and not any(slot.get("name") == "target_count" for slot in slots):
-        slots.append(
-            {
-                "name": "target_count",
-                "description": "사용자가 요청한 수집 개수(target count)",
-                "observed_value": target_count,
-                "required": False,
-                "source": "worker_target_count",
-            }
-        )
 
     deduped: dict[str, dict[str, Any]] = {}
     for slot in slots:
@@ -109,8 +93,11 @@ def _step_intents(recorded_steps: list[dict[str, Any]], feedback_episodes: list[
                 "target_role": normalize_text(step.get("target_role") or proposal.get("target_role_candidate")),
                 "component": normalize_text(step.get("component") or proposal.get("component_candidate")),
                 "expected_after": normalize_text(step.get("expected_after") or proposal.get("expected_after")),
-                "fixed": step.get("fixed") if step.get("fixed") is not None else proposal.get("fixed_candidate"),
-                "slot_refs": _slot_refs(proposal, step),
+                "replay_mode": normalize_text(
+                    step.get("replay_mode")
+                ).casefold()
+                or "reasoning",
+                "slot_refs": _slot_refs(step),
             }
         )
     return intents
@@ -121,7 +108,7 @@ def _verification(feedback_episodes: list[dict[str, Any]], extracted_summary: di
     failure_signals: list[str] = []
     fallback_conditions: list[str] = [
         "현재 화면의 OCR 마커가 기록된 대상과 매칭되지 않음(marker match miss)",
-        "행동 후 전환 계약(transition contract)이 제한 시간 안에 충족되지 않음",
+        "행동 후 OpenCV 화면 변화가 확인되지 않음(screen change miss)",
     ]
 
     if extracted_summary.get("has_data"):
@@ -162,16 +149,21 @@ def build_skill_metadata_evidence(
 
     step_intents = _step_intents(recorded_steps, feedback_episodes)
     return {
+        "when_to_use": goal,
+        "goal_pattern": goal,
         "goal": goal,
         "site": site,
         "task_category": normalize_task_category(task_category),
         "keyword": keyword,
         "target_count": target_count,
-        "inputs": _input_slots(feedback_episodes, keyword, target_count),
+        "inputs": _input_slots(recorded_steps),
         "step_intents": step_intents,
         "actions": [step.get("action", "") for step in recorded_steps or [] if isinstance(step, dict)],
         "target_roles": _unique([item.get("target_role", "") for item in step_intents]),
         "components": _unique([item.get("component", "") for item in step_intents]),
         "verification": _verification(feedback_episodes, extracted_summary),
-        "notes": "코드는 증거만 포장하고 재사용 가능성은 비평가(Critic)가 판단한다.",
+        "notes": (
+            "자율탐색이 재사용 후보를 선언하고 비평가(Critic)는 "
+            "실패하거나 불안정한 단계만 제거한다."
+        ),
     }

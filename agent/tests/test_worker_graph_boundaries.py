@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from agent.graph import (
@@ -13,6 +15,10 @@ from agent.graph.workflow import (
     route_after_reflex,
     route_after_selection,
     route_after_transition,
+)
+from agent.graph.worker_state_contract import (
+    current_observation_errors,
+    current_observation_matches_capture,
 )
 
 
@@ -40,7 +46,7 @@ def _execution_state(request, **overrides):
     return state
 
 
-def test_action_request_rejects_multiple_calls_from_every_source():
+def test_action_request_allows_only_supported_reflex_action_group():
     calls = [
         {
             "name": "type_in_marker",
@@ -60,10 +66,28 @@ def test_action_request_rejects_multiple_calls_from_every_source():
     with pytest.raises(ValueError):
         build_action_request(
             "reflex",
-            "레시피 경로도 현재 단계 하나만 요청해야 함",
+            "두 타깃 행동은 중간 화면 관찰이 필요함",
             calls,
-            metadata={"execution_unit": "stable_recipe_path"},
+            metadata={"execution_unit": "recipe_transition"},
         )
+
+    grouped = build_action_request(
+        "reflex",
+        "검색어 입력 후 제출",
+        [
+            calls[0],
+            {
+                "name": "press_key",
+                "args": {"key": "enter"},
+                "id": "submit",
+            },
+        ],
+        metadata={"execution_unit": "recipe_transition"},
+    )
+    assert [call.name for call in grouped.tool_calls] == [
+        "type_in_marker",
+        "press_key",
+    ]
 
 
 def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
@@ -97,13 +121,6 @@ def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
     from agent.graph import worker_selection
 
     monkeypatch.setenv("REFLEX_ENABLED", "1")
-    monkeypatch.setattr(
-        worker_selection,
-        "select_followup_after_transition",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("활성 레시피 중간에 후속 전략을 조회하면 안 됩니다.")
-        ),
-    )
 
     result = worker_selection.selection_node(
         {
@@ -114,13 +131,12 @@ def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
             },
             "active_reflex_recipe": {
                 "recipe_key": "recipe-search-set",
-                "next_step_index": 1,
-                "step_count": 2,
+                "current_transition_index": 1,
+                "transition_count": 2,
             },
         }
     )
 
-    assert result["followup_action_trace"] == {}
     assert (
         route_after_selection(
             {
@@ -129,8 +145,8 @@ def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
                 "transition_result": {"status": "ready"},
                 "active_reflex_recipe": {
                     "recipe_key": "recipe-search-set",
-                    "next_step_index": 1,
-                    "step_count": 2,
+                    "current_transition_index": 1,
+                    "transition_count": 2,
                 },
             }
         )
@@ -141,6 +157,62 @@ def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
 def test_transition_requires_collection_only_after_ocr():
     assert route_after_transition({"ocr_complete": False}) == "selection"
     assert route_after_transition({"ocr_complete": True}) == "collection"
+    assert (
+        route_after_transition(
+            {
+                "ocr_complete": True,
+                "current_capture_id": "capture:2",
+                "ocr_capture_id": "capture:1",
+            }
+        )
+        == "selection"
+    )
+
+
+def test_worker_observation_contract_rejects_mixed_capture_state():
+    valid = {
+        "ocr_complete": True,
+        "current_capture_id": "capture:2",
+        "ocr_capture_id": "capture:2",
+        "current_screenshot": "screen.png",
+    }
+    mixed = {
+        **valid,
+        "ocr_capture_id": "capture:1",
+    }
+
+    assert current_observation_matches_capture(valid) is True
+    assert current_observation_matches_capture(mixed) is False
+    assert current_observation_errors(valid) == []
+    assert current_observation_errors(mixed) == ["ocr_capture_mismatch"]
+
+
+def test_unchanged_transition_probe_clears_ocr_capture_owner(monkeypatch):
+    class ProbeOnlyPerception:
+        def wait_for_transition_phash_match(self, *args, **kwargs):
+            return False
+
+    monkeypatch.setattr(
+        worker_observation,
+        "_perception_engine",
+        lambda: ProbeOnlyPerception(),
+    )
+
+    result = worker_observation.capture_node(
+        {
+            "current_capture_id": "capture:0001",
+            "ocr_capture_id": "capture:0001",
+            "ocr_complete": True,
+            "transition_request": {
+                "pending_target_phash": "abcd",
+                "started_at": time.time(),
+            },
+        }
+    )
+
+    assert result["transition_probe_unchanged"] is True
+    assert result["ocr_complete"] is False
+    assert result["ocr_capture_id"] == ""
 
 
 def test_screen_changing_action_always_routes_to_capture():
@@ -268,6 +340,96 @@ def test_atomic_execution_and_recording_are_separate(monkeypatch):
         == "worker-test:capture:0003"
     )
     assert len(recorded["feedback_episodes"]) == 1
+
+
+def test_reflex_transition_executes_input_and_enter_without_recapture(
+    monkeypatch,
+):
+    calls: list[str] = []
+
+    def fake_dispatch(action_name, args, get_bbox, current_url=""):
+        calls.append(action_name)
+        if args.get("marker_id") is not None:
+            get_bbox(args["marker_id"])
+        return {
+            "action": action_name,
+            "status": "success",
+            "result": "executed",
+        }
+
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        fake_dispatch,
+    )
+    request = build_action_request(
+        "reflex",
+        "검색 입력 전이",
+        [
+            {
+                "name": "type_in_marker",
+                "args": {
+                    "marker_id": 1,
+                    "text": "AI 엔지니어",
+                },
+                "id": "type",
+            },
+            {
+                "name": "press_key",
+                "args": {"key": "enter"},
+                "id": "submit",
+            },
+        ],
+        metadata={
+            "execution_unit": "recipe_transition",
+            "recipe_key": "path6#search",
+            "transition_index": 0,
+            "transition_count": 1,
+            "transition_actions": [
+                "type_in_marker",
+                "press_key",
+            ],
+            "expected_after_state": {
+                "url_template": "example.com/jobs",
+                "screen_context_signature": {
+                    "phash": "f" * 16,
+                    "size": [1920, 1080],
+                },
+            },
+        },
+    )
+
+    result = worker_execution.execution_node(
+        _execution_state(
+            request,
+            current_markers=[
+                {
+                    "id": 1,
+                    "bbox": [0, 0, 100, 30],
+                    "text": "검색어",
+                    "type": "input",
+                }
+            ],
+            reflex_trace={
+                "recipe_key": "path6#search",
+                "tool_calls": {},
+            },
+        )
+    )
+
+    assert calls == ["type_in_marker", "press_key"]
+    assert len(result["action_history"]) == 2
+    assert result["transition_request"]["action"] == "press_key"
+    assert result["transition_request"]["transition_actions"] == [
+        "type_in_marker",
+        "press_key",
+    ]
+    assert (
+        result["transition_request"]["expected_after_state"][
+            "url_template"
+        ]
+        == "example.com/jobs"
+    )
 
 
 def test_detail_completion_guard_blocks_more_screen_exploration(monkeypatch):

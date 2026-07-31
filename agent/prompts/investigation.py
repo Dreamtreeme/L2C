@@ -135,7 +135,10 @@ def action_plan_prompt() -> str:
 
 
 def evidence_validation_prompt() -> str:
-    return """당신은 DB 공고 후보가 조사에서 정의한 근거 집단에 실제로 속하는지 판정합니다.
+    from agent.prompts.trust_boundary import external_content_contract_ko
+
+    return external_content_contract_ko() + """
+당신은 DB 공고 후보가 조사에서 정의한 근거 집단에 실제로 속하는지 판정합니다.
 - 이 단계에는 사전으로 확정할 수 없었던 직무·기술 또는 비정형 조건만 들어옵니다.
 - 공고의 직무명, 직군, 기술, 자격요건, 우대사항, 지역, 경력, 고용형태와 게시일만 사용하십시오.
 - occupation_query가 있으면 직무의 본질적인 역할을 판단하고 단어 포함 여부만으로 판정하지 마십시오.
@@ -151,7 +154,10 @@ def evidence_validation_prompt() -> str:
 
 
 def answer_prompt() -> str:
-    return """당신은 질문의 근거 정책에 따라 보편 지식 또는 검증된 자료로 답변합니다.
+    from agent.prompts.trust_boundary import external_content_contract_ko
+
+    return external_content_contract_ko() + """
+당신은 질문의 근거 정책에 따라 보편 지식 또는 검증된 자료로 답변합니다.
 질문의 evidence_policy를 먼저 확인하십시오.
 - 질문에 먼저 답하고 사용자가 요청하지 않은 배경, 심화 항목, 조사 과정은 덧붙이지 마십시오.
 - model_knowledge이면 보편적인 전문 지식 중 질문에 필요한 핵심만 간결하게 답하십시오. 별도의 조사 범위, 가정, 한계 문단을 만들지 마십시오.

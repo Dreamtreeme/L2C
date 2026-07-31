@@ -60,7 +60,7 @@ def _missing_action_update(
 
 
 def execution_node(state: GraphState) -> dict[str, Any]:
-    """현재 화면에서 선택된 원자 행동을 검증하고 실행한다."""
+    """현재 화면에서 선택된 행동 실행 단위를 검증하고 실행한다."""
 
     raise_if_cancelled()
     started = time.perf_counter()

@@ -10,6 +10,7 @@ export const PHASE_LABELS: Record<RunPhase, string> = {
   persistence: "DB 저장",
   answering: "답변 작성",
   completed: "완료",
+  partial: "부분 완료",
   failed: "실패",
   cancelled: "취소",
 };
@@ -20,6 +21,7 @@ export const STATUS_LABELS: Record<RunStatus, string> = {
   waiting_approval: "승인 대기",
   waiting_input: "사용자 선택 필요",
   completed: "완료",
+  partial: "부분 완료",
   failed: "실패",
   cancelled: "취소",
 };

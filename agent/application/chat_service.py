@@ -7,7 +7,9 @@ import time
 from typing import Any
 
 from agent.application.run_context import (
+    ModelRequestTimeout,
     RunCancelled,
+    RunDeadlineExceeded,
     emit_run_event,
     raise_if_cancelled,
     run_context,
@@ -69,7 +71,12 @@ class ChatService:
             "run_id": context.run_id,
             "run_status": status.value,
             "last_action_result": answer,
-            "is_finished": status in {RunStatus.COMPLETED, RunStatus.FAILED},
+            "is_finished": status
+            in {
+                RunStatus.COMPLETED,
+                RunStatus.PARTIAL,
+                RunStatus.FAILED,
+            },
             "duration_sec": duration,
             "metrics": metrics,
             "llm_usage": metrics.get("llm", {}),
@@ -169,6 +176,24 @@ class ChatService:
                     context=context,
                     started=started,
                     status=RunStatus.CANCELLED,
+                    investigation_id=investigation_id,
+                )
+            except (RunDeadlineExceeded, ModelRequestTimeout) as exc:
+                emit_run_event(
+                    "run_partial",
+                    RunPhase.PARTIAL,
+                    "실행 시간 경계에 도달해 확보한 결과까지만 보존했습니다.",
+                    status=RunStatus.PARTIAL,
+                    data={"failure_code": type(exc).__name__},
+                )
+                return self._result(
+                    (
+                        "실행 제한시간에 도달했습니다. "
+                        "이미 저장된 자료는 유지되며 이번 요청은 부분 완료로 종료했습니다."
+                    ),
+                    context=context,
+                    started=started,
+                    status=RunStatus.PARTIAL,
                     investigation_id=investigation_id,
                 )
             except Exception as exc:

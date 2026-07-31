@@ -483,6 +483,10 @@ def test_collection_service_forces_partial_status_when_explicit_target_is_unmet(
     )
 
     assert result["completion_status"] == "partial"
+    assert result["worker_status"] == "finished"
+    assert result["review_status"] == "accepted"
+    assert result["persistence_status"] == "persisted"
+    assert result["target_status"] == "unmet"
     assert result["missing_count"] == 1
     assert result["persisted_count"] == 1
     assert "partial collection persisted" in result["message"]

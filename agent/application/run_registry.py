@@ -80,6 +80,7 @@ class RunRegistry:
                 return None
             if item.get("status") in {
                 RunStatus.COMPLETED.value,
+                RunStatus.PARTIAL.value,
                 RunStatus.FAILED.value,
                 RunStatus.CANCELLED.value,
             }:
@@ -112,6 +113,7 @@ class RunRegistry:
                 if item.get("conversation_id") == conversation_id
                 and item.get("status") in {
                     RunStatus.COMPLETED.value,
+                    RunStatus.PARTIAL.value,
                     RunStatus.WAITING_INPUT.value,
                 }
             ]
@@ -137,6 +139,8 @@ class RunRegistry:
             )
             if status == RunStatus.COMPLETED:
                 phase = RunPhase.COMPLETED.value
+            elif status == RunStatus.PARTIAL:
+                phase = RunPhase.PARTIAL.value
             elif status == RunStatus.FAILED:
                 phase = RunPhase.FAILED.value
             elif status == RunStatus.CANCELLED:

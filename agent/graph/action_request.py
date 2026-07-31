@@ -46,11 +46,11 @@ class ToolCallRequest(BaseModel):
 
 
 class ActionRequest(BaseModel):
-    """현재 화면 캡처를 근거로 실행할 원자 행동."""
+    """현재 화면 캡처를 근거로 실행할 행동 또는 검증된 행동 묶음."""
 
     source: str
     summary: str = ""
-    tool_calls: list[ToolCallRequest] = Field(default_factory=list, max_length=1)
+    tool_calls: list[ToolCallRequest] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("source")
@@ -81,6 +81,27 @@ class ActionRequest(BaseModel):
                 if not normalized_args.get(empty_collection_field):
                     normalized_args.pop(empty_collection_field, None)
             call.args = normalized_args
+        if len(self.tool_calls) > 1:
+            from agent.recipe.replay_actions import (
+                is_supported_recipe_action_group,
+            )
+
+            action_group = [
+                {
+                    "action": call.name,
+                    "param": call.args,
+                }
+                for call in self.tool_calls
+            ]
+            if (
+                self.source != "reflex"
+                or self.metadata.get("execution_unit")
+                != "recipe_transition"
+                or not is_supported_recipe_action_group(action_group)
+            ):
+                raise ValueError(
+                    "여러 행동은 검증된 경험 기반 탐색 전이에서만 허용됩니다."
+                )
         return self
 
 
@@ -103,7 +124,7 @@ def build_action_request(
     metadata: dict[str, Any] | None = None,
     allowed_tool_names: Sequence[str] | None = None,
 ) -> ActionRequest:
-    """정책 또는 모델의 단일 도구 호출을 검증된 행동 요청으로 만든다."""
+    """정책 또는 모델 호출을 검증된 행동 요청으로 만든다."""
 
     calls: list[ToolCallRequest] = []
     for index, call in enumerate(tool_calls):

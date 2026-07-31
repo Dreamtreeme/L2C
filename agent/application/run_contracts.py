@@ -18,6 +18,7 @@ class RunStatus(str, Enum):
     WAITING_APPROVAL = "waiting_approval"
     WAITING_INPUT = "waiting_input"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -32,6 +33,7 @@ class RunPhase(str, Enum):
     PERSISTENCE = "persistence"
     ANSWERING = "answering"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
 

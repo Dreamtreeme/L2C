@@ -333,6 +333,16 @@ def run_worker_once(
         ),
         "collection_intent": search_intent,
     }
+    from agent.runtime.action_permissions import (
+        build_public_collection_permission_contract,
+    )
+
+    initial_state["action_permission_contract"] = (
+        build_public_collection_permission_contract(
+            site_profile,
+            initial_state["recipe_params"],
+        )
+    )
 
     logger.info(
         "비전 작업자 그래프 시작: site=%s attempt=%s",

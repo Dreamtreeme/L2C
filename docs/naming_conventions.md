@@ -31,10 +31,11 @@ tags:
 | `candidate_review` | Critic이 후보를 검토한 결과 |
 | `promotion` | 후보를 active recipe로 승격하는 처리 결과 |
 | `active_recipe` | 경험 기반 탐색에서 실제 재생 가능한 활성 레시피 |
-| `recipe_step` | 레시피 안의 단일 행동 단계 |
-| `replay_step` | Critic이 fixed/parameterized로 승인한 재생 단계 |
-| `stable_recipe_path` | 한 성공 실행에서 연속 검증된 행동의 순서가 보존된 Reflex 저장·실행 단위 |
-| `active_reflex_recipe` | 한 번 선택한 안정 경로의 레시피 키, 다음 단계 번호, 전체 단계 수를 보관하는 작업 상태 |
+| `recipe_action` | 한 화면 관찰을 근거로 실행할 물리 행동 |
+| `recipe_checkpoint` | 전이 전후에 다시 확인할 URL·화면 문맥·ROI 앵커 상태 |
+| `recipe_transition` | `before + actions + after`로 구성된 검증 가능한 실행 단위 |
+| `recipe_path` | 시작 상태, 순서가 보존된 전이 목록과 완료 상태를 담은 활성 레시피 경로 |
+| `active_reflex_recipe` | 선택한 경로 키, 현재 전이 번호, 검증 대기 전이 번호와 전체 전이 수를 보관하는 작업 상태 |
 | `task_category` | 검색, 로그인, 결제, 사이트 탐색 같은 작업 카테고리 |
 | `page_role` | home, search, job_detail, popup처럼 행동 당시 화면을 설명하는 관측 메타데이터 |
 | `recipe_key` | active recipe row의 DB 식별자. `site`, `task_category`와 전체 단계의 순서·의미로 계산 |
@@ -46,7 +47,7 @@ tags:
 | `job_card_queue` | 채용 검색 결과에서 수집할 공고 카드 작업 큐 |
 | `job_results_memory` | 공고 카드 큐를 만든 검색 결과 화면의 복귀 검증용 기억 |
 | `job_detail_buffer` | 공고 상세 화면에서 누적한 OCR 본문 |
-| `transition_request` | 직전 행동이 요청한 화면 전환과 검증 조건 |
+| `transition_request` | 직전 행동 묶음이 요청한 화면 전환과 저장된 도착 상태 |
 | `transition_result` | 화면 전환 검증의 현재 결과 |
 | `transition_records` | 한 작업에서 확정된 화면 전환 결과 목록 |
 | `pending_action` | 아직 실행하지 않은 검증된 `ActionRequest` |
@@ -168,7 +169,7 @@ recorded_step
 -> worker_submission
 -> recipe_candidate
 -> candidate_review
--> replay_step
+-> recipe_transition
 -> active_recipe
 -> reflex_replay
 ```

@@ -74,7 +74,11 @@ class LLMEngine:
             logger.info("[LLMEngine] 텍스트 정제 시작 (모델: %s)", model_name)
             t0 = time.perf_counter()
             try:
-                llm = get_google_chat_model(model_name, temperature=LLM_TEMPERATURE)
+                llm = get_google_chat_model(
+                    model_name,
+                    temperature=LLM_TEMPERATURE,
+                    execution_role="lightweight",
+                )
                 from agent.application.run_context import invoke_with_metrics
 
                 response = invoke_with_metrics(

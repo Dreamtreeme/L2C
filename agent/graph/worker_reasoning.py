@@ -153,7 +153,6 @@ def reasoning_node(state: GraphState) -> dict[str, Any]:
                 "hit": False,
                 "source": "screen_loading",
             },
-            "reflex_transition_contracts": {},
         }
 
     if selector_request is not None:
@@ -170,7 +169,6 @@ def reasoning_node(state: GraphState) -> dict[str, Any]:
                 "hit": False,
                 "source": "card_selector",
             },
-            "reflex_transition_contracts": {},
         }
         if error_increment > 0:
             result["error_count"] = (
@@ -218,7 +216,6 @@ def reasoning_node(state: GraphState) -> dict[str, Any]:
         "pending_action": pending_action,
         "job_card_selection_trace": selector_trace,
         "reflex_trace": {"hit": False, "source": "reasoning"},
-        "reflex_transition_contracts": {},
     }
     if error_increment > 0:
         result["error_count"] = (

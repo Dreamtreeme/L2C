@@ -63,6 +63,7 @@ class InvestigationModels:
                 RequestAnalysis,
                 temperature=0.0,
                 max_output_tokens=self._max_output_tokens(),
+                execution_role="commander",
             )
         return self.analysis_model
 
@@ -76,6 +77,7 @@ class InvestigationModels:
                 EvidencePlan,
                 temperature=0.0,
                 max_output_tokens=self._max_output_tokens(),
+                execution_role="commander",
             )
         return self.evidence_model
 
@@ -89,6 +91,7 @@ class InvestigationModels:
                 TaxonomyResolution,
                 temperature=0.0,
                 max_output_tokens=self._max_output_tokens(),
+                execution_role="commander",
             )
         return self.taxonomy_model
 
@@ -102,6 +105,7 @@ class InvestigationModels:
                 InvestigationActionPlan,
                 temperature=0.0,
                 max_output_tokens=self._max_output_tokens(),
+                execution_role="commander",
             )
         return self.action_model
 
@@ -115,6 +119,7 @@ class InvestigationModels:
                 EvidenceValidation,
                 temperature=0.0,
                 max_output_tokens=self._max_output_tokens(),
+                execution_role="commander",
             )
         return self.validation_model
 
@@ -127,6 +132,7 @@ class InvestigationModels:
                 commander_model_name(),
                 temperature=0.0,
                 max_output_tokens=self._max_output_tokens(),
+                execution_role="commander",
             )
         return self.answer_model
 

@@ -112,22 +112,10 @@ def _normalize_field_evidence(value: Any) -> dict[str, str]:
     return evidence
 
 
-def _system_field_evidence(
-    state: Mapping[str, Any],
-    current_url: str,
-) -> dict[str, str]:
-    active_card = state.get("active_job_card")
-    active_card = active_card if isinstance(active_card, Mapping) else {}
-    evidence: dict[str, str] = {}
-    if current_url:
-        evidence["url"] = current_url
-    company = _short_evidence(active_card.get("company"))
-    title = _short_evidence(active_card.get("title"))
-    if company:
-        evidence["company_name"] = company
-    if title:
-        evidence["position"] = title
-    return evidence
+def _system_field_evidence(current_url: str) -> dict[str, str]:
+    """브라우저가 확정한 URL만 상세 공고의 시스템 근거로 사용한다."""
+
+    return {"url": current_url} if current_url else {}
 
 
 def merge_job_detail_coverage(
@@ -147,7 +135,8 @@ def merge_job_detail_coverage(
     evidence = _normalize_field_evidence(
         current.get("field_evidence")
     )
-    evidence.update(_system_field_evidence(state, current_url))
+    # 카드 큐의 회사명·직무명은 탐색 힌트일 뿐 상세 화면의 사실 근거가 아닙니다.
+    evidence.update(_system_field_evidence(current_url))
 
     observed = observation if isinstance(observation, Mapping) else {}
     evidence.update(

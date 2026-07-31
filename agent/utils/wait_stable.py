@@ -2,47 +2,85 @@ import time
 import os
 from typing import Optional
 
-from PIL import Image, ImageChops, ImageStat
+import cv2
+import numpy as np
+from PIL import Image
 
 from agent.config import get_settings
 from agent.tools.perception import PerceptionEngine
 from agent.utils.logger import logger
+from agent.vision.frame_compare import (
+    changed_pixel_ratio,
+    gray_frame,
+    load_gray_frame,
+    mean_difference_percent,
+)
 
 
 class WaitStable:
     """
     OCR 캡처 직전의 큰 화면 흔들림이 잦아들 때까지 기다리는 보조 모듈입니다.
 
-    콘텐츠 로딩 완료 여부는 판단하지 않습니다. 정상 결과와 로딩 중 화면의 구분은
-    perception 단계의 전환 계약(transition contract)이 담당합니다.
+    OpenCV 연속 프레임 비교로 행동 후 변화 시작과 렌더링 안정화를 판단합니다.
+    pHash는 이 모듈의 일반 대기 시간이 아니라 저장 상태를 찾는 경우에만 사용합니다.
     """
 
     def __init__(self, perception_engine: PerceptionEngine):
         self.perception = perception_engine
         self.last_wait_result: dict = {}
 
-    def _capture_memory_image(self, region: Optional[dict] = None, sample_width: int = 360) -> Image.Image:
-        """
-        현재 화면(브라우저 영역)을 파일로 저장하지 않고 메모리(PIL Image)로 즉시 가져옵니다.
-        """
+    def _capture_memory_frame(
+        self,
+        region: Optional[dict] = None,
+        sample_width: int = 360,
+    ) -> np.ndarray:
+        """현재 브라우저 화면을 파일 저장 없이 OpenCV 회색 프레임으로 가져옵니다."""
+
         if region is None:
             region = self.perception._get_browser_region()
-        
+
         try:
             if region:
                 sct_img = self.perception.sct.grab(region)
             else:
                 sct_img = self.perception.sct.grab(self.perception.sct.monitors[1])
-                
-            # mss의 raw BGRA 바이트를 BGRX 디코더로 PIL Image로 고속 변환
-            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
-            if sample_width > 0 and img.width > sample_width:
-                ratio = sample_width / img.width
-                img = img.resize((sample_width, max(1, int(img.height * ratio))), Image.Resampling.BILINEAR)
-            return img
+
+            raw = np.frombuffer(sct_img.bgra, dtype=np.uint8)
+            frame = gray_frame(
+                raw.reshape(
+                    int(sct_img.height),
+                    int(sct_img.width),
+                    4,
+                )
+            )
+            if sample_width > 0 and frame.shape[1] > sample_width:
+                ratio = sample_width / frame.shape[1]
+                frame = cv2.resize(
+                    frame,
+                    (
+                        sample_width,
+                        max(1, int(frame.shape[0] * ratio)),
+                    ),
+                    interpolation=cv2.INTER_AREA,
+                )
+            return frame
         except Exception as e:
             logger.exception("Failed to capture memory image for stabilization check", error=str(e))
             raise
+
+    def _capture_memory_image(
+        self,
+        region: Optional[dict] = None,
+        sample_width: int = 360,
+    ) -> Image.Image:
+        """저장 상태 pHash 비교가 필요할 때만 PIL 이미지로 변환합니다."""
+
+        return Image.fromarray(
+            self._capture_memory_frame(
+                region=region,
+                sample_width=sample_width,
+            )
+        )
 
     def wait_for_change(
         self,
@@ -61,22 +99,23 @@ class WaitStable:
             check_interval_sec = get_settings().vision.transition_change_check_sec
         minimum_ratio = get_settings().reflex.visual_change_min_ratio
         intensity_threshold = get_settings().reflex.visual_change_pixel_threshold
-        target_size = (196, 212)
-
         try:
-            with Image.open(reference_image_path) as source:
-                reference = source.convert("L").resize(target_size, Image.Resampling.BILINEAR)
+            reference = load_gray_frame(reference_image_path)
         except Exception as exc:
             logger.debug("Transition reference image could not be loaded", error=str(exc))
             return False
 
         started = time.perf_counter()
         while (time.perf_counter() - started) < max_wait_sec:
-            current = self._capture_memory_image(region=region, sample_width=0)
-            current = current.convert("L").resize(target_size, Image.Resampling.BILINEAR)
-            histogram = ImageChops.difference(reference, current).histogram()
-            changed_pixels = sum(histogram[intensity_threshold + 1 :])
-            changed_ratio = changed_pixels / float(target_size[0] * target_size[1])
+            current = self._capture_memory_frame(
+                region=region,
+                sample_width=0,
+            )
+            changed_ratio = changed_pixel_ratio(
+                reference,
+                current,
+                intensity_threshold=intensity_threshold,
+            )
             if changed_ratio >= minimum_ratio:
                 logger.info(
                     "Transition screen change detected",
@@ -89,54 +128,6 @@ class WaitStable:
         logger.info(
             "Transition screen change wait expired",
             max_wait_sec=max_wait_sec,
-        )
-        return False
-
-    def wait_for_phash_change(
-        self,
-        reference_phash: str,
-        *,
-        max_wait_sec: Optional[float] = None,
-        check_interval_sec: Optional[float] = None,
-        region: Optional[dict] = None,
-    ) -> bool:
-        """직전 관찰 화면의 pHash와 달라질 때까지 파일 저장 없이 확인합니다."""
-
-        if not reference_phash:
-            return True
-        if max_wait_sec is None:
-            max_wait_sec = get_settings().vision.transition_change_max_wait_sec
-        if check_interval_sec is None:
-            check_interval_sec = get_settings().vision.transition_change_check_sec
-        max_distance = get_settings().reflex.no_effect_phash_max_distance
-
-        from agent.vision.screen_signature import (
-            hamming_distance,
-            perceptual_hash_image,
-        )
-
-        started = time.perf_counter()
-        while (time.perf_counter() - started) < max(0.0, max_wait_sec):
-            current = self._capture_memory_image(
-                region=region,
-                sample_width=0,
-            )
-            distance = hamming_distance(
-                reference_phash,
-                perceptual_hash_image(current),
-            )
-            if distance is None or distance > max_distance:
-                logger.info(
-                    "Transition pHash change detected",
-                    elapsed_sec=round(time.perf_counter() - started, 3),
-                    phash_distance=distance,
-                )
-                return True
-            time.sleep(max(0.0, check_interval_sec))
-
-        logger.info(
-            "Transition pHash probe unchanged",
-            max_wait_sec=round(max(0.0, max_wait_sec), 3),
         )
         return False
 
@@ -224,16 +215,23 @@ class WaitStable:
         probe_count = 0
         stable_count = 0
         last_diff_percent: float | None = None
-        prev_img = self._capture_memory_image(region=region, sample_width=sample_width)
+        previous_frame = self._capture_memory_frame(
+            region=region,
+            sample_width=sample_width,
+        )
 
         while (time.perf_counter() - start_time) < max_wait_sec:
             time.sleep(check_interval_sec)
-            curr_img = self._capture_memory_image(region=region, sample_width=sample_width)
+            current_frame = self._capture_memory_frame(
+                region=region,
+                sample_width=sample_width,
+            )
             probe_count += 1
 
-            diff = ImageChops.difference(prev_img, curr_img)
-            stat = ImageStat.Stat(diff)
-            diff_ratio = (sum(stat.mean) / (3 * 255.0)) * 100.0
+            diff_ratio = mean_difference_percent(
+                previous_frame,
+                current_frame,
+            )
             last_diff_percent = diff_ratio
 
             if diff_ratio <= threshold_percent:
@@ -256,7 +254,7 @@ class WaitStable:
                     "Screen still changing...",
                     diff_percent=round(diff_ratio, 3),
                 )
-            prev_img = curr_img
+            previous_frame = current_frame
 
         self.last_wait_result = {
             "stable": False,

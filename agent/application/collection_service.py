@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable
 
+from agent.application.collection_outcome import build_collection_outcome
 from agent.application.run_context import emit_run_event, measure_step
 from agent.application.run_contracts import RunPhase
 from agent.utils.logger import logger
@@ -286,9 +287,20 @@ class CollectionService:
                     ),
                 )
         except Exception as exc:
-            from agent.application.run_context import RunCancelled
+            from agent.application.run_context import (
+                ModelRequestTimeout,
+                RunCancelled,
+                RunDeadlineExceeded,
+            )
 
-            if isinstance(exc, RunCancelled):
+            if isinstance(
+                exc,
+                (
+                    RunCancelled,
+                    RunDeadlineExceeded,
+                    ModelRequestTimeout,
+                ),
+            ):
                 raise
             logger.exception("Vision worker execution failed", error=str(exc))
             return {
@@ -361,19 +373,18 @@ class CollectionService:
         )
         validation = dict(worker_result.get("persistence_validation") or {})
         rejected_count = int(validation.get("rejected_count") or 0)
-        if scope_exhausted:
-            completion_status = "complete"
-        elif resolved_count <= 0:
-            completion_status = "rejected"
-        elif (
-            rejected_count > 0
-            or (effective_target_count > 0 and resolved_count < effective_target_count)
-            or hit_recursion_limit
-            or not is_finished
-        ):
-            completion_status = "partial"
-        else:
-            completion_status = "complete"
+        outcome = build_collection_outcome(
+            is_finished=is_finished,
+            hit_recursion_limit=hit_recursion_limit,
+            review=review,
+            persisted_count=persisted_count,
+            resolved_count=resolved_count,
+            rejected_count=rejected_count,
+            target_count=effective_target_count,
+            scope_exhausted=scope_exhausted,
+        )
+        outcome_fields = outcome.as_dict()
+        completion_status = outcome_fields["completion_status"]
         missing_count = (
             max(0, effective_target_count - resolved_count)
             if effective_target_count > 0
@@ -447,6 +458,7 @@ class CollectionService:
                 "document_ids": collection_document_ids,
                 "needs_human_approval": needs_approval,
                 "completion_status": completion_status,
+                "stage_statuses": outcome_fields,
             },
         )
         return {
@@ -469,6 +481,11 @@ class CollectionService:
             "intermediate_report": intermediate_report,
             "collection_intent": collection_intent,
             "completion_status": completion_status,
+            "worker_status": outcome_fields["worker_status"],
+            "review_status": outcome_fields["review_status"],
+            "persistence_status": outcome_fields["persistence_status"],
+            "target_status": outcome_fields["target_status"],
+            "stage_statuses": outcome_fields,
             "search_scope_exhausted": scope_exhausted,
             "job_results_availability": availability,
             "missing_count": missing_count,

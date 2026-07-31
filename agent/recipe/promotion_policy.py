@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from agent.config import get_settings
 from agent.recipe.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
+    is_supported_recipe_action_group,
 )
 _BLOCKING_FEEDBACK_LABELS = {"wrong_target", "no_effect", "loop_risk", "error"}
 _BLOCKING_RESULT_STATUSES = {"error", "skipped"}
@@ -23,7 +23,10 @@ _CODE_MANAGED_TRANSITION_SOURCES = {
     "duplicate_job_policy": "managed_by_duplicate_policy",
     "screen_policy": "managed_by_screen_policy",
     "reflex": "already_managed_by_reflex",
-    "followup_strategy": "already_managed_by_followup_strategy",
+}
+_DEFERRED_GROUP_EFFECT_REASONS = {
+    "no_screen_change",
+    "transition_not_ready",
 }
 
 
@@ -34,29 +37,101 @@ def _seq(value: Any) -> int | None:
         return None
 
 
-def transition_observation_supports_contract_review(
-    observation: dict[str, Any],
-) -> bool:
-    """계약은 없었지만 후처리 검토에 충분한 화면 변화가 기록됐는지 확인한다."""
-
-    if observation.get("reason") != "transition_contract_missing":
-        return False
-    if int(observation.get("marker_count") or 0) <= 0:
-        return False
-    visual_ratio = float(observation.get("visual_change_ratio") or 0.0)
-    phash_distance = observation.get("phash_distance")
-    try:
-        phash_changed = (
-            phash_distance is not None
-            and int(phash_distance)
-            > get_settings().reflex.no_effect_phash_max_distance
-        )
-    except (TypeError, ValueError):
-        phash_changed = False
-    return bool(
-        visual_ratio >= get_settings().reflex.visual_change_min_ratio
-        or phash_changed
+def _step_before_capture_id(step: dict[str, Any]) -> str:
+    before_state = (
+        step.get("before_state")
+        if isinstance(step.get("before_state"), dict)
+        else {}
     )
+    return str(
+        before_state.get("capture_id")
+        or step.get("decision_capture_id")
+        or ""
+    )
+
+
+def _transition_after_capture_id(
+    observations: list[dict[str, Any]],
+) -> str:
+    for observation in reversed(observations):
+        after_state = (
+            observation.get("after_state")
+            if isinstance(observation.get("after_state"), dict)
+            else {}
+        )
+        capture_id = str(
+            after_state.get("capture_id")
+            or observation.get("to_capture_id")
+            or ""
+        )
+        if capture_id:
+            return capture_id
+    return ""
+
+
+def _apply_verified_action_groups(
+    candidate: dict[str, Any],
+    transitions_by_seq: dict[int, list[dict[str, Any]]],
+    verdicts: dict[int, dict[str, Any]],
+) -> None:
+    """최종 행동이 전환을 검증한 연속 행동 묶음의 선행 무변화를 허용한다."""
+
+    reviewable_steps = [
+        step
+        for step in candidate.get("steps", []) or []
+        if (
+            isinstance(step, dict)
+            and step.get("action") in REVIEWABLE_REPLAY_ACTIONS
+            and _seq(step.get("seq")) is not None
+        )
+    ]
+    for first, second in zip(reviewable_steps, reviewable_steps[1:]):
+        if not is_supported_recipe_action_group([first, second]):
+            continue
+        first_seq = int(first["seq"])
+        second_seq = int(second["seq"])
+        first_verdict = verdicts.get(first_seq)
+        second_verdict = verdicts.get(second_seq)
+        if not first_verdict or not second_verdict or not second_verdict["eligible"]:
+            continue
+
+        first_after_capture = _transition_after_capture_id(
+            transitions_by_seq.get(first_seq, [])
+        )
+        second_before_capture = _step_before_capture_id(second)
+        if (
+            not first_after_capture
+            or not second_before_capture
+            or first_after_capture != second_before_capture
+        ):
+            continue
+
+        blocking_reasons = list(first_verdict.get("blocking_reasons") or [])
+        remaining_reasons = [
+            reason
+            for reason in blocking_reasons
+            if reason not in _DEFERRED_GROUP_EFFECT_REASONS
+        ]
+        if remaining_reasons:
+            continue
+
+        group_seqs = [first_seq, second_seq]
+        first_verdict.update(
+            {
+                "eligible": True,
+                "blocking_reasons": [],
+                "execution_group_seqs": group_seqs,
+                "effect_verified_by_seq": second_seq,
+                "evidence_mode": "deferred_group_effect",
+            }
+        )
+        second_verdict.update(
+            {
+                "execution_group_seqs": group_seqs,
+                "effect_verified_by_seq": second_seq,
+                "evidence_mode": "group_commit_effect",
+            }
+        )
 
 
 def evaluate_candidate_step_evidence(candidate: dict[str, Any]) -> dict[int, dict[str, Any]]:
@@ -97,6 +172,10 @@ def evaluate_candidate_step_evidence(candidate: dict[str, Any]) -> dict[int, dic
         transition_sources: list[str] = []
         transition_statuses: list[str] = []
         reasons: list[str] = []
+        if str(step.get("risk_level") or "").strip().casefold() == "sensitive":
+            reasons.append("sensitive_action")
+        if step.get("needs_user_confirmation") is True:
+            reasons.append("user_confirmation_required")
 
         for episode in feedback_items:
             feedback = episode.get("feedback") if isinstance(episode.get("feedback"), dict) else {}
@@ -130,13 +209,7 @@ def evaluate_candidate_step_evidence(candidate: dict[str, Any]) -> dict[int, dic
                 reasons.append("action_evidence_missing")
             if not transition_items:
                 reasons.append("transition_evidence_missing")
-            elif (
-                "ready" not in transition_statuses
-                and not any(
-                    transition_observation_supports_contract_review(item)
-                    for item in transition_items
-                )
-            ):
+            elif "ready" not in transition_statuses:
                 reasons.append("transition_not_ready")
         elif not feedback_items and not transition_items:
             reasons.append("action_evidence_missing")
@@ -150,6 +223,11 @@ def evaluate_candidate_step_evidence(candidate: dict[str, Any]) -> dict[int, dic
             "transition_sources": list(dict.fromkeys(transition_sources)),
             "transition_statuses": list(dict.fromkeys(transition_statuses)),
         }
+    _apply_verified_action_groups(
+        candidate,
+        transitions_by_seq,
+        verdicts,
+    )
     return verdicts
 
 
@@ -163,5 +241,4 @@ def compact_step_evidence_verdicts(candidate: dict[str, Any]) -> list[dict[str, 
 __all__ = [
     "compact_step_evidence_verdicts",
     "evaluate_candidate_step_evidence",
-    "transition_observation_supports_contract_review",
 ]

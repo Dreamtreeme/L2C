@@ -121,6 +121,7 @@ def guard_ui_action(
         },
         action_name,
         args,
+        source=context.action_request.source,
     )
     if sensitive_reason:
         context.require_human_approval(

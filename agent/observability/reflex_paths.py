@@ -13,16 +13,22 @@ def reflex_selection_observation(result: dict[str, Any]) -> dict[str, Any]:
     if not recipe_key:
         return {}
 
-    step_index = _optional_int(trace.get("recipe_step_index"))
-    step_count = _optional_int(trace.get("recipe_step_count"))
+    transition_index = _optional_int(
+        trace.get("recipe_transition_index")
+    )
+    transition_count = _optional_int(
+        trace.get("recipe_transition_count")
+    )
     observation = {
         "reflex_recipe_key": recipe_key,
-        "reflex_path_step_index": step_index,
-        "reflex_path_step_count": step_count,
+        "reflex_path_transition_index": transition_index,
+        "reflex_path_transition_count": transition_count,
     }
     if trace.get("hit"):
         observation["reflex_path_event"] = (
-            "started" if step_index in (None, 0) else "step_selected"
+            "started"
+            if transition_index in (None, 0)
+            else "transition_selected"
         )
         return observation
 
@@ -47,12 +53,16 @@ def reflex_transition_observation(result: dict[str, Any]) -> dict[str, Any]:
         return {}
 
     status = str(transition.get("status") or "")
-    step_index = _optional_int(transition.get("recipe_step_index"))
-    step_count = _optional_int(transition.get("recipe_step_count"))
+    transition_index = _optional_int(
+        transition.get("recipe_transition_index")
+    )
+    transition_count = _optional_int(
+        transition.get("recipe_transition_count")
+    )
     observation = {
         "reflex_recipe_key": recipe_key,
-        "reflex_path_step_index": step_index,
-        "reflex_path_step_count": step_count,
+        "reflex_path_transition_index": transition_index,
+        "reflex_path_transition_count": transition_count,
         "reflex_transition_status": status,
     }
     if status == "unknown":
@@ -65,13 +75,13 @@ def reflex_transition_observation(result: dict[str, Any]) -> dict[str, Any]:
         )
     elif (
         status == "ready"
-        and step_index is not None
-        and step_count is not None
-        and step_index + 1 >= step_count
+        and transition_index is not None
+        and transition_count is not None
+        and transition_index + 1 >= transition_count
     ):
         observation["reflex_path_event"] = "completed"
     elif status == "ready":
-        observation["reflex_path_event"] = "step_completed"
+        observation["reflex_path_event"] = "transition_completed"
     return observation
 
 
@@ -94,11 +104,14 @@ def summarize_reflex_paths(steps: list[dict[str, Any]]) -> dict[str, Any]:
     failed = sum(item.get("reflex_path_event") == "failed" for item in path_events)
     mid_path_failed = sum(
         item.get("reflex_path_event") == "failed"
-        and int(item.get("reflex_path_step_index") or 0) > 0
+        and int(
+            item.get("reflex_path_transition_index") or 0
+        )
+        > 0
         for item in path_events
     )
     return {
-        "reflex_step_hit_count": len(reflex_steps),
+        "reflex_transition_hit_count": len(reflex_steps),
         "reflex_path_started_count": started,
         "reflex_path_completed_count": completed,
         "reflex_path_failed_count": failed,

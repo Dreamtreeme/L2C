@@ -37,7 +37,12 @@ def normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dic
         from agent.application.model_policy import lightweight_model_name
 
         model_name = lightweight_model_name("VISION_JD_NORMALIZATION_MODEL")
-        llm = get_structured_google_model(model_name, JobPosting, temperature=0.0)
+        llm = get_structured_google_model(
+            model_name,
+            JobPosting,
+            temperature=0.0,
+            execution_role="lightweight",
+        )
         messages = [
             SystemMessage(
                 content=(

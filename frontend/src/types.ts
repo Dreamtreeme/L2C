@@ -4,6 +4,7 @@ export type RunStatus =
   | "waiting_approval"
   | "waiting_input"
   | "completed"
+  | "partial"
   | "failed"
   | "cancelled";
 
@@ -17,6 +18,7 @@ export type RunPhase =
   | "persistence"
   | "answering"
   | "completed"
+  | "partial"
   | "failed"
   | "cancelled";
 

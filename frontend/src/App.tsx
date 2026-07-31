@@ -171,6 +171,8 @@ function workspaceReducer(
         activePhase:
           action.payload.status === "completed"
             ? "completed"
+            : action.payload.status === "partial"
+              ? "partial"
             : action.payload.status === "cancelled"
               ? "cancelled"
               : state.activePhase,

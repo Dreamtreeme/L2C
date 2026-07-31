@@ -113,11 +113,16 @@ def _build_forbidden_action_context(
 
 
 def _safety_page_role_contract() -> str:
+    from agent.prompts.trust_boundary import external_content_contract_en
+
     return (
-        "\n\n[Safety and page-role contract]\n"
+        "\n\n"
+        + external_content_contract_en()
+        + "\n[Safety and page-role contract]\n"
         "- For every UI tool call, include page_role when you can infer it: home, search, list, detail, form, popup, error, or unknown.\n"
         "- Include risk_level: safe_read, safe_navigation, or sensitive.\n"
         "- Set needs_user_confirmation=true before login, password/authentication, personal data, agreement/terms, application/submission, payment, transfer, account, finance, or legal-effect steps. The executor will stop and ask the user.\n"
+        "- Set needs_user_confirmation=false for safe UI actions. For type_in_marker, set slot_name to the matching task input key such as query or keyword; type only values supplied by the task contract.\n"
         "- For public job collection, do not attempt login, signup, authentication, or account switching unless the user explicitly asked for it. If such a screen appears, leave that flow and return to a public search/list/home surface. Use neutral action reasons such as 'return to public search surface' instead of describing a login/signup action.\n"
         "- A marker whose OCR text is only a generic icon label has no known semantic identity. Infer it only from a clearly visible symbol; otherwise choose a nearby labeled text marker or another visible navigation path instead of inventing what its ID means.\n"
         "- Unknown or newly released tasks should be researched and narrowed before execution. Do not try random branches first.\n"

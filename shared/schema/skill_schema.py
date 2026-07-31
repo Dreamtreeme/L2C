@@ -42,7 +42,6 @@ class SkillStepIntent(BaseModel):
     target_role: str = Field("", description="대상 역할(target role)")
     component: str = Field("", description="화면 구성요소(component)")
     expected_after: str = Field("", description="행동 이후 기대 화면 변화(expected after)")
-    fixed: bool | None = Field(None, description="고정 행동 여부(fixed step)")
     replay_mode: ReplayMode = Field(
         "reasoning",
         description="고정 재생, 입력 치환 재생, 매 실행 추론 중 하나(replay mode)",

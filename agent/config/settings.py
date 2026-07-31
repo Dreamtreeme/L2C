@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -136,6 +138,41 @@ class ModelSettings(SectionSettings):
         return str(getattr(self, field_name) or "").strip() if field_name else None
 
 
+class ExecutionSettings(SectionSettings):
+    """외부 모델 역할과 전체 사용자 요청의 시간 경계."""
+
+    commander_request_timeout_sec: float = Field(
+        60.0,
+        gt=0,
+        le=600,
+        validation_alias="COMMANDER_REQUEST_TIMEOUT_SEC",
+    )
+    worker_reasoning_request_timeout_sec: float = Field(
+        60.0,
+        gt=0,
+        le=600,
+        validation_alias="VISION_WORKER_REASONING_TIMEOUT_SEC",
+    )
+    lightweight_request_timeout_sec: float = Field(
+        30.0,
+        gt=0,
+        le=600,
+        validation_alias="VISION_LIGHTWEIGHT_TIMEOUT_SEC",
+    )
+    transient_retries: int = Field(
+        1,
+        ge=0,
+        le=5,
+        validation_alias="MODEL_TRANSIENT_RETRIES",
+    )
+    run_deadline_sec: float = Field(
+        900.0,
+        gt=0,
+        le=7200,
+        validation_alias="L2C_RUN_DEADLINE_SEC",
+    )
+
+
 class BrowserSettings(SectionSettings):
     playwright_headless: bool = Field(True, validation_alias="PLAYWRIGHT_HEADLESS")
     playwright_timeout_ms: int = Field(30000, gt=0, le=300000, validation_alias="PLAYWRIGHT_TIMEOUT_MS")
@@ -179,6 +216,41 @@ class BrowserSettings(SectionSettings):
         if isinstance(value, str):
             return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
+
+    @model_validator(mode="after")
+    def enforce_loopback_api_configuration(self):
+        """로컬 제품에서 외부 API 노출 설정을 시작 전에 거부한다."""
+
+        local_names = {"localhost", "testserver", "[::1]", "::1"}
+
+        def is_loopback_host(value: str) -> bool:
+            normalized = str(value or "").strip().casefold()
+            if normalized in local_names:
+                return True
+            try:
+                return ip_address(normalized.strip("[]")).is_loopback
+            except ValueError:
+                return False
+
+        invalid_hosts = [
+            host
+            for host in self.local_api_allowed_hosts
+            if not is_loopback_host(host)
+        ]
+        invalid_origins = []
+        for origin in self.cors_allow_origins:
+            parsed = urlsplit(origin)
+            if parsed.scheme not in {"http", "https"} or not is_loopback_host(
+                parsed.hostname or ""
+            ):
+                invalid_origins.append(origin)
+        if invalid_hosts or invalid_origins:
+            raise ValueError(
+                "현재 로컬 제품은 loopback API만 지원합니다. "
+                f"external_hosts={invalid_hosts}, "
+                f"external_origins={invalid_origins}"
+            )
+        return self
 
 
 class VisionSettings(SectionSettings):
@@ -344,10 +416,6 @@ class ReflexSettings(SectionSettings):
     capture_width_tolerance_px: int = Field(32, ge=0, le=1000, validation_alias="REFLEX_CAPTURE_WIDTH_TOLERANCE_PX")
     capture_height_tolerance_px: int = Field(48, ge=0, le=1000, validation_alias="REFLEX_CAPTURE_HEIGHT_TOLERANCE_PX")
     interactive_content_top_px: int = Field(180, ge=0, le=4000, validation_alias="VISION_INTERACTIVE_CONTENT_TOP_PX")
-    visual_change_sufficient_components: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("tab_button", "search_button", "expand_detail_button", "reveal_button", "details_toggle"),
-        validation_alias="REFLEX_VISUAL_CHANGE_SUFFICIENT_COMPONENTS",
-    )
     idempotent_control_components: Annotated[tuple[str, ...], NoDecode] = Field(
         (
             "tab_button",
@@ -366,7 +434,6 @@ class ReflexSettings(SectionSettings):
     )
 
     @field_validator(
-        "visual_change_sufficient_components",
         "idempotent_control_components",
         "idempotent_scope_ignored_query_keys",
         mode="before",
@@ -418,6 +485,7 @@ class AppSettings:
     def __init__(self) -> None:
         self.paths = PathSettings()
         self.models = ModelSettings()
+        self.execution = ExecutionSettings()
         self.browser = BrowserSettings()
         self.vision = VisionSettings()
         self.ocr = OcrSettings()
@@ -442,6 +510,7 @@ __all__ = [
     "AppSettings",
     "BASE_DIR",
     "BrowserSettings",
+    "ExecutionSettings",
     "ModelSettings",
     "OcrSettings",
     "ObservabilitySettings",

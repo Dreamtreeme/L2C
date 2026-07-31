@@ -1,4 +1,4 @@
-"""첫 ROI가 일치하는 안정 Recipe 경로를 끝까지 순서대로 재생한다."""
+"""첫 ROI가 일치하는 경험 기반 탐색 경로를 상태 전이 단위로 재생한다."""
 
 from __future__ import annotations
 
@@ -7,518 +7,179 @@ from typing import Any
 
 from agent.graph.action_request import build_action_request
 from agent.graph.state import GraphState
-from agent.recipe.replay_actions import (
-    CONTEXTUAL_REPLAY_ACTIONS,
-    TARGET_REPLAY_ACTIONS,
+from agent.runtime.reflex_replay import (
+    ReflexReplayContext,
+    ReflexSelection,
+    load_reflex_replay_context,
+    select_reflex_replay,
 )
-from agent.runtime.action_validation import text_input_target_rejection
-from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
 
 
-def _reflex_trace_args(step: dict) -> dict:
-    """실행에 영향 없는 레시피 추적 메타데이터를 도구 인자로 복원한다."""
+def _miss_result(
+    state: GraphState,
+    reason: str,
+    trace: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """현재 활성 경로를 차단하고 자율 탐색 폴백 상태를 만든다."""
 
-    out: dict[str, str] = {}
-    mapping = {
-        "intent": "reason",
-        "page_role": "page_role",
-        "target_role": "target_role",
-        "component": "target_component",
-        "expected_after": "expected_after",
-    }
-    for source_key, arg_key in mapping.items():
-        value = step.get(source_key)
-        if value:
-            out[arg_key] = str(value)
-    target = step.get("target") if isinstance(step.get("target"), dict) else {}
-    semantic_label = target.get("semantic_label")
-    if semantic_label:
-        out["target_label"] = str(semantic_label)
-    return out
-
-
-def _reflex_action_args(step: dict, marker_id: int | None, params: dict | None = None) -> dict | None:
-    """저장된 경로 단계를 물리 action 도구 인자로 변환한다."""
-
-    action = step.get("action")
-    param = dict(step.get("param") or {})
-    value = step.get("value")
-    params = dict(params or {})
-    trace_args = _reflex_trace_args(step)
-
-    if action == "click_marker":
-        return {"marker_id": marker_id, **trace_args} if marker_id is not None else None
-    if action == "type_in_marker":
-        if marker_id is None:
-            return None
-        slot_name = param.get("slot_name") or param.get("slot") or ""
-        if not slot_name:
-            slot_refs = step.get("slot_refs") or []
-            slot_name = slot_refs[0] if slot_refs else ""
-        if step.get("replay_mode") == "parameterized" and not slot_name:
-            return None
-        text = params.get(slot_name) if slot_name else None
-        if slot_name and step.get("replay_mode") == "parameterized" and not text:
-            return None
-        text = text or param.get("text") or value
-        if not text:
-            return None
-        args = {"marker_id": marker_id, "text": text, **trace_args}
-        if slot_name:
-            args["slot_name"] = slot_name
-        return args
-    if action in CONTEXTUAL_REPLAY_ACTIONS:
-        allowed_param_keys = {
-            "press_key": {"key"},
-            "go_back": set(),
-            "close_current_tab": set(),
-            "switch_tab": {"direction"},
-        }[action]
-        args = {
-            key: value
-            for key, value in param.items()
-            if key in allowed_param_keys and value not in (None, "")
+    reflex_trace = dict(trace or {})
+    reflex_trace.update(
+        {
+            "hit": False,
+            "reason": reason or reflex_trace.get("reason", ""),
         }
-        if action == "press_key" and not args.get("key"):
-            return None
-        if action == "switch_tab" and not args.get("direction"):
-            return None
-        args.update(
+    )
+    active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
+    blocked_keys = [
+        str(key)
+        for key in (state.get("reflex_blocked_recipe_keys") or [])
+        if str(key)
+    ]
+    active_recipe_key = str(active_recipe.get("recipe_key") or "")
+    if active_recipe_key:
+        reflex_trace.update(
             {
-                key: value
-                for key, value in trace_args.items()
-                if key in {"reason", "page_role", "expected_after"}
+                "recipe_key": active_recipe_key,
+                "recipe_transition_index": int(
+                    active_recipe.get("current_transition_index") or 0
+                ),
+                "recipe_transition_count": int(
+                    active_recipe.get("transition_count") or 0
+                ),
+                "path_failed": True,
             }
         )
-        args.update(
-            {
-                "risk_level": "safe_navigation",
-                "needs_user_confirmation": False,
-            }
-        )
-        return args
-    return None
+        if active_recipe_key not in blocked_keys:
+            blocked_keys.append(active_recipe_key)
+    return {
+        "reflex_trace": reflex_trace,
+        "active_reflex_recipe": {},
+        "reflex_blocked_recipe_keys": blocked_keys,
+    }
 
 
-def _missing_required_recipe_inputs(recipe: Any, params: dict) -> list[str]:
-    """레시피 skill metadata의 필수 입력 중 누락된 이름을 반환한다."""
+def _build_request(selection: ReflexSelection):
+    """검증을 통과한 레시피 전이를 실행 요청으로 조립한다."""
 
-    metadata = getattr(recipe, "skill_metadata", None)
-    inputs = getattr(metadata, "inputs", []) if metadata is not None else []
-    missing: list[str] = []
-    for item in inputs or []:
-        name = getattr(item, "name", "")
-        required = bool(getattr(item, "required", False))
-        value = params.get(name)
-        if required and name and (value is None or value == ""):
-            missing.append(name)
-    return missing
+    transition_count = len(selection.recipe.transitions)
+    return build_action_request(
+        "reflex",
+        "cached recipe transition",
+        selection.tool_calls,
+        metadata={
+            "execution_unit": "recipe_transition",
+            "recipe_key": selection.recipe_key,
+            "transition_index": selection.transition_index,
+            "transition_count": transition_count,
+            "before_state": dump_model(selection.transition.before),
+            "expected_after_state": dump_model(selection.transition.after),
+            "transition_actions": [
+                str(action.action)
+                for action in selection.transition.actions
+            ],
+        },
+    )
+
+
+def _hit_result(
+    context: ReflexReplayContext,
+    selection: ReflexSelection,
+) -> dict[str, Any]:
+    """요청, 활성 경로 상태와 관측 trace를 함께 만든다."""
+
+    transition_count = len(selection.recipe.transitions)
+    active_recipe_state = {
+        "recipe_key": selection.recipe_key,
+        "current_transition_index": selection.transition_index,
+        "pending_transition_index": selection.transition_index,
+        "transition_count": transition_count,
+        "actions": [
+            [str(action.action) for action in transition.actions]
+            for transition in selection.recipe.transitions
+        ],
+    }
+    return {
+        "pending_action": _build_request(selection),
+        "reflex_trace": {
+            "hit": True,
+            "recipe_key": selection.recipe_key,
+            "candidate_count": context.candidate_count,
+            "task_category": context.task_category,
+            "actions": [
+                call["name"]
+                for call in selection.tool_calls
+            ],
+            "tool_calls": selection.tool_call_traces,
+            "recipe_transition_index": selection.transition_index,
+            "recipe_transition_count": transition_count,
+        },
+        "active_reflex_recipe": active_recipe_state,
+    }
 
 
 def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
-    """일치하는 ROI Recipe가 있으면 reasoning을 우회해 행동 요청을 만든다."""
+    """후보 조회, 검증과 요청 조립을 순서대로 실행한다."""
 
     started = time.perf_counter()
     logger.info("Executing Reflex Node")
-
-    def miss(_elapsed: float, reason: str = "", trace: dict | None = None) -> dict[str, Any]:
-        reflex_trace = dict(trace or {})
-        reflex_trace.update({"hit": False, "reason": reason or reflex_trace.get("reason", "")})
-        active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
-        blocked_keys = [
-            str(key)
-            for key in (state.get("reflex_blocked_recipe_keys") or [])
-            if str(key)
-        ]
-        active_recipe_key = str(active_recipe.get("recipe_key") or "")
-        if active_recipe_key:
-            reflex_trace.update(
-                {
-                    "recipe_key": active_recipe_key,
-                    "recipe_step_index": int(
-                        active_recipe.get("next_step_index") or 0
-                    ),
-                    "recipe_step_count": int(
-                        active_recipe.get("step_count") or 0
-                    ),
-                    "path_failed": True,
-                }
-            )
-        if active_recipe_key and active_recipe_key not in blocked_keys:
-            blocked_keys.append(active_recipe_key)
-        return {
-            "reflex_trace": reflex_trace,
-            "reflex_transition_contracts": {},
-            "active_reflex_recipe": {},
-            "reflex_blocked_recipe_keys": blocked_keys,
-        }
-
     try:
-        from agent.recipe.matcher import is_replayable_step
-        from agent.recipe.page_context import normalize_page_role
-        from agent.recipe.phash_replay import (
-            match_step_by_screen_signature,
-            screen_context_signature_match,
-        )
-        from agent.recipe.store import RecipeStore
-        from agent.recipe.text_utils import recipe_url_scope_matches, url_template
-
-        markers = state.get("current_markers", []) or []
-        params = dict(state.get("recipe_params") or {})
-        params.setdefault("goal", state.get("goal", ""))
-        requested_task_category = str(params.get("task_category") or "").strip()
-        site = str(params.get("site") or "").strip()
-        recent_images = state.get("recent_images", []) or []
-        current_image_path = str(recent_images[-1]) if recent_images else ""
-        current_page_role = normalize_page_role(state.get("current_page_role", ""))
-        current_url = str(state.get("current_url") or "")
-        current_url_template = url_template(current_url)
-        transition_failed_recipe_keys = {
-            str(key)
-            for key in (state.get("reflex_blocked_recipe_keys") or [])
-            if str(key)
-        }
-        already_used_recipe_keys = used_idempotent_recipe_keys_on_url(
-            state,
-            str(state.get("current_url") or ""),
-        )
-        recipe_candidates = (
-            RecipeStore().get_site_recipes(
-                site,
-                task_category=requested_task_category or None,
+        context = load_reflex_replay_context(state)
+        if not context.recipe_candidates:
+            logger.info(
+                "Reflex miss: no recipe",
+                site=context.site,
+                task_category=context.task_category,
             )
-            if site
-            else []
-        )
-        active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
-        active_recipe_key = str(active_recipe.get("recipe_key") or "")
-        if active_recipe_key:
-            recipe_candidates = [
-                item
-                for item in recipe_candidates
-                if str(item[0]) == active_recipe_key
-            ]
-
-        if not recipe_candidates:
-            elapsed = time.perf_counter() - started
-            logger.info("Reflex miss: no recipe", site=site, task_category=requested_task_category)
-            return miss(
-                elapsed,
+            return _miss_result(
+                state,
                 "no_recipe",
                 {
                     "candidate_count": 0,
-                    "site": site,
-                    "task_category": requested_task_category,
+                    "site": context.site,
+                    "task_category": context.task_category,
                 },
             )
 
-        selected = None
-        rejected_count = 0
-        last_reject_reason = ""
-        reject_reason_priority = {
-            "capture_size_mismatch": 100,
-            "screen_context_signature_missing": 100,
-            "roi_phash_distance": 90,
-            "screen_context_phash_distance": 90,
-            "target_ratio_miss": 75,
-            "url_scope_mismatch": 65,
-        }
-        reject_reason_score = -1
-        reject_reason_counts: dict[str, int] = {}
-        candidate_rejections: list[dict[str, Any]] = []
-
-        def record_rejection(recipe_key: str, reason: str, trace: dict[str, Any] | None = None) -> None:
-            nonlocal last_reject_reason, reject_reason_score
-            resolved = str(reason or "candidate_invalid")
-            reject_reason_counts[resolved] = reject_reason_counts.get(resolved, 0) + 1
-            score = reject_reason_priority.get(resolved, 50)
-            if score > reject_reason_score:
-                reject_reason_score = score
-                last_reject_reason = resolved
-            item = {"recipe_key": recipe_key, "reason": resolved}
-            if trace:
-                item.update(
-                    {
-                        "page_role": trace.get("page_role", ""),
-                        "current_page_role": trace.get("current_page_role", ""),
-                        "url_template": trace.get("url_template", ""),
-                        "current_url_template": trace.get("current_url_template", ""),
-                        "action": trace.get("action", ""),
-                        "phash": dict(trace.get("phash") or {}),
-                    }
-                )
-            candidate_rejections.append(item)
-
-        for recipe_key, recipe in recipe_candidates:
-            if (
-                recipe_key in transition_failed_recipe_keys
-                or (
-                    not active_recipe_key
-                    and recipe_key in already_used_recipe_keys
-                )
-            ):
-                rejected_count += 1
-                reason = (
-                    "recipe_blocked_after_transition_failure"
-                    if recipe_key in transition_failed_recipe_keys
-                    else "recipe_already_used_on_page"
-                )
-                record_rejection(recipe_key, reason)
-                continue
-            if _missing_required_recipe_inputs(recipe, params):
-                rejected_count += 1
-                record_rejection(recipe_key, "missing_required_inputs")
-                continue
-            if not recipe.steps:
-                rejected_count += 1
-                record_rejection(recipe_key, "empty_recipe")
-                continue
-
-            step_count = len(recipe.steps)
-            step_index = (
-                int(active_recipe.get("next_step_index") or 0)
-                if recipe_key == active_recipe_key
-                else 0
-            )
-            if step_index < 0 or step_index >= step_count:
-                rejected_count += 1
-                record_rejection(
-                    recipe_key,
-                    "recipe_step_out_of_range",
-                )
-                continue
-
-            tool_calls = []
-            transition_contracts: dict[str, dict] = {}
-            tool_call_traces: dict[str, dict[str, Any]] = {}
-            candidate_valid = True
-            for index, recipe_step in [
-                (step_index, recipe.steps[step_index])
-            ]:
-                step = dump_model(recipe_step)
-                action = step.get("action")
-                step_trace: dict[str, Any] = {
-                    "seq": step.get("seq"),
-                    "step_index": index,
-                    "action": action,
-                    "page_role": step.get("page_role", ""),
-                    "current_page_role": current_page_role,
-                    "url_template": step.get("url_template", ""),
-                    "current_url_template": current_url_template,
-                    "replay_mode": step.get("replay_mode"),
-                    "match_mode": "none",
-                    "target_text": (
-                        (step.get("target") or {}).get("text")
-                        if isinstance(step.get("target"), dict)
-                        else ""
-                    ),
-                }
-                if not is_replayable_step(step):
-                    record_rejection(recipe_key, "not_replayable", step_trace)
-                    candidate_valid = False
-                    break
-                if not recipe_url_scope_matches(step.get("url_template", ""), current_url):
-                    record_rejection(recipe_key, "url_scope_mismatch", step_trace)
-                    candidate_valid = False
-                    break
-                contextual_continuation = bool(
-                    active_recipe_key
-                    and action in CONTEXTUAL_REPLAY_ACTIONS
-                )
-                if contextual_continuation:
-                    context_match = screen_context_signature_match(
-                        dict(step.get("screen_context_signature") or {}),
-                        dict(state.get("screen_signature") or {}),
-                    )
-                    step_trace["phash"] = context_match
-                    step_trace["match_mode"] = (
-                        context_match.get("mode")
-                        or "screen_context_phash"
-                    )
-                    if not context_match.get("matched"):
-                        record_rejection(
-                            recipe_key,
-                            str(
-                                context_match.get("reason")
-                                or "screen_context_mismatch"
-                            ),
-                            step_trace,
-                        )
-                        candidate_valid = False
-                        break
-                if (
-                    action in CONTEXTUAL_REPLAY_ACTIONS
-                    and not active_recipe_key
-                ):
-                    record_rejection(
-                        recipe_key,
-                        "recipe_must_start_with_roi",
-                        step_trace,
-                    )
-                    candidate_valid = False
-                    break
-                marker_id = None
-                if action in TARGET_REPLAY_ACTIONS:
-                    marker_id, phash_result = match_step_by_screen_signature(
-                        step,
-                        dict(state.get("screen_signature", {}) or {}),
-                        markers,
-                        current_image_path=current_image_path,
-                    )
-                    step_trace["phash"] = phash_result
-                    step_trace["match_mode"] = (
-                        phash_result.get("mode") or "roi_phash"
-                    )
-                    if marker_id is None:
-                        record_rejection(
-                            recipe_key,
-                            phash_result.get(
-                                "reason",
-                                "phash_check_failed",
-                            ),
-                            step_trace,
-                        )
-                        candidate_valid = False
-                        break
-                    if action == "type_in_marker":
-                        target_rejection = text_input_target_rejection(
-                            markers,
-                            marker_id,
-                        )
-                        if target_rejection:
-                            record_rejection(
-                                recipe_key,
-                                str(
-                                    target_rejection.get("reason")
-                                    or "invalid_text_input_target"
-                                ),
-                                step_trace,
-                            )
-                            candidate_valid = False
-                            break
-                    step_trace["marker_id"] = marker_id
-                elif step_trace["match_mode"] == "none":
-                    step_trace["match_mode"] = "active_recipe_context"
-                args = _reflex_action_args(step, marker_id, params=params)
-                if args is None:
-                    record_rejection(recipe_key, "args_build_failed", step_trace)
-                    candidate_valid = False
-                    break
-
-                call_id = f"reflex_{abs(hash(recipe_key))}_{index}"
-                tool_calls.append({"name": action, "args": args, "id": call_id})
-                step_trace.update({"accepted": True, "tool_call_id": call_id})
-                tool_call_traces[call_id] = dict(step_trace)
-                contract = step.get("transition_contract")
-                if contract:
-                    transition_contracts[call_id] = dict(contract)
-            if candidate_valid and tool_calls:
-                selected = (
-                    recipe_key,
-                    recipe,
-                    tool_calls,
-                    transition_contracts,
-                    tool_call_traces,
-                )
-                break
-            rejected_count += 1
-            if not last_reject_reason:
-                record_rejection(recipe_key, "candidate_invalid")
-
-        if selected is None:
-            elapsed = time.perf_counter() - started
+        selection, rejection_log = select_reflex_replay(state, context)
+        if selection is None:
+            trace = rejection_log.trace_payload(context.candidate_count)
             logger.info(
                 "Reflex miss: no candidate passed marker matching",
-                candidates=len(recipe_candidates),
-                last_reason=last_reject_reason,
-                reject_reasons=reject_reason_counts,
-                candidate_rejections=candidate_rejections[:12],
+                candidates=context.candidate_count,
+                last_reason=rejection_log.last_reason,
+                reject_reasons=rejection_log.reason_counts,
+                candidate_rejections=rejection_log.candidates[:12],
             )
-            return miss(
-                elapsed,
-                "no_candidate_passed",
-                {
-                    "candidate_count": len(recipe_candidates),
-                    "rejected_count": rejected_count,
-                    "last_reason": last_reject_reason,
-                    "reject_reasons": reject_reason_counts,
-                    "candidate_rejections": candidate_rejections[:12],
-                },
-            )
+            return _miss_result(state, "no_candidate_passed", trace)
 
-        recipe_key, recipe, tool_calls, transition_contracts, tool_call_traces = selected
-        selected_call = tool_calls[0]
-        selected_trace = tool_call_traces[selected_call["id"]]
-        step_index = int(selected_trace.get("step_index") or 0)
-        step_count = len(recipe.steps)
-        active_recipe_state = (
-            {
-                "recipe_key": recipe_key,
-                "next_step_index": step_index + 1,
-                "step_count": step_count,
-                "actions": [
-                    str(item.action)
-                    for item in recipe.steps
-                ],
-            }
-            if step_count > 1
-            else {}
-        )
-        request = build_action_request(
-            "reflex",
-            "cached recipe path step",
-            tool_calls,
-            metadata={
-                "execution_unit": "stable_recipe_path",
-                "recipe_key": recipe_key,
-                "step_index": step_index,
-                "step_count": step_count,
-            },
-        )
         elapsed = time.perf_counter() - started
         logger.info(
             "Reflex hit",
-            recipe_key=recipe_key[:24],
-            actions=[call["name"] for call in tool_calls],
-            recipe_step=(
-                f"{step_index + 1}/{step_count}"
-                if step_count > 1
+            recipe_key=selection.recipe_key[:24],
+            actions=[call["name"] for call in selection.tool_calls],
+            recipe_transition=(
+                f"{selection.transition_index + 1}/"
+                f"{len(selection.recipe.transitions)}"
+                if len(selection.recipe.transitions) > 1
                 else ""
             ),
-            transition_contracts=len(transition_contracts),
             when_to_use=getattr(
-                getattr(recipe, "skill_metadata", None),
+                getattr(selection.recipe, "skill_metadata", None),
                 "when_to_use",
                 "",
             )[:80],
             duration=f"{elapsed:.3f}s",
         )
-        reflex_trace = {
-            "hit": True,
-            "recipe_key": recipe_key,
-            "candidate_count": len(recipe_candidates),
-            "task_category": requested_task_category,
-            "actions": [call["name"] for call in tool_calls],
-            "tool_calls": tool_call_traces,
-            "recipe_step_index": (
-                step_index
-            ),
-            "recipe_step_count": (
-                step_count
-            ),
-        }
-        return {
-            "pending_action": request,
-            "reflex_trace": reflex_trace,
-            "reflex_transition_contracts": transition_contracts,
-            "active_reflex_recipe": active_recipe_state,
-        }
+        return _hit_result(context, selection)
     except Exception as exc:
-        elapsed = time.perf_counter() - started
         logger.debug("reflex node skipped", error=str(exc))
-        return miss(elapsed, "exception", {"error": str(exc)})
+        return _miss_result(
+            state,
+            "exception",
+            {"error": str(exc)},
+        )
 
 
 __all__ = ["attempt_reflex_replay"]

@@ -106,6 +106,7 @@ def extract_search_intent(
             model_name,
             CollectionIntent,
             temperature=0.0,
+            execution_role="lightweight",
         )
         messages = [
             SystemMessage(

@@ -79,27 +79,18 @@ def capture_node(state: GraphState) -> dict[str, Any]:
     perception = _perception_engine()
     transition_request = dict(state.get("transition_request", {}) or {})
     pending_action = str(transition_request.get("action") or "")
-    pending_screen_phash = str(
-        transition_request.get("pending_screen_phash") or ""
-    )
     pending_target_phash = str(
         transition_request.get("pending_target_phash") or ""
     )
 
-    if pending_screen_phash or pending_target_phash:
-        wait_method_name = (
-            "wait_for_transition_phash_match"
-            if pending_target_phash
-            else "wait_for_transition_phash_change"
+    if pending_target_phash:
+        wait_for_phash = getattr(
+            perception,
+            "wait_for_transition_phash_match",
+            None,
         )
-        wait_for_phash = getattr(perception, wait_method_name, None)
         if callable(wait_for_phash):
-            contract = (
-                transition_request.get("contract")
-                if isinstance(transition_request.get("contract"), dict)
-                else {}
-            )
-            timeout_sec = float(contract.get("timeout_sec") or 12.0)
+            timeout_sec = get_settings().vision.page_ready_timeout_sec
             elapsed_sec = max(
                 0.0,
                 time.time()
@@ -111,22 +102,16 @@ def capture_node(state: GraphState) -> dict[str, Any]:
                 remaining_sec,
             )
             try:
-                if pending_target_phash:
-                    changed = wait_for_phash(
-                        pending_target_phash,
-                        max_distance=int(
-                            transition_request.get(
-                                "pending_target_max_distance"
-                            )
-                            or 0
-                        ),
-                        max_wait_sec=probe_wait_sec,
-                    )
-                else:
-                    changed = wait_for_phash(
-                        pending_screen_phash,
-                        max_wait_sec=probe_wait_sec,
-                    )
+                changed = wait_for_phash(
+                    pending_target_phash,
+                    max_distance=int(
+                        transition_request.get(
+                            "pending_target_max_distance"
+                        )
+                        or 0
+                    ),
+                    max_wait_sec=probe_wait_sec,
+                )
             except Exception as exc:
                 logger.debug(
                     "Transition pHash wait skipped",
@@ -136,12 +121,12 @@ def capture_node(state: GraphState) -> dict[str, Any]:
             if not changed:
                 return {
                     "ocr_complete": False,
+                    "ocr_capture_id": "",
                     "transition_probe_unchanged": True,
                 }
 
     if (
         pending_action in _WAIT_ACTIONS
-        and not pending_screen_phash
         and not pending_target_phash
     ):
         wait_for_change = getattr(perception, "wait_for_transition_change", None)
@@ -207,6 +192,7 @@ def capture_node(state: GraphState) -> dict[str, Any]:
     )
     return {
         "current_capture_id": capture_id,
+        "ocr_capture_id": "",
         "capture_sequence": capture_sequence,
         "current_screenshot": str(image_path),
         "previous_screen_observation": previous_observation,
@@ -293,6 +279,7 @@ def ocr_node(state: GraphState) -> dict[str, Any]:
         "current_page_role": page_role,
         "analysis_mode": analysis_mode,
         "ocr_complete": True,
+        "ocr_capture_id": str(state.get("current_capture_id") or ""),
         "low_information_screen": False,
     }
 

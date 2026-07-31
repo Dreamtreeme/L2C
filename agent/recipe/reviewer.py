@@ -67,6 +67,7 @@ def _report_summary_mode() -> str:
 
 def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     from langchain_core.messages import HumanMessage, SystemMessage
+    from agent.prompts.trust_boundary import external_content_contract_en
 
     compact_jobs = [
         {
@@ -81,11 +82,17 @@ def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[s
     model_name = lightweight_model_name("VISION_WORKER_SUMMARY_MODEL")
     from agent.application.model_clients import get_structured_google_model
 
-    llm = get_structured_google_model(model_name, ReportJobSummary, temperature=0.0)
+    llm = get_structured_google_model(
+        model_name,
+        ReportJobSummary,
+        temperature=0.0,
+        execution_role="lightweight",
+    )
     messages = [
         SystemMessage(
             content=(
-                "You normalize job postings that were already extracted by a vision worker. "
+                external_content_contract_en()
+                + "\nYou normalize job postings that were already extracted by a vision worker. "
                 "Read field names in any language, including Korean. "
                 "Return one summary item per input job in the same order. "
                 "Do not invent missing facts; use an empty string when a value is unknown."
@@ -400,19 +407,29 @@ def build_worker_review_payload(
     }
 
 
-def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallback: dict[str, Any]) -> dict[str, Any]:
+def _llm_review(
+    submission: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> dict[str, Any]:
     from langchain_core.messages import HumanMessage, SystemMessage
     from agent.application.model_clients import get_structured_google_model
+    from agent.prompts.trust_boundary import external_content_contract_en
 
     from agent.application.model_policy import commander_model_name
 
     model_name = commander_model_name("VISION_WORKER_REVIEW_MODEL")
-    llm = get_structured_google_model(model_name, CommanderReview, temperature=0.0)
+    llm = get_structured_google_model(
+        model_name,
+        CommanderReview,
+        temperature=0.0,
+        execution_role="commander",
+    )
     compact = build_worker_review_payload(submission, issues)
     messages = [
         SystemMessage(
             content=(
-                "You are the commander reviewing a child vision worker submission. "
+                external_content_contract_en()
+                + "\nYou are the commander reviewing a child vision worker submission. "
                 "Return only the structured CommanderReview schema. Decide data acceptance separately from "
                 "whether another collection attempt is needed. Set accept_collected_data=true for relevant, "
                 "persistable jobs even when the requested count was not reached. Set continue_collection=true "
@@ -421,28 +438,11 @@ def _llm_review(submission: dict[str, Any], issues: list[dict[str, Any]], fallba
         ),
         HumanMessage(content=json.dumps(compact, ensure_ascii=False, indent=2)),
     ]
-    last_error = ""
-    for _ in range(2):
-        try:
-            from agent.application.run_context import invoke_with_metrics
+    from agent.application.run_context import invoke_with_metrics
 
-            response = invoke_with_metrics(llm, messages, "worker_review")
-            review = dump_model(response)
-            return dump_model(CommanderReview(**review))
-        except Exception as exc:  # pragma: no cover - provider/schema failures are best-effort
-            last_error = str(exc)
-            messages.append(
-                HumanMessage(
-                    content=(
-                        "Your previous review was not valid CommanderReview JSON/schema output. "
-                        "Retry with fields: decision, reasons, feedback_to_worker, accept_collected_data, "
-                        "continue_collection, recipe_candidate, confidence."
-                    )
-                )
-            )
-    fallback = dict(fallback)
-    fallback.setdefault("reasons", []).append(f"llm_review_failed: {last_error[:200]}")
-    return fallback
+    response = invoke_with_metrics(llm, messages, "worker_review")
+    review = dump_model(response)
+    return dump_model(CommanderReview(**review))
 
 
 def review_worker_submission(submission: dict[str, Any]) -> dict[str, Any]:
@@ -455,7 +455,7 @@ def review_worker_submission(submission: dict[str, Any]) -> dict[str, Any]:
     if mode != "llm":
         return fallback
     try:
-        return _llm_review(submission, issues, fallback)
+        return _llm_review(submission, issues)
     except Exception as exc:  # pragma: no cover - keep worker completion resilient
         fallback = dict(fallback)
         fallback.setdefault("reasons", []).append(f"llm_review_unavailable: {str(exc)[:200]}")

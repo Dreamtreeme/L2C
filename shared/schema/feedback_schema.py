@@ -11,10 +11,6 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from shared.schema.recipe_schema import TransitionContract
-from shared.schema.skill_schema import RecipeSkillMetadata
-
-
 FeedbackLabel = Literal[
     "success",
     "partial",
@@ -24,14 +20,6 @@ FeedbackLabel = Literal[
     "error",
 ]
 
-
-class ParameterCandidate(BaseModel):
-    """향후 레시피 템플릿(recipe template)의 입력 슬롯이 될 수 있는 값."""
-
-    slot_candidate: str = Field("", description="입력 슬롯 후보(slot candidate)")
-    value: Any = Field(None, description="관찰된 값(observed value)")
-    reason: str = Field("", description="가변값으로 본 이유(reason)")
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
 
 class ActionProposal(BaseModel):
     """실행 전 행위자가 제안한 행동(action proposal)."""
@@ -45,8 +33,6 @@ class ActionProposal(BaseModel):
     component_candidate: Optional[str] = None
     target_role_candidate: Optional[str] = None
     expected_after: str = ""
-    parameter_candidates: List[ParameterCandidate] = Field(default_factory=list)
-    fixed_candidate: Optional[bool] = None
 
 
 class ActionObservation(BaseModel):
@@ -127,20 +113,19 @@ class CommanderReview(BaseModel):
     confidence: float = Field(0.0, ge=0.0, le=1.0)
 
 
-class TransitionContractAssignment(BaseModel):
-    """비평가가 특정 기록 단계에 부여한 전환 계약."""
+class RecipeStepVerdict(BaseModel):
+    """자율탐색이 제안한 재생 단계에 대한 비평가의 가지치기 판정."""
 
     seq: int
-    contract: TransitionContract
+    keep: bool = False
+    reason: str = ""
 
 
 class RecipeCandidateReview(BaseModel):
-    """반사 레시피 후보에 대한 비평가 판정(recipe candidate review)."""
+    """반사 레시피 후보를 유지하거나 제거하는 비평가 판정."""
 
     decision: ReviewDecision
     reasons: List[str] = Field(default_factory=list)
     feedback_to_worker: str = ""
-    promote_to_active_recipe: bool = False
-    skill_metadata: RecipeSkillMetadata = Field(default_factory=RecipeSkillMetadata)
-    transition_contracts: List[TransitionContractAssignment] = Field(default_factory=list)
+    step_verdicts: List[RecipeStepVerdict] = Field(default_factory=list)
     confidence: float = Field(0.0, ge=0.0, le=1.0)
