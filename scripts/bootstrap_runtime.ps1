@@ -3,6 +3,7 @@ param(
     [switch]$SkipBrowserInstall,
     [switch]$SkipAssetDownload,
     [switch]$NoInstallPython,
+    [switch]$Development,
     [switch]$DryRun
 )
 
@@ -11,6 +12,8 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $MinimumFreeBytes = 12GB
+$MinimumVramMiB = 8192
+$MinimumCuda13DriverMajor = 580
 $PinnedPythonVersion = '3.13.14'
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PinnedPythonVersion/python-$PinnedPythonVersion-amd64.exe"
 $PythonInstallerSha256 = 'c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0'
@@ -127,11 +130,45 @@ $NvidiaSmi = Find-NvidiaSmi
 if (-not $NvidiaSmi) {
     throw "NVIDIA 드라이버를 찾을 수 없습니다. 드라이버 설치 후 setup.cmd를 다시 실행하세요."
 }
-$GpuInfo = (& $NvidiaSmi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>$null)
+$GpuInfo = (
+    & $NvidiaSmi `
+        --query-gpu=name,driver_version,memory.total `
+        --format=csv,noheader,nounits 2>$null
+)
 if ($LASTEXITCODE -ne 0 -or -not $GpuInfo) {
     throw "NVIDIA GPU 정보를 읽지 못했습니다: $NvidiaSmi"
 }
-Write-Host "GPU 점검 완료: $($GpuInfo -join '; ')"
+$SupportedGpus = @()
+foreach ($GpuRow in $GpuInfo) {
+    $Parts = @($GpuRow -split ',' | ForEach-Object { $_.Trim() })
+    if ($Parts.Count -lt 3) {
+        continue
+    }
+    $DriverMajor = 0
+    $VramMiB = 0
+    [void][int]::TryParse(($Parts[1] -split '\.')[0], [ref]$DriverMajor)
+    [void][int]::TryParse($Parts[2], [ref]$VramMiB)
+    if (
+        $DriverMajor -ge $MinimumCuda13DriverMajor -and
+        $VramMiB -ge $MinimumVramMiB
+    ) {
+        $SupportedGpus += @{
+            Name = $Parts[0]
+            Driver = $Parts[1]
+            VramMiB = $VramMiB
+        }
+    }
+}
+if (-not $SupportedGpus) {
+    throw (
+        "CUDA 13 실행에는 NVIDIA 드라이버 580 이상과 VRAM 8GB 이상인 GPU가 필요합니다. " +
+        "감지 결과: $($GpuInfo -join '; ')"
+    )
+}
+$SupportedGpus | ForEach-Object {
+    $VramGiB = [math]::Round($_.VramMiB / 1024, 1)
+    Write-Host "GPU 점검 완료: $($_.Name), driver=$($_.Driver), VRAM=${VramGiB}GB"
+}
 
 $ResolvedPython = Find-Python313
 if (-not $ResolvedPython) {
@@ -172,6 +209,9 @@ if ($SkipBrowserInstall) {
 if ($SkipAssetDownload) {
     $SetupParameters.SkipAssetDownload = $true
 }
+if ($Development) {
+    $SetupParameters.Development = $true
+}
 
 if ($DryRun) {
     $DisplayPython = $ResolvedPython
@@ -184,6 +224,9 @@ if ($DryRun) {
     }
     if ($SkipAssetDownload) {
         $DisplayArguments += '-SkipAssetDownload'
+    }
+    if ($Development) {
+        $DisplayArguments += '-Development'
     }
     Write-Host "실행 예정: scripts\setup_runtime.ps1 $($DisplayArguments -join ' ')"
     exit 0

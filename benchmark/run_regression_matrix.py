@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import sqlite3
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -18,6 +20,96 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from agent.observability.reflex_paths import summarize_reflex_paths
+
+
+def _expand_scenarios(
+    scenarios: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """행렬의 반복 횟수를 독립 실행 시나리오로 확장한다."""
+
+    expanded = []
+    for raw in scenarios:
+        repeat = max(1, int(raw.get("repeat") or 1))
+        base_id = str(raw["id"])
+        for repeat_index in range(1, repeat + 1):
+            scenario = dict(raw)
+            scenario["base_id"] = base_id
+            scenario["repeat_index"] = repeat_index
+            scenario["repeat_total"] = repeat
+            scenario["id"] = (
+                f"{base_id}-r{repeat_index}"
+                if repeat > 1
+                else base_id
+            )
+            expanded.append(scenario)
+    return expanded
+
+
+def _git_execution_contract() -> dict[str, Any]:
+    def run_git(*args: str, strip: bool = True) -> str:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=ROOT_DIR,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return (
+            completed.stdout.strip()
+            if strip
+            else completed.stdout.rstrip("\r\n")
+        )
+
+    status = run_git("status", "--porcelain", strip=False)
+    return {
+        "commit_sha": run_git("rev-parse", "HEAD"),
+        "worktree_clean": not bool(status),
+        "changed_paths": [
+            line[3:]
+            for line in status.splitlines()
+            if len(line) >= 4
+        ],
+    }
+
+
+def _runtime_execution_contract() -> dict[str, Any]:
+    from agent.application.model_policy import (
+        commander_model_name,
+        lightweight_model_name,
+        worker_reasoning_model_name,
+    )
+    from agent.config import get_settings
+
+    settings = get_settings()
+    environment_keys = (
+        "COMMANDER_MODEL",
+        "VISION_WORKER_REASONING_MODEL",
+        "VISION_LIGHTWEIGHT_MODEL",
+        "CHROME_WINDOW_WIDTH",
+        "CHROME_WINDOW_HEIGHT",
+        "VISION_BROWSER_WINDOW_WIDTH",
+        "VISION_BROWSER_WINDOW_HEIGHT",
+        "PADDLEOCR_USE_GPU",
+        "VISION_OCR_MAX_DIM",
+    )
+    return {
+        "python": sys.version,
+        "platform": platform.platform(),
+        "resolved": {
+            "commander_model": commander_model_name(),
+            "worker_reasoning_model": worker_reasoning_model_name(),
+            "lightweight_model": lightweight_model_name(),
+            "vision_window_width": settings.browser.vision_window_width,
+            "vision_window_height": settings.browser.vision_window_height,
+            "ocr_use_gpu": settings.ocr.use_gpu,
+            "ocr_max_dim": settings.ocr.max_image_dim,
+            "run_deadline_sec": settings.execution.run_deadline_sec,
+        },
+        "environment": {
+            key: os.environ.get(key, "")
+            for key in environment_keys
+        },
+    }
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -78,19 +170,11 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
             and item.get("action_source") == "job_card_queue"
             for item in steps
         ),
-        "followup_count": sum(
-            item.get("stage") == "execution"
-            and item.get("action_source") == "followup_strategy"
-            for item in steps
-        ),
         "experience_guided_performance_comparable": bool(
             experience_preconditions.get("performance_comparable", True)
         ),
         "active_roi_recipe_count": int(
             experience_preconditions.get("roi_recipes") or 0
-        ),
-        "active_followup_strategy_count": int(
-            experience_preconditions.get("followup_strategies") or 0
         ),
         "input_tokens": int(totals.get("input_tokens") or 0),
         "output_tokens": int(totals.get("output_tokens") or 0),
@@ -187,9 +271,16 @@ def _paired_autonomous_failed(
         str(scenario.get("execution_mode") or "")
         == "experience_guided"
         and autonomous_contracts.get(
-            _scenario_workload_key(scenario)
+            _scenario_pair_key(scenario)
         )
         is False
+    )
+
+
+def _scenario_pair_key(scenario: dict[str, Any]) -> str:
+    return (
+        f"{_scenario_workload_key(scenario)}"
+        f"#repeat={int(scenario.get('repeat_index') or 1)}"
     )
 
 
@@ -249,6 +340,160 @@ def _attach_promotion_metrics(
     }
 
 
+def _mode_pair_efficiency(
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """같은 반복 번호의 자율·경험 탐색을 품질 통과 실행끼리만 비교한다."""
+
+    grouped: dict[str, dict[int, dict[str, dict[str, Any]]]] = {}
+    for item in results:
+        scenario = dict(item.get("scenario") or {})
+        workload = _scenario_workload_key(scenario)
+        repeat_index = int(scenario.get("repeat_index") or 1)
+        mode = str(scenario.get("execution_mode") or "")
+        grouped.setdefault(workload, {}).setdefault(
+            repeat_index,
+            {},
+        )[mode] = item
+
+    summaries = []
+    for workload, repetitions in grouped.items():
+        pairs = []
+        for repeat_index, modes in sorted(repetitions.items()):
+            autonomous = modes.get("autonomous")
+            experience = modes.get("experience_guided")
+            if not autonomous or not experience:
+                continue
+            autonomous_metrics = dict(autonomous.get("metrics") or {})
+            experience_metrics = dict(experience.get("metrics") or {})
+            comparable = all(
+                (
+                    autonomous_metrics.get("quality_passed"),
+                    experience_metrics.get("quality_passed"),
+                    autonomous.get("mode_contract_passed"),
+                    experience.get("mode_contract_passed"),
+                    experience_metrics.get(
+                        "experience_guided_performance_comparable"
+                    ),
+                )
+            )
+            if not comparable:
+                continue
+            autonomous_cost = autonomous_metrics.get("estimated_cost")
+            experience_cost = experience_metrics.get("estimated_cost")
+            cost_saved = (
+                float(autonomous_cost) - float(experience_cost)
+                if autonomous_cost is not None
+                and experience_cost is not None
+                else None
+            )
+            pairs.append(
+                {
+                    "repeat_index": repeat_index,
+                    "execution_time_saved_sec": round(
+                        float(
+                            autonomous_metrics.get(
+                                "execution_time_sec"
+                            )
+                            or 0.0
+                        )
+                        - float(
+                            experience_metrics.get(
+                                "execution_time_sec"
+                            )
+                            or 0.0
+                        ),
+                        6,
+                    ),
+                    "reasoning_calls_saved": int(
+                        autonomous_metrics.get("reasoning_count") or 0
+                    )
+                    - int(
+                        experience_metrics.get("reasoning_count") or 0
+                    ),
+                    "tokens_saved": int(
+                        autonomous_metrics.get("total_tokens") or 0
+                    )
+                    - int(
+                        experience_metrics.get("total_tokens") or 0
+                    ),
+                    "estimated_cost_saved": (
+                        round(cost_saved, 10)
+                        if cost_saved is not None
+                        else None
+                    ),
+                    "promotion_estimated_cost": (
+                        autonomous_metrics.get(
+                            "promotion_estimated_cost"
+                        )
+                    ),
+                }
+            )
+        if not pairs:
+            continue
+        cost_savings = [
+            float(item["estimated_cost_saved"])
+            for item in pairs
+            if item["estimated_cost_saved"] is not None
+        ]
+        promotion_costs = [
+            float(item["promotion_estimated_cost"])
+            for item in pairs
+            if item["promotion_estimated_cost"] is not None
+        ]
+        median_cost_saved = (
+            median(cost_savings)
+            if cost_savings
+            else None
+        )
+        median_promotion_cost = (
+            median(promotion_costs)
+            if promotion_costs
+            else None
+        )
+        break_even = (
+            round(median_promotion_cost / median_cost_saved, 3)
+            if median_promotion_cost is not None
+            and median_cost_saved is not None
+            and median_cost_saved > 0
+            else None
+        )
+        summaries.append(
+            {
+                "workload": json.loads(workload),
+                "comparable_pair_count": len(pairs),
+                "median_execution_time_saved_sec": round(
+                    median(
+                        item["execution_time_saved_sec"]
+                        for item in pairs
+                    ),
+                    6,
+                ),
+                "median_reasoning_calls_saved": median(
+                    item["reasoning_calls_saved"]
+                    for item in pairs
+                ),
+                "median_tokens_saved": median(
+                    item["tokens_saved"]
+                    for item in pairs
+                ),
+                "median_estimated_cost_saved": (
+                    round(median_cost_saved, 10)
+                    if median_cost_saved is not None
+                    else None
+                ),
+                "median_promotion_estimated_cost": (
+                    round(median_promotion_cost, 10)
+                    if median_promotion_cost is not None
+                    else None
+                ),
+                "break_even_repeat_count": break_even,
+                "pairs": pairs,
+            }
+        )
+    return summaries
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run L2C vision E2E scenarios sequentially.")
     parser.add_argument("--matrix", default=str(DEFAULT_MATRIX))
@@ -261,10 +506,23 @@ def main() -> int:
 
     matrix_path = Path(args.matrix).resolve()
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
-    scenarios = [item for item in matrix.get("scenarios", []) if isinstance(item, dict)]
+    scenarios = _expand_scenarios(
+        [
+            item
+            for item in matrix.get("scenarios", [])
+            if isinstance(item, dict)
+        ]
+    )
     selected = set(args.scenario)
     if selected:
-        scenarios = [item for item in scenarios if str(item.get("id")) in selected]
+        scenarios = [
+            item
+            for item in scenarios
+            if (
+                str(item.get("id")) in selected
+                or str(item.get("base_id")) in selected
+            )
+        ]
     if not scenarios:
         raise SystemExit("실행할 E2E 시나리오가 없습니다.")
 
@@ -282,8 +540,28 @@ def main() -> int:
             )
         )
     if args.dry_run:
-        print(json.dumps({"output_dir": str(output_dir), "commands": commands}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "output_dir": str(output_dir),
+                    "git": _git_execution_contract(),
+                    "runtime": _runtime_execution_contract(),
+                    "commands": commands,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
+
+    git_contract = _git_execution_contract()
+    if (
+        matrix.get("require_clean_worktree")
+        and not git_contract["worktree_clean"]
+    ):
+        raise SystemExit(
+            "이 평가 행렬은 깨끗한 작업 트리에서만 실행할 수 있습니다."
+        )
 
     output_dir.mkdir(parents=True, exist_ok=False)
     results = []
@@ -291,7 +569,7 @@ def main() -> int:
     autonomous_contracts: dict[str, bool] = {}
     for scenario, command in zip(scenarios, commands):
         execution_mode = str(scenario["execution_mode"])
-        workload_key = _scenario_workload_key(scenario)
+        workload_key = _scenario_pair_key(scenario)
         if _paired_autonomous_failed(
             scenario,
             autonomous_contracts,
@@ -407,12 +685,15 @@ def main() -> int:
         "matrix": str(matrix_path),
         "db_path": str(db_path),
         "created_at": datetime.now().astimezone().isoformat(),
+        "git": git_contract,
+        "runtime": _runtime_execution_contract(),
         "passed": all(
             item["process_exit_code"] == 0
             and item["metrics"]["quality_passed"]
             and item["mode_contract_passed"]
             for item in results
         ),
+        "mode_pair_efficiency": _mode_pair_efficiency(results),
         "results": results,
     }
     aggregate_path = output_dir / "matrix.summary.json"

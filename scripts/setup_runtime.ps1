@@ -1,7 +1,8 @@
 param(
     [string]$PythonPath = "",
     [switch]$SkipBrowserInstall,
-    [switch]$SkipAssetDownload
+    [switch]$SkipAssetDownload,
+    [switch]$Development
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,8 +55,15 @@ function Install-Environment {
 
 $AppEnvironment = Join-Path $RepoRoot '.venv-app'
 $OcrEnvironment = Join-Path $RepoRoot '.venv-ocr'
+$AppRequirements = Join-Path $RepoRoot (
+    if ($Development) {
+        'requirements-dev.txt'
+    } else {
+        'requirements.txt'
+    }
+)
 
-Install-Environment $AppEnvironment (Join-Path $RepoRoot 'requirements-dev.txt')
+Install-Environment $AppEnvironment $AppRequirements
 Install-Environment $OcrEnvironment (Join-Path $RepoRoot 'requirements-ocr.txt')
 
 $AppPython = Join-Path $AppEnvironment 'Scripts\python.exe'
@@ -76,5 +84,6 @@ if (-not $SkipAssetDownload) {
 }
 
 Write-Host "Python $PythonVersion 런타임 구성이 완료됐습니다."
+Write-Host "설치 프로필: $(if ($Development) { 'development' } else { 'runtime' })"
 Write-Host "앱: $AppPython"
 Write-Host "OCR: $OcrPython"

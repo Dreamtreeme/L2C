@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "description": "대표 3개 사이트에서 자율 탐색과 경험 기반 탐색을 짝 비교한다.",
+  "require_clean_worktree": true,
+  "scenarios": [
+    {"id": "wanted-ios-autonomous", "site": "wanted", "query": "iOS 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "wanted-ios-experience", "site": "wanted", "query": "iOS 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "experience_guided", "repeat": 3},
+    {"id": "saramin-ai-autonomous", "site": "saramin", "query": "AI 엔지니어", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "saramin-ai-experience", "site": "saramin", "query": "AI 엔지니어", "target_count": 2, "count_mode": "explicit", "execution_mode": "experience_guided", "repeat": 3},
+    {"id": "worknet-web-autonomous", "site": "worknet", "query": "웹 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "worknet-web-experience", "site": "worknet", "query": "웹 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "experience_guided", "repeat": 3}
+  ]
+}

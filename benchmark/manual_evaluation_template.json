@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "commit_sha": "REPLACE_WITH_GIT_SHA",
+  "model_contract": {
+    "commander": "gemini-3.6-flash",
+    "worker_reasoning": "gemini-3.6-flash",
+    "lightweight": "gemini-3.5-flash-lite"
+  },
+  "environment_contract": {
+    "window_size": "1976x2129",
+    "database_initial_state": "empty_jobs",
+    "browser_initial_state": "new_process",
+    "ocr_initial_state": "new_worker"
+  },
+  "runs": [
+    {
+      "run_id": "wanted-ios-r1",
+      "summary_path": "wanted-ios-r1.summary.json",
+      "site": "wanted",
+      "query": "iOS 개발자",
+      "search_conditions_correct": true,
+      "count_handling_correct": true,
+      "no_out_of_scope_actions": true,
+      "wrong_target_count": 0,
+      "no_effect_action_count": 0,
+      "recovery_succeeded": null,
+      "human_review_sec": 0,
+      "jobs": [
+        {
+          "url": "REPLACE_WITH_DETAIL_URL",
+          "semantic_match": true,
+          "company_name": "pass",
+          "job_title": "pass",
+          "responsibilities": "pass",
+          "requirements": "pass"
+        }
+      ],
+      "notes": ""
+    }
+  ]
+}

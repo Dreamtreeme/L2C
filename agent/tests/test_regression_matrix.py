@@ -10,12 +10,36 @@ from benchmark.run_regression_matrix import (
     _attach_promotion_metrics,
     _clear_jobs_for_experience_guided_run,
     _command,
+    _expand_scenarios,
     _metric_summary,
+    _mode_pair_efficiency,
     _paired_autonomous_failed,
     _promote_autonomous_candidate,
     _scenario_environment,
+    _scenario_pair_key,
     _scenario_workload_key,
 )
+
+
+def test_matrix_repeat_expands_to_independent_run_ids() -> None:
+    scenarios = _expand_scenarios(
+        [
+            {
+                "id": "wanted-ios",
+                "site": "wanted",
+                "query": "iOS 개발자",
+                "execution_mode": "autonomous",
+                "repeat": 3,
+            }
+        ]
+    )
+
+    assert [item["id"] for item in scenarios] == [
+        "wanted-ios-r1",
+        "wanted-ios-r2",
+        "wanted-ios-r3",
+    ]
+    assert [item["repeat_index"] for item in scenarios] == [1, 2, 3]
 
 
 def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
@@ -64,7 +88,6 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
                     {"stage": "selection", "action_source": "job_card_queue"},
                     {"stage": "execution", "action_source": "reflex"},
                     {"stage": "execution", "action_source": "job_card_queue"},
-                    {"stage": "execution", "action_source": "followup_strategy"},
                 ],
                 "llm": {
                     "totals": {
@@ -85,7 +108,6 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
     assert summary["reasoning_count"] == 1
     assert summary["reflex_count"] == 1
     assert summary["queue_count"] == 1
-    assert summary["followup_count"] == 1
     assert summary["total_tokens"] == 12
 
 
@@ -121,7 +143,6 @@ def test_experience_guided_comparison_rejects_existing_jobs() -> None:
     preconditions = {
         "required": True,
         "roi_recipes": 2,
-        "followup_strategies": 1,
         "performance_comparable": True,
         "reasons": [],
     }
@@ -194,18 +215,22 @@ def test_scenario_workload_key_matches_both_execution_modes() -> None:
 
     workload_key = _scenario_workload_key(autonomous)
     assert workload_key == _scenario_workload_key(experience_guided)
+    pair_key = _scenario_pair_key(experience_guided)
     assert _paired_autonomous_failed(
         experience_guided,
-        {workload_key: False},
+        {pair_key: False},
     )
     assert not _paired_autonomous_failed(
         experience_guided,
-        {workload_key: True},
+        {pair_key: True},
     )
     assert not _paired_autonomous_failed(
         autonomous,
         {workload_key: False},
     )
+    assert _scenario_pair_key(
+        {**autonomous, "repeat_index": 2}
+    ).endswith("#repeat=2")
 
 
 def test_promotion_metrics_are_added_to_collection_metrics() -> None:
@@ -228,6 +253,54 @@ def test_promotion_metrics_are_added_to_collection_metrics() -> None:
     assert review_metrics["estimated_cost"] == 0.003
     assert combined["workflow_total_tokens"] == 700
     assert combined["workflow_estimated_cost"] == 0.013
+
+
+def test_mode_pair_efficiency_includes_critic_break_even() -> None:
+    base = {
+        "site": "wanted",
+        "query": "iOS 개발자",
+        "target_count": 2,
+        "count_mode": "explicit",
+        "repeat_index": 1,
+    }
+    report = _mode_pair_efficiency(
+        [
+            {
+                "scenario": {
+                    **base,
+                    "execution_mode": "autonomous",
+                },
+                "mode_contract_passed": True,
+                "metrics": {
+                    "quality_passed": True,
+                    "execution_time_sec": 120,
+                    "reasoning_count": 20,
+                    "total_tokens": 1000,
+                    "estimated_cost": 0.02,
+                    "promotion_estimated_cost": 0.006,
+                },
+            },
+            {
+                "scenario": {
+                    **base,
+                    "execution_mode": "experience_guided",
+                },
+                "mode_contract_passed": True,
+                "metrics": {
+                    "quality_passed": True,
+                    "experience_guided_performance_comparable": True,
+                    "execution_time_sec": 90,
+                    "reasoning_count": 10,
+                    "total_tokens": 600,
+                    "estimated_cost": 0.014,
+                },
+            },
+        ]
+    )
+
+    assert report[0]["median_execution_time_saved_sec"] == 30
+    assert report[0]["median_tokens_saved"] == 400
+    assert report[0]["break_even_repeat_count"] == 1.0
 
 
 def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
@@ -288,7 +361,7 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
             "enabled": True,
             "promoted": True,
             "saved_count": 1,
-            "promoted_step_count": 1,
+            "promoted_action_count": 1,
             "skipped_steps": [],
         }
         RecipeCandidateStore(db_path).update_status(

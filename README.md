@@ -16,7 +16,7 @@
 L2C는 두 방식의 장점을 결합하는 구조를 실험합니다. 지원할 사이트에는 공식
 주소와 화면 단서를 담은 작은 선언형 프로필을 등록하고, 검색과 상세 탐색은
 사이트별 실행 코드가 아니라 공통 비전 작업자가 수행합니다. 자율 탐색에서 성공한
-행동 중 Critic과 화면 증거가 안전하다고 판단한 연속 단계를 전체 Reflex Recipe
+행동 중 Critic과 화면 증거가 안전하다고 판단한 기록을 검증 가능한 상태 전이
 경로로 승격합니다. 검색 진입·입력처럼 고정 가능한 부모 경로는 재생하고, 현재 공고
 선택·상세 내용처럼 달라지는 자식 노드는 LLM 판단에 남깁니다.
 
@@ -250,14 +250,14 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
 
 - [ ] **Phase 8: 피드백 루프 기반 Reflex Recipe 승격 (현재 단계)**
 
-  > 현재 진행 중인 핵심 단계. 비전 에이전트가 처음부터 정답 스크립트를 만들도록 제약하지 않고, 탐색 중 생성한 행동 제안과 실제 실행 결과를 관찰한다. 현재 구현은 성공한 한 실행에서 Critic과 화면 증거가 승인한 연속 단계를 순서가 보존된 활성 Reflex Recipe 경로로 저장한다. 경로는 한 번 선택한 뒤 단계별 화면 검증을 거쳐 이어서 실행한다. 검색어·수집 개수·사이트 범위처럼 바뀌는 값은 지휘자가 파라미터로 주입하고, 실패하거나 확신이 낮은 상황에서는 다시 비전 탐색으로 폴백한다. 여러 실행의 반복 성공을 승격 전 필수 조건으로 두는 정책과 negative example 학습은 아직 완료되지 않았다.
+  > 현재 진행 중인 핵심 단계. 자율탐색은 행동을 선택할 때 `fixed / parameterized / reasoning` 재사용 방식과 입력 슬롯을 함께 기록한다. Critic은 실행 내용을 새로 만들거나 수정하지 않고 실패·불안정 행동만 제거한다. `자율탐색 후보 ∩ Critic 유지 ∩ 화면 증거 통과`에 해당하는 기록을 `이전 상태 + 행동 묶음 + 도착 상태` 전이로 저장한다. 경로는 한 번 선택한 뒤 도착 상태가 확인될 때만 다음 전이로 진행하고, 실패하거나 확신이 낮은 상황에서는 다시 자율탐색으로 폴백한다. 여러 실행의 반복 성공을 승격 전 필수 조건으로 두는 정책과 negative example 학습은 아직 완료되지 않았다.
 
   - [x] 1. 제안 로그 포맷 정규화
-    - [x] LLM/VLM이 선택한 행동, 대상 마커, target_label, component 후보, parameter 후보, 선택 이유(`reason`)를 기록
-    - [x] 검색어(`query`)와 수집 개수(`target_count`)처럼 실행마다 바뀔 수 있는 후보 값을 별도 필드로 보존
+    - [x] LLM/VLM이 선택한 행동, 대상 마커, target_label, component, 재사용 방식, 선택 이유(`reason`)를 기록
+    - [x] 검색어처럼 실행마다 바뀌는 값은 도구 호출의 `slot_name`과 레시피 `slot_refs`로 보존
   - [x] 2. 전후 관찰(Observer) 파이프라인 구축
     - [x] 화면 변경 행동과 다음 OCR·스크린샷을 `transition_records`로 연결
-    - [x] 로딩 중 관찰은 같은 action seq에 누적하고, 준비 완료 여부는 전환 계약으로 판정
+    - [x] OpenCV 연속 프레임 비교로 화면 변화 시작과 렌더링 안정화를 판단하고, pHash는 저장 상태 확인에 사용
     - [ ] 같은 카드 반복 클릭, 화면 변화 없음, 팝업/승인창 개입 등 오염 신호 탐지
   - [x] 3. Critic 피드백 루프 추가
     - [x] success / partial / wrong_target / no_effect / loop_risk 라벨 부여
@@ -266,12 +266,12 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
     - [ ] 같은 사이트·페이지 역할·작업 유형에서 반복 성공한 패턴만 confidence 상승
     - [ ] 실패 패턴은 negative example로 저장하고 Reflex 후보에서 제외
     - [ ] Codex 승인창, 브라우저 툴바, 광고/팝업처럼 사이트 고유 동작이 아닌 요소는 승격 금지
-    - [x] Critic이 각 단계를 `fixed / parameterized / reasoning`으로 분류하도록 후보 검토 결과에 기록
-    - [x] 검증 전 자동 활성 레시피 쓰기는 비활성화하고 후보 저장/검토만 유지
+    - [x] 자율탐색이 각 단계를 `fixed / parameterized / reasoning`으로 제안하고 Critic은 유지/제거만 판정
+    - [x] Critic이 행동·파라미터·슬롯·화면 역할·전환 조건을 덮어쓰지 못하도록 스키마 축소
     - [ ] 승인된 후보를 활성 Recipe Memory에 반영하는 수동/승인 정책 결정
   - [x] 5. 슬롯 기반 Reflex 실행기
     - [x] 검색어가 바뀌면 `query` 슬롯만 교체하고 고정 UI 절차는 유지
-    - [x] 행동 후 `common_ready_cues + outcomes`가 충족될 때까지 재관찰하고, 시간 초과 시 Explore로 폴백
+    - [x] 행동 후 저장된 도착 ROI 또는 화면 문맥을 확인하고, 불일치나 시간 초과 시 자율탐색으로 폴백
     - [x] 검색 결과의 현재 공고 제목은 동적 대상으로 취급하여 과거 제목을 재생하지 않고, 작업자가 미방문 카드를 선택
     - [x] 상위 N개 요청은 `target_count`와 방문 이력을 유지하며 `현재 카드 선택 → 상세 수집 → 필요 시 go_back` 루프를 반복
     - [ ] Reflex는 높은 confidence 패턴만 실행하고, 불확실하면 추론하지 않고 Explore로 폴백
@@ -358,6 +358,9 @@ cd L2C
 # Windows 원클릭 설치
 .\setup.cmd
 
+# 테스트·벤치마크 도구까지 설치
+.\setup.cmd -Development
+
 # setup.cmd가 만든 .env에 GEMINI_API_KEY를 설정
 
 # 분할된 비전 작업자 그래프는 VISION_AGENT_RECURSION_LIMIT=180 기본값으로 실행
@@ -382,19 +385,33 @@ python -m benchmark.run_realtime_e2e --site wanted --query "ios 개발자 공고
 
 # 구조화 summary의 p50/p95/max, Reflex, OCR 지표 확인
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
+
+# 포트폴리오 수집 성공률 30회 실행 계약 확인
+python -m benchmark.run_regression_matrix --matrix benchmark/portfolio_collection_matrix.json --dry-run
+
+# 자율 탐색·경험 기반 탐색 18회 짝 비교 계약 확인
+python -m benchmark.run_regression_matrix --matrix benchmark/portfolio_reflex_matrix.json --dry-run
+
+# E2E summary와 사람 판정표를 결합한 엄격 성공률 계산
+python -m benchmark.manual_evaluation logs/portfolio/manual_evaluation.json
+
+# 설치 용량과 현재 RAM·VRAM 기준값 측정
+powershell -File scripts/measure_runtime_resources.ps1
 ```
 
-`setup.cmd`는 디스크와 NVIDIA GPU를 먼저 검사하고, Python 3.13.14가 없으면 공식 python.org 설치 파일을 받아 SHA-256을 검증한 뒤 설치합니다. 이후 `.venv-app`과 `.venv-ocr`을 만들고 Chromium과 OmniParser·PaddleOCR 모델을 내려받은 뒤 실제 GPU 연산까지 검사합니다. NVIDIA 드라이버는 하드웨어와 재부팅이 관련되므로 자동 설치하지 않습니다.
+`setup.cmd`는 디스크, NVIDIA 드라이버 580 이상과 VRAM 8GB 이상을 다운로드 전에 검사합니다. Python 3.13.14가 없으면 공식 python.org 설치 파일을 받아 SHA-256을 검증한 뒤 설치합니다. 이후 `.venv-app`과 `.venv-ocr`을 만들고 Chromium과 OmniParser·PaddleOCR 모델을 내려받은 뒤 실제 GPU 연산까지 검사합니다. 기본 설치에는 제품 런타임만 포함되며 `-Development`를 지정하면 테스트·벤치마크 의존성도 설치합니다. NVIDIA 드라이버는 하드웨어와 재부팅이 관련되므로 자동 설치하지 않습니다.
 
 OmniParser/PyTorch와 PaddleOCR/PaddlePaddle의 CUDA 런타임은 서로 다른 환경에 둡니다. 따라서 한 프로세스 안에서 DLL과 import 순서를 맞추는 우회 코드가 필요하지 않습니다. 설치 항목을 선택적으로 생략해야 하는 개발 환경에서는 `scripts/setup_runtime.ps1`을 직접 사용할 수 있습니다.
 
 고정 버전의 선택 근거와 GPU 실측 결과는 [`docs/runtime_compatibility.md`](./docs/runtime_compatibility.md)에 정리했습니다.
 
+백엔드와 UI는 `127.0.0.1`에서만 실행됩니다. 설정에 외부 Host나 CORS 출처를 넣거나 원격 클라이언트가 직접 요청하면 시작 또는 요청 단계에서 거부합니다.
+
 웹 화면 오른쪽 위의 활동 아이콘에서 최근 실행 상태와 저장 현황을 확인할 수 있습니다. 만료 항목 정리는 먼저 삭제 후보와 예상 용량을 미리 계산하고, 사용자가 확인한 경우에만 오래된 로그·미참조 화면 산출물·감사 이력을 삭제합니다. 현재 공고, 활성 레시피, 공고가 참조하는 화면 파일은 정리 대상에서 제외합니다.
 
 기본 보존 기간은 로그 30일, 화면 산출물과 감사 이력 90일, 공고 변경 이력 180일입니다. 공고별 최신 변경 이력은 기간과 관계없이 5개를 남기며, `RETENTION_*` 환경변수로 기준을 조정할 수 있습니다.
 
-E2E 요약은 `run_id`, 실행시간, 실패 단계, 단계별 시간, 모델별 토큰, 비용 추정, 수집 품질을 한 파일에 기록합니다. LangSmith를 활성화하면 같은 실행의 trace와 결정론적 feedback도 함께 전송합니다. 설정과 대시보드 기준은 [`docs/e2e_observability.md`](./docs/e2e_observability.md)를 참고하세요. 기본 모델 단가는 [`config/model_pricing.json`](./config/model_pricing.json)에서 관리하며, 별도 가격표가 필요할 때만 `LLM_PRICING_FILE`로 덮어씁니다. 가격이 등록되지 않은 모델은 비용을 추정하지 않고 토큰 원시값과 `unpriced_models`에 남깁니다.
+E2E 요약은 `run_id`, 실행시간, 실패 단계, 단계별 시간, 모델별 토큰, 비용 추정, 수집 품질을 한 파일에 기록합니다. LangSmith를 활성화하면 같은 실행의 trace와 결정론적 feedback도 함께 전송합니다. 설정과 대시보드 기준은 [`docs/e2e_observability.md`](./docs/e2e_observability.md), 고정 행렬과 사람 판정 절차는 [`docs/portfolio_evaluation.md`](./docs/portfolio_evaluation.md)를 참고하세요. 기본 모델 단가는 [`config/model_pricing.json`](./config/model_pricing.json)에서 관리하며, 별도 가격표가 필요할 때만 `LLM_PRICING_FILE`로 덮어씁니다. 가격이 등록되지 않은 모델은 비용을 추정하지 않고 토큰 원시값과 `unpriced_models`에 남깁니다.
 
 Windows Python을 WSL/Git Bash에서 직접 호출해 한글이나 이모지가 깨지는 경우에는 `python -X utf8 -m ...` 형태로 실행하세요.
 

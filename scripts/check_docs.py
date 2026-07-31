@@ -27,6 +27,7 @@ ALLOWED_AREAS = {
     "project",
     "architecture",
     "documentation",
+    "evaluation",
     "runtime",
     "observability",
     "reflex",

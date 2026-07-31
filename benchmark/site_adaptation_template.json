@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "commit_sha": "REPLACE_WITH_GIT_SHA",
+  "task_contract": {
+    "target_count": 2,
+    "required_fields": [
+      "company_name",
+      "job_title",
+      "responsibilities",
+      "requirements",
+      "source_url"
+    ],
+    "success_rule": "3 consecutive strict successes"
+  },
+  "records": [
+    {
+      "site": "REPLACE_SITE_1",
+      "approach": "classic",
+      "implementation_minutes": 0,
+      "site_specific_code_lines": 0,
+      "modified_file_count": 0,
+      "common_runtime_code_lines": 0,
+      "fix_iteration_count": 0,
+      "successful_runs": 0,
+      "attempted_runs": 3,
+      "runtime_sec": [],
+      "notes": ""
+    },
+    {
+      "site": "REPLACE_SITE_1",
+      "approach": "vision",
+      "implementation_minutes": 0,
+      "site_specific_code_lines": 0,
+      "modified_file_count": 0,
+      "common_runtime_code_lines": 0,
+      "fix_iteration_count": 0,
+      "successful_runs": 0,
+      "attempted_runs": 3,
+      "runtime_sec": [],
+      "notes": ""
+    }
+  ]
+}

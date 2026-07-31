@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "description": "고정 조건에서 5개 사이트의 엄격 수집 성공률을 측정한다.",
+  "require_clean_worktree": true,
+  "scenarios": [
+    {"id": "wanted-ios", "site": "wanted", "query": "iOS 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "wanted-ai", "site": "wanted", "query": "AI 엔지니어", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "saramin-ai", "site": "saramin", "query": "AI 엔지니어", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "saramin-backend", "site": "saramin", "query": "백엔드 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "jobkorea-backend", "site": "jobkorea", "query": "백엔드 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "jobkorea-data", "site": "jobkorea", "query": "데이터 엔지니어", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "worknet-web", "site": "worknet", "query": "웹 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "worknet-care", "site": "worknet", "query": "요양보호사", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "rocketpunch-backend", "site": "rocketpunch", "query": "백엔드 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
+    {"id": "rocketpunch-ai", "site": "rocketpunch", "query": "AI 엔지니어", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3}
+  ]
+}
