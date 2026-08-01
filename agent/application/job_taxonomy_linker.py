@@ -203,6 +203,321 @@ class JobTaxonomyLinker:
                 result.append(row)
         return result
 
+    @staticmethod
+    def _clear_generated_links(
+        connection: sqlite3.Connection,
+        job_id: int,
+    ) -> None:
+        connection.execute(
+            """
+            DELETE FROM job_concept_links
+            WHERE job_id = ?
+              AND linked_by IN ('exact_alias', 'contained_alias')
+            """,
+            (job_id,),
+        )
+
+    def _match_occupations(
+        self,
+        connection: sqlite3.Connection,
+        job: sqlite3.Row,
+    ) -> dict[int, tuple[str, str, float]]:
+        matches: dict[int, tuple[str, str, float]] = {}
+        category_text = str(job["job_category"] or "")
+        category = normalize_term(category_text)
+        category_parts = {
+            normalize_term(part)
+            for part in re.split(r"[/,|]", category_text)
+            if normalize_term(part)
+        }
+        position_text = str(job["position"] or "")
+        position = normalize_term(position_text)
+
+        for alias_row in self._occupation_alias_rows(connection):
+            concept_id = int(alias_row["id"])
+            alias = str(alias_row["normalized_alias"])
+            is_reviewed_local = (
+                str(alias_row["source_key"])
+                in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
+                or str(alias_row["alias_source_key"])
+                in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
+            )
+            if category and category == alias:
+                matches[concept_id] = (
+                    "job_category",
+                    category_text,
+                    1.0,
+                )
+            elif alias in category_parts:
+                matches[concept_id] = (
+                    "job_category",
+                    category_text,
+                    0.96,
+                )
+            if position and (
+                position == alias
+                or (
+                    is_reviewed_local
+                    and contains_taxonomy_alias(position, alias)
+                )
+            ):
+                current = matches.get(concept_id)
+                confidence = 0.98 if position == alias else 0.9
+                if current is None or confidence > current[2]:
+                    matches[concept_id] = (
+                        "position",
+                        position_text,
+                        confidence,
+                    )
+        return matches
+
+    def _save_occupation_links(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        job_id: int,
+        job: sqlite3.Row,
+        linked_at: str,
+    ) -> int:
+        matches = self._match_occupations(connection, job)
+        selected_ids = self._most_specific_matches(
+            connection,
+            set(matches),
+        )
+        for concept_id in selected_ids:
+            evidence_field, evidence_text, confidence = matches[concept_id]
+            connection.execute(
+                """
+                INSERT INTO job_concept_links (
+                    job_id, concept_id, link_type, evidence_field,
+                    evidence_text, confidence, linked_by,
+                    created_at, updated_at
+                ) VALUES (?, ?, 'occupation', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    job_id, concept_id, link_type, evidence_field
+                ) DO UPDATE SET
+                    evidence_text = excluded.evidence_text,
+                    confidence = excluded.confidence,
+                    linked_by = excluded.linked_by,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job_id,
+                    concept_id,
+                    evidence_field,
+                    evidence_text,
+                    confidence,
+                    (
+                        "exact_alias"
+                        if confidence >= 0.98
+                        else "contained_alias"
+                    ),
+                    linked_at,
+                    linked_at,
+                ),
+            )
+        return len(selected_ids)
+
+    @classmethod
+    def _skill_sections(
+        cls,
+        job: sqlite3.Row,
+    ) -> tuple[tuple[str, list[str], str, bool], ...]:
+        return (
+            (
+                "tech_stack",
+                cls._json_text_list(job["tech_stack"]),
+                "mentioned",
+                True,
+            ),
+            (
+                "requirements",
+                cls._json_text_list(job["requirements"]),
+                "required",
+                False,
+            ),
+            (
+                "preferred",
+                cls._json_text_list(job["preferred"]),
+                "preferred",
+                False,
+            ),
+            (
+                "main_tasks",
+                cls._json_text_list(job["main_tasks"]),
+                "mentioned",
+                False,
+            ),
+        )
+
+    def _skill_alias_index(
+        self,
+        connection: sqlite3.Connection,
+    ) -> dict[str, list[sqlite3.Row]]:
+        aliases: dict[str, list[sqlite3.Row]] = {}
+        for alias_row in self._skill_alias_rows(connection):
+            aliases.setdefault(
+                str(alias_row["normalized_alias"]),
+                [],
+            ).append(alias_row)
+        return aliases
+
+    def _matching_skill_rows(
+        self,
+        aliases: dict[str, list[sqlite3.Row]],
+        evidence_text: str,
+        *,
+        exact_only: bool,
+    ) -> list[sqlite3.Row]:
+        normalized_text = normalize_term(evidence_text)
+        if exact_only:
+            return self._preferred_skill_rows(
+                aliases.get(normalized_text, [])
+            )
+        return self._preferred_skill_rows(
+            row
+            for alias, rows in aliases.items()
+            if contains_taxonomy_alias(normalized_text, alias)
+            for row in rows
+        )
+
+    @staticmethod
+    def _upsert_skill_link(
+        connection: sqlite3.Connection,
+        *,
+        job_id: int,
+        concept_id: int,
+        evidence_field: str,
+        evidence_text: str,
+        requirement_type: str,
+        exact_only: bool,
+        linked_at: str,
+    ) -> None:
+        confidence = 1.0 if exact_only else 0.95
+        linked_by = "exact_alias" if exact_only else "contained_alias"
+        connection.execute(
+            """
+            INSERT INTO job_concept_links (
+                job_id, concept_id, link_type,
+                evidence_field, evidence_text,
+                requirement_type, confidence, linked_by,
+                created_at, updated_at
+            ) VALUES (
+                ?, ?, 'skill', ?, ?, ?, ?, ?, ?, ?
+            )
+            ON CONFLICT(
+                job_id, concept_id, link_type,
+                evidence_field
+            ) DO UPDATE SET
+                evidence_text = excluded.evidence_text,
+                requirement_type = excluded.requirement_type,
+                confidence = excluded.confidence,
+                linked_by = excluded.linked_by,
+                updated_at = excluded.updated_at
+            """,
+            (
+                job_id,
+                concept_id,
+                evidence_field,
+                evidence_text,
+                requirement_type,
+                confidence,
+                linked_by,
+                linked_at,
+                linked_at,
+            ),
+        )
+
+    def _save_skill_links(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        job_id: int,
+        job: sqlite3.Row,
+        linked_at: str,
+    ) -> tuple[int, int]:
+        aliases = self._skill_alias_index(connection)
+        inserted_links: set[tuple[int, str]] = set()
+        skill_count = 0
+        candidate_count = 0
+
+        for evidence_field, texts, requirement_type, exact_only in (
+            self._skill_sections(job)
+        ):
+            for evidence_text in texts:
+                matched_rows = self._matching_skill_rows(
+                    aliases,
+                    evidence_text,
+                    exact_only=exact_only,
+                )
+                if exact_only and not matched_rows:
+                    candidate_count += int(
+                        self._record_term_candidate(
+                            connection,
+                            term=evidence_text,
+                            job_id=job_id,
+                        )
+                    )
+                    continue
+                for alias_row in matched_rows:
+                    concept_id = int(alias_row["id"])
+                    link_key = (concept_id, evidence_field)
+                    if link_key in inserted_links:
+                        continue
+                    inserted_links.add(link_key)
+                    self._upsert_skill_link(
+                        connection,
+                        job_id=job_id,
+                        concept_id=concept_id,
+                        evidence_field=evidence_field,
+                        evidence_text=evidence_text,
+                        requirement_type=requirement_type,
+                        exact_only=exact_only,
+                        linked_at=linked_at,
+                    )
+                    skill_count += 1
+        return skill_count, candidate_count
+
+    @staticmethod
+    def _mark_indexed(
+        connection: sqlite3.Connection,
+        *,
+        job_id: int,
+        indexed_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE jobs
+            SET taxonomy_index_status = 'indexed',
+                taxonomy_index_error = NULL,
+                taxonomy_index_attempts = taxonomy_index_attempts + 1,
+                taxonomy_indexed_at = ?
+            WHERE id = ?
+            """,
+            (indexed_at, job_id),
+        )
+
+    def _mark_index_failed(self, job_id: int, error: Exception) -> None:
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET taxonomy_index_status = 'failed',
+                        taxonomy_index_error = ?,
+                        taxonomy_index_attempts = taxonomy_index_attempts + 1,
+                        taxonomy_indexed_at = NULL
+                    WHERE id = ?
+                    """,
+                    (
+                        f"{type(error).__name__}: {error}"[:1000],
+                        job_id,
+                    ),
+                )
+        finally:
+            connection.close()
+
     def link_job(self, job_id: int) -> dict[str, int]:
         """구조화 필드와 검토된 별칭으로 공고를 직무·기술에 연결한다."""
 
@@ -220,251 +535,30 @@ class JobTaxonomyLinker:
                 ).fetchone()
                 if job is None:
                     return counts
-                connection.execute(
-                    """
-                    DELETE FROM job_concept_links
-                    WHERE job_id = ?
-                      AND linked_by IN ('exact_alias', 'contained_alias')
-                    """,
-                    (job_id,),
-                )
-                occupation_matches: dict[
-                    int,
-                    tuple[str, str, float],
-                ] = {}
-                category = normalize_term(
-                    str(job["job_category"] or "")
-                )
-                category_parts = {
-                    normalize_term(part)
-                    for part in re.split(
-                        r"[/,|]",
-                        str(job["job_category"] or ""),
-                    )
-                    if normalize_term(part)
-                }
-                position = normalize_term(str(job["position"] or ""))
-                for alias_row in self._occupation_alias_rows(connection):
-                    concept_id = int(alias_row["id"])
-                    alias = str(alias_row["normalized_alias"])
-                    is_reviewed_local = (
-                        str(alias_row["source_key"])
-                        in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-                        or str(alias_row["alias_source_key"])
-                        in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-                    )
-                    if category and category == alias:
-                        occupation_matches[concept_id] = (
-                            "job_category",
-                            str(job["job_category"] or ""),
-                            1.0,
-                        )
-                    elif alias in category_parts:
-                        occupation_matches[concept_id] = (
-                            "job_category",
-                            str(job["job_category"] or ""),
-                            0.96,
-                        )
-                    if position and (
-                        position == alias
-                        or (
-                            is_reviewed_local
-                            and contains_taxonomy_alias(position, alias)
-                        )
-                    ):
-                        current = occupation_matches.get(concept_id)
-                        confidence = 0.98 if position == alias else 0.9
-                        if current is None or confidence > current[2]:
-                            occupation_matches[concept_id] = (
-                                "position",
-                                str(job["position"] or ""),
-                                confidence,
-                            )
-                selected_occupations = self._most_specific_matches(
+                self._clear_generated_links(connection, job_id)
+                indexed_at = taxonomy_timestamp()
+                counts["occupations"] = self._save_occupation_links(
                     connection,
-                    set(occupation_matches),
+                    job_id=job_id,
+                    job=job,
+                    linked_at=indexed_at,
                 )
-                now = taxonomy_timestamp()
-                for concept_id in selected_occupations:
-                    (
-                        evidence_field,
-                        evidence_text,
-                        confidence,
-                    ) = occupation_matches[concept_id]
-                    connection.execute(
-                        """
-                        INSERT INTO job_concept_links (
-                            job_id, concept_id, link_type, evidence_field,
-                            evidence_text, confidence, linked_by,
-                            created_at, updated_at
-                        ) VALUES (?, ?, 'occupation', ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(
-                            job_id, concept_id, link_type, evidence_field
-                        ) DO UPDATE SET
-                            evidence_text = excluded.evidence_text,
-                            confidence = excluded.confidence,
-                            linked_by = excluded.linked_by,
-                            updated_at = excluded.updated_at
-                        """,
-                        (
-                            job_id,
-                            concept_id,
-                            evidence_field,
-                            evidence_text,
-                            confidence,
-                            (
-                                "exact_alias"
-                                if confidence >= 0.98
-                                else "contained_alias"
-                            ),
-                            now,
-                            now,
-                        ),
-                    )
-                    counts["occupations"] += 1
-
-                sections = (
-                    (
-                        "tech_stack",
-                        self._json_text_list(job["tech_stack"]),
-                        "mentioned",
-                        True,
-                    ),
-                    (
-                        "requirements",
-                        self._json_text_list(job["requirements"]),
-                        "required",
-                        False,
-                    ),
-                    (
-                        "preferred",
-                        self._json_text_list(job["preferred"]),
-                        "preferred",
-                        False,
-                    ),
-                    (
-                        "main_tasks",
-                        self._json_text_list(job["main_tasks"]),
-                        "mentioned",
-                        False,
-                    ),
+                (
+                    counts["skills"],
+                    counts["candidate_observations"],
+                ) = self._save_skill_links(
+                    connection,
+                    job_id=job_id,
+                    job=job,
+                    linked_at=indexed_at,
                 )
-                aliases: dict[str, list[sqlite3.Row]] = {}
-                for alias_row in self._skill_alias_rows(connection):
-                    aliases.setdefault(
-                        str(alias_row["normalized_alias"]),
-                        [],
-                    ).append(alias_row)
-                inserted_links: set[tuple[int, str]] = set()
-                for (
-                    evidence_field,
-                    texts,
-                    requirement_type,
-                    exact_only,
-                ) in sections:
-                    for evidence_text in texts:
-                        normalized_text = normalize_term(evidence_text)
-                        if exact_only:
-                            matched_rows = self._preferred_skill_rows(
-                                aliases.get(normalized_text, [])
-                            )
-                        else:
-                            matched_rows = self._preferred_skill_rows(
-                                row
-                                for alias, rows in aliases.items()
-                                if contains_taxonomy_alias(
-                                    normalized_text,
-                                    alias,
-                                )
-                                for row in rows
-                            )
-                        if exact_only and not matched_rows:
-                            recorded = self._record_term_candidate(
-                                connection,
-                                term=evidence_text,
-                                job_id=job_id,
-                            )
-                            counts["candidate_observations"] += int(
-                                recorded
-                            )
-                            continue
-                        for alias_row in matched_rows:
-                            concept_id = int(alias_row["id"])
-                            link_key = (concept_id, evidence_field)
-                            if link_key in inserted_links:
-                                continue
-                            inserted_links.add(link_key)
-                            confidence = 1.0 if exact_only else 0.95
-                            linked_by = (
-                                "exact_alias"
-                                if exact_only
-                                else "contained_alias"
-                            )
-                            connection.execute(
-                                """
-                                INSERT INTO job_concept_links (
-                                    job_id, concept_id, link_type,
-                                    evidence_field, evidence_text,
-                                    requirement_type, confidence, linked_by,
-                                    created_at, updated_at
-                                ) VALUES (
-                                    ?, ?, 'skill', ?, ?, ?, ?, ?, ?, ?
-                                )
-                                ON CONFLICT(
-                                    job_id, concept_id, link_type,
-                                    evidence_field
-                                ) DO UPDATE SET
-                                    evidence_text = excluded.evidence_text,
-                                    requirement_type =
-                                        excluded.requirement_type,
-                                    confidence = excluded.confidence,
-                                    linked_by = excluded.linked_by,
-                                    updated_at = excluded.updated_at
-                                """,
-                                (
-                                    job_id,
-                                    concept_id,
-                                    evidence_field,
-                                    evidence_text,
-                                    requirement_type,
-                                    confidence,
-                                    linked_by,
-                                    now,
-                                    now,
-                                ),
-                            )
-                            counts["skills"] += 1
-                connection.execute(
-                    """
-                    UPDATE jobs
-                    SET taxonomy_index_status = 'indexed',
-                        taxonomy_index_error = NULL,
-                        taxonomy_index_attempts = taxonomy_index_attempts + 1,
-                        taxonomy_indexed_at = ?
-                    WHERE id = ?
-                    """,
-                    (now, job_id),
+                self._mark_indexed(
+                    connection,
+                    job_id=job_id,
+                    indexed_at=indexed_at,
                 )
         except Exception as exc:
-            failure_connection = self._connect()
-            try:
-                with failure_connection:
-                    failure_connection.execute(
-                        """
-                        UPDATE jobs
-                        SET taxonomy_index_status = 'failed',
-                            taxonomy_index_error = ?,
-                            taxonomy_index_attempts = taxonomy_index_attempts + 1,
-                            taxonomy_indexed_at = NULL
-                        WHERE id = ?
-                        """,
-                        (
-                            f"{type(exc).__name__}: {exc}"[:1000],
-                            job_id,
-                        ),
-                    )
-            finally:
-                failure_connection.close()
+            self._mark_index_failed(job_id, exc)
             raise
         finally:
             connection.close()
