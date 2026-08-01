@@ -224,7 +224,7 @@ def test_product_chat_matrix_snapshots_sqlite_database(tmp_path):
 
 
 def test_runtime_reuse_quality_requires_same_worker_and_closed_browser():
-    from benchmark.run_runtime_reuse_e2e import _reuse_quality
+    from benchmark.run_product_chat_e2e import _reuse_quality
 
     runs = [
         {

@@ -26,8 +26,7 @@ class SubmissionStore(SQLiteStore):
         review = review or {}
         clean_submission = strip_full_screen_signatures(submission)
         run_id = clean_submission.get("run_id") or "run-unknown"
-        attempt = int(clean_submission.get("review_attempt") or 0)
-        submission_id = f"{run_id}:{attempt}"
+        submission_id = run_id
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
             existing = conn.execute(
@@ -39,9 +38,9 @@ class SubmissionStore(SQLiteStore):
                 """
                 INSERT OR REPLACE INTO worker_submissions (
                     submission_id, run_id, source, site, goal, keyword, run_status,
-                    review_attempt, review_decision, review_confidence, feedback_to_worker,
+                    review_decision, review_confidence, feedback_to_worker,
                     payload_json, review_json, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     submission_id,
@@ -51,7 +50,6 @@ class SubmissionStore(SQLiteStore):
                     clean_submission.get("goal", "") or "",
                     clean_submission.get("keyword", "") or "",
                     clean_submission.get("run_status", "") or "",
-                    attempt,
                     review.get("decision", "") or "",
                     float(review.get("confidence") or 0.0),
                     review.get("feedback_to_worker", "") or "",
@@ -81,24 +79,15 @@ class SubmissionStore(SQLiteStore):
             ).fetchone()
         return self._row_to_item(row) if row else None
 
-    def get_run_attempt(
-        self,
-        run_id: str,
-        review_attempt: int | None = None,
-    ) -> dict[str, Any] | None:
-        """실행 ID와 검토 시도로 제출물을 조회한다.
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        """작업자 실행 ID로 제출물을 조회한다."""
 
-        검토 시도를 생략하면 같은 실행에서 가장 최근 제출물을 반환한다.
-        """
-
-        sql = "SELECT * FROM worker_submissions WHERE run_id=?"
-        params: list[Any] = [run_id]
-        if review_attempt is not None:
-            sql += " AND review_attempt=?"
-            params.append(review_attempt)
-        sql += " ORDER BY review_attempt DESC, updated_at DESC LIMIT 1"
         with self._conn() as conn:
-            row = conn.execute(sql, params).fetchone()
+            row = conn.execute(
+                "SELECT * FROM worker_submissions WHERE run_id=? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
         return self._row_to_item(row) if row else None
 
     def list_recent(self, limit: int = 20, decision: str | None = None) -> list[dict[str, Any]]:

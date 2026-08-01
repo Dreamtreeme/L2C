@@ -148,7 +148,7 @@ python -m benchmark.profile_investigation_planner `
 - `worker_prepare_screen`, `worker_graph`, `worker_review`, `job_persistence`: 수집 생명주기
 - `ocr_request`: 실제 PaddleOCR worker 요청과 timeout
 - LangGraph 노드와 LLM 호출: 판단 흐름과 모델 토큰
-- 직접 호출한 OpenAI/Ollama 모델: 별도의 LLM child trace
+- Classic Ollama 정제 호출: `classic_extraction` LLM 사용량
 
 각 단계에는 `stage`, `component`, 성공 여부와 실패 코드가 붙습니다. `graph:reflex`의 `action_source=reflex`와 `graph:selection`의 `action_source=job_card_queue`가 각각 Reflex와 공고 카드 큐 hit의 기준입니다. 중간 실패 후 복구된 실행은 최종 성공으로 집계하고, 실패 이력은 `recovered_failure_count`와 `internal_failure_codes`에 남깁니다.
 
@@ -160,14 +160,14 @@ python -m benchmark.profile_investigation_planner `
 python scripts/inspect_worker_trace.py
 ```
 
-특정 실행의 최신 검토 시도나 정확한 제출물을 조회할 수도 있습니다.
+특정 실행이나 정확한 제출물을 조회할 수도 있습니다.
 
 ```powershell
 python scripts/inspect_worker_trace.py --run-id worker-20260723192058-c0cd94e8
-python scripts/inspect_worker_trace.py --submission-id worker-20260723192058-c0cd94e8:0 --json
+python scripts/inspect_worker_trace.py --submission-id worker-20260723192058-c0cd94e8 --json
 ```
 
-텍스트 출력은 긴 실행 ID에서 `capture:0001`처럼 캡처 순번만 줄여 보여 줍니다. `--json` 출력은 실행 ID, 검토 시도, 전체 캡처 ID, 스크린샷 경로를 그대로 유지하므로 실패 경로 분석이나 별도 시각화 입력으로 사용할 수 있습니다.
+텍스트 출력은 긴 실행 ID에서 `capture:0001`처럼 캡처 순번만 줄여 보여 줍니다. `--json` 출력은 실행 ID, 전체 캡처 ID, 스크린샷 경로를 그대로 유지하므로 실패 경로 분석이나 별도 시각화 입력으로 사용할 수 있습니다.
 
 ## 대시보드
 

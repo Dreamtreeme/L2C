@@ -1,13 +1,12 @@
 import time
 import os
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
 from PIL import Image
 
 from agent.config import get_settings
-from agent.tools.perception import PerceptionEngine
 from agent.utils.logger import logger
 from agent.vision.frame_compare import (
     changed_pixel_ratio,
@@ -15,7 +14,6 @@ from agent.vision.frame_compare import (
     load_gray_frame,
     mean_difference_percent,
 )
-
 
 class WaitStable:
     """
@@ -25,7 +23,7 @@ class WaitStable:
     pHash는 이 모듈의 일반 대기 시간이 아니라 저장 상태를 찾는 경우에만 사용합니다.
     """
 
-    def __init__(self, perception_engine: PerceptionEngine):
+    def __init__(self, perception_engine: Any):
         self.perception = perception_engine
         self.last_wait_result: dict = {}
 

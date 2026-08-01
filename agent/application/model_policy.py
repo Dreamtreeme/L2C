@@ -39,7 +39,7 @@ def model_execution_policy(
             settings.execution.worker_reasoning_request_timeout_sec
         ),
         "lightweight": settings.execution.lightweight_request_timeout_sec,
-        "detail": settings.models.detail_openai_timeout_sec,
+        "detail": settings.execution.detail_request_timeout_sec,
         "critic": settings.recipe.critic_timeout_sec,
     }
     return ModelExecutionPolicy(

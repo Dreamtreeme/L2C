@@ -433,75 +433,6 @@ class StepObservation:
         self.data.update(data)
 
 
-@dataclass
-class ExternalLLMObservation:
-    """LangChain 밖에서 호출한 모델의 실제 사용량을 실행 구간에 연결한다."""
-
-    usage: dict[str, Any] = field(default_factory=dict)
-    output: dict[str, Any] = field(default_factory=dict)
-
-    def set_usage(self, usage: dict[str, Any] | None) -> None:
-        self.usage = normalize_usage(dict(usage or {}))
-
-    def set_output(self, **output: Any) -> None:
-        self.output.update(output)
-
-
-@contextmanager
-def observe_external_llm_call(
-    *,
-    component: str,
-    provider: str,
-    model: str,
-) -> Iterator[ExternalLLMObservation]:
-    """직접 호출 모델의 시간·토큰·오류를 로컬과 LangSmith에 한 번씩 기록한다."""
-
-    observation = ExternalLLMObservation()
-    started = time.perf_counter()
-    success = True
-    error = ""
-    with langsmith_trace(
-        component,
-        run_type="llm",
-        inputs={"component": component},
-        metadata={
-            "component": component,
-            "ls_provider": provider,
-            "ls_model_name": model,
-        },
-        tags=["llm", provider, component],
-    ) as llm_trace:
-        try:
-            yield observation
-        except BaseException as exc:
-            success = False
-            error = str(exc)[:300]
-            raise
-        finally:
-            duration = time.perf_counter() - started
-            context = current_run_context()
-            if context is not None:
-                context.record_llm_call(
-                    component,
-                    provider,
-                    model,
-                    observation.usage,
-                    duration,
-                    success=success,
-                    error=error,
-                )
-            finish_langsmith_trace(
-                llm_trace,
-                outputs={
-                    "success": success,
-                    "usage_metadata": normalize_usage(observation.usage),
-                    **observation.output,
-                },
-                metadata={"success": success, "error": error},
-                usage=normalize_usage(observation.usage),
-            )
-
-
 @contextmanager
 def observe_step(component: str, **data: Any) -> Iterator[StepObservation]:
     """로컬 메트릭과 LangSmith child trace를 같은 실행 구간에서 기록한다."""
@@ -588,68 +519,6 @@ def _is_timeout_exception(exc: BaseException) -> bool:
         return True
     text = str(exc).casefold()
     return "timed out" in text or "deadline exceeded" in text
-
-
-def _is_transient_model_exception(exc: BaseException) -> bool:
-    """연결·사용량 제한·공급자 일시 장애만 재시도 대상으로 분류한다."""
-
-    if _is_timeout_exception(exc):
-        return True
-    names = {
-        type(item).__name__.casefold()
-        for item in type(exc).mro()
-    }
-    transient_names = {
-        "connectionerror",
-        "connecterror",
-        "networkerror",
-        "ratelimiterror",
-        "resourceexhausted",
-        "serviceunavailable",
-        "toomanyrequestserror",
-    }
-    if names & transient_names:
-        return True
-    status_code = getattr(exc, "status_code", None)
-    try:
-        status_code = int(status_code)
-    except (TypeError, ValueError):
-        status_code = 0
-    return status_code in {408, 409, 429, 500, 502, 503, 504}
-
-
-def invoke_direct_model_with_policy(
-    runnable: Any,
-    inputs: Any,
-    component: str,
-    *,
-    execution_role: str,
-) -> Any:
-    """LangChain 밖 모델에도 역할별 재시도와 timeout 오류 계약을 적용한다."""
-
-    from agent.application.model_policy import model_execution_policy
-
-    policy = model_execution_policy(execution_role)
-    for attempt in range(policy.retries + 1):
-        raise_if_cancelled()
-        try:
-            result = runnable.invoke(inputs)
-        except Exception as exc:
-            can_retry = (
-                attempt < policy.retries
-                and _is_transient_model_exception(exc)
-            )
-            if can_retry:
-                time.sleep(min(0.25 * (2**attempt), 1.0))
-                continue
-            if _is_timeout_exception(exc):
-                raise ModelRequestTimeout(
-                    f"{component} model request timed out"
-                ) from exc
-            raise
-        raise_if_cancelled()
-        return result
-    raise RuntimeError(f"{component} model invocation ended without a result")
 
 
 def _stream_result(
@@ -764,6 +633,8 @@ def record_external_llm_usage(
     success: bool = True,
     error: str = "",
 ) -> None:
+    """Classic Ollama 호출의 사용량을 현재 실행 메트릭에 합친다."""
+
     context = current_run_context()
     if context is None:
         return
@@ -786,10 +657,8 @@ __all__ = [
     "current_run_context",
     "emit_run_event",
     "invoke_with_metrics",
-    "invoke_direct_model_with_policy",
     "measure_step",
     "normalize_usage",
-    "observe_external_llm_call",
     "observe_step",
     "record_external_llm_usage",
     "raise_if_cancelled",

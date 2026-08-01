@@ -371,22 +371,7 @@ def build_site_goal(
     )
 
 
-def append_review_feedback(
-    goal: str,
-    review_feedback: str | None,
-) -> str:
-    if not review_feedback:
-        return goal
-    return (
-        goal
-        + "\n\n[Commander review feedback from the previous attempt]\n"
-        + review_feedback.strip()
-        + "\nRevise the next actions and final submission to address this feedback."
-    )
-
-
 __all__ = [
-    "append_review_feedback",
     "build_direct_search_url",
     "build_site_goal",
     "extract_search_intent",

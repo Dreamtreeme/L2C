@@ -10,6 +10,7 @@ from agent.application.chat_service import ChatService
 from agent.application.recipe_promotion_service import auto_promotion_enabled
 from agent.application.recipe_promotion_worker import RecipePromotionWorker
 from agent.graph.investigation_workflow import InvestigationWorkflow
+from agent.graph.workflow import build_graph
 from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
 from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 from agent.tools.realtime_scraping import build_runtime_realtime_scraping_tool
@@ -33,7 +34,9 @@ class ApplicationRuntime:
         self.checkpoint_runtime = checkpoint_runtime or InvestigationCheckpointRuntime(
             self.db_path
         )
-        self.vision_runtime = vision_runtime or VisionWorkerRuntime()
+        self.vision_runtime = vision_runtime or VisionWorkerRuntime(
+            graph_factory=build_graph
+        )
         self.collection_tool = build_runtime_realtime_scraping_tool(
             self.vision_runtime
         )

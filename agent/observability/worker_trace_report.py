@@ -183,15 +183,9 @@ def build_worker_trace(submission: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    review_attempt = _sequence(
-        payload.get("review_attempt")
-        if payload.get("review_attempt") is not None
-        else submission.get("review_attempt")
-    )
     return {
         "submission_id": str(submission.get("submission_id") or ""),
         "run_id": str(payload.get("run_id") or submission.get("run_id") or ""),
-        "review_attempt": review_attempt or 0,
         "site": str(payload.get("site") or submission.get("site") or ""),
         "goal": str(payload.get("goal") or submission.get("goal") or ""),
         "run_status": str(
@@ -214,7 +208,6 @@ def render_worker_trace(trace: dict[str, Any]) -> str:
     lines = [
         f"실행 ID: {trace.get('run_id') or '-'}",
         f"제출물 ID: {trace.get('submission_id') or '-'}",
-        f"검토 시도: {trace.get('review_attempt', 0)}",
         f"사이트: {trace.get('site') or '-'}",
         (
             f"상태: {trace.get('run_status') or '-'}"

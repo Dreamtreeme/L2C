@@ -28,11 +28,6 @@ PAGE_LOAD_WAIT_SEC = _SETTINGS.browser.page_load_wait_sec
 # ── LLM (Ollama) ───────────────────────────────────────────
 OLLAMA_MODEL = _SETTINGS.models.ollama_model
 OLLAMA_HOST = _SETTINGS.models.ollama_host
-WORKNET_API_KEY = (
-    _SETTINGS.models.worknet_api_key.get_secret_value()
-    if _SETTINGS.models.worknet_api_key is not None
-    else ""
-)
 LLM_TEMPERATURE = _SETTINGS.models.llm_temperature
 
 # ── LLM 프롬프트 ───────────────────────────────────────────

@@ -231,34 +231,6 @@ async def get_operations_summary():
     }
 
 
-@app.get("/api/contracts")
-async def get_backend_contracts():
-    """실행 모델에서 생성한 백엔드·에이전트 JSON 계약을 반환합니다."""
-
-    from agent.application.backend_contract import build_backend_contract_manifest
-
-    return build_backend_contract_manifest()
-
-
-@app.get("/api/taxonomy/stats")
-async def get_search_taxonomy_stats():
-    """검색 사전 적재 건수와 최상위 직무 카디널리티를 반환합니다."""
-
-    import shared.config as config
-    from agent.application.search_taxonomy_import_service import taxonomy_counts
-    from agent.application.search_taxonomy_service import SearchTaxonomyService
-    from shared.schema.investigation_schema import InvestigationConstraints
-
-    taxonomy = SearchTaxonomyService(config.DB_PATH)
-    question = taxonomy.build_domain_question(InvestigationConstraints())
-    return {
-        "tables": taxonomy_counts(config.DB_PATH),
-        "occupation_domains": (
-            question.model_dump(mode="json") if question is not None else None
-        ),
-    }
-
-
 @app.post("/api/operations/retention")
 async def apply_retention(x_l2c_operation: str = Header(default="")):
     """현재 보존 정책의 만료 후보를 실제로 정리합니다."""

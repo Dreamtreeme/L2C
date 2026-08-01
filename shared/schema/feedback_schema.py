@@ -83,7 +83,6 @@ class WorkerSubmission(BaseModel):
     task_category: str = ""
     keyword: str = ""
     run_status: str = ""
-    review_attempt: int = 0
     is_finished: bool = False
     hit_recursion_limit: bool = False
     collected_count: int = 0

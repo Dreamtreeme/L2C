@@ -15,14 +15,7 @@ def normalize_text(text) -> str:
     """OCR 마커 노이즈([0], [id: 2]) 제거 + 공백 정규화."""
     if not text:
         return ""
-    raw = str(text)
-    try:
-        from agent.utils.preprocessor import Preprocessor
-
-        raw = Preprocessor.clean_text(raw)
-    except Exception:
-        pass
-    t = _MARKER_NOISE.sub("", raw)
+    t = _MARKER_NOISE.sub("", str(text))
     t = _MULTISPACE.sub(" ", t).strip()
     return t
 

@@ -17,7 +17,6 @@ def _candidate_submission() -> dict:
         "site": "wanted",
         "task_category": "검색",
         "keyword": "AI 엔지니어",
-        "review_attempt": 0,
         "skill_metadata_evidence": {
             "site": "wanted",
             "task_category": "검색",

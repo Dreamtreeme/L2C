@@ -553,14 +553,6 @@ def test_realtime_scraping_passes_confirmed_collection_constraints_to_worker(mon
     assert "analysis_goal=회사별 요구 기술 비교" in captured["goal"]
 
 
-def test_worker_review_retries_are_disabled_by_default(monkeypatch):
-    from agent.application import collection_worker_runner as rt
-
-    monkeypatch.delenv("VISION_WORKER_REVIEW_RETRIES", raising=False)
-
-    assert rt.worker_review_retries() == 0
-
-
 def test_realtime_scraping_target_count_falls_back_to_intent(monkeypatch):
     from agent.application import collection_worker_runner as rt
 

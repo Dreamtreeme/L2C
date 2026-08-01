@@ -47,8 +47,6 @@ def _run_realtime_scraping(
     target_count: int = 0,
     task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
     search_intent_resolved: bool = False,
-    review_feedback: str | None = None,
-    review_attempt: int = 0,
     count_mode: str = CollectionCountMode.UNSPECIFIED.value,
     posted_date_expression: str = "",
     posted_from: str = "",
@@ -113,8 +111,6 @@ def _run_realtime_scraping(
                 or DEFAULT_SEARCH_TASK_CATEGORY
             ),
             search_intent_resolved=search_intent_resolved,
-            review_feedback=review_feedback or "",
-            review_attempt=review_attempt,
             collection_intent=dump_model(collection_intent),
         )
     )
@@ -133,10 +129,11 @@ def _invoke_realtime_scraping(
 
     from agent.application.run_context import emit_run_event, run_context
     from agent.application.run_contracts import RunPhase, RunStatus
+    from agent.graph.workflow import build_graph
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 
     owned_runtime = worker_runtime is None
-    runtime = worker_runtime or VisionWorkerRuntime()
+    runtime = worker_runtime or VisionWorkerRuntime(graph_factory=build_graph)
     context_query = arguments.get("query") or " ".join(
         part
         for part in (
@@ -210,8 +207,6 @@ def realtime_scraping(
     query: str = None,
     target_count: int = 0,
     task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
-    review_feedback: str = None,
-    review_attempt: int = 0,
     count_mode: str = CollectionCountMode.UNSPECIFIED.value,
     posted_date_expression: str = "",
     posted_from: str = "",
@@ -236,8 +231,6 @@ def realtime_scraping(
             "query": query,
             "target_count": target_count,
             "task_category": task_category,
-            "review_feedback": review_feedback,
-            "review_attempt": review_attempt,
             "count_mode": count_mode,
             "posted_date_expression": posted_date_expression,
             "posted_from": posted_from,

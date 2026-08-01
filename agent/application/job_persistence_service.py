@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
-from agent.config import get_settings
 from agent.runtime.job_collection import job_list_value
 from agent.utils.model_dump import dump_model
 
@@ -14,73 +12,12 @@ from agent.utils.model_dump import dump_model
 logger = logging.getLogger(__name__)
 
 
-def normalization_mode() -> str:
-    mode = get_settings().recipe.jd_normalization_mode.strip().lower()
-    return mode if mode in {"deterministic", "llm", "off"} else "deterministic"
+def normalize_job_for_persistence(job: dict[str, Any]) -> dict[str, Any]:
+    """상세 정제가 끝난 수집 결과를 DB 입력 형식으로 정규화한다."""
 
+    from agent.utils.job_fields import deterministic_job_for_persistence
 
-def normalize_job_for_persistence(job: dict[str, Any], keyword: str = "") -> dict[str, Any]:
-    """수집 원본을 설정된 방식으로 DB 입력 스키마에 맞춘다."""
-
-    mode = normalization_mode()
-    if mode == "off":
-        return dict(job)
-    if mode == "deterministic":
-        from agent.utils.job_fields import deterministic_job_for_persistence
-
-        return deterministic_job_for_persistence(job)
-    try:
-        from langchain_core.messages import HumanMessage, SystemMessage
-        from agent.application.model_clients import get_structured_google_model
-        from shared.schema.jd_schema import JobPosting
-
-        from agent.application.model_policy import lightweight_model_name
-
-        model_name = lightweight_model_name("VISION_JD_NORMALIZATION_MODEL")
-        llm = get_structured_google_model(
-            model_name,
-            JobPosting,
-            temperature=0.0,
-            execution_role="lightweight",
-        )
-        messages = [
-            SystemMessage(
-                content=(
-                    "Normalize one raw job posting collected by a vision worker into the JobPosting schema. "
-                    "Read field names in any language, including Korean. Preserve the original job URL. "
-                    "Use empty strings or empty lists for unknown fields; do not invent missing facts. "
-                    "Do not compute content_hash or evidence_hash."
-                )
-            ),
-            HumanMessage(
-                content=json.dumps(
-                    {"search_keyword": keyword, "raw_job": job},
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            ),
-        ]
-        from agent.application.run_context import invoke_with_metrics
-
-        normalized = dump_model(
-            invoke_with_metrics(
-                llm,
-                messages,
-                "job_normalization",
-                stream=True,
-            )
-        )
-        raw_url = job.get("url") or job.get("URL") or job.get("공고url")
-        if raw_url and not normalized.get("url"):
-            normalized["url"] = raw_url
-        normalized["_normalization_source"] = "llm"
-        return normalized
-    except Exception as exc:  # pragma: no cover - 공급자 실패는 원본 저장으로 폴백한다.
-        logger.warning("[job_persistence] JD normalization failed; using raw job: %s", exc)
-        fallback = dict(job)
-        fallback["_normalization_source"] = "llm_failed"
-        fallback["_normalization_error"] = str(exc)[:200]
-        return fallback
+    return deterministic_job_for_persistence(job)
 
 
 def _job_validation_issues(
@@ -189,7 +126,7 @@ def persist_collected_data_with_report(
             if page_exhausted
             else []
         )
-        normalized_job = normalize_job_for_persistence(job, keyword=keyword)
+        normalized_job = normalize_job_for_persistence(job)
         url = normalized_job.get("url") or job.get("url") or job.get("URL") or job.get("공고url")
         if not url:
             company_name = job.get("회사명", job.get("company_name", ""))
@@ -317,7 +254,6 @@ def persist_collected_data_with_report(
 
 
 __all__ = [
-    "normalization_mode",
     "normalize_job_for_persistence",
     "persist_collected_data_with_report",
 ]

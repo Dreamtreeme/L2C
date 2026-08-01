@@ -231,25 +231,6 @@ def test_chat_api_streams_structured_progress_without_character_delay(monkeypatc
     assert '"text": "최종 답변"' in response.text
     assert "data: 최" not in response.text
 
-def test_backend_contract_endpoint_exposes_generated_json_schemas():
-    from fastapi.testclient import TestClient
-
-    from agent.web_server import app
-
-    response = TestClient(app).get("/api/contracts")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["version"] == 4
-    assert payload["transport"]["media_type"] == "text/event-stream"
-    assert "chat_request" in payload["schemas"]
-    assert "taxonomy_resolution" in payload["schemas"]
-    assert "job_collection_contract" in payload["schemas"]
-    properties = payload["schemas"]["collection_tool_arguments"]["properties"]
-    assert "query" in properties
-    assert "site" in properties
-    assert "required_fields" in properties
-
 def test_chat_api_resumes_from_structured_clarification(monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -457,11 +438,9 @@ def test_collection_service_forces_partial_status_when_explicit_target_is_unmet(
     operations = CollectionOperations(
         normalize_target_count=lambda value: int(value or 0),
         normalize_task_category=lambda value: value or "검색",
-        review_retries=lambda: 0,
         run_worker=run_worker,
         review_worker=lambda submission: ({"decision": "accept"}, "submission-partial"),
         persist_result=persist,
-        render_review_feedback=lambda review: "",
         needs_approval=lambda **kwargs: False,
         build_intermediate_report=lambda *args, **kwargs: {},
         report_requires_more_collection=lambda report: False,
@@ -529,11 +508,9 @@ def test_collection_service_completes_with_existing_database_jobs_only():
     operations = CollectionOperations(
         normalize_target_count=lambda value: int(value or 0),
         normalize_task_category=lambda value: value or "검색",
-        review_retries=lambda: 0,
         run_worker=run_worker,
         review_worker=lambda submission: ({"decision": "accept"}, "submission-existing"),
         persist_result=persist,
-        render_review_feedback=lambda review: "",
         needs_approval=lambda **kwargs: False,
         build_intermediate_report=lambda *args, **kwargs: {},
         report_requires_more_collection=lambda report: False,
@@ -604,7 +581,6 @@ def test_collection_service_completes_when_visible_result_scope_is_exhausted():
     operations = CollectionOperations(
         normalize_target_count=lambda value: int(value or 0),
         normalize_task_category=lambda value: value or "검색",
-        review_retries=lambda: 1,
         run_worker=run_worker,
         review_worker=lambda submission: (
             {
@@ -615,7 +591,6 @@ def test_collection_service_completes_when_visible_result_scope_is_exhausted():
             "submission-exhausted",
         ),
         persist_result=persist,
-        render_review_feedback=lambda review: "계속 수집",
         needs_approval=lambda **kwargs: True,
         build_intermediate_report=lambda *args, **kwargs: {"target_count": 10, "persisted_count": 1},
         report_requires_more_collection=lambda report: True,
@@ -640,91 +615,6 @@ def test_collection_service_completes_when_visible_result_scope_is_exhausted():
     assert result["missing_count"] == 9
     assert result["needs_human_approval"] is False
     assert result["persisted_count"] == 1
-
-def test_collection_service_persists_valid_partial_data_before_retry():
-    from agent.application.collection_service import (
-        CollectionOperations,
-        CollectionRequest,
-        CollectionService,
-    )
-
-    requested_counts = []
-    reviews = iter(
-        [
-            {
-                "decision": "revise",
-                "accept_collected_data": True,
-                "continue_collection": True,
-            },
-            {
-                "decision": "accept",
-                "accept_collected_data": True,
-                "continue_collection": False,
-            },
-        ]
-    )
-
-    def run_worker(*args, **kwargs):
-        requested_counts.append(kwargs["target_count"])
-        attempt = len(requested_counts)
-        return {
-            "submission": {
-                "run_id": "worker-retry",
-                "review_attempt": attempt - 1,
-                "collected_count": 1,
-                "target_count": kwargs["target_count"],
-            },
-            "site_name": "Wanted",
-            "site_slug": "wanted",
-            "keyword": "백엔드",
-            "target_count": kwargs["target_count"],
-            "is_finished": attempt == 2,
-            "hit_recursion_limit": attempt == 1,
-            "attempt": attempt,
-        }
-
-    def persist(worker_result, review):
-        job_id = int(worker_result["attempt"])
-        validation = {
-            "submitted_count": 1,
-            "persisted_count": 1,
-            "persisted_items": [{"job_id": job_id, "url": f"https://example.com/{job_id}"}],
-            "rejected_count": 0,
-            "rejected_items": [],
-        }
-        worker_result["persistence_validation"] = validation
-        return 1, worker_result["submission"], review, f"submission-{job_id}"
-
-    operations = CollectionOperations(
-        normalize_target_count=lambda value: int(value or 0),
-        normalize_task_category=lambda value: value or "검색",
-        review_retries=lambda: 1,
-        run_worker=run_worker,
-        review_worker=lambda submission: (next(reviews), "submission"),
-        persist_result=persist,
-        render_review_feedback=lambda review: "남은 공고 수집",
-        needs_approval=lambda **kwargs: False,
-        build_intermediate_report=lambda *args, **kwargs: {},
-        report_requires_more_collection=lambda report: False,
-        close_browser=lambda: None,
-    )
-
-    result = CollectionService(operations).collect(
-        CollectionRequest(
-            search_keyword="백엔드",
-            target_count=3,
-            collection_intent={
-                "search_keyword": "백엔드",
-                "count_mode": "explicit",
-                "target_count": 3,
-            },
-        )
-    )
-
-    assert requested_counts == [3, 2]
-    assert result["persisted_count"] == 2
-    assert result["missing_count"] == 1
-    assert len(result["persistence_validation"]["persisted_items"]) == 2
 
 def test_worker_execution_session_serializes_concurrent_requests():
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
@@ -817,8 +707,8 @@ def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
 
     monkeypatch.setattr("agent.web_server.ApplicationRuntime", FakeRuntime)
 
-    with TestClient(app) as client:
-        assert client.get("/api/contracts").status_code == 200
+    with TestClient(app):
+        pass
 
     assert calls[0][0] == "init"
     assert calls[1:] == ["start", ("close", 0.5)]

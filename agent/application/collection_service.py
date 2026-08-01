@@ -21,8 +21,6 @@ class CollectionRequest:
     target_count: int = 0
     task_category: str = ""
     search_intent_resolved: bool = False
-    review_feedback: str = ""
-    review_attempt: int = 0
     collection_intent: dict[str, Any] | None = None
 
 
@@ -30,11 +28,9 @@ class CollectionRequest:
 class CollectionOperations:
     normalize_target_count: Callable[[Any], int]
     normalize_task_category: Callable[[str], str]
-    review_retries: Callable[[], int]
     run_worker: Callable[..., dict]
     review_worker: Callable[[dict], tuple[dict, str]]
     persist_result: Callable[[dict, dict], tuple[int, dict, dict, str]]
-    render_review_feedback: Callable[[dict], str]
     needs_approval: Callable[..., bool]
     build_intermediate_report: Callable[..., dict]
     report_requires_more_collection: Callable[[dict], bool]
@@ -75,57 +71,6 @@ class CollectionService:
         trusted = available_count >= 0 and confidence >= 0.8 and bool(evidence)
         return bool(trusted and resolved_count >= available_count), availability
 
-    @staticmethod
-    def _merge_persistence_validation(
-        aggregate: dict[str, Any],
-        current: dict[str, Any],
-    ) -> dict[str, Any]:
-        """여러 작업자 시도의 저장 결과를 문서 기준으로 합친다."""
-
-        aggregate_items = [
-            item
-            for item in (aggregate.get("persisted_items") or [])
-            if isinstance(item, dict)
-        ]
-        current_items = [
-            item
-            for item in (current.get("persisted_items") or [])
-            if isinstance(item, dict)
-        ]
-        persisted: dict[str, dict[str, Any]] = {}
-        for item in [*aggregate_items, *current_items]:
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get("job_id") or item.get("url") or len(persisted))
-            persisted[key] = dict(item)
-        unidentified_count = max(
-            0,
-            int(aggregate.get("persisted_count") or 0) - len(aggregate_items),
-        ) + max(
-            0,
-            int(current.get("persisted_count") or 0) - len(current_items),
-        )
-        rejected = [
-            dict(item)
-            for item in [
-                *(aggregate.get("rejected_items") or []),
-                *(current.get("rejected_items") or []),
-            ]
-            if isinstance(item, dict)
-        ]
-        return {
-            "submitted_count": int(aggregate.get("submitted_count") or 0)
-            + int(current.get("submitted_count") or 0),
-            "persisted_count": len(persisted) + unidentified_count,
-            "created_count": int(aggregate.get("created_count") or 0)
-            + int(current.get("created_count") or 0),
-            "updated_count": int(aggregate.get("updated_count") or 0)
-            + int(current.get("updated_count") or 0),
-            "persisted_items": list(persisted.values()),
-            "rejected_count": len(rejected),
-            "rejected_items": rejected,
-        }
-
     def collect(self, request: CollectionRequest) -> dict[str, Any]:
         keyword = str(request.search_keyword or "").strip()
         if not keyword:
@@ -158,134 +103,80 @@ class CollectionService:
         )
 
         try:
-            max_review_retries = self.operations.review_retries()
-            attempt = max(0, int(request.review_attempt or 0))
-            pending_feedback = request.review_feedback or ""
-            worker_run_id: str | None = None
-            aggregate_validation: dict[str, Any] = {}
-            observed_job_ids: set[int] = set()
-
-            while True:
-                persisted_ids = {
-                    int(item["job_id"])
-                    for item in aggregate_validation.get("persisted_items", [])
-                    if isinstance(item, dict) and str(item.get("job_id", "")).isdigit()
-                }
-                resolved_count = max(
-                    int(aggregate_validation.get("persisted_count") or 0),
-                    len(persisted_ids | observed_job_ids),
-                )
-                remaining_target = (
-                    max(0, target_count - resolved_count)
-                    if target_count > 0
-                    else 0
-                )
-                attempt_intent = dict(intent_payload)
-                if target_count > 0:
-                    attempt_intent["target_count"] = remaining_target
-                with measure_step(
-                    "vision_worker",
-                    site=request.site or "",
-                    review_attempt=attempt,
-                ):
-                    worker_result = self.operations.run_worker(
-                        keyword,
-                        site=request.site,
-                        target_count=remaining_target if target_count > 0 else target_count,
-                        task_category=task_category,
-                        search_intent_resolved=request.search_intent_resolved,
-                        collection_intent=attempt_intent,
-                        review_feedback=pending_feedback,
-                        review_attempt=attempt,
-                        run_id=worker_run_id,
-                    )
-                submission = worker_result["submission"]
-                worker_run_id = submission.get("run_id") or worker_run_id
-
-                emit_run_event(
-                    "review_started",
-                    RunPhase.REVIEW,
-                    "작업자 수집 결과를 검토하고 있습니다.",
-                    data={"worker_run_id": worker_run_id or "", "attempt": attempt},
-                )
-                with measure_step("worker_review", review_attempt=attempt):
-                    review, submission_id = self.operations.review_worker(submission)
-
-                emit_run_event(
-                    "persistence_started",
-                    RunPhase.PERSISTENCE,
-                    "검증된 채용공고를 저장하고 있습니다.",
-                    data={"decision": review.get("decision", "")},
-                )
-                with measure_step("job_persistence"):
-                    (
-                        _persisted_count,
-                        submission,
-                        review,
-                        persisted_submission_id,
-                    ) = self.operations.persist_result(worker_result, review)
-                if persisted_submission_id:
-                    submission_id = persisted_submission_id
-                current_validation = dict(worker_result.get("persistence_validation") or {})
-                aggregate_validation = self._merge_persistence_validation(
-                    aggregate_validation,
-                    current_validation,
-                )
-                observed_job_ids.update(
-                    int(job_id)
-                    for job_id in (worker_result.get("observed_job_ids") or [])
-                    if str(job_id).isdigit() and int(job_id) > 0
-                )
-                persisted_ids = {
-                    int(item["job_id"])
-                    for item in aggregate_validation.get("persisted_items", [])
-                    if isinstance(item, dict) and str(item.get("job_id", "")).isdigit()
-                }
-                resolved_count = max(
-                    int(aggregate_validation.get("persisted_count") or 0),
-                    len(persisted_ids | observed_job_ids),
-                )
-                scope_exhausted, _availability = self._search_scope_exhausted(
-                    submission,
-                    worker_result,
-                    resolved_count,
-                )
-
-                should_retry = bool(
-                    review.get("decision") == "revise"
-                    and review.get("continue_collection", True)
-                    and attempt < max_review_retries
-                    and not scope_exhausted
-                )
-                if should_retry:
-                    pending_feedback = self.operations.render_review_feedback(review)
-                    attempt += 1
-                    logger.info(
-                        "Retrying worker after commander feedback",
-                        attempt=attempt,
-                        worker_run_id=worker_run_id,
-                    )
-                    continue
-
-                worker_result["persistence_validation"] = aggregate_validation
-                worker_result["observed_job_ids"] = sorted(observed_job_ids)
-
-                return self._build_result(
-                    request=request,
-                    keyword=keyword,
+            with measure_step(
+                "vision_worker",
+                site=request.site or "",
+            ):
+                worker_result = self.operations.run_worker(
+                    keyword,
+                    site=request.site,
                     target_count=target_count,
                     task_category=task_category,
-                    worker_result=worker_result,
-                    submission=submission,
-                    submission_id=submission_id,
-                    review=review,
-                    persisted_count=int(aggregate_validation.get("persisted_count") or 0),
-                    resolved_count=resolved_count,
-                    collection_intent=(
-                        worker_result.get("collection_intent")
-                        or intent_payload
-                    ),
+                    search_intent_resolved=request.search_intent_resolved,
+                    collection_intent=intent_payload,
                 )
+            submission = worker_result["submission"]
+            worker_run_id = str(submission.get("run_id") or "")
+
+            emit_run_event(
+                "review_started",
+                RunPhase.REVIEW,
+                "작업자 수집 결과를 검토하고 있습니다.",
+                data={"worker_run_id": worker_run_id},
+            )
+            with measure_step("worker_review"):
+                review, submission_id = self.operations.review_worker(submission)
+
+            emit_run_event(
+                "persistence_started",
+                RunPhase.PERSISTENCE,
+                "검증된 채용공고를 저장하고 있습니다.",
+                data={"decision": review.get("decision", "")},
+            )
+            with measure_step("job_persistence"):
+                (
+                    _persisted_count,
+                    submission,
+                    review,
+                    persisted_submission_id,
+                ) = self.operations.persist_result(worker_result, review)
+            if persisted_submission_id:
+                submission_id = persisted_submission_id
+
+            validation = dict(worker_result.get("persistence_validation") or {})
+            observed_job_ids = {
+                int(job_id)
+                for job_id in (worker_result.get("observed_job_ids") or [])
+                if str(job_id).isdigit() and int(job_id) > 0
+            }
+            persisted_ids = {
+                int(item["job_id"])
+                for item in validation.get("persisted_items", [])
+                if isinstance(item, dict)
+                and str(item.get("job_id", "")).isdigit()
+            }
+            resolved_count = max(
+                int(validation.get("persisted_count") or 0),
+                len(persisted_ids | observed_job_ids),
+            )
+            worker_result["observed_job_ids"] = sorted(observed_job_ids)
+
+            return self._build_result(
+                request=request,
+                keyword=keyword,
+                target_count=target_count,
+                task_category=task_category,
+                worker_result=worker_result,
+                submission=submission,
+                submission_id=submission_id,
+                review=review,
+                persisted_count=int(validation.get("persisted_count") or 0),
+                resolved_count=resolved_count,
+                collection_intent=(
+                    worker_result.get("collection_intent")
+                    or intent_payload
+                ),
+            )
         except Exception as exc:
             from agent.application.run_context import (
                 ModelRequestTimeout,
@@ -518,25 +409,21 @@ def build_collection_operations(
         limit_report_requires_more_collection,
         needs_human_limit_approval,
         run_worker_once,
-        worker_review_retries,
     )
     from agent.application.worker_execution_service import (
         close_browser_after_run,
     )
-    from agent.recipe.reviewer import render_review_feedback
     from agent.recipe.task_category import normalize_task_category
 
     return CollectionOperations(
         normalize_target_count=normalize_target_count,
         normalize_task_category=normalize_task_category,
-        review_retries=worker_review_retries,
         run_worker=partial(
             run_worker_once,
             worker_runtime=worker_runtime,
         ),
         review_worker=commit_worker_review,
         persist_result=persist_accepted_worker_result,
-        render_review_feedback=render_review_feedback,
         needs_approval=needs_human_limit_approval,
         build_intermediate_report=build_limit_intermediate_report,
         report_requires_more_collection=limit_report_requires_more_collection,

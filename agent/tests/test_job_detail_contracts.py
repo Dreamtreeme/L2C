@@ -117,9 +117,7 @@ def test_detail_extraction_does_not_use_card_identity_as_fallback(
 
     from agent.application import detail_extraction_service
 
-    class FakeDetailLLM(
-        detail_extraction_service.OllamaDetailExtractionLLM
-    ):
+    class FakeDetailLLM:
         def __init__(self):
             self.messages = []
 

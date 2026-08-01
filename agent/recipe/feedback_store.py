@@ -15,7 +15,6 @@ from agent.recipe.sqlite_store import SQLiteStore
 from shared.db.reflex_schema import (
     FEEDBACK_EPISODES_INDEX_SQL,
     FEEDBACK_EPISODES_TABLE_SQL,
-    ensure_feedback_episode_schema,
 )
 
 
@@ -25,7 +24,6 @@ class FeedbackStore(SQLiteStore):
             conn.execute(FEEDBACK_EPISODES_TABLE_SQL)
             for sql in FEEDBACK_EPISODES_INDEX_SQL:
                 conn.execute(sql)
-            ensure_feedback_episode_schema(conn)
 
     def commit_episodes(
         self,
@@ -33,13 +31,11 @@ class FeedbackStore(SQLiteStore):
         run_id: str | None = None,
         run_status: str = "",
         source: str = "vision_run",
-        review_attempt: int = 0,
     ) -> int:
         clean = [strip_full_screen_signatures(episode) for episode in episodes or [] if isinstance(episode, dict)]
         if not clean:
             return 0
         run_id = run_id or f"run-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-        attempt_index = max(0, int(review_attempt or 0))
         now = datetime.now().isoformat(timespec="seconds")
         rows = []
         for idx, episode in enumerate(clean):
@@ -49,15 +45,11 @@ class FeedbackStore(SQLiteStore):
                 action_sequence = max(0, int(episode.get("seq", idx)))
             except (TypeError, ValueError):
                 action_sequence = idx
-            episode_id = (
-                f"{run_id}:attempt:{attempt_index:02d}:"
-                f"action:{action_sequence:04d}"
-            )
+            episode_id = f"{run_id}:action:{action_sequence:04d}"
             rows.append(
                 (
                     episode_id,
                     run_id,
-                    attempt_index,
                     run_status,
                     source,
                     episode.get("site", "") or "",
@@ -74,10 +66,10 @@ class FeedbackStore(SQLiteStore):
             conn.executemany(
                 """
                 INSERT OR IGNORE INTO feedback_episodes (
-                    episode_id, run_id, review_attempt, run_status, source, site, goal,
+                    episode_id, run_id, run_status, source, site, goal,
                     action, feedback_label, feedback_reason, feedback_confidence,
                     payload_json, created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 rows,
             )

@@ -79,9 +79,6 @@ class ModelSettings(SectionSettings):
         None,
         validation_alias="VISION_DETAIL_FINAL_EXTRACTION_MODEL",
     )
-    jd_normalization_model: str | None = Field(None, validation_alias="VISION_JD_NORMALIZATION_MODEL")
-    worker_summary_model: str | None = Field(None, validation_alias="VISION_WORKER_SUMMARY_MODEL")
-    worker_review_model: str | None = Field(None, validation_alias="VISION_WORKER_REVIEW_MODEL")
     search_intent_model: str | None = Field(None, validation_alias="VISION_SEARCH_INTENT_MODEL")
     job_card_selector_model: str | None = Field(
         None,
@@ -90,28 +87,8 @@ class ModelSettings(SectionSettings):
     recipe_critic_model: str | None = Field(None, validation_alias="VISION_RECIPE_CRITIC_MODEL")
     ollama_host: str = Field("http://localhost:11434", validation_alias="OLLAMA_HOST")
     ollama_model: str = Field("qwen3:8b", validation_alias="OLLAMA_MODEL")
-    detail_ollama_num_predict: int = Field(
-        2048,
-        ge=1,
-        le=65536,
-        validation_alias="VISION_DETAIL_OLLAMA_NUM_PREDICT",
-    )
-    detail_openai_max_output_tokens: int = Field(
-        2048,
-        ge=1,
-        le=65536,
-        validation_alias="VISION_DETAIL_OPENAI_MAX_OUTPUT_TOKENS",
-    )
-    detail_openai_timeout_sec: float = Field(
-        120.0,
-        gt=0,
-        le=600,
-        validation_alias="VISION_DETAIL_OPENAI_TIMEOUT",
-    )
     llm_temperature: float = Field(0.1, ge=0.0, le=2.0, validation_alias="LLM_TEMPERATURE")
     gemini_api_key: SecretStr | None = Field(None, validation_alias="GEMINI_API_KEY")
-    openai_api_key: SecretStr | None = Field(None, validation_alias="OPENAI_API_KEY")
-    worknet_api_key: SecretStr | None = Field(None, validation_alias="WORKNET_API_KEY")
 
     @field_validator("worker_reasoning_thinking_level")
     @classmethod
@@ -124,9 +101,6 @@ class ModelSettings(SectionSettings):
     def model_override(self, env_name: str) -> str | None:
         field_by_env = {
             "VISION_DETAIL_FINAL_EXTRACTION_MODEL": "detail_final_extraction_model",
-            "VISION_JD_NORMALIZATION_MODEL": "jd_normalization_model",
-            "VISION_WORKER_SUMMARY_MODEL": "worker_summary_model",
-            "VISION_WORKER_REVIEW_MODEL": "worker_review_model",
             "VISION_SEARCH_INTENT_MODEL": "search_intent_model",
             "VISION_JOB_CARD_SELECTOR_MODEL": "job_card_selector_model",
             "VISION_RECIPE_CRITIC_MODEL": "recipe_critic_model",
@@ -158,6 +132,12 @@ class ExecutionSettings(SectionSettings):
         gt=0,
         le=600,
         validation_alias="VISION_LIGHTWEIGHT_TIMEOUT_SEC",
+    )
+    detail_request_timeout_sec: float = Field(
+        120.0,
+        gt=0,
+        le=600,
+        validation_alias="VISION_DETAIL_REQUEST_TIMEOUT_SEC",
     )
     transient_retries: int = Field(
         1,
@@ -453,10 +433,6 @@ class RecipeSettings(SectionSettings):
     promotion_poll_sec: float = Field(1.0, ge=0.1, le=300, validation_alias="VISION_RECIPE_PROMOTION_POLL_SEC")
     promotion_retry_delay_sec: float = Field(30.0, ge=0, le=3600, validation_alias="VISION_RECIPE_PROMOTION_RETRY_DELAY_SEC")
     promotion_max_attempts: int = Field(3, ge=1, le=100, validation_alias="VISION_RECIPE_PROMOTION_MAX_ATTEMPTS")
-    worker_review_retries: int = Field(0, ge=0, le=20, validation_alias="VISION_WORKER_REVIEW_RETRIES")
-    worker_summary_mode: str = Field("deterministic", validation_alias="VISION_WORKER_SUMMARY_MODE")
-    worker_review_mode: str = Field("shape", validation_alias="VISION_WORKER_REVIEW_MODE")
-    jd_normalization_mode: str = Field("deterministic", validation_alias="VISION_JD_NORMALIZATION_MODE")
 
 
 class RetentionSettings(SectionSettings):

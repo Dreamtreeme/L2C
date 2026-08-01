@@ -253,10 +253,7 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     from agent.application.model_policy import commander_model_name
     from agent.prompts.trust_boundary import external_content_contract_en
 
-    model_name = commander_model_name(
-        "VISION_RECIPE_CRITIC_MODEL",
-        "VISION_WORKER_REVIEW_MODEL",
-    )
+    model_name = commander_model_name("VISION_RECIPE_CRITIC_MODEL")
     from agent.application.model_clients import get_structured_google_model
 
     llm = get_structured_google_model(

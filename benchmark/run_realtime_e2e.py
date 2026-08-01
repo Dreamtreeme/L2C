@@ -71,7 +71,7 @@ def _runtime_config() -> dict[str, str]:
         "VISION_WORKER_REASONING_THINKING_LEVEL": DEFAULT_WORKER_REASONING_THINKING_LEVEL,
         "VISION_DETAIL_FINAL_EXTRACTION_MODEL": DEFAULT_LIGHTWEIGHT_MODEL,
         "VISION_SEARCH_INTENT_MODEL": DEFAULT_LIGHTWEIGHT_MODEL,
-        "VISION_WORKER_REVIEW_MODEL": DEFAULT_COMMANDER_MODEL,
+        "VISION_RECIPE_CRITIC_MODEL": DEFAULT_COMMANDER_MODEL,
         "VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS": "1536",
         "SOM_OCR_MAX_DIM": "1152",
         "SOM_OCR_REQUEST_TIMEOUT_SEC": "20",
@@ -239,6 +239,7 @@ def main() -> int:
             from agent.application.run_context import run_context
             from agent.application.run_contracts import RunPhase, RunStatus
             from agent.observability.langsmith_adapter import publish_langsmith_feedback
+            from agent.graph.workflow import build_graph
             from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
             from agent.tools.realtime_scraping import build_runtime_realtime_scraping_tool
             from benchmark.e2e_observability import (
@@ -250,7 +251,7 @@ def main() -> int:
             from shared.db.database import Database
 
             Database(DB_PATH)
-            vision_runtime = VisionWorkerRuntime()
+            vision_runtime = VisionWorkerRuntime(graph_factory=build_graph)
             collection_tool = build_runtime_realtime_scraping_tool(vision_runtime)
             events = []
             status = "failed"

@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from agent.application.collection_request_builder import (
-    append_review_feedback,
     build_direct_search_url,
     build_site_goal,
     extract_search_intent,
@@ -40,7 +39,6 @@ def _commit_feedback_episodes(
     hit_recursion_limit: bool,
     is_finished: bool,
     run_id: str = "",
-    review_attempt: int = 0,
 ) -> int:
     """나중에 Critic이 검토할 피드백 episode를 저장한다."""
 
@@ -62,7 +60,6 @@ def _commit_feedback_episodes(
             run_id=run_id or None,
             run_status=run_status,
             source="realtime_scraping",
-            review_attempt=review_attempt,
         )
         logger.info(
             "작업자 피드백 episode 저장: episodes=%s, saved=%s, status=%s",
@@ -85,10 +82,6 @@ def _worker_run_status(
     if hit_recursion_limit:
         return "recursion_limit"
     return "stopped"
-
-
-def worker_review_retries() -> int:
-    return get_settings().recipe.worker_review_retries
 
 
 def _suggested_recursion_limit(current_limit: int) -> int:
@@ -214,18 +207,12 @@ def limit_report_requires_more_collection(report: dict) -> bool:
     return persisted > 0
 
 
-def _initial_worker_state(
-    goal: str,
-    *,
-    run_id: str = "",
-    attempt_index: int = 0,
-) -> dict:
+def _initial_worker_state(goal: str, *, run_id: str = "") -> dict:
     from agent.graph.state_factory import create_worker_state
 
     return create_worker_state(
         goal,
         worker_run_id=run_id,
-        worker_attempt_index=attempt_index,
     )
 
 
@@ -235,8 +222,6 @@ def run_worker_once(
     target_count: int = 0,
     task_category: str = DEFAULT_SEARCH_TASK_CATEGORY,
     search_intent_resolved: bool = False,
-    review_feedback: str | None = None,
-    review_attempt: int = 0,
     run_id: str | None = None,
     task_context: dict[str, Any] | None = None,
     collection_intent: dict[str, Any] | None = None,
@@ -304,21 +289,17 @@ def run_worker_once(
         search_keyword,
         site_profile,
     )
-    goal = append_review_feedback(
-        build_site_goal(
-            search_keyword,
-            site_profile,
-            direct_search_url,
-            target_count=target_count,
-            task_context=task_context,
-            collection_intent=search_intent,
-        ),
-        review_feedback,
+    goal = build_site_goal(
+        search_keyword,
+        site_profile,
+        direct_search_url,
+        target_count=target_count,
+        task_context=task_context,
+        collection_intent=search_intent,
     )
     initial_state = _initial_worker_state(
         goal,
         run_id=run_id,
-        attempt_index=review_attempt,
     )
     initial_state["job_collection_contract"] = job_collection_contract
     initial_state["recipe_params"] = {
@@ -345,9 +326,8 @@ def run_worker_once(
     )
 
     logger.info(
-        "비전 작업자 그래프 시작: site=%s attempt=%s",
+        "비전 작업자 그래프 시작: site=%s",
         site_slug,
-        review_attempt,
     )
     recursion_limit = get_settings().vision.recursion_limit
     final_state, hit_recursion_limit = execute_worker_graph(
@@ -377,7 +357,6 @@ def run_worker_once(
         hit_recursion_limit,
         is_finished,
         run_id=run_id,
-        review_attempt=review_attempt,
     )
     submission = build_worker_submission(
         final_state,
@@ -387,7 +366,6 @@ def run_worker_once(
         hit_recursion_limit=hit_recursion_limit,
         persisted_count=0,
         feedback_saved=feedback_saved,
-        review_attempt=review_attempt,
         run_id=run_id,
         target_count=target_count,
         task_category=task_category,
@@ -424,5 +402,4 @@ __all__ = [
     "limit_report_requires_more_collection",
     "needs_human_limit_approval",
     "run_worker_once",
-    "worker_review_retries",
 ]

@@ -35,7 +35,7 @@ class VisionWorkerRuntime:
         *,
         perception_factory: Callable[[], Any] | None = None,
         action_tools_factory: Callable[[Any], Any] | None = None,
-        graph_factory: Callable[["VisionWorkerRuntime"], Any] | None = None,
+        graph_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._perception_factory = perception_factory
         self._action_tools_factory = action_tools_factory
@@ -146,11 +146,8 @@ class VisionWorkerRuntime:
             self._require_open()
             if self._graph is None:
                 if self._graph_factory is None:
-                    from agent.graph.workflow import build_graph
-
-                    self._graph = build_graph(worker_runtime=self)
-                else:
-                    self._graph = self._graph_factory(self)
+                    raise RuntimeError("작업자 그래프 팩토리가 설정되지 않았습니다.")
+                self._graph = self._graph_factory(worker_runtime=self)
             return self._graph
 
     @contextmanager

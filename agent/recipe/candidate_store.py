@@ -39,8 +39,7 @@ class RecipeCandidateStore(SQLiteStore):
             return ""
 
         run_id = clean_submission.get("run_id") or "run-unknown"
-        attempt = int(clean_submission.get("review_attempt") or 0)
-        candidate_id = submission_id or f"{run_id}:{attempt}"
+        candidate_id = submission_id or run_id
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
             existing = conn.execute(

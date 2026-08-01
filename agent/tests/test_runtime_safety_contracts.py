@@ -252,60 +252,6 @@ def test_model_timeout_is_normalized_to_application_contract():
         )
 
 
-def test_direct_model_policy_retries_only_transient_errors(monkeypatch):
-    from types import SimpleNamespace
-
-    from agent.application import model_policy, run_context
-
-    monkeypatch.setattr(
-        model_policy,
-        "model_execution_policy",
-        lambda _role: SimpleNamespace(retries=1),
-    )
-    monkeypatch.setattr(run_context.time, "sleep", lambda _seconds: None)
-
-    class TransientError(RuntimeError):
-        status_code = 503
-
-    class Recovers:
-        calls = 0
-
-        def invoke(self, _inputs):
-            self.calls += 1
-            if self.calls == 1:
-                raise TransientError("temporary")
-            return "ok"
-
-    recovering = Recovers()
-    assert (
-        run_context.invoke_direct_model_with_policy(
-            recovering,
-            "input",
-            "direct_model",
-            execution_role="detail",
-        )
-        == "ok"
-    )
-    assert recovering.calls == 2
-
-    class InvalidSchema:
-        calls = 0
-
-        def invoke(self, _inputs):
-            self.calls += 1
-            raise ValueError("invalid schema")
-
-    invalid = InvalidSchema()
-    with pytest.raises(ValueError, match="invalid schema"):
-        run_context.invoke_direct_model_with_policy(
-            invalid,
-            "input",
-            "direct_model",
-            execution_role="detail",
-        )
-    assert invalid.calls == 1
-
-
 def test_model_role_policy_reads_validated_timeout_settings(monkeypatch):
     from agent.application.model_policy import model_execution_policy
     from agent.config import clear_settings_cache

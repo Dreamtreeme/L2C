@@ -30,7 +30,7 @@ flowchart TD
     ANSWER --> U
 ```
 
-FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫습니다. 이 런타임은 조사 체크포인터, 컴파일된 조사·작업자 그래프, `ChatService`, 지연 생성 비전 자원, 자동승격 작업자를 소유합니다. `ChatService`가 사용자 진입점의 유일한 지휘자이며 요청 이해, 확인 질문, 필요 근거 정의, DB 충분성 검사, 수집 계획, 결과 검증, 답변 순서로 진행합니다. CLI는 같은 런타임을 여는 개발·복구용 어댑터일 뿐 별도 운영 경로가 아닙니다.
+FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫습니다. 이 런타임은 조사 체크포인터, 컴파일된 조사·작업자 그래프, `ChatService`, 지연 생성 비전 자원, 자동승격 작업자를 소유합니다. `ChatService`가 사용자 진입점의 유일한 지휘자이며 요청 이해, 확인 질문, 필요 근거 정의, DB 충분성 검사, 수집 계획, 결과 검증, 답변 순서로 진행합니다.
 
 ## 백엔드 요청 생명주기
 
@@ -79,7 +79,7 @@ flowchart TD
 
 | 계층 | 주요 파일 | 책임 |
 |---|---|---|
-| 진입점 | `agent/main.py`, `agent/web_server.py` | CLI·HTTP 입력과 응답 |
+| 진입점 | `agent/web_server.py` | HTTP 입력과 SSE 응답 |
 | 실행 계약 | `agent/application/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
 | 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py` | 조사 실행 진입과 DB 근거 충분성 검사 |
 | 수집 요청 | `agent/application/collection_request_builder.py` | 검색 의도 정규화, 사이트 프로필 선택, 작업자 목표 생성 |
@@ -116,7 +116,7 @@ flowchart TD
 
 ## 로컬 작업자 생명주기
 
-- `ApplicationRuntime`은 FastAPI 시작 때 한 번 생성되고 CLI·E2E에서는 명시적인 컨텍스트로 관리됩니다.
+- `ApplicationRuntime`은 FastAPI 시작 때 한 번 생성되고 E2E 실행기에서는 명시적인 컨텍스트로 관리됩니다.
 - Perception·ActionTools·OCR·컴파일된 작업자 그래프·판단 모델은 애플리케이션 수명 동안 재사용합니다.
 - `VisionWorkerRuntime.execution_session()`이 전체 수집, 검토 재시도, 브라우저 정리를 직렬화해 동시 요청이 같은 화면을 조작하지 못하게 합니다.
 - 브라우저 창은 수집 요청마다 열고 기본적으로 요청 종료 때 닫습니다. 이때 OCR worker는 유지됩니다.

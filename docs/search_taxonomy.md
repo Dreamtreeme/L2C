@@ -93,4 +93,4 @@ O*NET 세부 직업은 SOC 코드의 대분류를 검토된 로컬 직무군에 
 - `search_term_candidates`: 미등록 표현과 검토 결과
 - `search_term_candidate_observations`: 후보가 관찰된 공고
 
-`GET /api/taxonomy/stats`는 적재 건수와 `occupation_domains` 업무 영역 질문 계약을 반환한다.
+`scripts/import_search_taxonomy.py` 실행 결과의 `taxonomy_counts`로 적재 건수를 확인한다. 업무 영역 질문 계약은 실제 Chat API 질문 보완 흐름에서 검증한다.

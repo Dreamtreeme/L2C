@@ -1,38 +1,17 @@
-"""Commander/critic review helpers for child vision worker submissions.
-
-The script layer only validates shape and observable facts. Semantic acceptance can
-be delegated to an LLM review pass, and active Reflex promotion is intentionally
-kept out of this module.
-"""
+"""비전 작업자 제출물을 만들고 관찰 가능한 실행 사실을 검증한다."""
 
 from __future__ import annotations
 
-import json
 import uuid
-from collections import Counter
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
-
-from agent.config import get_settings
 from agent.recipe.text_utils import site_of
 from agent.runtime.job_collection import job_items as _job_items
 from agent.recipe.task_category import normalize_task_category
 from agent.utils.job_fields import JOB_FIELD_ALIASES, deterministic_report_item, first_present, summary_text
 from agent.utils.model_dump import dump_model
 from shared.schema.feedback_schema import CommanderReview, SubmissionIssue, WorkerSubmission
-
-
-class ReportJobSummaryItem(BaseModel):
-    company: str = ""
-    position: str = ""
-    url: str = ""
-    field_count: int = 0
-
-
-class ReportJobSummary(BaseModel):
-    jobs: list[ReportJobSummaryItem] = Field(default_factory=list)
 
 
 def _empty_report_summary(jobs: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -60,85 +39,6 @@ def _semantic_job_evidence(jobs: list[dict[str, Any]], limit: int = 20) -> list[
     ]
 
 
-def _report_summary_mode() -> str:
-    mode = get_settings().recipe.worker_summary_mode.strip().lower()
-    return mode if mode in {"deterministic", "llm", "off"} else "deterministic"
-
-
-def _llm_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from agent.prompts.trust_boundary import external_content_contract_en
-
-    compact_jobs = [
-        {
-            "index": idx,
-            "field_count": len(job.keys()),
-            "raw_job": job,
-        }
-        for idx, job in enumerate(jobs[:limit])
-    ]
-    from agent.application.model_policy import lightweight_model_name
-
-    model_name = lightweight_model_name("VISION_WORKER_SUMMARY_MODEL")
-    from agent.application.model_clients import get_structured_google_model
-
-    llm = get_structured_google_model(
-        model_name,
-        ReportJobSummary,
-        temperature=0.0,
-        execution_role="lightweight",
-    )
-    messages = [
-        SystemMessage(
-            content=(
-                external_content_contract_en()
-                + "\nYou normalize job postings that were already extracted by a vision worker. "
-                "Read field names in any language, including Korean. "
-                "Return one summary item per input job in the same order. "
-                "Do not invent missing facts; use an empty string when a value is unknown."
-            )
-        ),
-        HumanMessage(content=json.dumps({"jobs": compact_jobs}, ensure_ascii=False, indent=2)),
-    ]
-    from agent.application.run_context import invoke_with_metrics
-
-    response = invoke_with_metrics(
-        llm,
-        messages,
-        "worker_summary",
-        stream=True,
-    )
-    summary = dump_model(response)
-    out: list[dict[str, Any]] = []
-    for idx, item in enumerate(summary.get("jobs") or []):
-        if not isinstance(item, dict):
-            continue
-        source_job = compact_jobs[idx] if idx < len(compact_jobs) else {}
-        out.append(
-            {
-                "company": str(item.get("company") or ""),
-                "position": str(item.get("position") or ""),
-                "url": str(item.get("url") or ""),
-                "field_count": int(item.get("field_count") or source_job.get("field_count") or 0),
-            }
-        )
-    if len(out) < len(compact_jobs):
-        out.extend(_empty_report_summary([job["raw_job"] for job in compact_jobs[len(out):]], limit))
-    return out[:limit]
-
-
-def _report_job_summary(jobs: list[dict[str, Any]], limit: int = 10) -> tuple[list[dict[str, Any]], str, str]:
-    if not jobs:
-        return [], "none", ""
-    mode = _report_summary_mode()
-    if mode in {"deterministic", "off"}:
-        return _empty_report_summary(jobs, limit), "disabled", ""
-    try:
-        return _llm_job_summary(jobs, limit=limit), "llm", ""
-    except Exception as exc:  # pragma: no cover - provider failures are best-effort
-        return _empty_report_summary(jobs, limit), "llm_failed", str(exc)[:200]
-
-
 def new_worker_run_id() -> str:
     return f"worker-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
@@ -152,7 +52,6 @@ def build_worker_submission(
     hit_recursion_limit: bool = False,
     persisted_count: int = 0,
     feedback_saved: int = 0,
-    review_attempt: int = 0,
     run_id: str | None = None,
     target_count: int = 0,
     task_category: str = "",
@@ -165,7 +64,7 @@ def build_worker_submission(
     recipe_params = final_state.get("recipe_params", {}) if isinstance(final_state.get("recipe_params"), dict) else {}
     resolved_task_category = normalize_task_category(task_category or recipe_params.get("task_category") or "")
     run_id = run_id or new_worker_run_id()
-    report_jobs, report_source, report_error = _report_job_summary(jobs)
+    report_jobs = _empty_report_summary(jobs, 10)
     recorded_steps = list(final_state.get("recorded_steps", []) or [])
     feedback_episodes = list(final_state.get("feedback_episodes", []) or [])
     transition_records = list(
@@ -186,8 +85,6 @@ def build_worker_submission(
         "job_count": len(jobs),
         "observed_job_count": len(observed_job_ids),
         "jobs": report_jobs,
-        "summary_source": report_source,
-        "summary_error": report_error,
         "current_url": current_url,
         "action_count": len(final_state.get("action_history", []) or []),
         "job_results_availability": dict(final_state.get("job_results_availability", {}) or {}),
@@ -211,7 +108,6 @@ def build_worker_submission(
         task_category=resolved_task_category,
         keyword=keyword,
         run_status=run_status,
-        review_attempt=review_attempt,
         is_finished=bool(final_state.get("is_finished", False)),
         hit_recursion_limit=bool(hit_recursion_limit),
         collected_count=len(jobs),
@@ -312,171 +208,14 @@ def shape_review(submission: dict[str, Any], issues: list[dict[str, Any]] | None
     return dump_model(review)
 
 
-def build_worker_review_payload(
-    submission: dict[str, Any],
-    issues: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """실시간 승인에 필요한 결과만 남기고 학습용 실행 원본은 제외한다."""
-
-    summary = submission.get("extracted_summary")
-    summary = summary if isinstance(summary, dict) else {}
-    intent = submission.get("collection_intent")
-    intent = intent if isinstance(intent, dict) else {}
-    feedback = [
-        item
-        for item in (submission.get("feedback_episodes") or [])
-        if isinstance(item, dict)
-    ]
-    transitions = [
-        item
-        for item in (submission.get("transition_records") or [])
-        if isinstance(item, dict)
-    ]
-    steps = [
-        item
-        for item in (submission.get("recorded_steps") or [])
-        if isinstance(item, dict)
-    ]
-    feedback_counts = Counter(
-        str((item.get("feedback") or {}).get("label") or "unknown")
-        for item in feedback
-        if isinstance(item.get("feedback"), dict)
-    )
-    action_counts = Counter(str(item.get("action") or "unknown") for item in steps)
-    failure_feedback = []
-    for item in feedback:
-        result = item.get("feedback") if isinstance(item.get("feedback"), dict) else {}
-        if result.get("label") not in {"wrong_target", "no_effect", "loop_risk", "error"}:
-            continue
-        proposal = item.get("proposal") if isinstance(item.get("proposal"), dict) else {}
-        failure_feedback.append(
-            {
-                "seq": item.get("seq"),
-                "action": proposal.get("action") or "",
-                "label": result.get("label") or "",
-                "reason": str(result.get("reason") or "")[:500],
-            }
-        )
-    transition_failures = []
-    for item in transitions:
-        status = str(item.get("status") or "").lower()
-        if status in {"", "success", "passed", "complete", "completed"}:
-            continue
-        transition_failures.append(
-            {
-                "action_seq": item.get("action_seq"),
-                "action": item.get("action") or "",
-                "status": status,
-                "reason": str(item.get("reason") or "")[:500],
-            }
-        )
-    user_request = str(intent.get("original_query") or "").strip()
-    return {
-        "request": {
-            "user_request": user_request or str(submission.get("goal") or "")[:1200],
-            "site": submission.get("site") or "",
-            "keyword": submission.get("keyword") or "",
-            "task_category": submission.get("task_category") or "",
-            "target_count": int(submission.get("target_count") or 0),
-            "collection_intent": intent,
-        },
-        "execution": {
-            "run_status": submission.get("run_status") or "",
-            "is_finished": bool(submission.get("is_finished", False)),
-            "hit_recursion_limit": bool(submission.get("hit_recursion_limit", False)),
-            "collected_count": int(submission.get("collected_count") or 0),
-            "observed_job_ids": list(submission.get("observed_job_ids") or [])[:20],
-            "persisted_count": int(submission.get("persisted_count") or 0),
-            "job_results_availability": dict(summary.get("job_results_availability") or {}),
-            "action_count": int(summary.get("action_count") or len(steps)),
-            "action_counts": dict(action_counts),
-            "feedback_counts": dict(feedback_counts),
-            "failure_feedback": failure_feedback[:12],
-            "transition_failures": transition_failures[:12],
-        },
-        "jobs": list(submission.get("semantic_evidence") or [])[:20],
-        "job_summary": list(summary.get("jobs") or [])[:20],
-        "shape_issues": issues,
-        "review_rules": [
-            "수집된 공고의 관련성과 저장 가능 여부를 실행 완료 여부와 별도로 판단한다.",
-            "관련 있는 유효 공고가 있으면 목표 개수 미달이어도 accept_collected_data=true로 둔다.",
-            "같은 검색 범위에서 추가 행동이 꼭 필요할 때만 continue_collection=true로 둔다.",
-            "화면에 확인된 전체 결과를 모두 처리했다면 목표 개수 미달만으로 재실행하지 않는다.",
-            "레시피 승격은 후처리 Critic이 판단하므로 여기서는 후보 여부만 표시한다.",
-        ],
-    }
-
-
-def _llm_review(
-    submission: dict[str, Any],
-    issues: list[dict[str, Any]],
-) -> dict[str, Any]:
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from agent.application.model_clients import get_structured_google_model
-    from agent.prompts.trust_boundary import external_content_contract_en
-
-    from agent.application.model_policy import commander_model_name
-
-    model_name = commander_model_name("VISION_WORKER_REVIEW_MODEL")
-    llm = get_structured_google_model(
-        model_name,
-        CommanderReview,
-        temperature=0.0,
-        execution_role="commander",
-    )
-    compact = build_worker_review_payload(submission, issues)
-    messages = [
-        SystemMessage(
-            content=(
-                external_content_contract_en()
-                + "\nYou are the commander reviewing a child vision worker submission. "
-                "Return only the structured CommanderReview schema. Decide data acceptance separately from "
-                "whether another collection attempt is needed. Set accept_collected_data=true for relevant, "
-                "persistable jobs even when the requested count was not reached. Set continue_collection=true "
-                "only when another attempt in the same search scope is necessary."
-            )
-        ),
-        HumanMessage(content=json.dumps(compact, ensure_ascii=False, indent=2)),
-    ]
-    from agent.application.run_context import invoke_with_metrics
-
-    response = invoke_with_metrics(llm, messages, "worker_review")
-    review = dump_model(response)
-    return dump_model(CommanderReview(**review))
-
-
 def review_worker_submission(submission: dict[str, Any]) -> dict[str, Any]:
-    """Review a submission. Shape is always checked; semantic LLM review is opt-in."""
-    issues = validate_submission_shape(submission)
-    fallback = shape_review(submission, issues)
-    if fallback.get("decision") != "accept":
-        return fallback
-    mode = get_settings().recipe.worker_review_mode.strip().lower()
-    if mode != "llm":
-        return fallback
-    try:
-        return _llm_review(submission, issues)
-    except Exception as exc:  # pragma: no cover - keep worker completion resilient
-        fallback = dict(fallback)
-        fallback.setdefault("reasons", []).append(f"llm_review_unavailable: {str(exc)[:200]}")
-        return fallback
-
-
-def render_review_feedback(review: dict[str, Any]) -> str:
-    if review.get("decision") == "accept":
-        return ""
-    feedback = review.get("feedback_to_worker") or "; ".join(review.get("reasons") or [])
-    return (
-        "Commander review rejected the previous worker submission. "
-        "Use this feedback on the next attempt: " + feedback
-    )
+    """작업자 제출물의 구조와 관찰 가능한 실행 사실을 검증한다."""
+    return shape_review(submission, validate_submission_shape(submission))
 
 
 __all__ = [
-    "build_worker_review_payload",
     "build_worker_submission",
     "new_worker_run_id",
-    "render_review_feedback",
     "review_worker_submission",
     "shape_review",
     "validate_submission_shape",
