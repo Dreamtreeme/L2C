@@ -86,17 +86,26 @@ def inspect_job_evidence(
 ) -> dict[str, Any]:
     """요구사항별 표본 수, 날짜 근거, 필드 충족률을 반환한다."""
 
+    from agent.application.search_taxonomy_service import SearchTaxonomyService
+
+    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy_reindex = taxonomy.relink_pending_jobs(
+        limit=100,
+        max_attempts=2,
+    )
     conn = sqlite3.connect(Path(db_path))
     conn.row_factory = sqlite3.Row
     try:
         columns = ", ".join(("id", "source_platform", *EVIDENCE_FIELDS))
-        rows = conn.execute(f"SELECT {columns} FROM jobs").fetchall()
+        total_db_rows = int(
+            conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        )
+        rows = conn.execute(
+            f"SELECT {columns} FROM jobs "
+            "WHERE taxonomy_index_status = 'indexed'"
+        ).fetchall()
     finally:
         conn.close()
-
-    from agent.application.search_taxonomy_service import SearchTaxonomyService
-
-    taxonomy = SearchTaxonomyService(db_path)
 
     reports: list[dict[str, Any]] = []
     all_document_ids: set[int] = set()
@@ -238,7 +247,9 @@ def inspect_job_evidence(
             }
         )
     return {
-        "total_db_rows": len(rows),
+        "total_db_rows": total_db_rows,
+        "search_ready_db_rows": len(rows),
+        "taxonomy_reindex": taxonomy_reindex,
         "document_scope_ids": (
             sorted(document_scope)
             if document_scope is not None
@@ -287,7 +298,8 @@ def load_job_evidence_documents(
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            f"SELECT {', '.join(selected_fields)} FROM jobs WHERE id IN ({placeholders})",
+            f"SELECT {', '.join(selected_fields)} FROM jobs "
+            f"WHERE id IN ({placeholders})",
             ids,
         ).fetchall()
     finally:

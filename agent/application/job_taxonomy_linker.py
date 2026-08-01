@@ -434,6 +434,38 @@ class JobTaxonomyLinker:
                                 ),
                             )
                             counts["skills"] += 1
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET taxonomy_index_status = 'indexed',
+                        taxonomy_index_error = NULL,
+                        taxonomy_index_attempts = taxonomy_index_attempts + 1,
+                        taxonomy_indexed_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, job_id),
+                )
+        except Exception as exc:
+            failure_connection = self._connect()
+            try:
+                with failure_connection:
+                    failure_connection.execute(
+                        """
+                        UPDATE jobs
+                        SET taxonomy_index_status = 'failed',
+                            taxonomy_index_error = ?,
+                            taxonomy_index_attempts = taxonomy_index_attempts + 1,
+                            taxonomy_indexed_at = NULL
+                        WHERE id = ?
+                        """,
+                        (
+                            f"{type(exc).__name__}: {exc}"[:1000],
+                            job_id,
+                        ),
+                    )
+            finally:
+                failure_connection.close()
+            raise
         finally:
             connection.close()
         return counts
@@ -505,6 +537,56 @@ class JobTaxonomyLinker:
             ):
                 totals[key] += int(linked[key])
         totals["resolved_candidates"] = self.reconcile_candidates()
+        return totals
+
+    def relink_pending_jobs(
+        self,
+        *,
+        limit: int = 100,
+        max_attempts: int = 2,
+    ) -> dict[str, int]:
+        """아직 색인되지 않은 공고를 제한된 횟수 안에서 다시 연결한다."""
+
+        connection = self._connect()
+        try:
+            job_ids = [
+                int(row["id"])
+                for row in connection.execute(
+                    """
+                    SELECT id
+                    FROM jobs
+                    WHERE taxonomy_index_status IN ('pending', 'failed')
+                      AND taxonomy_index_attempts < ?
+                    ORDER BY updated_at ASC, id ASC
+                    LIMIT ?
+                    """,
+                    (max(1, int(max_attempts)), max(1, int(limit))),
+                ).fetchall()
+            ]
+        finally:
+            connection.close()
+
+        totals = {
+            "jobs": len(job_ids),
+            "indexed": 0,
+            "failed": 0,
+            "occupations": 0,
+            "skills": 0,
+            "candidate_observations": 0,
+        }
+        for job_id in job_ids:
+            try:
+                linked = self.link_job(job_id)
+            except Exception:
+                totals["failed"] += 1
+                continue
+            totals["indexed"] += 1
+            for key in (
+                "occupations",
+                "skills",
+                "candidate_observations",
+            ):
+                totals[key] += int(linked[key])
         return totals
 
     def reconcile_candidates(self) -> int:

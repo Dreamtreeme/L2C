@@ -48,6 +48,10 @@ JOBS_COLUMNS_SQL = """(
     raw_ocr_text    TEXT,
     content_hash    TEXT,
     evidence_hash   TEXT,
+    taxonomy_index_status TEXT NOT NULL DEFAULT 'pending',
+    taxonomy_index_error TEXT,
+    taxonomy_index_attempts INTEGER NOT NULL DEFAULT 0,
+    taxonomy_indexed_at TEXT,
     experience_min  INTEGER,
     experience_max  INTEGER,
     experience_text TEXT,
@@ -147,6 +151,10 @@ class Database:
                 "posted_at": "TEXT",
                 "posted_at_text": "TEXT",
                 "evidence_hash": "TEXT",
+                "taxonomy_index_status": "TEXT NOT NULL DEFAULT 'pending'",
+                "taxonomy_index_error": "TEXT",
+                "taxonomy_index_attempts": "INTEGER NOT NULL DEFAULT 0",
+                "taxonomy_indexed_at": "TEXT",
             }
             for col, col_type in new_cols.items():
                 if col not in columns:
@@ -155,6 +163,27 @@ class Database:
                         logger.info(f"마이그레이션: jobs 테이블에 컬럼 '{col}' 추가 완료")
                     except sqlite3.OperationalError as e:
                         logger.debug(f"컬럼 '{col}' 추가 건너뜀: {e}")
+
+            conn.execute(
+                """
+                UPDATE jobs
+                SET taxonomy_index_status = 'indexed',
+                    taxonomy_index_attempts = CASE
+                        WHEN taxonomy_index_attempts < 1 THEN 1
+                        ELSE taxonomy_index_attempts
+                    END,
+                    taxonomy_indexed_at = COALESCE(
+                        taxonomy_indexed_at,
+                        updated_at
+                    )
+                WHERE taxonomy_index_status = 'pending'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM job_concept_links AS links
+                      WHERE links.job_id = jobs.id
+                  )
+                """
+            )
             
             link_columns = {
                 row["name"]
@@ -306,6 +335,10 @@ class Database:
             "raw_ocr_text": data.get("raw_ocr_text"),
             "content_hash": data.get("content_hash"),
             "evidence_hash": evidence_hash,
+            "taxonomy_index_status": "pending",
+            "taxonomy_index_error": None,
+            "taxonomy_index_attempts": 0,
+            "taxonomy_indexed_at": None,
             "experience_min": data.get("experience_min"),
             "experience_max": data.get("experience_max"),
             "experience_text": data.get("experience_text"),

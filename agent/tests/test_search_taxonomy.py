@@ -542,6 +542,56 @@ def test_reindex_is_idempotent_and_does_not_rewrite_source_tech_stack(tmp_path):
     assert Database(db_path).get(job_id)["tech_stack"] == ["Python"]
 
 
+def test_failed_taxonomy_index_is_retried_once_before_search(tmp_path):
+    db_path = tmp_path / "retry-index.db"
+    db = Database(db_path)
+    taxonomy = SearchTaxonomyService(db_path)
+    job_id = db.upsert(
+        "https://example.com/jobs/retry-index",
+        {
+            "company_name": "예시회사",
+            "position": "AI 엔지니어",
+            "job_category": "AI 엔지니어",
+            "requirements": ["Python"],
+        },
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE jobs
+            SET taxonomy_index_status = 'failed',
+                taxonomy_index_attempts = 1,
+                taxonomy_index_error = 'temporary failure'
+            WHERE id = ?
+            """,
+            (job_id,),
+        )
+        connection.commit()
+
+    assert taxonomy.matching_occupation_job_ids(
+        ["l2c:occupation:ai_ml_engineer"]
+    ) == set()
+
+    retry = taxonomy.relink_pending_jobs(limit=10, max_attempts=2)
+
+    with sqlite3.connect(db_path) as connection:
+        status = connection.execute(
+            """
+            SELECT taxonomy_index_status, taxonomy_index_attempts,
+                   taxonomy_index_error
+            FROM jobs
+            WHERE id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+    assert retry["indexed"] == 1
+    assert status == ("indexed", 2, None)
+    assert taxonomy.matching_occupation_job_ids(
+        ["l2c:occupation:ai_ml_engineer"]
+    ) == {job_id}
+    assert taxonomy.relink_pending_jobs(limit=10, max_attempts=2)["jobs"] == 0
+
+
 def test_onet_reimport_preserves_curated_alias_on_existing_concept(tmp_path):
     db_path = tmp_path / "jobs.db"
     archive_path = tmp_path / "onet.zip"

@@ -92,7 +92,9 @@ def persist_collected_data_with_report(
     else:
         job_list = [extracted_jd] if extracted_jd else []
 
+    stored_count = 0
     persisted_count = 0
+    taxonomy_index_failed_count = 0
     created_count = 0
     updated_count = 0
     persisted_items: list[dict[str, Any]] = []
@@ -199,14 +201,29 @@ def persist_collected_data_with_report(
                 screenshot_path=screenshot_path,
                 ocr_text_path=ocr_text_path,
             )
+            stored_count += 1
             try:
                 taxonomy_service.link_job(int(job_id))
             except Exception as exc:
+                taxonomy_index_failed_count += 1
                 logger.warning(
                     "[job_persistence] Search taxonomy linking failed for job #%s: %s",
                     job_id,
                     exc,
                 )
+                rejected_items.append(
+                    {
+                        "index": index,
+                        "job_id": int(job_id),
+                        "url": job_posting.url or str(url),
+                        "company_name": job_posting.company_name or "",
+                        "position": job_posting.position or "",
+                        "issues": [
+                            f"taxonomy_index_failed:{type(exc).__name__}"
+                        ],
+                    }
+                )
+                continue
             persisted_count += 1
             if existed:
                 updated_count += 1
@@ -243,7 +260,9 @@ def persist_collected_data_with_report(
 
     return {
         "submitted_count": len(job_list),
+        "stored_count": stored_count,
         "persisted_count": persisted_count,
+        "taxonomy_index_failed_count": taxonomy_index_failed_count,
         "created_count": created_count,
         "updated_count": updated_count,
         "persisted_items": persisted_items,

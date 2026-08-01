@@ -470,6 +470,63 @@ def test_persistence_accepts_field_confirmed_unavailable_at_page_end(
     ]
 
 
+def test_taxonomy_failure_is_stored_but_not_counted_as_search_ready(
+    monkeypatch,
+    tmp_path,
+):
+    import shared.config as cfg
+    from agent.application.job_persistence_service import (
+        persist_collected_data_with_report,
+    )
+    from agent.application.job_taxonomy_linker import (
+        JobTaxonomyLinker,
+    )
+
+    db_path = tmp_path / "taxonomy_failure.db"
+    monkeypatch.setattr(cfg, "DB_PATH", db_path)
+
+    def fail_alias_load(_self, _connection):
+        raise RuntimeError("색인 실패")
+
+    monkeypatch.setattr(
+        JobTaxonomyLinker,
+        "_occupation_alias_rows",
+        fail_alias_load,
+    )
+    result = persist_collected_data_with_report(
+        {
+            "jobs": [
+                {
+                    "company_name": "예시회사",
+                    "position": "AI 엔지니어",
+                    "url": "https://example.com/jobs/index-failure",
+                    "requirements": ["Python"],
+                }
+            ]
+        },
+        "AI 엔지니어",
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT taxonomy_index_status, taxonomy_index_attempts
+            FROM jobs
+            WHERE url = ?
+            """,
+            ("https://example.com/jobs/index-failure",),
+        ).fetchone()
+
+    assert result["stored_count"] == 1
+    assert result["persisted_count"] == 0
+    assert result["taxonomy_index_failed_count"] == 1
+    assert result["rejected_count"] == 1
+    assert result["rejected_items"][0]["issues"] == [
+        "taxonomy_index_failed:RuntimeError"
+    ]
+    assert row == ("failed", 1)
+
+
 def test_persistence_report_distinguishes_created_and_updated_jobs(monkeypatch, tmp_path):
     from agent.application.job_persistence_service import persist_collected_data_with_report
 

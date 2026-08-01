@@ -195,7 +195,7 @@ class SearchTaxonomyService:
     def _job_filter_clauses(
         constraints: InvestigationConstraints,
     ) -> tuple[list[str], list[Any]]:
-        where: list[str] = []
+        where: list[str] = ["jobs.taxonomy_index_status = 'indexed'"]
         params: list[Any] = []
         if constraints.sites:
             placeholders = ",".join("?" for _ in constraints.sites)
@@ -618,6 +618,17 @@ class SearchTaxonomyService:
 
     def relink_all_jobs(self) -> dict[str, int]:
         return self._job_linker.relink_all_jobs()
+
+    def relink_pending_jobs(
+        self,
+        *,
+        limit: int = 100,
+        max_attempts: int = 2,
+    ) -> dict[str, int]:
+        return self._job_linker.relink_pending_jobs(
+            limit=limit,
+            max_attempts=max_attempts,
+        )
 
     def reconcile_candidates(self) -> int:
         return self._job_linker.reconcile_candidates()
