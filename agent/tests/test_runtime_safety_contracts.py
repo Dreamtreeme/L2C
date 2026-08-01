@@ -245,6 +245,24 @@ def test_safe_navigation_requires_model_risk_declaration():
     )
 
 
+def test_safe_read_does_not_require_redundant_confirmation_false():
+    from agent.graph.worker_execution_policy import sensitive_action_reason
+
+    state = {
+        "action_permission_contract": {"site": "wanted"}
+    }
+
+    assert (
+        sensitive_action_reason(
+            state,
+            "scroll",
+            {"risk_level": "safe_read"},
+            source="llm",
+        )
+        == ""
+    )
+
+
 def test_explicit_sensitive_recipe_step_is_not_promotion_eligible():
     from agent.recipe.promotion_policy import (
         evaluate_candidate_step_evidence,

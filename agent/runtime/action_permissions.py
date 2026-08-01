@@ -110,8 +110,6 @@ def task_permission_reason(
         risk_level = str(args.get("risk_level") or "").strip().casefold()
         if risk_level not in {"safe_read", "safe_navigation", "sensitive"}:
             return "task_contract_risk_not_declared"
-        if args.get("needs_user_confirmation") not in {True, False}:
-            return "task_contract_confirmation_not_declared"
     return ""
 
 
