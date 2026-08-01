@@ -1,0 +1,35 @@
+# GPU 모델 없이 API, 그래프와 단위 테스트를 실행하는 공통 런타임입니다.
+
+# 데이터·설정
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+Pillow==12.3.0
+beautifulsoup4==4.15.0
+json-repair==0.61.7
+requests==2.34.2
+
+# 브라우저·API
+playwright==1.61.0
+ollama==0.6.2
+fastapi==0.139.2
+uvicorn==0.51.0
+
+# 화면 제어·관측
+structlog==26.1.0
+sentry-sdk==2.66.1
+mss==10.2.0
+PyAutoGUI==0.9.54
+pyperclip==1.11.0
+PyGetWindow==0.0.9
+
+# 에이전트 워크플로
+langgraph==1.2.9
+langgraph-checkpoint-sqlite==3.1.0
+langchain-core==1.5.0
+langchain-google-genai==4.3.1
+langsmith==0.10.9
+
+# 화면 계산
+numpy==2.5.1
+opencv-python==5.0.0.93

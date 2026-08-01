@@ -55,13 +55,12 @@ function Install-Environment {
 
 $AppEnvironment = Join-Path $RepoRoot '.venv-app'
 $OcrEnvironment = Join-Path $RepoRoot '.venv-ocr'
-$AppRequirements = Join-Path $RepoRoot (
-    if ($Development) {
-        'requirements-dev.txt'
-    } else {
-        'requirements.txt'
-    }
-)
+$AppRequirementsName = if ($Development) {
+    'requirements-dev.txt'
+} else {
+    'requirements.txt'
+}
+$AppRequirements = Join-Path $RepoRoot $AppRequirementsName
 
 Install-Environment $AppEnvironment $AppRequirements
 Install-Environment $OcrEnvironment (Join-Path $RepoRoot 'requirements-ocr.txt')

@@ -75,7 +75,7 @@ Paddle 공식 저장소의 CUDA 13.0 Windows CPython 3.13 휠을 사용한다. �
 - Paddle CUDA 텐서 연산 통과
 - 사람인 한국어 화면에서 OCR 113개 상자 반환
 - 동일 OCR 작업자 재사용: 첫 요청 1.63초, 두 번째 요청 0.59초, 작업자 세대 1 유지
-- Python 3.13 전체 에이전트 테스트: 286개 통과
+- Python 3.13 전체 에이전트 테스트: 295개 통과
 
 LangGraph 설치 기준은 [공식 설치 문서](https://docs.langchain.com/oss/python/langgraph/install), 영속 체크포인트는 [공식 SQLite 체크포인터](https://pypi.org/project/langgraph-checkpoint-sqlite/), PyTorch CUDA 휠은 [공식 cu130 인덱스](https://download.pytorch.org/whl/cu130/), Playwright 브라우저 설치는 [공식 Python 문서](https://playwright.dev/python/docs/intro)를 기준으로 했다. 최신 Starlette 테스트 클라이언트는 [공식 문서](https://www.starlette.io/testclient/)에 따라 개발 환경에서 `httpx2`를 사용한다.
 
@@ -94,7 +94,7 @@ powershell -File scripts\measure_runtime_resources.ps1
 
 사전 점검이 끝나면 공식 SHA-256을 검증한 Python 3.13.14 설치, 앱·OCR 환경 구성, Chromium과 모델 다운로드, GPU 호환성 검사를 순서대로 실행한다. NVIDIA 드라이버만 자동 설치 대상에서 제외한다. 설치 전 동작만 확인하려면 `setup.cmd -DryRun`을 사용한다.
 
-기본 `setup.cmd`는 `requirements.txt`로 제품 런타임만 설치한다. `setup.cmd -Development`는 `requirements-dev.txt`를 사용해 pytest와 벤치마크 의존성을 추가한다. `requirements-ocr.txt`는 두 설치 모드에서 독립 OCR 작업자만 소유한다.
+기본 `setup.cmd`는 `requirements.txt`로 제품 런타임만 설치한다. `setup.cmd -Development`는 `requirements-dev.txt`를 사용해 pytest와 벤치마크 의존성을 추가한다. GitHub Actions는 GPU 모델을 제외한 `requirements-ci.txt`로 백엔드 계약 테스트를 실행한다. `requirements-ocr.txt`는 두 설치 모드에서 독립 OCR 작업자만 소유한다.
 
 ## 설치 용량
 
