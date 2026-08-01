@@ -1,6 +1,7 @@
 """채용공고 카드 선택과 재생 계약 테스트."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from agent.graph import worker_reasoning
 
@@ -140,6 +141,45 @@ def test_loading_result_recaptures_without_general_reasoning(tmp_path, monkeypat
 
     assert result["pending_action"] is None
     assert result["job_card_selection_trace"]["reason"] == "screen_loading"
+
+
+def test_general_reasoning_converts_model_tool_call(monkeypatch):
+    from agent.application import run_context
+
+    monkeypatch.setattr(
+        worker_reasoning,
+        "select_job_cards",
+        lambda _state: (None, {"attempted": False}),
+    )
+    monkeypatch.setattr(
+        worker_reasoning,
+        "build_reasoning_messages",
+        lambda *_args: ["현재 화면"],
+    )
+    monkeypatch.setattr(
+        worker_reasoning,
+        "_get_ui_llm_with_tools",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        run_context,
+        "invoke_with_metrics",
+        lambda *_args: SimpleNamespace(
+            content="아래 내용을 확인합니다.",
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "scroll",
+                    "args": {"direction": "down"},
+                }
+            ],
+        ),
+    )
+
+    result = worker_reasoning.reasoning_node({"action_history": []})
+
+    assert result["pending_action"].tool_calls[0].name == "scroll"
+    assert result["reflex_trace"]["source"] == "reasoning"
 
 
 def test_resolved_card_count_only_includes_collected_or_database_confirmed():

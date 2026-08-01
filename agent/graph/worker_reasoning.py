@@ -167,7 +167,7 @@ def reasoning_node(state: GraphState) -> dict[str, Any]:
     try:
         pending_action = action_request_from_model_response(
             response,
-            allowed_tool_names=allowed_tool_names,
+            allowed_tool_names=tuple(ACTION_TOOL_SCHEMAS),
         )
     except (TypeError, ValueError) as exc:
         logger.warning("Model action request rejected", error=str(exc))
