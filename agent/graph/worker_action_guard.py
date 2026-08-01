@@ -69,6 +69,25 @@ def guard_ui_action(
 ) -> bool:
     """현재 캡처와 목표가 유효하며 안전할 때만 UI 행동을 허용한다."""
 
+    sensitive_reason = sensitive_action_reason(
+        {
+            **context.state,
+            "current_markers": context.current_markers,
+        },
+        action_name,
+        args,
+        source=context.action_request.source,
+    )
+    if sensitive_reason:
+        context.require_human_approval(
+            action_name,
+            args,
+            sensitive_reason,
+            before_snapshot,
+            step_started,
+        )
+        return True
+
     if (
         action_name in {"click_marker", "type_in_marker"}
         and context.action_request.source not in DIRECT_SCREEN_ACTION_SOURCES
@@ -119,25 +138,6 @@ def guard_ui_action(
                 "screen. Choose another navigation method."
             ),
             step_started=step_started,
-        )
-        return True
-
-    sensitive_reason = sensitive_action_reason(
-        {
-            **context.state,
-            "current_markers": context.current_markers,
-        },
-        action_name,
-        args,
-        source=context.action_request.source,
-    )
-    if sensitive_reason:
-        context.require_human_approval(
-            action_name,
-            args,
-            sensitive_reason,
-            before_snapshot,
-            step_started,
         )
         return True
 

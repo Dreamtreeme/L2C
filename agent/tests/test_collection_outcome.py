@@ -9,7 +9,10 @@ def test_collection_outcome_keeps_stage_results_separate():
     outcome = build_collection_outcome(
         is_finished=False,
         hit_recursion_limit=True,
-        review={"decision": "revise"},
+        review={
+            "decision": "revise",
+            "accept_collected_data": True,
+        },
         persisted_count=1,
         resolved_count=1,
         rejected_count=1,
@@ -30,7 +33,10 @@ def test_scope_exhaustion_is_complete_without_claiming_target_met():
     outcome = build_collection_outcome(
         is_finished=False,
         hit_recursion_limit=True,
-        review={"decision": "revise"},
+        review={
+            "decision": "revise",
+            "accept_collected_data": True,
+        },
         persisted_count=1,
         resolved_count=1,
         rejected_count=0,

@@ -3,6 +3,7 @@ import time
 import pytest
 
 from agent.graph import (
+    worker_action_guard,
     worker_execution,
     worker_execution_dispatch,
     worker_observation,
@@ -301,6 +302,16 @@ def test_atomic_execution_and_recording_are_separate(monkeypatch):
         worker_execution_dispatch,
         "dispatch_ui_action",
         fake_dispatch,
+    )
+    monkeypatch.setattr(
+        worker_action_guard,
+        "check_current_reasoning_screen",
+        lambda *_args, **_kwargs: {
+            "checked": True,
+            "stale": False,
+            "must_refresh": False,
+            "reason": "screen_unchanged",
+        },
     )
     request = _request(
         "llm",

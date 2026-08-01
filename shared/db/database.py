@@ -155,6 +155,8 @@ class Database:
                 "taxonomy_index_error": "TEXT",
                 "taxonomy_index_attempts": "INTEGER NOT NULL DEFAULT 0",
                 "taxonomy_indexed_at": "TEXT",
+                "created_at": "TEXT",
+                "updated_at": "TEXT",
             }
             for col, col_type in new_cols.items():
                 if col not in columns:
@@ -167,6 +169,17 @@ class Database:
             conn.execute(
                 """
                 UPDATE jobs
+                SET created_at = COALESCE(created_at, datetime('now')),
+                    updated_at = COALESCE(
+                        updated_at,
+                        created_at,
+                        datetime('now')
+                    )
+                """
+            )
+            conn.execute(
+                """
+                UPDATE jobs
                 SET taxonomy_index_status = 'indexed',
                     taxonomy_index_attempts = CASE
                         WHEN taxonomy_index_attempts < 1 THEN 1
@@ -174,7 +187,8 @@ class Database:
                     END,
                     taxonomy_indexed_at = COALESCE(
                         taxonomy_indexed_at,
-                        updated_at
+                        updated_at,
+                        created_at
                     )
                 WHERE taxonomy_index_status = 'pending'
                   AND EXISTS (
