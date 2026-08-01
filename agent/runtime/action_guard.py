@@ -56,7 +56,12 @@ def check_reasoning_screen_stale(
     """OCR 없이 행동 대상 ROI를 다시 계산해 오래된 마커 클릭을 차단한다."""
 
     if not reasoning_screen_guard_enabled():
-        return {"checked": False, "stale": False, "reason": "disabled"}
+        return {
+            "checked": False,
+            "stale": False,
+            "must_refresh": False,
+            "reason": "disabled",
+        }
     target_signature = _target_roi_signature(state, marker_id)
     previous_phash = str(target_signature.get("phash") or "")
     mode = "target_roi"
@@ -64,7 +69,12 @@ def check_reasoning_screen_stale(
         previous_phash = str((state.get("screen_signature") or {}).get("phash") or "")
         mode = "full_screen"
     if not previous_phash:
-        return {"checked": False, "stale": False, "reason": "previous_phash_missing"}
+        return {
+            "checked": False,
+            "stale": False,
+            "must_refresh": True,
+            "reason": "previous_phash_missing",
+        }
 
     filename = f"pre_action_{int(time.time() * 1000)}.png"
     image_path: Path | None = None
@@ -89,7 +99,13 @@ def check_reasoning_screen_stale(
         distance = hamming_distance(previous_phash, current_phash)
     except Exception as exc:
         logger.debug("Reasoning screen guard skipped", error=str(exc))
-        return {"checked": False, "stale": False, "reason": "capture_failed"}
+        return {
+            "checked": False,
+            "stale": False,
+            "must_refresh": True,
+            "reason": "capture_failed",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
     finally:
         if image_path is not None and image_path.name == filename:
             try:
@@ -97,11 +113,20 @@ def check_reasoning_screen_stale(
             except OSError as exc:
                 logger.debug("Reasoning screen guard temporary capture cleanup failed", error=str(exc))
 
+    if distance is None:
+        return {
+            "checked": False,
+            "stale": False,
+            "must_refresh": True,
+            "reason": "hash_comparison_failed",
+        }
+
     max_distance = get_settings().vision.reasoning_stale_phash_max_distance
     stale = distance is not None and distance > max_distance
     result = {
         "checked": True,
         "stale": stale,
+        "must_refresh": stale,
         "reason": "screen_changed_during_reasoning" if stale else "screen_unchanged",
         "distance": distance,
         "max_distance": max_distance,

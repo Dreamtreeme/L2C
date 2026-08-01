@@ -2,7 +2,11 @@ import time
 
 import pytest
 
-from agent.graph import worker_execution, worker_execution_dispatch
+from agent.graph import (
+    worker_action_guard,
+    worker_execution,
+    worker_execution_dispatch,
+)
 from agent.prompts.detail_extraction import (
     build_detail_extraction_system_prompt,
 )
@@ -56,6 +60,78 @@ def test_sensitive_action_requires_user_approval_before_physical_input(monkeypat
     assert result["pending_human_approval"] is True
     assert result["human_approval_request"]["action"] == "click_marker"
     assert result["action_history"][0]["status"] == "skipped"
+
+
+def test_screen_guard_capture_failure_requires_fresh_observation(monkeypatch):
+    from agent.runtime import action_guard
+
+    class FailedPerception:
+        def capture_screen(self, **_kwargs):
+            raise RuntimeError("capture unavailable")
+
+    monkeypatch.setattr(
+        action_guard,
+        "reasoning_screen_guard_enabled",
+        lambda: True,
+    )
+    result = action_guard.check_reasoning_screen_stale(
+        {"screen_signature": {"phash": "0" * 16}},
+        FailedPerception(),
+    )
+
+    assert result["checked"] is False
+    assert result["must_refresh"] is True
+    assert result["reason"] == "capture_failed"
+
+
+def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
+    monkeypatch,
+):
+    from agent.graph.worker_execution_context import WorkerExecutionContext
+
+    request = _action_request(
+        [
+            {
+                "name": "click_marker",
+                "args": {"marker_id": 7},
+                "id": "unvalidated-click",
+            }
+        ]
+    )
+    context = WorkerExecutionContext.from_state(
+        {
+            "current_markers": [
+                {"id": 7, "text": "검색", "bbox": [0, 0, 100, 20]}
+            ],
+            "current_url": "https://example.com/jobs",
+            "current_url_stale": False,
+            "action_history": [],
+        },
+        request,
+    )
+    monkeypatch.setattr(
+        worker_action_guard,
+        "check_current_reasoning_screen",
+        lambda *_args, **_kwargs: {
+            "checked": False,
+            "stale": False,
+            "must_refresh": True,
+            "reason": "previous_phash_missing",
+        },
+    )
+
+    blocked = worker_action_guard.guard_ui_action(
+        context,
+        "click_marker",
+        {"marker_id": 7},
+        context.before_snapshot(),
+        time.perf_counter(),
+    )
+
+    assert blocked is True
+    assert context.new_actions[0]["status"] == "skipped"
+    assert context.new_actions[0]["reason"] == "screen_validation_unavailable"
+    assert context.new_actions[0]["observation_required"] is True
 
 
 def test_local_api_rejects_untrusted_host_and_cross_origin_request():

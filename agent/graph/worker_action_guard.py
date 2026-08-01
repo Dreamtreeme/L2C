@@ -77,16 +77,24 @@ def guard_ui_action(
             context.state,
             marker_id=args.get("marker_id"),
         )
-        if guard_result.get("stale"):
+        if guard_result.get("must_refresh"):
+            screen_changed = bool(guard_result.get("stale"))
             context.append_guard_result(
                 action_name,
                 args,
                 before_snapshot,
                 status="skipped",
-                reason="screen_changed_during_reasoning",
+                reason=(
+                    "screen_changed_during_reasoning"
+                    if screen_changed
+                    else "screen_validation_unavailable"
+                ),
                 message=(
-                    "Skipped UI action because the screen changed while reasoning; "
-                    "a fresh perception is required."
+                    "Skipped UI action because the screen changed while "
+                    "reasoning; a fresh perception is required."
+                    if screen_changed
+                    else "Skipped UI action because its source screen could "
+                    "not be validated; a fresh perception is required."
                 ),
                 step_started=step_started,
                 observation_required=True,
