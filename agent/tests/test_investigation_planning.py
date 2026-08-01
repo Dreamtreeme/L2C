@@ -74,6 +74,48 @@ def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path)
     assert normalized[0].minimum_count == 1
     assert plan.requirements[0].minimum_count == 50
 
+
+def test_collection_step_status_uses_structured_run_status():
+    from agent.application.collection_service import (
+        build_failed_collection_result,
+    )
+    from agent.graph.investigation_collection_nodes import (
+        InvestigationCollectionNodes,
+    )
+
+    step = InvestigationPlanStep(
+        step_id="collect-1",
+        action="collect",
+        tool_name="realtime_scraping",
+    )
+    investigation = InvestigationRequest(
+        investigation_id="structured-collection-status",
+        original_query="AI 엔지니어 공고를 찾아줘",
+        plan=[step],
+    )
+    payload = build_failed_collection_result(
+        "vision collection persisted: misleading display text",
+        error_code="collection_error:RuntimeError",
+    )
+
+    class FailedCollectionTool:
+        def invoke(self, _arguments):
+            return json.dumps(payload, ensure_ascii=False)
+
+    result = InvestigationCollectionNodes(
+        FailedCollectionTool()
+    ).execute(
+        {
+            "investigation": investigation.model_dump(mode="json"),
+            "collection_results": [],
+        }
+    )
+    updated = InvestigationRequest.model_validate(result["investigation"])
+
+    assert updated.executed_step_ids == ["collect-1"]
+    assert updated.plan[0].status == "failed"
+    assert result["collection_results"][0]["run_status"] == "failed"
+
 def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
 
     investigation = InvestigationRequest(

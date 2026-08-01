@@ -462,6 +462,7 @@ def test_collection_service_forces_partial_status_when_explicit_target_is_unmet(
     )
 
     assert result["completion_status"] == "partial"
+    assert result["run_status"] == "partial"
     assert result["worker_status"] == "finished"
     assert result["review_status"] == "accepted"
     assert result["persistence_status"] == "persisted"
@@ -532,6 +533,7 @@ def test_collection_service_completes_with_existing_database_jobs_only():
     )
 
     assert result["completion_status"] == "complete"
+    assert result["run_status"] == "completed"
     assert result["missing_count"] == 0
     assert result["persisted_count"] == 0
     assert result["observed_job_ids"] == [7, 8]
@@ -611,10 +613,29 @@ def test_collection_service_completes_when_visible_result_scope_is_exhausted():
     )
 
     assert result["completion_status"] == "complete"
+    assert result["run_status"] == "completed"
     assert result["search_scope_exhausted"] is True
     assert result["missing_count"] == 9
     assert result["needs_human_approval"] is False
     assert result["persisted_count"] == 1
+
+
+def test_collection_failure_uses_the_same_structured_status_contract():
+    from agent.application.collection_service import (
+        build_failed_collection_result,
+    )
+
+    result = build_failed_collection_result(
+        "collection failed: missing search keyword",
+        error_code="missing_search_keyword",
+        target_count=2,
+    )
+
+    assert result["run_status"] == "failed"
+    assert result["completion_status"] == "rejected"
+    assert result["review_status"] == "rejected"
+    assert result["target_status"] == "unmet"
+    assert result["error_code"] == "missing_search_keyword"
 
 def test_worker_execution_session_serializes_concurrent_requests():
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime

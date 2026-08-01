@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable
 
-from agent.application.collection_outcome import build_collection_outcome
+from agent.application.collection_outcome import (
+    build_collection_outcome,
+    collection_run_status,
+)
 from agent.application.run_context import emit_run_event, measure_step
 from agent.application.run_contracts import RunPhase
 from agent.utils.logger import logger
@@ -35,6 +38,52 @@ class CollectionOperations:
     build_intermediate_report: Callable[..., dict]
     report_requires_more_collection: Callable[[dict], bool]
     close_browser: Callable[[], None]
+
+
+def build_failed_collection_result(
+    message: str,
+    *,
+    error_code: str,
+    keyword: str = "",
+    site: str = "",
+    target_count: int = 0,
+) -> dict[str, Any]:
+    """모든 수집 실패 경로가 같은 구조를 반환하게 만든다."""
+
+    outcome = build_collection_outcome(
+        is_finished=False,
+        hit_recursion_limit=False,
+        review={"decision": "reject"},
+        persisted_count=0,
+        resolved_count=0,
+        rejected_count=0,
+        target_count=target_count,
+        scope_exhausted=False,
+    )
+    stage_statuses = outcome.as_dict()
+    return {
+        "message": message,
+        "error_code": error_code,
+        "site": site,
+        "keyword": keyword,
+        "target_count": target_count,
+        "item_count": 0,
+        "persisted_count": 0,
+        "review": {"decision": "reject"},
+        "is_finished": False,
+        "needs_human_approval": False,
+        "completion_status": stage_statuses["completion_status"],
+        "worker_status": stage_statuses["worker_status"],
+        "review_status": stage_statuses["review_status"],
+        "persistence_status": stage_statuses["persistence_status"],
+        "target_status": stage_statuses["target_status"],
+        "stage_statuses": stage_statuses,
+        "run_status": collection_run_status(
+            stage_statuses["completion_status"]
+        ).value,
+        "document_ids": [],
+        "persistence_validation": {},
+    }
 
 
 class CollectionService:
@@ -74,10 +123,12 @@ class CollectionService:
     def collect(self, request: CollectionRequest) -> dict[str, Any]:
         keyword = str(request.search_keyword or "").strip()
         if not keyword:
-            return {
-                "message": "collection failed: missing search keyword",
-                "review": {"decision": "reject"},
-            }
+            return build_failed_collection_result(
+                "collection failed: missing search keyword",
+                error_code="missing_search_keyword",
+                site=request.site or "",
+                target_count=max(0, int(request.target_count or 0)),
+            )
 
         intent = normalize_collection_intent(
             request.collection_intent,
@@ -194,10 +245,13 @@ class CollectionService:
             ):
                 raise
             logger.exception("Vision worker execution failed", error=str(exc))
-            return {
-                "message": f"collection error: {exc}",
-                "review": {"decision": "reject"},
-            }
+            return build_failed_collection_result(
+                f"collection error: {exc}",
+                error_code=f"collection_error:{type(exc).__name__}",
+                keyword=keyword,
+                site=request.site or "",
+                target_count=target_count,
+            )
         finally:
             with measure_step("browser_cleanup"):
                 self.operations.close_browser()
@@ -276,6 +330,10 @@ class CollectionService:
         )
         outcome_fields = outcome.as_dict()
         completion_status = outcome_fields["completion_status"]
+        run_status = collection_run_status(
+            completion_status,
+            needs_human_approval=needs_approval,
+        )
         missing_count = (
             max(0, effective_target_count - resolved_count)
             if effective_target_count > 0
@@ -349,6 +407,7 @@ class CollectionService:
                 "document_ids": collection_document_ids,
                 "needs_human_approval": needs_approval,
                 "completion_status": completion_status,
+                "run_status": run_status.value,
                 "stage_statuses": outcome_fields,
             },
         )
@@ -372,6 +431,7 @@ class CollectionService:
             "intermediate_report": intermediate_report,
             "collection_intent": collection_intent,
             "completion_status": completion_status,
+            "run_status": run_status.value,
             "worker_status": outcome_fields["worker_status"],
             "review_status": outcome_fields["review_status"],
             "persistence_status": outcome_fields["persistence_status"],
@@ -438,5 +498,6 @@ __all__ = [
     "CollectionOperations",
     "CollectionRequest",
     "CollectionService",
+    "build_failed_collection_result",
     "build_collection_operations",
 ]

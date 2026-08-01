@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
 
+from agent.application.run_contracts import RunStatus
+
 
 class WorkerStatus(str, Enum):
     FINISHED = "finished"
@@ -54,6 +56,26 @@ class CollectionOutcome:
             key: value.value if isinstance(value, Enum) else str(value)
             for key, value in asdict(self).items()
         }
+
+
+def collection_run_status(
+    completion_status: CollectionStatus | str,
+    *,
+    needs_human_approval: bool = False,
+) -> RunStatus:
+    """수집 도메인 결과를 백엔드 실행 상태로 변환한다."""
+
+    if needs_human_approval:
+        return RunStatus.WAITING_APPROVAL
+    try:
+        status = CollectionStatus(completion_status)
+    except (TypeError, ValueError):
+        return RunStatus.FAILED
+    return {
+        CollectionStatus.COMPLETE: RunStatus.COMPLETED,
+        CollectionStatus.PARTIAL: RunStatus.PARTIAL,
+        CollectionStatus.REJECTED: RunStatus.FAILED,
+    }[status]
 
 
 def _review_status(review: dict[str, Any]) -> ReviewStatus:
@@ -106,7 +128,13 @@ def build_collection_outcome(
     else:
         target_status = TargetStatus.UNMET
 
-    if resolved_count <= 0:
+    review_allows_result = (
+        review_status == ReviewStatus.ACCEPTED
+        or bool(review.get("accept_collected_data"))
+    )
+    if not review_allows_result:
+        completion_status = CollectionStatus.REJECTED
+    elif resolved_count <= 0:
         completion_status = CollectionStatus.REJECTED
     elif target_status == TargetStatus.SCOPE_EXHAUSTED:
         completion_status = CollectionStatus.COMPLETE
@@ -139,4 +167,5 @@ __all__ = [
     "TargetStatus",
     "WorkerStatus",
     "build_collection_outcome",
+    "collection_run_status",
 ]

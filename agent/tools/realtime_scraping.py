@@ -8,10 +8,12 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from agent.application.collection_outcome import collection_run_status
 from agent.application.collection_request_builder import normalize_target_count
 from agent.application.collection_service import (
     CollectionRequest,
     CollectionService,
+    build_failed_collection_result,
     build_collection_operations,
 )
 from agent.recipe.task_category import (
@@ -68,14 +70,6 @@ def _run_realtime_scraping(
         company=company,
         tech_stack=tech_stack,
     )
-    if not keyword:
-        return json.dumps(
-            {
-                "message": "collection failed: missing search keyword",
-                "review": {"decision": "reject"},
-            },
-            ensure_ascii=False,
-        )
 
     logger.info("비전 작업자 수집 요청: keyword=%r", keyword)
     collection_intent = normalize_collection_intent(
@@ -163,31 +157,57 @@ def _invoke_realtime_scraping(
 
             try:
                 payload = json.loads(result_text)
-            except (TypeError, json.JSONDecodeError):
-                payload = {"message": str(result_text)}
+                if not isinstance(payload, dict):
+                    raise TypeError("collection result is not an object")
+            except (TypeError, json.JSONDecodeError) as exc:
+                payload = build_failed_collection_result(
+                    "collection returned an invalid result payload",
+                    error_code=f"invalid_collection_payload:{type(exc).__name__}",
+                    keyword=context_query,
+                )
             payload["run_id"] = context.run_id
             payload["metrics"] = context.snapshot()
-            failed = str(
-                payload.get("message")
-                or ""
-            ).startswith("collection error")
+            try:
+                run_status = RunStatus(str(payload.get("run_status") or ""))
+            except ValueError:
+                run_status = collection_run_status(
+                    str(payload.get("completion_status") or "")
+                )
+                payload["run_status"] = run_status.value
+            event_name, phase, event_message = {
+                RunStatus.COMPLETED: (
+                    "run_completed",
+                    RunPhase.COMPLETED,
+                    "수집 작업을 완료했습니다.",
+                ),
+                RunStatus.PARTIAL: (
+                    "run_partial",
+                    RunPhase.PARTIAL,
+                    "수집 작업을 부분 완료했습니다.",
+                ),
+                RunStatus.WAITING_APPROVAL: (
+                    "run_waiting_approval",
+                    RunPhase.COLLECTION,
+                    "수집 계속 여부에 대한 승인을 기다립니다.",
+                ),
+                RunStatus.FAILED: (
+                    "run_failed",
+                    RunPhase.FAILED,
+                    "수집 작업이 실패했습니다.",
+                ),
+            }.get(
+                run_status,
+                (
+                    "run_failed",
+                    RunPhase.FAILED,
+                    "수집 작업이 실패했습니다.",
+                ),
+            )
             emit_run_event(
-                "run_failed" if failed else "run_completed",
-                (
-                    RunPhase.FAILED
-                    if failed
-                    else RunPhase.COMPLETED
-                ),
-                (
-                    "수집 작업이 실패했습니다."
-                    if failed
-                    else "수집 작업을 완료했습니다."
-                ),
-                status=(
-                    RunStatus.FAILED
-                    if failed
-                    else RunStatus.COMPLETED
-                ),
+                event_name,
+                phase,
+                event_message,
+                status=run_status,
             )
             return json.dumps(
                 payload,

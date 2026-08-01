@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from agent.application.collection_outcome import collection_run_status
+from agent.application.collection_service import build_failed_collection_result
 from agent.application.run_context import emit_run_event, raise_if_cancelled
-from agent.application.run_contracts import RunPhase
+from agent.application.run_contracts import RunPhase, RunStatus
 from agent.graph.investigation_context import InvestigationGraphState
 from shared.schema.investigation_schema import (
     InvestigationRequest,
@@ -38,8 +40,28 @@ class InvestigationCollectionNodes:
         )
         try:
             parsed_result = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
-        except json.JSONDecodeError:
-            parsed_result = {"raw_result": str(raw_result)}
+            if not isinstance(parsed_result, dict):
+                raise TypeError("collection result is not an object")
+        except (TypeError, json.JSONDecodeError) as exc:
+            parsed_result = build_failed_collection_result(
+                "collection returned an invalid result payload",
+                error_code=f"invalid_collection_payload:{type(exc).__name__}",
+                keyword=step.arguments.query or "",
+                site=step.arguments.site or "",
+                target_count=int(step.arguments.target_count or 0),
+            )
+        try:
+            run_status = RunStatus(
+                str(parsed_result.get("run_status") or "")
+            )
+        except ValueError:
+            run_status = collection_run_status(
+                str(parsed_result.get("completion_status") or ""),
+                needs_human_approval=bool(
+                    parsed_result.get("needs_human_approval")
+                ),
+            )
+            parsed_result["run_status"] = run_status.value
         executed = [*investigation.executed_step_ids, step.step_id]
         persistence_validation = (
             parsed_result.get("persistence_validation", {})
@@ -61,7 +83,7 @@ class InvestigationCollectionNodes:
             if str(job_id).isdigit() and int(job_id) > 0
         )
         steps = [
-            item.model_copy(update={"status": "completed"})
+            item.model_copy(update={"status": run_status.value})
             if item.step_id == step.step_id
             else item
             for item in investigation.plan
