@@ -44,17 +44,46 @@ def _recipe_learning_mode() -> str:
     return mode if mode in {"off", "record"} else "record"
 
 
+def _recipe_learning_result(
+    mode: str,
+    status: str,
+    *,
+    reason: str = "",
+    candidate_id: str = "",
+    promotion_scheduled: bool = False,
+    error: str = "",
+) -> dict[str, Any]:
+    return {
+        "mode": mode,
+        "status": status,
+        "reason": reason,
+        "candidate_id": candidate_id,
+        "promotion_scheduled": promotion_scheduled,
+        "error": error,
+    }
+
+
 def _commit_recipe_candidate(
     submission: dict,
     review: dict,
     source: str,
     submission_id: str,
     mode: str,
-) -> str:
+) -> dict[str, Any]:
     """학습 모드에 따라 Reflex 레시피 후보를 저장한다."""
 
-    if mode == "off" or not review.get("recipe_candidate"):
-        return ""
+    if mode == "off":
+        return _recipe_learning_result(
+            mode,
+            "disabled",
+            reason="learning_mode_off",
+        )
+    if not review.get("recipe_candidate"):
+        return _recipe_learning_result(
+            mode,
+            "not_eligible",
+            reason="critic_did_not_select_recipe_candidate",
+        )
     try:
         from agent.recipe.candidate_store import RecipeCandidateStore
 
@@ -64,16 +93,27 @@ def _commit_recipe_candidate(
             source=source,
             submission_id=submission_id,
         )
+        candidate_id = str(candidate_id or "")
         if candidate_id:
             logger.info(
                 "레시피 후보 저장: id=%s mode=%s",
                 candidate_id,
                 mode,
             )
-        return candidate_id
+        return _recipe_learning_result(
+            mode,
+            "recorded" if candidate_id else "failed",
+            reason="" if candidate_id else "candidate_id_missing",
+            candidate_id=candidate_id,
+        )
     except Exception as exc:
-        logger.debug("레시피 후보 저장 생략: %s", exc)
-        return ""
+        logger.warning("레시피 후보 저장 실패: %s", exc)
+        return _recipe_learning_result(
+            mode,
+            "failed",
+            reason="candidate_persistence_failed",
+            error=f"{type(exc).__name__}: {exc}"[:1000],
+        )
 
 
 def _schedule_recipe_candidate_promotion(candidate_id: str) -> bool:
@@ -132,12 +172,40 @@ def persist_accepted_worker_result(
 
     raise_if_cancelled()
     submission = dict(worker_result.get("submission") or {})
+    learning_mode = _recipe_learning_mode()
     accepts_data = bool(
         review.get("decision") == "accept"
         or review.get("accept_collected_data")
     )
     if not accepts_data or not worker_result.get("extracted_jd"):
-        return 0, submission, review, ""
+        learning = (
+            _recipe_learning_result(
+                learning_mode,
+                "disabled",
+                reason="learning_mode_off",
+            )
+            if learning_mode == "off"
+            else _recipe_learning_result(
+                learning_mode,
+                "not_eligible",
+                reason=(
+                    "review_not_accepted"
+                    if not accepts_data
+                    else "no_extracted_data"
+                ),
+            )
+        )
+        submission["recipe_learning"] = learning
+        worker_result["submission"] = submission
+        worker_result["recipe_learning"] = learning
+        from agent.recipe.submission_store import SubmissionStore
+
+        submission_id = SubmissionStore().commit_submission(
+            submission,
+            review=review,
+            source=source,
+        )
+        return 0, submission, review, submission_id
 
     validation = persist_collected_data_with_report(
         worker_result.get("extracted_jd") or {},
@@ -153,30 +221,31 @@ def persist_accepted_worker_result(
 
     from agent.recipe.submission_store import SubmissionStore
 
-    submission_id = SubmissionStore().commit_submission(
+    submission_store = SubmissionStore()
+    submission_id = submission_store.commit_submission(
         submission,
         review=review,
         source=source,
     )
-    learning_mode = _recipe_learning_mode()
     candidate_run_complete = _recipe_candidate_run_is_complete(submission)
-    if (
-        learning_mode != "off"
-        and review.get("decision") == "accept"
-        and candidate_run_complete
-    ):
-        candidate_id = _commit_recipe_candidate(
-            submission,
-            review,
-            source,
-            submission_id,
+    if learning_mode == "off":
+        learning = _recipe_learning_result(
             learning_mode,
+            "disabled",
+            reason="learning_mode_off",
         )
-        if candidate_id:
-            submission["recipe_candidate_id"] = candidate_id
-            submission["recipe_learning_mode"] = learning_mode
-            _schedule_recipe_candidate_promotion(candidate_id)
-    elif learning_mode != "off" and review.get("decision") == "accept":
+    elif review.get("decision") != "accept":
+        learning = _recipe_learning_result(
+            learning_mode,
+            "not_eligible",
+            reason="review_not_accepted_after_validation",
+        )
+    elif not candidate_run_complete:
+        learning = _recipe_learning_result(
+            learning_mode,
+            "not_eligible",
+            reason="worker_run_incomplete",
+        )
         logger.info(
             "레시피 후보 제외: run_status=%s is_finished=%s "
             "hit_recursion_limit=%s",
@@ -184,6 +253,42 @@ def persist_accepted_worker_result(
             bool(submission.get("is_finished")),
             bool(submission.get("hit_recursion_limit")),
         )
+    else:
+        learning = _commit_recipe_candidate(
+            submission,
+            review,
+            source,
+            submission_id,
+            learning_mode,
+        )
+        candidate_id = str(learning.get("candidate_id") or "")
+        if candidate_id:
+            submission["recipe_candidate_id"] = candidate_id
+            submission["recipe_learning_mode"] = learning_mode
+            try:
+                scheduled = _schedule_recipe_candidate_promotion(candidate_id)
+            except Exception as exc:
+                learning = {
+                    **learning,
+                    "reason": "promotion_schedule_failed",
+                    "error": f"{type(exc).__name__}: {exc}"[:1000],
+                }
+                logger.warning("레시피 후보 승격 예약 실패: %s", exc)
+            else:
+                if scheduled:
+                    learning = {
+                        **learning,
+                        "status": "queued",
+                        "promotion_scheduled": True,
+                    }
+    submission["recipe_learning"] = learning
+    worker_result["submission"] = submission
+    worker_result["recipe_learning"] = learning
+    submission_id = submission_store.commit_submission(
+        submission,
+        review=review,
+        source=source,
+    )
     return persisted_count, submission, review, submission_id
 
 

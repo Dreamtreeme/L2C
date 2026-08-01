@@ -5,8 +5,14 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 TABLES = (
@@ -16,6 +22,17 @@ TABLES = (
     "feedback_episodes",
     "worker_submissions",
 )
+
+RECIPE_REQUIRED_COLUMNS = {
+    "recipe_key",
+    "site",
+    "goal",
+    "path_json",
+    "metadata_json",
+    "success_count",
+    "created_at",
+    "updated_at",
+}
 
 
 def main() -> None:
@@ -48,15 +65,49 @@ def main() -> None:
             conn.backup(backup)
 
         conn.execute("BEGIN IMMEDIATE")
+        recipe_columns = (
+            {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(recipes)")
+            }
+            if "recipes" in existing
+            else set()
+        )
+        incompatible_recipe_schema = bool(
+            recipe_columns
+            and not RECIPE_REQUIRED_COLUMNS.issubset(recipe_columns)
+        )
+        if incompatible_recipe_schema:
+            conn.execute("DROP TABLE IF EXISTS recipe_sources")
+            conn.execute("DROP TABLE recipes")
         for table in counts:
+            if incompatible_recipe_schema and table in {
+                "recipes",
+                "recipe_sources",
+            }:
+                continue
             conn.execute(f'DELETE FROM "{table}"')
         conn.commit()
-        after = {
-            table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-            for table in counts
-        }
         print(f"backup={backup_path}")
-        print(f"after={after}")
+
+    from agent.recipe.store import RecipeStore
+
+    RecipeStore(db_path)
+    with sqlite3.connect(db_path) as conn:
+        existing_after = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        after = {
+            table: conn.execute(
+                f'SELECT COUNT(*) FROM "{table}"'
+            ).fetchone()[0]
+            for table in TABLES
+            if table in existing_after
+        }
+    print(f"after={after}")
 
 
 if __name__ == "__main__":

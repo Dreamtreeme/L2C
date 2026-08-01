@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from agent.graph import (
     worker_execution_dispatch,
     worker_observation,
@@ -145,10 +147,13 @@ def test_recipe_store_scopes_by_site_and_task_category(tmp_path):
     assert store.get_site_recipes("saramin", task_category="검색") == []
 
 
-def test_recipe_store_replaces_old_step_table_with_path_schema(tmp_path):
+def test_recipe_store_requires_explicit_migration_for_old_step_schema(tmp_path):
     import sqlite3
 
-    from agent.recipe.store import RecipeStore
+    from agent.recipe.store import (
+        RecipeSchemaMigrationRequired,
+        RecipeStore,
+    )
 
     db_path = tmp_path / "old-recipes.db"
     with sqlite3.connect(db_path) as connection:
@@ -177,7 +182,11 @@ def test_recipe_store_replaces_old_step_table_with_path_schema(tmp_path):
             """
         )
 
-    store = RecipeStore(db_path)
+    with pytest.raises(
+        RecipeSchemaMigrationRequired,
+        match="reset_recipe_memory.py --apply",
+    ):
+        RecipeStore(db_path)
 
     with sqlite3.connect(db_path) as connection:
         columns = {
@@ -189,10 +198,45 @@ def test_recipe_store_replaces_old_step_table_with_path_schema(tmp_path):
         row_count = connection.execute(
             "SELECT COUNT(*) FROM recipes"
         ).fetchone()[0]
-    assert "path_json" in columns
-    assert "steps_json" not in columns
-    assert row_count == 0
-    assert store.active_counts()["total"] == 0
+    assert "steps_json" in columns
+    assert "path_json" not in columns
+    assert row_count == 1
+
+
+def test_recipe_store_preserves_but_does_not_activate_old_recipe_keys(tmp_path):
+    import sqlite3
+
+    from agent.recipe.store import RecipeStore
+
+    db_path = tmp_path / "compatible-legacy-key.db"
+    store = RecipeStore(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO recipes (
+                recipe_key, site, goal, path_json, metadata_json,
+                success_count, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "path5#legacy",
+                "wanted",
+                "검색",
+                "{}",
+                "{}",
+                1,
+                "2026-01-01",
+                "2026-01-01",
+            ),
+        )
+        connection.commit()
+
+    assert store.get_by_site("wanted") == []
+    assert store.active_counts("wanted")["total"] == 0
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM recipes WHERE recipe_key = 'path5#legacy'"
+        ).fetchone()[0] == 1
 
 
 def test_recipe_store_saves_input_and_submit_as_one_path(tmp_path):

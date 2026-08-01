@@ -78,6 +78,8 @@ def build_failed_collection_result(
         "persistence_status": stage_statuses["persistence_status"],
         "target_status": stage_statuses["target_status"],
         "stage_statuses": stage_statuses,
+        "feedback_persistence": {},
+        "recipe_learning": {},
         "run_status": collection_run_status(
             stage_statuses["completion_status"]
         ).value,
@@ -355,6 +357,14 @@ class CollectionService:
                 ),
             }
         )
+        feedback_persistence = dict(
+            submission.get("feedback_persistence") or {}
+        )
+        recipe_learning = dict(
+            worker_result.get("recipe_learning")
+            or submission.get("recipe_learning")
+            or {}
+        )
 
         if needs_approval:
             message = (
@@ -409,6 +419,8 @@ class CollectionService:
                 "completion_status": completion_status,
                 "run_status": run_status.value,
                 "stage_statuses": outcome_fields,
+                "feedback_persistence": feedback_persistence,
+                "recipe_learning": recipe_learning,
             },
         )
         return {
@@ -437,6 +449,8 @@ class CollectionService:
             "persistence_status": outcome_fields["persistence_status"],
             "target_status": outcome_fields["target_status"],
             "stage_statuses": outcome_fields,
+            "feedback_persistence": feedback_persistence,
+            "recipe_learning": recipe_learning,
             "search_scope_exhausted": scope_exhausted,
             "job_results_availability": availability,
             "missing_count": missing_count,

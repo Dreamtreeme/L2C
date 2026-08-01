@@ -39,12 +39,17 @@ def _commit_feedback_episodes(
     hit_recursion_limit: bool,
     is_finished: bool,
     run_id: str = "",
-) -> int:
+) -> dict[str, Any]:
     """나중에 Critic이 검토할 피드백 episode를 저장한다."""
 
     episodes = list(final_state.get("feedback_episodes", []) or [])
     if not episodes:
-        return 0
+        return {
+            "status": "not_applicable",
+            "episode_count": 0,
+            "saved_count": 0,
+            "error": "",
+        }
     run_status = (
         "finished"
         if is_finished
@@ -67,10 +72,27 @@ def _commit_feedback_episodes(
             saved,
             run_status,
         )
-        return saved
+        status = (
+            "saved"
+            if saved >= len(episodes)
+            else "partial"
+            if saved > 0
+            else "already_saved"
+        )
+        return {
+            "status": status,
+            "episode_count": len(episodes),
+            "saved_count": int(saved),
+            "error": "",
+        }
     except Exception as exc:
-        logger.debug("작업자 피드백 episode 저장 생략: %s", exc)
-        return 0
+        logger.warning("작업자 피드백 episode 저장 실패: %s", exc)
+        return {
+            "status": "failed",
+            "episode_count": len(episodes),
+            "saved_count": 0,
+            "error": f"{type(exc).__name__}: {exc}"[:1000],
+        }
 
 
 def _worker_run_status(
@@ -352,12 +374,27 @@ def run_worker_once(
         hit_recursion_limit,
         is_finished,
     )
-    feedback_saved = _commit_feedback_episodes(
+    feedback_persistence = _commit_feedback_episodes(
         final_state,
         hit_recursion_limit,
         is_finished,
         run_id=run_id,
     )
+    if not isinstance(feedback_persistence, dict):
+        feedback_saved_legacy = int(feedback_persistence or 0)
+        feedback_persistence = {
+            "status": (
+                "saved"
+                if feedback_saved_legacy > 0
+                else "not_recorded"
+            ),
+            "episode_count": len(
+                final_state.get("feedback_episodes", []) or []
+            ),
+            "saved_count": feedback_saved_legacy,
+            "error": "",
+        }
+    feedback_saved = int(feedback_persistence.get("saved_count") or 0)
     submission = build_worker_submission(
         final_state,
         site=site_slug,
@@ -366,6 +403,7 @@ def run_worker_once(
         hit_recursion_limit=hit_recursion_limit,
         persisted_count=0,
         feedback_saved=feedback_saved,
+        feedback_persistence=feedback_persistence,
         run_id=run_id,
         target_count=target_count,
         task_category=task_category,
@@ -392,6 +430,7 @@ def run_worker_once(
         "hit_recursion_limit": hit_recursion_limit,
         "is_finished": is_finished,
         "feedback_saved": feedback_saved,
+        "feedback_persistence": feedback_persistence,
         "recursion_limit": recursion_limit,
         "observed_job_ids": observed_job_ids,
     }

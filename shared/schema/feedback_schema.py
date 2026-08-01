@@ -90,6 +90,7 @@ class WorkerSubmission(BaseModel):
     target_count: int = 0
     persisted_count: int = 0
     feedback_saved: int = 0
+    feedback_persistence: Dict[str, Any] = Field(default_factory=dict)
     recorded_steps: List[Dict[str, Any]] = Field(default_factory=list)
     feedback_episodes: List[Dict[str, Any]] = Field(default_factory=list)
     transition_records: List[Dict[str, Any]] = Field(default_factory=list)

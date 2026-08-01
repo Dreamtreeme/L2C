@@ -35,6 +35,10 @@ _INITIALIZED_DB_PATHS: set[Path] = set()
 _SCHEMA_LOCK = threading.RLock()
 
 
+class RecipeSchemaMigrationRequired(RuntimeError):
+    """기존 레시피 테이블을 명시적으로 마이그레이션해야 함을 알린다."""
+
+
 class RecipeStore:
     def __init__(self, db_path=None):
         if db_path is None:
@@ -82,8 +86,13 @@ class RecipeStore:
                     "updated_at",
                 }
                 if not required_columns.issubset(columns):
-                    conn.execute("DROP TABLE IF EXISTS recipe_sources")
-                    conn.execute("DROP TABLE recipes")
+                    missing = sorted(required_columns - columns)
+                    raise RecipeSchemaMigrationRequired(
+                        "recipes 스키마가 현재 경로 규격과 다릅니다. "
+                        f"누락 컬럼={missing}. 백업 후 "
+                        "`python benchmark/reset_recipe_memory.py --apply`를 "
+                        "실행해 명시적으로 초기화하십시오."
+                    )
 
             conn.execute(
                 """
@@ -115,14 +124,6 @@ class RecipeStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_recipe_sources_candidate "
                 "ON recipe_sources(candidate_id)"
-            )
-            conn.execute(
-                "DELETE FROM recipes WHERE recipe_key NOT LIKE ?",
-                (f"{_RECIPE_KEY_PREFIX}%",),
-            )
-            conn.execute(
-                "DELETE FROM recipe_sources "
-                "WHERE recipe_key NOT IN (SELECT recipe_key FROM recipes)"
             )
 
     @staticmethod
@@ -518,9 +519,9 @@ class RecipeStore:
                 "(SELECT COUNT(*) FROM recipe_sources "
                 "WHERE recipe_sources.recipe_key=recipes.recipe_key) "
                 "AS source_count FROM recipes "
-                "WHERE site=? "
+                "WHERE site=? AND recipe_key LIKE ? "
                 "ORDER BY success_count DESC, updated_at DESC, recipe_key ASC",
-                (site,),
+                (site, f"{_RECIPE_KEY_PREFIX}%"),
             ).fetchall()
         out = []
         for row in rows:
@@ -534,8 +535,11 @@ class RecipeStore:
     def active_counts(self, site: str | None = None) -> dict[str, int]:
         """E2E 사전조건 검사용 활성 자동화 데이터 개수를 반환한다."""
 
-        where = " WHERE site=?" if site else ""
-        params = (site,) if site else ()
+        where = " WHERE recipe_key LIKE ?"
+        params: tuple[Any, ...] = (f"{_RECIPE_KEY_PREFIX}%",)
+        if site:
+            where += " AND site=?"
+            params += (site,)
         with self._conn() as conn:
             recipe_count = int(
                 conn.execute(
@@ -569,3 +573,6 @@ class RecipeStore:
             )
             candidates.append((item.get("recipe_key") or "", recipe))
         return candidates
+
+
+__all__ = ["RecipeSchemaMigrationRequired", "RecipeStore"]
