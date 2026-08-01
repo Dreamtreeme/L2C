@@ -369,6 +369,7 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
     assert result.submission.collection_intent.target_count == 2
     assert result.submission.collection_intent.task_category == "탐색"
     assert captured["recipe_params"]["target_count"] == 2
+    assert captured["recipe_params"]["search_keyword"] == "iOS 개발자"
     assert captured["recipe_params"]["task_category"] == "탐색"
     assert captured["job_collection_contract"]["required_fields"] == [
         "company_name",

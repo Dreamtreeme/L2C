@@ -87,6 +87,7 @@ def run_worker_once(
     initial_state["recipe_params"] = {
         "query": search_keyword,
         "keyword": search_keyword,
+        "search_keyword": search_keyword,
         "target_count": target_count,
         "site": site_slug,
         "task_category": task_category,
