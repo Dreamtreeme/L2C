@@ -2,7 +2,7 @@
 데이터 전처리 및 DB 적재 신뢰성 검증 테스트
 - 비전 수집 JSON 로드 및 Preprocessor 정제 검증
 - 신규 MVP 스키마 필드 적재 검증 (source_platform, content_hash 등)
-- 중복 적재 방지(Deduplication) 검증
+- 동일 출처 갱신과 다른 출처 보존 검증
 """
 
 import json
@@ -111,6 +111,107 @@ def test_database_migrates_posted_date_columns_without_rebuilding_jobs(tmp_path)
 
     assert {"posted_at", "posted_at_text"} <= columns
     assert "idx_jobs_posted_at" in indexes
+
+
+def test_database_migrates_unique_content_hash_without_losing_jobs(tmp_path):
+    db_path = tmp_path / "legacy_unique_content_hash.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE jobs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "url TEXT NOT NULL UNIQUE, "
+            "company_name TEXT, "
+            "position TEXT, "
+            "content_hash TEXT UNIQUE, "
+            "created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO jobs (url, company_name, position, content_hash, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "https://example.com/jobs/legacy",
+                "Acme",
+                "AI Engineer",
+                "shared-content",
+                "2026-07-01T00:00:00",
+                "2026-07-01T00:00:00",
+            ),
+        )
+        conn.execute(
+            "CREATE TABLE job_versions ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "job_id INTEGER NOT NULL, "
+            "version_number INTEGER NOT NULL, "
+            "observed_at TEXT NOT NULL, "
+            "source_url TEXT NOT NULL, "
+            "source_platform TEXT, "
+            "evidence_hash TEXT NOT NULL, "
+            "changed_fields_json TEXT NOT NULL, "
+            "content_json TEXT NOT NULL, "
+            "UNIQUE(job_id, version_number), "
+            "UNIQUE(job_id, evidence_hash), "
+            "FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO job_versions ("
+            "job_id, version_number, observed_at, source_url, evidence_hash, "
+            "changed_fields_json, content_json"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                1,
+                1,
+                "2026-07-01T00:00:00",
+                "https://example.com/jobs/legacy",
+                "legacy-evidence",
+                "[]",
+                "{}",
+            ),
+        )
+
+    db = Database(db_path)
+    second_id = db.upsert(
+        "https://another.example.com/jobs/new",
+        {
+            "company_name": "Acme",
+            "position": "AI Engineer",
+            "content_hash": "shared-content",
+        },
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, url FROM jobs WHERE content_hash = ? ORDER BY id",
+            ("shared-content",),
+        ).fetchall()
+        version_count = conn.execute(
+            "SELECT COUNT(*) FROM job_versions WHERE job_id = 1"
+        ).fetchone()[0]
+        foreign_key_violations = conn.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+        unique_content_hash_indexes = []
+        for index in conn.execute("PRAGMA index_list(jobs)").fetchall():
+            if not int(index["unique"]):
+                continue
+            columns = [
+                row["name"]
+                for row in conn.execute(
+                    f"PRAGMA index_info('{index['name']}')"
+                ).fetchall()
+            ]
+            if columns == ["content_hash"]:
+                unique_content_hash_indexes.append(index["name"])
+
+    assert len(rows) == 2
+    assert rows[0]["url"] == "https://example.com/jobs/legacy"
+    assert rows[1]["id"] == second_id
+    assert version_count == 1
+    assert foreign_key_violations == []
+    assert unique_content_hash_indexes == []
 
 
 def test_database_upsert_and_recent_list_include_posted_date(tmp_path):
@@ -482,14 +583,16 @@ def test_persistence_pipeline(tmp_path):
     assert id_1 == id_2, "동일 URL 적재 시 새로운 row가 생성되었습니다. (UPSERT 오작동)"
     print("✓ URL 중복 충돌 시 정상 UPDATE 확인")
 
-    # URL은 다르지만 content_hash가 동일한 경우 중복 차단 검증
+    # URL이 다르면 content_hash가 같아도 별도 출처로 보존
     jp_2 = Preprocessor.process_raw_jd(first_jd)
     jp_2.url = "https://www.wanted.co.kr/wd/9999999999" # 임의의 새 URL
     assert jp_1.content_hash == jp_2.content_hash, "동일 데이터에 대한 hash가 불일치합니다."
 
     id_3 = db.upsert(jp_2.url, jp_2.model_dump())
-    assert id_1 == id_3, f"동일 content_hash인데 신규 row가 적재되었습니다. (Deduplication 실패) id_1={id_1}, id_3={id_3}"
-    print("✓ content_hash 중복 충돌 시 정상 UPDATE 및 중복 차단 확인")
+    assert id_1 != id_3, "다른 URL의 공고가 content_hash만으로 병합되었습니다."
+    assert db.get(id_1)["url"] == jp_1.url
+    assert db.get(id_3)["url"] == jp_2.url
+    print("✓ 동일 content_hash의 서로 다른 출처 URL 보존 확인")
 
     # DB의 최종 레코드 수 확인
     conn = sqlite3.connect(test_db_path)
@@ -497,8 +600,9 @@ def test_persistence_pipeline(tmp_path):
         conn.row_factory = sqlite3.Row
         cursor = conn.execute("SELECT COUNT(*) as cnt FROM jobs")
         cnt = cursor.fetchone()["cnt"]
-        print(f"\n✓ 최종 DB 레코드 수: {cnt}건 (정적 검증 기대치: {len(jds)}건)")
-        assert cnt == len(jds), f"최종 적재 개수 오류: 기대={len(jds)}건, 실제={cnt}건"
+        expected_count = len(jds) + 1
+        print(f"\n✓ 최종 DB 레코드 수: {cnt}건 (정적 검증 기대치: {expected_count}건)")
+        assert cnt == expected_count, f"최종 적재 개수 오류: 기대={expected_count}건, 실제={cnt}건"
     finally:
         conn.close()
 

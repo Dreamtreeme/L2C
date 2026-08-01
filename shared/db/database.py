@@ -22,8 +22,7 @@ from shared.db.search_taxonomy_schema import SEARCH_TAXONOMY_SCHEMA
 logger = logging.getLogger(__name__)
 
 
-SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS jobs (
+JOBS_COLUMNS_SQL = """(
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     url             TEXT    NOT NULL UNIQUE,
     company_name    TEXT,
@@ -47,14 +46,18 @@ CREATE TABLE IF NOT EXISTS jobs (
     ocr_text_path   TEXT,
     source_platform TEXT,
     raw_ocr_text    TEXT,
-    content_hash    TEXT UNIQUE,
+    content_hash    TEXT,
     evidence_hash   TEXT,
     experience_min  INTEGER,
     experience_max  INTEGER,
     experience_text TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
-);
+)"""
+
+
+SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS jobs {JOBS_COLUMNS_SQL};
 
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_name);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
@@ -126,6 +129,7 @@ class Database:
 
     def _init_schema(self) -> None:
         with self._conn() as conn:
+            self._migrate_content_hash_to_candidate_index(conn)
             conn.executescript(SCHEMA)
             ensure_recipe_candidate_queue_schema(conn)
             
@@ -178,10 +182,87 @@ class Database:
                         f"ALTER TABLE search_term_candidates ADD COLUMN {column} TEXT"
                     )
 
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_posted_at ON jobs(posted_at)")
             
         logger.debug("schema 확인/생성 및 마이그레이션 완료")
+
+    @staticmethod
+    def _content_hash_has_unique_index(conn: sqlite3.Connection) -> bool:
+        """content_hash를 단독 UNIQUE 키로 쓰는 이전 스키마인지 확인한다."""
+
+        for index in conn.execute("PRAGMA index_list(jobs)").fetchall():
+            if not int(index["unique"]):
+                continue
+            columns = [
+                row["name"]
+                for row in conn.execute(
+                    f"PRAGMA index_info('{index['name']}')"
+                ).fetchall()
+            ]
+            if columns == ["content_hash"]:
+                return True
+        return False
+
+    def _migrate_content_hash_to_candidate_index(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        """출처가 다른 공고를 보존하도록 content_hash UNIQUE 제약을 제거한다."""
+
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
+        ).fetchone()
+        if not table_exists or not self._content_hash_has_unique_index(conn):
+            return
+
+        temporary_table = "jobs_content_hash_migration"
+        existing_columns = [
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        ]
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(f"DROP TABLE IF EXISTS {temporary_table}")
+            conn.execute(
+                f"CREATE TABLE {temporary_table} {JOBS_COLUMNS_SQL}"
+            )
+            target_columns = {
+                row["name"]
+                for row in conn.execute(
+                    f"PRAGMA table_info({temporary_table})"
+                ).fetchall()
+            }
+            copied_columns = [
+                column
+                for column in existing_columns
+                if column in target_columns
+            ]
+            column_sql = ", ".join(copied_columns)
+            conn.execute(
+                f"INSERT INTO {temporary_table} ({column_sql}) "
+                f"SELECT {column_sql} FROM jobs"
+            )
+            conn.execute("DROP TABLE jobs")
+            conn.execute(
+                f"ALTER TABLE {temporary_table} RENAME TO jobs"
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(
+                "content_hash 스키마 마이그레이션 후 외래키 불일치가 발생했습니다."
+            )
+        logger.info(
+            "마이그레이션: content_hash를 비고유 중복 후보 인덱스로 변경 완료"
+        )
 
     def exists(self, url: str) -> bool:
         with self._conn() as conn:
@@ -235,16 +316,10 @@ class Database:
         }
 
         with self._conn() as conn:
-            existing = None
-            if payload.get("content_hash"):
-                existing = conn.execute(
-                    "SELECT id, raw_json, evidence_hash FROM jobs WHERE url = ? OR content_hash = ?",
-                    (url, payload["content_hash"]),
-                ).fetchone()
-            else:
-                existing = conn.execute(
-                    "SELECT id, raw_json, evidence_hash FROM jobs WHERE url = ?", (url,)
-                ).fetchone()
+            existing = conn.execute(
+                "SELECT id, raw_json, evidence_hash FROM jobs WHERE url = ?",
+                (url,),
+            ).fetchone()
 
             if existing:
                 cols = ", ".join(f"{k} = :{k}" for k in payload.keys())

@@ -2,7 +2,7 @@
 비전 에이전트 수집 채용공고 데이터 전처리 유틸리티
 - OCR 마커 노이즈 제거
 - 경력 구조화 추출 (experience_min, experience_max, experience_text)
-- 중복 방지용 content_hash 생성
+- 중복 후보 그룹용 content_hash 생성
 - Pydantic JobPosting 스키마 유효성 검사 및 정형화
 """
 
@@ -133,7 +133,7 @@ class Preprocessor:
 
     @staticmethod
     def generate_content_hash(company_name: str | None, position: str | None, requirements: list[str]) -> str:
-        """중복 방지용 컨텐츠 해시(SHA256) 생성"""
+        """출처를 보존한 채 중복 후보를 묶기 위한 컨텐츠 해시를 생성한다."""
         def normalize(s: str | None) -> str:
             if not s:
                 return ""
