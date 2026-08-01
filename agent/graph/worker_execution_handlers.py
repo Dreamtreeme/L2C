@@ -183,6 +183,13 @@ def execute_action_request(
             logger.info(
                 "Action execution completed",
                 action=action_name,
+                status=result.get("status", ""),
+                reason=result.get("reason", ""),
+                missing_fields=(
+                    result.get("missing_fields")
+                    or result.get("extraction_missing_fields")
+                    or []
+                ),
                 duration_sec=round(
                     time.perf_counter() - step_started,
                     6,

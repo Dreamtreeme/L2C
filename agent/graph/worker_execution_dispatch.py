@@ -200,6 +200,32 @@ def _detail_followup(
     }
 
 
+def _classify_extraction_missing_fields(
+    extracted_job: dict[str, Any],
+    required_fields: list[str],
+    coverage_status: dict[str, Any],
+) -> tuple[list[str], list[str], list[str]]:
+    """페이지를 더 읽을 수 있는 경우에만 구조화 누락을 재시도한다."""
+
+    unavailable_fields = list(coverage_status["unavailable_fields"])
+    missing_fields = missing_job_fields(
+        extracted_job,
+        required_fields,
+        unavailable_fields=unavailable_fields,
+    )
+    if not missing_fields or not coverage_status["page_exhausted"]:
+        return unavailable_fields, missing_fields, []
+
+    # 같은 OCR을 다시 정제해도 화면 근거는 늘지 않는다. 원문과 누락 목록을
+    # 보존한 채 부분 결과를 확정해 반복 호출을 막는다.
+    unavailable_fields.extend(
+        field
+        for field in missing_fields
+        if field not in unavailable_fields
+    )
+    return unavailable_fields, [], missing_fields
+
+
 def _finish_detail_reading(
     args: dict[str, Any],
     current_jobs: dict[str, Any],
@@ -269,13 +295,14 @@ def _finish_detail_reading(
                 current_jobs,
             )
 
-        unavailable_fields = list(
-            coverage_status["unavailable_fields"]
-        )
-        missing = missing_job_fields(
+        (
+            unavailable_fields,
+            missing,
+            extraction_missing_fields,
+        ) = _classify_extraction_missing_fields(
             extracted_job,
             required_fields,
-            unavailable_fields=unavailable_fields,
+            coverage_status,
         )
         if missing:
             return (
@@ -304,6 +331,10 @@ def _finish_detail_reading(
                 current_jobs,
             )
 
+        if extraction_missing_fields:
+            extracted_job["_collection_extraction_missing_fields"] = list(
+                extraction_missing_fields
+            )
         extracted_job["_collection_required_fields"] = required_fields
         extracted_job["_collection_unavailable_fields"] = unavailable_fields
         extracted_job["_collection_page_exhausted"] = bool(
@@ -335,6 +366,7 @@ def _finish_detail_reading(
                 "incoming_jobs": summary["incoming_jobs"],
                 "total_jobs": summary["total_jobs"],
                 "fields": summary["fields"],
+                "extraction_missing_fields": extraction_missing_fields,
                 "_job_detail_buffer": {},
                 "_job_detail_coverage": {},
                 "_job_detail_followup": {},
