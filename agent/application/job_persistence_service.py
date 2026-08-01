@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent.runtime.job_collection import job_list_value
@@ -10,6 +11,55 @@ from agent.utils.model_dump import dump_model
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PreparedJob:
+    index: int
+    url: str
+    posting: Any
+    data: dict[str, Any]
+    screenshot_path: str | None
+    ocr_text_path: str | None
+    required_fields: list[str]
+    unavailable_fields: list[str]
+
+
+@dataclass
+class _PersistenceReport:
+    submitted_count: int
+    required_fields: list[str]
+    stored_count: int = 0
+    persisted_count: int = 0
+    taxonomy_index_failed_count: int = 0
+    created_count: int = 0
+    updated_count: int = 0
+    persisted_items: list[dict[str, Any]] = field(default_factory=list)
+    rejected_items: list[dict[str, Any]] = field(default_factory=list)
+
+    def include_required_fields(self, values: list[str]) -> None:
+        for value in values:
+            if value not in self.required_fields:
+                self.required_fields.append(value)
+
+    def reject(self, item: dict[str, Any]) -> None:
+        self.rejected_items.append(item)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "submitted_count": self.submitted_count,
+            "stored_count": self.stored_count,
+            "persisted_count": self.persisted_count,
+            "taxonomy_index_failed_count": (
+                self.taxonomy_index_failed_count
+            ),
+            "created_count": self.created_count,
+            "updated_count": self.updated_count,
+            "persisted_items": self.persisted_items,
+            "rejected_count": len(self.rejected_items),
+            "rejected_items": self.rejected_items,
+            "required_fields": self.required_fields,
+        }
 
 
 def normalize_job_for_persistence(job: dict[str, Any]) -> dict[str, Any]:
@@ -34,14 +84,18 @@ def _job_validation_issues(
     )
 
     issues: list[str] = []
-    for field in missing_job_fields(
+    for missing_field in missing_job_fields(
         job_posting,
         required_job_fields(collection_intent),
         unavailable_fields=unavailable_fields,
     ):
-        issues.append(f"required_field_missing:{field}")
+        issues.append(f"required_field_missing:{missing_field}")
 
-    filters = collection_intent.get("filters") if isinstance(collection_intent, dict) else {}
+    filters = (
+        collection_intent.get("filters")
+        if isinstance(collection_intent, dict)
+        else {}
+    )
     filters = filters if isinstance(filters, dict) else {}
     posted_from = str(filters.get("posted_from") or "").strip()
     posted_to = str(filters.get("posted_to") or "").strip()
@@ -50,15 +104,225 @@ def _job_validation_issues(
         or posted_to
         or collection_intent.get("freshness_required")
     )
-    posted_at = str(getattr(job_posting, "posted_at", None) or "").strip()
+    posted_at = str(
+        getattr(job_posting, "posted_at", None) or ""
+    ).strip()
     if date_required and not posted_at:
         issues.append("requested_evidence_missing:posted_at")
     if posted_at and posted_from and posted_at < posted_from:
         issues.append("requested_filter_mismatch:posted_at_before_range")
     if posted_at and posted_to and posted_at > posted_to:
         issues.append("requested_filter_mismatch:posted_at_after_range")
-
     return issues
+
+
+def _collected_jobs(extracted_jd: dict[str, Any]) -> list[Any]:
+    jobs = job_list_value(extracted_jd)
+    if jobs is None:
+        return [extracted_jd] if extracted_jd else []
+    return jobs if isinstance(jobs, list) else [jobs]
+
+
+def _intent_for_job(
+    job: dict[str, Any],
+    base_intent: dict[str, Any],
+) -> dict[str, Any]:
+    intent = dict(base_intent)
+    if not intent.get("required_fields"):
+        intent["required_fields"] = list(
+            job.get("_collection_required_fields") or []
+        )
+    return intent
+
+
+def _prepare_job(
+    index: int,
+    job: dict[str, Any],
+    collection_intent: dict[str, Any],
+) -> tuple[_PreparedJob | None, dict[str, Any] | None]:
+    from agent.runtime.job_identity import url_with_source_card_key
+    from agent.runtime.site_context import looks_like_job_detail_url
+    from agent.utils.job_fields import normalize_job_collection_fields
+    from agent.utils.preprocessor import Preprocessor
+
+    page_exhausted = bool(job.get("_collection_page_exhausted"))
+    unavailable_fields = (
+        normalize_job_collection_fields(
+            job.get("_collection_unavailable_fields")
+        )
+        if page_exhausted
+        else []
+    )
+    normalized_job = normalize_job_for_persistence(job)
+    url = str(normalized_job.get("url") or "").strip()
+    if not url:
+        logger.warning(
+            "[job_persistence] Skipping job #%s (%s - %s): URL not collected",
+            index,
+            normalized_job.get("company_name", ""),
+            normalized_job.get("position", ""),
+        )
+        return None, {
+            "index": index,
+            "issues": ["required_field_missing:url"],
+        }
+
+    try:
+        card_key = str(
+            normalized_job.get("_source_card_key")
+            or job.get("_source_card_key")
+            or ""
+        ).strip()
+        if card_key and not looks_like_job_detail_url(url):
+            url = url_with_source_card_key(url, card_key)
+        normalized_job["url"] = url
+        raw_ocr_text = (
+            str(normalized_job.get("raw_ocr_text") or "").strip()
+            or None
+        )
+        posting = Preprocessor.process_raw_jd(
+            normalized_job,
+            raw_ocr_text=raw_ocr_text,
+        )
+        issues = _job_validation_issues(
+            posting,
+            collection_intent,
+            unavailable_fields=unavailable_fields,
+        )
+        if issues:
+            logger.warning(
+                "[job_persistence] Rejected job #%s before persistence: %s",
+                index,
+                ", ".join(issues),
+            )
+            return None, {
+                "index": index,
+                "url": posting.url or url,
+                "company_name": posting.company_name or "",
+                "position": posting.position or "",
+                "issues": issues,
+            }
+
+        persistence_data = dump_model(posting)
+        required_fields = list(
+            collection_intent.get("required_fields") or []
+        )
+        persistence_data["_collection_required_fields"] = required_fields
+        persistence_data["_collection_unavailable_fields"] = list(
+            unavailable_fields
+        )
+        persistence_data["_collection_page_exhausted"] = page_exhausted
+        persistence_data["_collection_field_evidence"] = dict(
+            job.get("_collection_field_evidence") or {}
+        )
+        return _PreparedJob(
+            index=index,
+            url=url,
+            posting=posting,
+            data=persistence_data,
+            screenshot_path=(
+                str(
+                    normalized_job.get("_evidence_screenshot_path")
+                    or ""
+                ).strip()
+                or None
+            ),
+            ocr_text_path=(
+                str(
+                    normalized_job.get("_evidence_ocr_text_path") or ""
+                ).strip()
+                or None
+            ),
+            required_fields=required_fields,
+            unavailable_fields=list(unavailable_fields),
+        ), None
+    except Exception as exc:
+        logger.error(
+            "[job_persistence] Failed to prepare job #%s: %s",
+            index,
+            exc,
+        )
+        return None, {
+            "index": index,
+            "url": url,
+            "issues": [f"persistence_error:{type(exc).__name__}"],
+        }
+
+
+def _store_job(
+    prepared: _PreparedJob,
+    *,
+    db: Any,
+    taxonomy_service: Any,
+    report: _PersistenceReport,
+) -> None:
+    try:
+        existed = db.exists(prepared.url)
+        job_id = db.upsert(
+            url=prepared.url,
+            data=prepared.data,
+            screenshot_path=prepared.screenshot_path,
+            ocr_text_path=prepared.ocr_text_path,
+        )
+        report.stored_count += 1
+        try:
+            taxonomy_service.link_job(int(job_id))
+        except Exception as exc:
+            report.taxonomy_index_failed_count += 1
+            logger.warning(
+                "[job_persistence] Search taxonomy linking failed for job #%s: %s",
+                job_id,
+                exc,
+            )
+            report.reject(
+                {
+                    "index": prepared.index,
+                    "job_id": int(job_id),
+                    "url": prepared.posting.url or prepared.url,
+                    "company_name": prepared.posting.company_name or "",
+                    "position": prepared.posting.position or "",
+                    "issues": [
+                        f"taxonomy_index_failed:{type(exc).__name__}"
+                    ],
+                }
+            )
+            return
+
+        report.persisted_count += 1
+        if existed:
+            report.updated_count += 1
+        else:
+            report.created_count += 1
+        report.persisted_items.append(
+            {
+                "job_id": int(job_id),
+                "url": prepared.posting.url or prepared.url,
+                "company_name": prepared.posting.company_name or "",
+                "position": prepared.posting.position or "",
+                "operation": "updated" if existed else "created",
+                "required_fields": prepared.required_fields,
+                "unavailable_fields": prepared.unavailable_fields,
+            }
+        )
+        logger.info(
+            "[job_persistence] Upserted job #%s: %s - %s",
+            prepared.index,
+            prepared.posting.company_name,
+            prepared.posting.position,
+        )
+    except Exception as exc:
+        logger.error(
+            "[job_persistence] Failed to persist job #%s: %s",
+            prepared.index,
+            exc,
+        )
+        report.reject(
+            {
+                "index": prepared.index,
+                "url": prepared.url,
+                "issues": [f"persistence_error:{type(exc).__name__}"],
+            }
+        )
 
 
 def persist_collected_data_with_report(
@@ -67,200 +331,44 @@ def persist_collected_data_with_report(
 ) -> dict[str, Any]:
     """공고별 검증 결과와 저장 건수를 함께 반환한다."""
 
-    from agent.utils.preprocessor import Preprocessor
-    from agent.application.search_taxonomy_service import SearchTaxonomyService
-    from agent.runtime.job_identity import url_with_source_card_key
-    from agent.runtime.site_context import looks_like_job_detail_url
+    from agent.application.search_taxonomy_service import (
+        SearchTaxonomyService,
+    )
     from agent.config import get_settings
     from shared.db.database import Database
 
+    jobs = _collected_jobs(extracted_jd)
+    base_intent = dict(collection_intent or {})
+    report = _PersistenceReport(
+        submitted_count=len(jobs),
+        required_fields=list(base_intent.get("required_fields") or []),
+    )
     db_path = get_settings().paths.db_path
     db = Database(db_path)
     taxonomy_service = SearchTaxonomyService(db_path)
-    jobs = job_list_value(extracted_jd)
-    if jobs is not None:
-        job_list = jobs if isinstance(jobs, list) else [jobs]
-    else:
-        job_list = [extracted_jd] if extracted_jd else []
 
-    stored_count = 0
-    persisted_count = 0
-    taxonomy_index_failed_count = 0
-    created_count = 0
-    updated_count = 0
-    persisted_items: list[dict[str, Any]] = []
-    rejected_items: list[dict[str, Any]] = []
-    base_collection_intent = dict(collection_intent or {})
-    report_required_fields = list(
-        base_collection_intent.get("required_fields") or []
-    )
-    for index, job in enumerate(job_list):
+    for index, job in enumerate(jobs):
         if not isinstance(job, dict) or not job:
-            rejected_items.append({"index": index, "issues": ["invalid_job_payload"]})
+            report.reject(
+                {"index": index, "issues": ["invalid_job_payload"]}
+            )
             continue
-
-        effective_intent = dict(base_collection_intent)
-        if not effective_intent.get("required_fields"):
-            effective_intent["required_fields"] = list(
-                job.get("_collection_required_fields") or []
-            )
-        for field in effective_intent.get("required_fields") or []:
-            if field not in report_required_fields:
-                report_required_fields.append(field)
-        page_exhausted = bool(
-            job.get("_collection_page_exhausted")
+        intent = _intent_for_job(job, base_intent)
+        report.include_required_fields(
+            list(intent.get("required_fields") or [])
         )
-        from agent.utils.job_fields import normalize_job_collection_fields
-
-        unavailable_fields = (
-            normalize_job_collection_fields(
-                job.get("_collection_unavailable_fields")
-            )
-            if page_exhausted
-            else []
-        )
-        normalized_job = normalize_job_for_persistence(job)
-        url = normalized_job.get("url")
-        if not url:
-            company_name = normalized_job.get("company_name", "")
-            position = normalized_job.get("position", "")
-            logger.warning(
-                "[job_persistence] Skipping job #%s (%s - %s): URL not collected",
-                index,
-                company_name,
-                position,
-            )
-            rejected_items.append({"index": index, "issues": ["required_field_missing:url"]})
+        prepared, rejected = _prepare_job(index, job, intent)
+        if rejected is not None:
+            report.reject(rejected)
             continue
-
-        try:
-            card_key = str(
-                normalized_job.get("_source_card_key")
-                or job.get("_source_card_key")
-                or ""
-            ).strip()
-            if card_key and not looks_like_job_detail_url(str(url)):
-                url = url_with_source_card_key(str(url), card_key)
-            normalized_job["url"] = str(url).strip()
-            raw_ocr_text = str(normalized_job.get("raw_ocr_text") or "").strip() or None
-            job_posting = Preprocessor.process_raw_jd(
-                normalized_job,
-                raw_ocr_text=raw_ocr_text,
+        if prepared is not None:
+            _store_job(
+                prepared,
+                db=db,
+                taxonomy_service=taxonomy_service,
+                report=report,
             )
-            issues = _job_validation_issues(
-                job_posting,
-                effective_intent,
-                unavailable_fields=unavailable_fields,
-            )
-            if issues:
-                rejected_items.append(
-                    {
-                        "index": index,
-                        "url": job_posting.url or str(url),
-                        "company_name": job_posting.company_name or "",
-                        "position": job_posting.position or "",
-                        "issues": issues,
-                    }
-                )
-                logger.warning(
-                    "[job_persistence] Rejected job #%s before persistence: %s",
-                    index,
-                    ", ".join(issues),
-                )
-                continue
-            existed = db.exists(str(url))
-            screenshot_path = str(
-                normalized_job.get("_evidence_screenshot_path") or ""
-            ).strip() or None
-            ocr_text_path = str(
-                normalized_job.get("_evidence_ocr_text_path") or ""
-            ).strip() or None
-            persistence_data = dump_model(job_posting)
-            persistence_data["_collection_required_fields"] = list(
-                effective_intent.get("required_fields") or []
-            )
-            persistence_data["_collection_unavailable_fields"] = list(
-                unavailable_fields
-            )
-            persistence_data["_collection_page_exhausted"] = page_exhausted
-            persistence_data["_collection_field_evidence"] = dict(
-                job.get("_collection_field_evidence") or {}
-            )
-            job_id = db.upsert(
-                url=url,
-                data=persistence_data,
-                screenshot_path=screenshot_path,
-                ocr_text_path=ocr_text_path,
-            )
-            stored_count += 1
-            try:
-                taxonomy_service.link_job(int(job_id))
-            except Exception as exc:
-                taxonomy_index_failed_count += 1
-                logger.warning(
-                    "[job_persistence] Search taxonomy linking failed for job #%s: %s",
-                    job_id,
-                    exc,
-                )
-                rejected_items.append(
-                    {
-                        "index": index,
-                        "job_id": int(job_id),
-                        "url": job_posting.url or str(url),
-                        "company_name": job_posting.company_name or "",
-                        "position": job_posting.position or "",
-                        "issues": [
-                            f"taxonomy_index_failed:{type(exc).__name__}"
-                        ],
-                    }
-                )
-                continue
-            persisted_count += 1
-            if existed:
-                updated_count += 1
-            else:
-                created_count += 1
-            persisted_items.append(
-                {
-                    "job_id": int(job_id),
-                    "url": job_posting.url or str(url),
-                    "company_name": job_posting.company_name or "",
-                    "position": job_posting.position or "",
-                    "operation": "updated" if existed else "created",
-                    "required_fields": list(
-                        effective_intent.get("required_fields") or []
-                    ),
-                    "unavailable_fields": list(unavailable_fields),
-                }
-            )
-            logger.info(
-                "[job_persistence] Upserted job #%s: %s - %s",
-                index,
-                job_posting.company_name,
-                job_posting.position,
-            )
-        except Exception as exc:
-            logger.error("[job_persistence] Failed to persist job #%s: %s", index, exc)
-            rejected_items.append(
-                {
-                    "index": index,
-                    "url": str(url),
-                    "issues": [f"persistence_error:{type(exc).__name__}"],
-                }
-            )
-
-    return {
-        "submitted_count": len(job_list),
-        "stored_count": stored_count,
-        "persisted_count": persisted_count,
-        "taxonomy_index_failed_count": taxonomy_index_failed_count,
-        "created_count": created_count,
-        "updated_count": updated_count,
-        "persisted_items": persisted_items,
-        "rejected_count": len(rejected_items),
-        "rejected_items": rejected_items,
-        "required_fields": report_required_fields,
-    }
+    return report.as_dict()
 
 
 __all__ = [
