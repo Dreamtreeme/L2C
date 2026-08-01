@@ -254,7 +254,6 @@ def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
     )
     state = {
         "worker_run_id": "worker-test",
-        "worker_attempt_index": 0,
         "capture_sequence": 0,
         "current_url": "https://example.com",
         "current_url_stale": False,
@@ -262,21 +261,32 @@ def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
 
     first = worker_observation.capture_node(state)
     second = worker_observation.capture_node({**state, **first})
-    retry_first = worker_observation.capture_node(
+    next_run_first = worker_observation.capture_node(
         {
             **state,
-            "worker_attempt_index": 1,
+            "worker_run_id": "worker-test-retry",
         }
     )
 
-    assert first["current_capture_id"] == "worker-test:attempt:00:capture:0001"
+    assert first["current_capture_id"] == "worker-test:capture:0001"
     assert first["capture_sequence"] == 1
-    assert second["current_capture_id"] == "worker-test:attempt:00:capture:0002"
+    assert second["current_capture_id"] == "worker-test:capture:0002"
     assert second["capture_sequence"] == 2
     assert (
-        retry_first["current_capture_id"]
-        == "worker-test:attempt:01:capture:0001"
+        next_run_first["current_capture_id"]
+        == "worker-test-retry:capture:0001"
     )
+
+
+def test_worker_state_factory_matches_the_declared_state_contract():
+    from agent.graph.state import GraphState
+    from agent.graph.state_factory import create_worker_state
+
+    state = create_worker_state("테스트 목표")
+
+    assert set(state).issubset(GraphState.__annotations__)
+    assert "worker_attempt_index" not in state
+    assert state["goal"] == "테스트 목표"
 
 
 def test_atomic_execution_and_recording_are_separate(monkeypatch):

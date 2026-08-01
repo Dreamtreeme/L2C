@@ -39,11 +39,7 @@ def _next_capture_identity(state: GraphState) -> tuple[int, str]:
     except (TypeError, ValueError):
         sequence = 1
     run_id = str(state.get("worker_run_id") or "").strip()
-    try:
-        attempt_index = max(0, int(state.get("worker_attempt_index", 0)))
-    except (TypeError, ValueError):
-        attempt_index = 0
-    prefix = f"{run_id}:attempt:{attempt_index:02d}:" if run_id else ""
+    prefix = f"{run_id}:" if run_id else ""
     return sequence, f"{prefix}capture:{sequence:04d}"
 
 

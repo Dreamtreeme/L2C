@@ -14,7 +14,6 @@ def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
     state: GraphState = {
         "goal": goal,
         "worker_run_id": "",
-        "worker_attempt_index": 0,
         "current_capture_id": "",
         "ocr_capture_id": "",
         "capture_sequence": 0,

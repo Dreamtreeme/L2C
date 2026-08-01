@@ -181,8 +181,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
 
     working = {
         "worker_run_id": "worker-no-effect",
-        "worker_attempt_index": 0,
-        "current_capture_id": "worker-no-effect:attempt:00:capture:0004",
+        "current_capture_id": "worker-no-effect:capture:0004",
         "capture_sequence": 4,
         "current_screenshot": str(screenshot),
         "current_url": "https://example.com/jobs",
@@ -201,7 +200,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
             "action": "click_marker",
             "replay_mode": "reasoning",
             "action_seq": 3,
-            "from_capture_id": "worker-no-effect:attempt:00:capture:0004",
+            "from_capture_id": "worker-no-effect:capture:0004",
             "source": "reflex",
             "recipe_key": "roi#search",
             "before_url": "https://example.com/jobs",
@@ -228,7 +227,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     assert result["current_markers"][0]["id"] == 1
     assert (
         result["previous_screen_observation"]["capture_id"]
-        == "worker-no-effect:attempt:00:capture:0005"
+        == "worker-no-effect:capture:0005"
     )
 
     monkeypatch.setattr(

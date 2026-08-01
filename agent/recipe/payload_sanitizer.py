@@ -11,7 +11,6 @@ FULL_SCREEN_SIGNATURE_FIELDS = {
 
 REPLAY_RUNTIME_FIELDS = {
     "worker_run_id",
-    "worker_attempt_index",
     "capture_sequence",
     "current_capture_id",
     "decision_capture_id",
