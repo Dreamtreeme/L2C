@@ -131,39 +131,6 @@ EvidenceField = Literal[
 ]
 
 
-class CollectionToolArguments(BaseModel):
-    """지휘자가 비전 수집 작업자에게 전달할 수 있는 인자."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    query: str = ""
-    site: str = ""
-    original_query: str = ""
-    count_mode: Literal["unspecified", "explicit", "visible_all"] = "unspecified"
-    target_count: int = Field(default=0, ge=0, le=100)
-    posted_from: str = ""
-    posted_to: str = ""
-    experience: str = ""
-    location: str = ""
-    employment_type: str = ""
-    freshness_required: bool = False
-    purpose: Literal["lookup", "collect", "compare", "trend"] = "collect"
-    analysis_goal: str = ""
-    task_category: str = "검색"
-    required_fields: list[JobCollectionField] = Field(
-        default_factory=list,
-        description="답변 근거와 사이트 기본 정책을 합쳐 반드시 확인할 공고 필드",
-    )
-
-    @field_validator("required_fields")
-    @classmethod
-    def unique_required_fields(
-        cls,
-        values: list[JobCollectionField],
-    ) -> list[JobCollectionField]:
-        return list(dict.fromkeys(values))
-
-
 class EvidenceDocument(BaseModel):
     """답변 모델에 전달하는 공고 근거 문서."""
 
@@ -186,7 +153,6 @@ class EvidenceDocument(BaseModel):
 
 
 __all__ = [
-    "CollectionToolArguments",
     "DEFAULT_JOB_COLLECTION_FIELDS",
     "EVIDENCE_FIELDS",
     "EvidenceDocument",

@@ -27,9 +27,9 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.db is None:
-        from shared.config import DB_PATH
+        from agent.config import get_settings
 
-        db_path = Path(DB_PATH)
+        db_path = get_settings().paths.db_path
     else:
         db_path = args.db
 

@@ -1,59 +1,130 @@
-def test_product_chat_e2e_frame_parser_accepts_structured_sse():
-    from benchmark.run_product_chat_e2e import _frame_payload
+import sqlite3
 
+import pytest
+
+from benchmark.run_product_chat_matrix import (
+    _frame_payload,
+    _scenario_quality,
+    _snapshot_database,
+)
+
+
+def _request(text, *, events=(), duration=0, tokens=0):
+    return {
+        "final": {
+            "status": "completed",
+            "text": text,
+            "metrics": {
+                "duration_sec": duration,
+                "llm": {"totals": {"total_tokens": tokens}},
+            },
+        },
+        "events": list(events),
+        "error": "",
+    }
+
+
+def _collection_events(document_id=2):
+    return [
+        {"event": "collection_started"},
+        {"event": "collection_completed", "data": {"document_ids": [document_id]}},
+    ]
+
+
+def test_product_chat_e2e_frame_parser_accepts_structured_sse():
     assert _frame_payload(
         'data: [FINAL] {"status":"completed","text":"답변 [job_id:1]"}',
         "FINAL",
-    ) == {
-        "status": "completed",
-        "text": "답변 [job_id:1]",
-    }
+    ) == {"status": "completed", "text": "답변 [job_id:1]"}
     assert _frame_payload("data: [DONE]", "FINAL") is None
     assert _frame_payload("data: [FINAL] invalid", "FINAL") is None
 
 
-def test_product_chat_matrix_accepts_database_only_answer_with_valid_citations():
-    from benchmark.run_product_chat_matrix import _scenario_quality
-
-    jobs = [
-        {"id": 1, "company_name": "A", "position": "iOS 개발자"},
-        {"id": 2, "company_name": "B", "position": "iOS 엔지니어"},
-    ]
-    quality = _scenario_quality(
-        {
-            "expected_status": "completed",
-            "collection": "forbidden",
-            "clarification": "forbidden",
-            "database_mutation": "forbidden",
-            "minimum_citations": 2,
-            "minimum_database_jobs": 2,
-        },
-        {
-            "final": {
-                "status": "completed",
-                "text": "두 공고를 비교했습니다. [job_id:1] [job_id:2]",
+@pytest.mark.parametrize(
+    ("contract", "request_result", "before", "after", "passed", "failed_check"),
+    [
+        (
+            {
+                "expected_status": "completed",
+                "collection": "forbidden",
+                "clarification": "forbidden",
+                "database_mutation": "forbidden",
+                "minimum_citations": 2,
+                "minimum_database_jobs": 2,
             },
-            "events": [{"event": "answering_started"}],
-            "error": "",
-        },
-        jobs,
-        jobs,
-    )
+            _request("비교 결과 [job_id:1] [job_id:2]"),
+            [{"id": 1}, {"id": 2}],
+            [{"id": 1}, {"id": 2}],
+            True,
+            "",
+        ),
+        (
+            {"expected_status": "completed", "collection": "required"},
+            _request("기존 공고 [job_id:1]"),
+            [{"id": 1}],
+            [{"id": 1}],
+            False,
+            "collection_contract",
+        ),
+        (
+            {
+                "expected_status": "completed",
+                "collection": "required",
+                "citation_scope": "collection",
+                "minimum_citations": 1,
+            },
+            _request("기존 공고 [job_id:1]", events=_collection_events()),
+            [{"id": 1}],
+            [{"id": 1}, {"id": 2}],
+            False,
+            "citation_scope",
+        ),
+        (
+            {
+                "expected_status": "completed",
+                "collection": "required",
+                "citation_scope": "collection",
+                "minimum_citations": 1,
+            },
+            _request("신규 공고 [job_id:2]", events=_collection_events()),
+            [{"id": 1}],
+            [{"id": 1}, {"id": 2}],
+            True,
+            "",
+        ),
+        (
+            {
+                "expected_status": "completed",
+                "maximum_execution_time_sec": 30,
+                "maximum_total_tokens": 10_000,
+            },
+            _request("답변", duration=250, tokens=214_241),
+            [],
+            [],
+            False,
+            "execution_time_budget",
+        ),
+    ],
+)
+def test_product_chat_matrix_contracts(
+    contract, request_result, before, after, passed, failed_check
+):
+    quality = _scenario_quality(contract, request_result, before, after)
 
-    assert quality["passed"] is True
-    assert quality["citation_ids"] == [1, 2]
-    assert quality["collection_observed"] is False
+    assert quality["passed"] is passed
+    if failed_check:
+        assert quality["checks"][failed_check] is False
+    if contract.get("maximum_total_tokens"):
+        assert quality["checks"]["token_budget"] is False
+        assert quality["total_tokens"] == 214_241
 
 
 def test_product_chat_matrix_accepts_structured_clarification():
-    from benchmark.run_product_chat_matrix import _scenario_quality
-
     quality = _scenario_quality(
         {
             "expected_status": "waiting_input",
             "collection": "forbidden",
             "clarification": "required",
-            "database_mutation": "forbidden",
             "minimum_clarification_options": 2,
         },
         {
@@ -61,10 +132,7 @@ def test_product_chat_matrix_accepts_structured_clarification():
                 "status": "waiting_input",
                 "text": "어떤 직무를 찾을까요?",
                 "clarification": {
-                    "options": [
-                        {"option_id": "office"},
-                        {"option_id": "manufacturing"},
-                    ]
+                    "options": [{"option_id": "office"}, {"option_id": "factory"}]
                 },
             },
             "events": [{"event": "clarification_required"}],
@@ -75,141 +143,10 @@ def test_product_chat_matrix_accepts_structured_clarification():
     )
 
     assert quality["passed"] is True
-    assert quality["clarification_observed"] is True
     assert quality["clarification_option_count"] == 2
 
 
-def test_product_chat_matrix_rejects_missing_required_collection():
-    from benchmark.run_product_chat_matrix import _scenario_quality
-
-    quality = _scenario_quality(
-        {
-            "expected_status": "completed",
-            "collection": "required",
-            "clarification": "forbidden",
-            "minimum_citations": 1,
-        },
-        {
-            "final": {
-                "status": "completed",
-                "text": "기존 공고입니다. [job_id:1]",
-            },
-            "events": [{"event": "answering_started"}],
-            "error": "",
-        },
-        [{"id": 1}],
-        [{"id": 1}],
-    )
-
-    assert quality["passed"] is False
-    assert quality["checks"]["collection_contract"] is False
-
-
-def test_product_chat_matrix_rejects_stale_citation_after_collection():
-    from benchmark.run_product_chat_matrix import _scenario_quality
-
-    quality = _scenario_quality(
-        {
-            "expected_status": "completed",
-            "collection": "required",
-            "clarification": "forbidden",
-            "citation_scope": "collection",
-            "minimum_citations": 1,
-        },
-        {
-            "final": {
-                "status": "completed",
-                "text": "기존 DB 공고입니다. [job_id:1]",
-            },
-            "events": [
-                {"event": "collection_started"},
-                {
-                    "event": "collection_completed",
-                    "data": {"document_ids": [2]},
-                },
-            ],
-            "error": "",
-        },
-        [{"id": 1}],
-        [{"id": 1}, {"id": 2}],
-    )
-
-    assert quality["passed"] is False
-    assert quality["checks"]["citation_integrity"] is True
-    assert quality["checks"]["citation_scope"] is False
-    assert quality["collection_document_ids"] == [2]
-
-
-def test_product_chat_matrix_accepts_citation_from_current_collection():
-    from benchmark.run_product_chat_matrix import _scenario_quality
-
-    quality = _scenario_quality(
-        {
-            "expected_status": "completed",
-            "collection": "required",
-            "clarification": "forbidden",
-            "citation_scope": "collection",
-            "minimum_citations": 1,
-        },
-        {
-            "final": {
-                "status": "completed",
-                "text": "이번에 확인한 공고입니다. [job_id:2]",
-            },
-            "events": [
-                {"event": "collection_started"},
-                {
-                    "event": "collection_completed",
-                    "data": {"document_ids": [2]},
-                },
-            ],
-            "error": "",
-        },
-        [{"id": 1}],
-        [{"id": 1}, {"id": 2}],
-    )
-
-    assert quality["passed"] is True
-    assert quality["checks"]["citation_scope"] is True
-
-
-def test_product_chat_matrix_rejects_runtime_and_token_outlier():
-    from benchmark.run_product_chat_matrix import _scenario_quality
-
-    quality = _scenario_quality(
-        {
-            "expected_status": "completed",
-            "maximum_execution_time_sec": 30,
-            "maximum_total_tokens": 10000,
-        },
-        {
-            "final": {
-                "status": "completed",
-                "text": "답변",
-                "metrics": {
-                    "duration_sec": 250,
-                    "llm": {"totals": {"total_tokens": 214241}},
-                },
-            },
-            "events": [],
-            "error": "",
-        },
-        [],
-        [],
-    )
-
-    assert quality["passed"] is False
-    assert quality["checks"]["execution_time_budget"] is False
-    assert quality["checks"]["token_budget"] is False
-    assert quality["execution_time_sec"] == 250
-    assert quality["total_tokens"] == 214241
-
-
 def test_product_chat_matrix_snapshots_sqlite_database(tmp_path):
-    import sqlite3
-
-    from benchmark.run_product_chat_matrix import _snapshot_database
-
     source = tmp_path / "source.db"
     target = tmp_path / "target.db"
     with sqlite3.connect(source) as connection:
@@ -219,39 +156,4 @@ def test_product_chat_matrix_snapshots_sqlite_database(tmp_path):
     _snapshot_database(source, target)
 
     with sqlite3.connect(target) as connection:
-        value = connection.execute("SELECT value FROM sample").fetchone()
-    assert value == ("copied",)
-
-
-def test_runtime_reuse_quality_requires_same_worker_and_closed_browser():
-    from benchmark.run_product_chat_e2e import _reuse_quality
-
-    runs = [
-        {
-            "quality": {"passed": True},
-            "ocr_startup_count": 1,
-            "resource_snapshot": {
-                "ocr_worker_pid": 7007,
-                "browser_window_bound": False,
-                "ui_model_variant_count": 1,
-            },
-        },
-        {
-            "quality": {"passed": True},
-            "ocr_startup_count": 0,
-            "resource_snapshot": {
-                "ocr_worker_pid": 7007,
-                "browser_window_bound": False,
-                "ui_model_variant_count": 1,
-            },
-        },
-    ]
-
-    assert _reuse_quality(runs) == {
-        "request_quality_passed": True,
-        "same_ocr_worker_pid": True,
-        "first_request_started_ocr": True,
-        "later_requests_skipped_ocr_startup": True,
-        "browser_closed_after_each_request": True,
-        "reasoning_model_cache_reused": True,
-    }
+        assert connection.execute("SELECT value FROM sample").fetchone() == ("copied",)

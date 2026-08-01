@@ -17,10 +17,7 @@ from agent.graph.workflow import (
     route_after_selection,
     route_after_transition,
 )
-from agent.graph.worker_state_contract import (
-    current_observation_errors,
-    current_observation_matches_capture,
-)
+from agent.graph.worker_state_contract import current_observation_matches_capture
 
 
 def _request(source: str, tool_calls: list[dict]):
@@ -184,8 +181,6 @@ def test_worker_observation_contract_rejects_mixed_capture_state():
 
     assert current_observation_matches_capture(valid) is True
     assert current_observation_matches_capture(mixed) is False
-    assert current_observation_errors(valid) == []
-    assert current_observation_errors(mixed) == ["ocr_capture_mismatch"]
 
 
 def test_unchanged_transition_probe_clears_ocr_capture_owner(monkeypatch):

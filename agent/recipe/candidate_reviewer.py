@@ -45,10 +45,6 @@ def _reviewable_action_specs(
     return specs
 
 
-def _reviewable_action_seqs(steps: list[dict[str, Any]]) -> set[int]:
-    return {item["seq"] for item in _reviewable_action_specs(steps)}
-
-
 def _feedback_evidence_seqs(
     worker_submission: dict[str, Any],
     steps: list[dict[str, Any]],
@@ -133,9 +129,7 @@ def _compact_worker_execution(worker_submission: dict[str, Any]) -> dict[str, An
         "is_finished",
         "hit_recursion_limit",
         "collected_count",
-        "target_count",
         "persisted_count",
-        "worker_notes",
     )
     execution = {
         key: worker_submission.get(key)
@@ -215,7 +209,9 @@ def build_candidate_review_payload(
     """후보 증거(candidate evidence)를 의미 판단 없이 비평가(Critic)에게 전달한다."""
     worker_submission = dict(candidate.get("payload", {}) or {})
     steps = [step for step in candidate.get("steps", []) or [] if isinstance(step, dict)]
-    reviewable_seqs = _reviewable_action_seqs(steps)
+    reviewable_seqs = {
+        item["seq"] for item in _reviewable_action_specs(steps)
+    }
     evidence_seqs = _feedback_evidence_seqs(
         worker_submission,
         steps,
@@ -241,9 +237,7 @@ def build_candidate_review_payload(
         ),
         "deterministic_step_validation": compact_step_evidence_verdicts(candidate),
         "required_step_verdicts": required_step_verdicts,
-        "skill_metadata_evidence": dict(worker_submission.get("skill_metadata_evidence", {}) or {}),
         "worker_execution": _compact_worker_execution(worker_submission),
-        "commander_review": dict(candidate.get("review", {}) or {}),
     }
 
 
@@ -253,7 +247,10 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     from agent.application.model_policy import commander_model_name
     from agent.prompts.trust_boundary import external_content_contract_en
 
-    model_name = commander_model_name("VISION_RECIPE_CRITIC_MODEL")
+    model_name = (
+        get_settings().models.recipe_critic_model
+        or commander_model_name()
+    )
     from agent.application.model_clients import get_structured_google_model
 
     llm = get_structured_google_model(

@@ -141,20 +141,26 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
   → 부족한 근거의 수집 행동계획 → 계획된 도구만 실행
   → 의미 조건·게시일 검증 → 최종 답변 및 job_id 인용 검증
     ↓
-[CollectionService — 수집 실행 생명주기]
-  Worker 실행 → 제출물 검토 → 승인 데이터 저장
+[CollectionService — 수집 요청과 결과 조율]
+  CollectionIntent 1회 정규화
+  → Worker 실행 → 제출물 구조 검증
+  → 공고 저장·레시피 후보 등록·제출물 최종 저장
     ↓
 [WorkerExecutionService — 단일 로컬 작업자 직렬화]
   브라우저 준비·LangGraph 실행·정리를 하나의 잠금 범위로 실행
     ↓
 [Vision Worker LangGraph]
-  Perception: OmniParser + PaddleOCR + 화면 서명
-  ├─ 카드 큐/상세 정책 hit: 결정론적 행동 실행
-  ├─ Reflex hit: ROI pHash와 마커 비율 검증 후 행동 실행
-  └─ miss: Gemini가 현재 화면의 다음 행동 판단
-  Action: PyAutoGUI 기반 클릭·입력·스크롤·뒤로가기
+  capture → transition → selection
+  ├─ OCR 필요: ocr → transition → collection → selection
+  ├─ 결정론적 정책: execution
+  ├─ Reflex 후보: reflex → execution 또는 reasoning
+  └─ 의미 판단 필요: reasoning → execution
+  execution → recording → capture·reasoning·종료
     ↓
-[제출물 검토 → 승인 데이터 SQLite 저장 → ChatService 답변]
+[SQLite 저장 → ChatService 근거 재검사 → 최종 답변]
+
+[비동기 RecipePromotionWorker]
+  레시피 후보 → Critic 가지치기 → 활성 Reflex Recipe 승격
 ```
 
 지휘자는 `agent/graph/investigation_workflow.py`의 LangGraph로 실행됩니다. 확인 질문이 남아 있으면 DB와 브라우저 도구를 호출하지 않고 `waiting_input`으로 중단하며, 사용자의 선택은 SQLite 조사 상태에 반영되어 다음 질문 또는 근거 검사 단계부터 재개됩니다. 사이트·날짜·개수·분석 목적은 실행 전에 확정된 행동계획에서만 수집 worker로 전달됩니다.
@@ -169,14 +175,13 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
 - [x] Phase 1: Classic 시스템 베이스라인
   - [x] 원티드 URL 입력 기반 추출
   - [x] 본문 셀렉터 기반 영역 추출 및 상세 정보 더 보기 클릭
-  - [x] Qwen (Ollama) 기반 LLM 정형화 및 SQLite 저장
+  - [x] Gemini 구조화 출력 기반 LLM 정형화 및 SQLite 저장
   - [x] LLM 출력 JSON 모드 및 타입 정규화 (string ↔ list 자동 변환)
   - [x] 사이트별 어댑터 패턴 및 URL 디스패처 (`classic/automation/sites/`)
   - [x] 5개 주요 사이트 안정화 (원티드, 잡코리아, 사람인, 워크넷, 로켓펀치)
 
 - [x] Phase 2: 비전 및 물리 제어 엔진 기반 에이전트 도구 구축
   - [x] 1. 지표 및 에러 추적 세팅
-    - [x] sentry-sdk: 시스템 크래시 및 좌표 이탈 등 치명적 에러 캡처
     - [x] structlog: 소요 시간 등 성능 벤치마크용 JSON 포맷 로깅
   - [x] 2. 백그라운드 엔진 스크립트 (LLM이 직접 호출하지 않는 내부 엔진 계층)
     - [x] Perception: mss 모듈 활용 브라우저 영역 검출 및 OmniParser + PaddleOCR 기반의 로컬 SoM(Set-of-Marks) 파이프라인 마커 합성 구현
@@ -307,7 +312,7 @@ L2C/
 │
 ├── classic/            전통 자동화 (베이스라인)
 │   ├── automation/       Playwright DOM 파싱 및 사이트별 어댑터
-│   └── extractor/        텍스트 구조화 및 정형화 (Gemini/Ollama)
+│   └── extractor/        Gemini 구조화 출력 기반 텍스트 정형화
 │
 ├── agent/              비전 LLM 에이전트
 │   ├── application/      사용자 지휘·작업자 실행·상세 정제·DB 저장 서비스
@@ -349,7 +354,7 @@ L2C/
 | 지휘자 모델 | Gemini 3.6 Flash |
 | 비전 판단 모델 | Gemini 3.6 Flash |
 | 경량 구조화 모델 | Gemini 3.5 Flash Lite |
-| 실행자 텍스트 모델 | Qwen (Ollama) |
+| 실행자 텍스트 모델 | Gemini 경량 모델 |
 | 검색 방식 | 검색 의미 사전 + 구조화 SQLite 근거 검사 |
 | 궤적 트래킹 | LangSmith |
 | 자격증명 보안 | .env (python-dotenv) |
@@ -393,7 +398,7 @@ python -m classic.main extract https://www.wanted.co.kr/wd/350432
 python -m benchmark.run_compare_jd
 
 # Realtime E2E: 로그, 구조화 요약, 선택적 LangSmith trace를 함께 생성
-python -m benchmark.run_realtime_e2e --site wanted --query "ios 개발자 공고 2개" --target-count 2 --count-mode explicit --scenario-id wanted-ios-2 --execution-mode experience_guided --log logs/e2e_wanted_ios2.log
+python -m benchmark.run_realtime_e2e --site wanted --search-keyword "iOS 개발자" --original-query "ios 개발자 공고 2개" --target-count 2 --count-mode explicit --scenario-id wanted-ios-2 --execution-mode experience_guided --log logs/e2e_wanted_ios2.log
 
 # 구조화 summary의 p50/p95/max, Reflex, OCR 지표 확인
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json

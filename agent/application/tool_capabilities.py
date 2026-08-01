@@ -59,14 +59,12 @@ def build_tool_capability_catalog() -> list[ToolCapability]:
             expected_latency="1초 이내",
         ),
     ]
-    try:
-        from agent.sites import list_supported_sites, load_site_profile
+    from agent.sites import list_supported_sites
 
-        for profile in list_supported_sites(enabled_only=True):
-            capabilities.append(_site_capability(load_site_profile(profile.slug)))
-    except Exception:
-        # 사이트 구성 오류는 실제 계획 검증 단계에서 드러나도록 DB 도구 목록은 유지한다.
-        pass
+    capabilities.extend(
+        _site_capability(profile)
+        for profile in list_supported_sites(enabled_only=True)
+    )
     return capabilities
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -199,19 +198,15 @@ def evaluate_job_records(
 
 
 def evaluate_collection_summary(result: Any) -> dict[str, Any]:
-    from agent.runtime.site_context import (
-        looks_like_job_detail_url,
-        persistence_policy_for_url,
-    )
+    from agent.runtime.site_context import looks_like_job_detail_url, site_profile_for_url
 
     payload = result if isinstance(result, dict) else {}
     target = max(0, int(payload.get("target_count") or 0))
-    collected = max(0, int(payload.get("item_count") or payload.get("collected_count") or 0))
+    collected = max(0, int(payload.get("collected_count") or 0))
     persisted = max(0, int(payload.get("persisted_count") or 0))
-    validation = payload.get("persistence_validation") or {}
     persisted_items = [
         item
-        for item in validation.get("persisted_items", [])
+        for item in payload.get("persisted_items", [])
         if isinstance(item, dict)
     ]
     persisted_ids = {
@@ -220,17 +215,17 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
         if str(item.get("job_id") or "").isdigit()
         and int(item["job_id"]) > 0
     }
-    detail_url_items = [
-        item
-        for item in persisted_items
-        if persistence_policy_for_url(str(item.get("url") or "")).get(
-            "require_detail_url_for_job_update"
-        )
-    ]
-    valid_detail_urls = sum(
-        looks_like_job_detail_url(str(item.get("url") or ""))
-        for item in detail_url_items
-    )
+    detail_url_items = persisted_items
+    valid_detail_urls = 0
+    for item in detail_url_items:
+        url = str(item.get("url") or "")
+        parsed = urlsplit(url)
+        if site_profile_for_url(url):
+            valid_detail_urls += int(looks_like_job_detail_url(url))
+        else:
+            valid_detail_urls += int(
+                parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+            )
     source_url_integrity = (
         valid_detail_urls / len(detail_url_items)
         if detail_url_items
@@ -241,9 +236,8 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
         for job_id in (payload.get("observed_job_ids") or [])
         if str(job_id).isdigit() and int(job_id) > 0
     }
-    unidentified_persisted = max(0, persisted - len(persisted_ids))
-    resolved = len(persisted_ids | observed_ids) + unidentified_persisted
-    accepted = (payload.get("review") or {}).get("decision") == "accept"
+    resolved = max(0, int(payload.get("resolved_count") or 0))
+    accepted = payload.get("status") in {"completed", "partial"}
     target_met = resolved >= target if target else resolved > 0
     return {
         "target_count": target,
@@ -257,26 +251,8 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
         "detail_url_valid_count": valid_detail_urls,
         "source_url_integrity": round(source_url_integrity, 6),
         "accepted": accepted,
-        "finished": bool(payload.get("is_finished")),
+        "finished": bool(payload.get("worker_finished")),
         "passed": bool(accepted and target_met and source_url_integrity == 1.0),
-    }
-
-
-def evaluate_answer_citations(
-    answer: str,
-    valid_ids: list[int],
-    expected_ids: list[int] | None = None,
-) -> dict[str, Any]:
-    citations = [int(value) for value in re.findall(r"\[job_id:(\d+)\]", answer or "")]
-    valid = set(valid_ids)
-    valid_citations = [value for value in citations if value in valid]
-    expected = set(expected_ids or [])
-    return {
-        "citation_count": len(citations),
-        "citation_validity": round(len(valid_citations) / len(citations), 6) if citations else 0.0,
-        "expected_citation_coverage": round(len(set(valid_citations) & expected) / len(expected), 6)
-        if expected
-        else None,
     }
 
 

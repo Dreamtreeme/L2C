@@ -2,25 +2,11 @@ import logging
 import sys
 from pathlib import Path
 
-import sentry_sdk
 import structlog
 from agent.config import get_settings
 
 
-# Sentry 초기화
 _OBSERVABILITY = get_settings().observability
-SENTRY_DSN = (
-    _OBSERVABILITY.sentry_dsn.get_secret_value()
-    if _OBSERVABILITY.sentry_dsn is not None
-    else ""
-)
-if SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        traces_sample_rate=_OBSERVABILITY.sentry_traces_sample_rate,
-        profiles_sample_rate=_OBSERVABILITY.sentry_profiles_sample_rate,
-        environment=_OBSERVABILITY.app_env,
-    )
 
 def setup_agent_logger():
     """

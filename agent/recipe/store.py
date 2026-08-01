@@ -8,11 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
-import threading
-from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from agent.recipe.page_context import normalize_page_role
@@ -22,6 +18,7 @@ from agent.recipe.replay_actions import (
     TARGET_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
 )
+from agent.recipe.sqlite_store import SQLiteStore
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.recipe.text_utils import normalize_text
 from agent.utils.model_dump import dump_model
@@ -31,69 +28,11 @@ from shared.schema.skill_schema import RecipeSkillMetadata
 
 _RECIPE_KEY_VERSION = 6
 _RECIPE_KEY_PREFIX = "path6#"
-_INITIALIZED_DB_PATHS: set[Path] = set()
-_SCHEMA_LOCK = threading.RLock()
 
 
-class RecipeSchemaMigrationRequired(RuntimeError):
-    """기존 레시피 테이블을 명시적으로 마이그레이션해야 함을 알린다."""
-
-
-class RecipeStore:
-    def __init__(self, db_path=None):
-        if db_path is None:
-            # 설정 지연 로드(lazy import)로 모듈 import 시점의 부작용을 줄인다.
-            from shared.config import DB_PATH
-
-            db_path = DB_PATH
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_key = self.db_path.resolve()
-        with _SCHEMA_LOCK:
-            if cache_key not in _INITIALIZED_DB_PATHS:
-                self._ensure_schema()
-                _INITIALIZED_DB_PATHS.add(cache_key)
-
-    @contextmanager
-    def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
-
+class RecipeStore(SQLiteStore):
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='recipes'"
-            ).fetchone()
-            if row:
-                columns = {
-                    item["name"]
-                    for item in conn.execute("PRAGMA table_info(recipes)").fetchall()
-                }
-                required_columns = {
-                    "recipe_key",
-                    "site",
-                    "goal",
-                    "path_json",
-                    "metadata_json",
-                    "success_count",
-                    "created_at",
-                    "updated_at",
-                }
-                if not required_columns.issubset(columns):
-                    missing = sorted(required_columns - columns)
-                    raise RecipeSchemaMigrationRequired(
-                        "recipes 스키마가 현재 경로 규격과 다릅니다. "
-                        f"누락 컬럼={missing}. 백업 후 "
-                        "`python benchmark/reset_recipe_memory.py --apply`를 "
-                        "실행해 명시적으로 초기화하십시오."
-                    )
-
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS recipes (
@@ -190,10 +129,6 @@ class RecipeStore:
             after.get("url_template")
             and after.get("url_template") != before.get("url_template")
         )
-
-    @staticmethod
-    def _dump_json(payload: Any) -> str:
-        return json.dumps(payload or {}, ensure_ascii=False)
 
     @staticmethod
     def _metadata_dict(metadata: dict[str, Any] | RecipeSkillMetadata | None) -> dict[str, Any]:
@@ -365,7 +300,7 @@ class RecipeStore:
 
         now = datetime.now().isoformat(timespec="seconds")
         path_payload = json.dumps(replay_path, ensure_ascii=False)
-        metadata_payload = self._dump_json(self._metadata_dict(metadata))
+        metadata_payload = self.dump_json(self._metadata_dict(metadata))
         with self._conn() as conn:
             row = conn.execute("SELECT 1 FROM recipes WHERE recipe_key=?", (recipe_key,)).fetchone()
             source_exists = bool(
@@ -519,9 +454,9 @@ class RecipeStore:
                 "(SELECT COUNT(*) FROM recipe_sources "
                 "WHERE recipe_sources.recipe_key=recipes.recipe_key) "
                 "AS source_count FROM recipes "
-                "WHERE site=? AND recipe_key LIKE ? "
+                "WHERE site=? "
                 "ORDER BY success_count DESC, updated_at DESC, recipe_key ASC",
-                (site, f"{_RECIPE_KEY_PREFIX}%"),
+                (site,),
             ).fetchall()
         out = []
         for row in rows:
@@ -535,10 +470,10 @@ class RecipeStore:
     def active_counts(self, site: str | None = None) -> dict[str, int]:
         """E2E 사전조건 검사용 활성 자동화 데이터 개수를 반환한다."""
 
-        where = " WHERE recipe_key LIKE ?"
-        params: tuple[Any, ...] = (f"{_RECIPE_KEY_PREFIX}%",)
+        where = ""
+        params: tuple[Any, ...] = ()
         if site:
-            where += " AND site=?"
+            where = " WHERE site=?"
             params += (site,)
         with self._conn() as conn:
             recipe_count = int(
@@ -575,4 +510,4 @@ class RecipeStore:
         return candidates
 
 
-__all__ = ["RecipeSchemaMigrationRequired", "RecipeStore"]
+__all__ = ["RecipeStore"]

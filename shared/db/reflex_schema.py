@@ -1,42 +1,11 @@
-"""Shared SQLite schema fragments for reflex feedback/review memory."""
-
-FEEDBACK_EPISODES_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS feedback_episodes (
-    episode_id          TEXT PRIMARY KEY,
-    run_id              TEXT NOT NULL,
-    run_status          TEXT,
-    source              TEXT,
-    site                TEXT,
-    goal                TEXT,
-    action              TEXT,
-    feedback_label      TEXT,
-    feedback_reason     TEXT,
-    feedback_confidence REAL,
-    payload_json        TEXT NOT NULL,
-    created_at          TEXT NOT NULL
-);
-"""
-
-FEEDBACK_EPISODES_INDEX_SQL = (
-    "CREATE INDEX IF NOT EXISTS idx_feedback_run ON feedback_episodes(run_id);",
-    "CREATE INDEX IF NOT EXISTS idx_feedback_site_label ON feedback_episodes(site, feedback_label);",
-    "CREATE INDEX IF NOT EXISTS idx_feedback_action ON feedback_episodes(action);",
-)
+"""Reflex 제출물과 후보 검토용 SQLite 스키마."""
 
 WORKER_SUBMISSIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS worker_submissions (
     submission_id      TEXT PRIMARY KEY,
     run_id             TEXT NOT NULL,
     source             TEXT,
-    site               TEXT,
-    goal               TEXT,
-    keyword            TEXT,
-    run_status         TEXT,
-    review_decision    TEXT,
-    review_confidence  REAL,
-    feedback_to_worker TEXT,
     payload_json       TEXT NOT NULL,
-    review_json        TEXT,
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL
 );
@@ -44,23 +13,13 @@ CREATE TABLE IF NOT EXISTS worker_submissions (
 
 WORKER_SUBMISSIONS_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_worker_submissions_run ON worker_submissions(run_id);",
-    "CREATE INDEX IF NOT EXISTS idx_worker_submissions_site ON worker_submissions(site, review_decision);",
 )
 
 RECIPE_CANDIDATES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS recipe_candidates (
     candidate_id      TEXT PRIMARY KEY,
-    run_id            TEXT NOT NULL,
-    submission_id     TEXT NOT NULL,
-    source            TEXT,
-    site              TEXT,
-    goal              TEXT,
-    keyword           TEXT,
+    submission_id     TEXT NOT NULL UNIQUE,
     status            TEXT NOT NULL DEFAULT 'pending_replay',
-    review_confidence REAL,
-    steps_json        TEXT NOT NULL,
-    payload_json      TEXT NOT NULL,
-    review_json       TEXT,
     validation_json   TEXT,
     review_attempts   INTEGER NOT NULL DEFAULT 0,
     review_started_at TEXT,
@@ -72,47 +31,9 @@ CREATE TABLE IF NOT EXISTS recipe_candidates (
 """
 
 RECIPE_CANDIDATES_INDEX_SQL = (
-    "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_run ON recipe_candidates(run_id);",
-    "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_site_status ON recipe_candidates(site, status);",
+    "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_status ON recipe_candidates(status);",
 )
 
 RECIPE_CANDIDATES_QUEUE_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_recipe_candidates_review_queue ON recipe_candidates(status, next_review_at, created_at);",
-)
-
-RECIPE_CANDIDATE_QUEUE_COLUMNS = {
-    "review_attempts": "INTEGER NOT NULL DEFAULT 0",
-    "review_started_at": "TEXT",
-    "next_review_at": "TEXT",
-    "review_error": "TEXT",
-}
-
-
-def ensure_recipe_candidate_queue_schema(conn) -> None:
-    """기존 후보 테이블에 영속 검토 대기열 컬럼과 인덱스를 순서대로 보강한다."""
-
-    columns = {
-        row["name"] if hasattr(row, "keys") else row[1]
-        for row in conn.execute("PRAGMA table_info(recipe_candidates)").fetchall()
-    }
-    if "validation_json" not in columns:
-        conn.execute("ALTER TABLE recipe_candidates ADD COLUMN validation_json TEXT")
-    for column, definition in RECIPE_CANDIDATE_QUEUE_COLUMNS.items():
-        if column not in columns:
-            conn.execute(
-                f"ALTER TABLE recipe_candidates ADD COLUMN {column} {definition}"
-            )
-    for sql in RECIPE_CANDIDATES_QUEUE_INDEX_SQL:
-        conn.execute(sql)
-
-
-REFLEX_MEMORY_SCHEMA = "\n".join(
-    [
-        FEEDBACK_EPISODES_TABLE_SQL,
-        *FEEDBACK_EPISODES_INDEX_SQL,
-        WORKER_SUBMISSIONS_TABLE_SQL,
-        *WORKER_SUBMISSIONS_INDEX_SQL,
-        RECIPE_CANDIDATES_TABLE_SQL,
-        *RECIPE_CANDIDATES_INDEX_SQL,
-    ]
 )

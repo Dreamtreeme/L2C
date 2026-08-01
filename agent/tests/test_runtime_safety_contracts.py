@@ -69,11 +69,6 @@ def test_screen_guard_capture_failure_requires_fresh_observation(monkeypatch):
         def capture_screen(self, **_kwargs):
             raise RuntimeError("capture unavailable")
 
-    monkeypatch.setattr(
-        action_guard,
-        "reasoning_screen_guard_enabled",
-        lambda: True,
-    )
     result = action_guard.check_reasoning_screen_stale(
         {"screen_signature": {"phash": "0" * 16}},
         FailedPerception(),
@@ -169,13 +164,8 @@ def test_external_content_contract_is_shared_by_extraction_and_answer():
 def test_task_contract_blocks_external_navigation_and_unknown_input():
     state = {
         "action_permission_contract": {
-            "allowed_tools": [
-                "open_browser",
-                "type_in_marker",
-            ],
             "allowed_domains": ["wanted.co.kr"],
             "allowed_input_values": ["ai 엔지니어"],
-            "require_declared_risk_for_model_actions": True,
         }
     }
 
@@ -210,10 +200,7 @@ def test_task_contract_blocks_external_navigation_and_unknown_input():
 
 def test_task_contract_requires_model_risk_declaration():
     state = {
-        "action_permission_contract": {
-            "allowed_tools": ["click_marker"],
-            "require_declared_risk_for_model_actions": True,
-        }
+        "action_permission_contract": {"site": "wanted"}
     }
 
     assert (
@@ -227,14 +214,11 @@ def test_task_contract_requires_model_risk_declaration():
     )
 
 
-def test_safe_navigation_still_requires_task_permission_contract():
+def test_safe_navigation_requires_model_risk_declaration():
     from agent.graph.worker_execution_policy import sensitive_action_reason
 
     state = {
-        "action_permission_contract": {
-            "allowed_tools": ["click_marker"],
-            "require_declared_risk_for_model_actions": True,
-        }
+        "action_permission_contract": {"site": "wanted"}
     }
 
     assert (
@@ -247,10 +231,9 @@ def test_safe_navigation_still_requires_task_permission_contract():
             },
             source="llm",
         )
-        == "task_contract_tool_not_allowed"
+        == ""
     )
 
-    state["action_permission_contract"]["allowed_tools"] = ["go_back"]
     assert (
         sensitive_action_reason(
             state,
@@ -330,15 +313,15 @@ def test_model_timeout_is_normalized_to_application_contract():
 
 def test_model_role_policy_reads_validated_timeout_settings(monkeypatch):
     from agent.application.model_policy import model_execution_policy
-    from agent.config import clear_settings_cache
+    from agent.config import get_settings
 
     monkeypatch.setenv("COMMANDER_REQUEST_TIMEOUT_SEC", "44")
     monkeypatch.setenv("MODEL_TRANSIENT_RETRIES", "2")
-    clear_settings_cache()
+    get_settings.cache_clear()
     try:
         policy = model_execution_policy("commander")
     finally:
-        clear_settings_cache()
+        get_settings.cache_clear()
 
     assert policy.request_timeout_sec == 44.0
     assert policy.retries == 2

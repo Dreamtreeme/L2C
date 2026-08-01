@@ -1,22 +1,13 @@
 # Vision Site Profiles
 
-This directory is the commander-facing site registry for multi-site collection.
+`profile.json`은 사이트마다 실제로 다른 정보만 선언합니다.
 
-The intended flow is:
+- 사이트 식별자, 표시명, 별칭과 공식 도메인
+- 공식 HTTPS 시작 주소
+- 화면 역할별 URL 패턴, 보이는 단서와 탐색 안내
+- 수집 시 반드시 확인할 공고 필드
+- 사이트별 검색·상세 화면 참고 지침
 
-1. The commander calls a site registry tool to list supported sites.
-2. The commander loads one site profile at a time.
-3. The site profile is passed to a child vision runner with the user's query.
-4. The child runner decides whether to use autonomous exploration or Reflex replay for that site.
-5. Collected jobs are persisted in the shared SQLite database.
-6. The commander queries the database and summarizes trends for the user.
+서버 시작 시 모든 프로필을 Pydantic으로 검증합니다. `get_official_site_url()`은 slug, 한글 이름, 별칭 또는 도메인을 공식 시작 주소로 변환합니다. 비전 작업자는 공식 홈을 연 뒤 현재 화면을 보고 검색 UI와 공고 상세를 조작합니다.
 
-Files per site:
-
-- `profile.json`: 사이트 정체성, 공식 주소, 화면 역할, 허용 도구, Reflex 경계와 판단 지침의 단일 계약.
-
-`ChatService` is the canonical user-facing orchestrator. `agent.graph.investigation_workflow` resolves material ambiguity, defines evidence requirements, checks DB coverage, and invokes `realtime_scraping` only through a validated action plan. 사이트 선택은 코드가 확정하며 LLM이 스킬 파일을 찾기 위한 별도 호출은 하지 않습니다.
-
-## 공식 시작 주소
-
-각 `profile.json`의 `base_url`은 해당 사이트의 공식 HTTPS 시작 주소입니다. 서버 시작 시 모든 프로필을 Pydantic으로 읽어 URL 패턴, 도구 이름, 중복 도메인을 검증합니다. `get_official_site_url()`은 slug, 한글 이름, 별칭, 도메인 요청을 이 주소로 변환합니다. Vision 작업자는 `open_browser(site=...)`로 이 주소를 먼저 연 뒤 화면 탐색을 시작합니다.
+원자 도구 목록, 브라우저 수명주기, Reflex 설정과 저장 정책은 사이트별 값이 아니므로 프로필에 두지 않습니다. 이 계약은 각각 작업자 도구 스키마, 런타임과 수집 서비스가 소유합니다.

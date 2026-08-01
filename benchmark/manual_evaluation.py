@@ -103,10 +103,9 @@ def _manual_coverage_passed(
         or len(set(judged_urls)) != len(judged_urls)
     ):
         return False
-    validation = dict(result.get("persistence_validation") or {})
     persisted_urls = {
         _normalized_url(item.get("url"))
-        for item in validation.get("persisted_items", []) or []
+        for item in result.get("persisted_items", []) or []
         if isinstance(item, dict) and _normalized_url(item.get("url"))
     }
     return persisted_urls.issubset(set(judged_urls))

@@ -25,18 +25,7 @@ def check_current_reasoning_screen(
 ) -> dict[str, Any]:
     """저장된 화면 서명이 있을 때 행동 대상 주변을 다시 검사한다."""
 
-    from agent.runtime.action_guard import (
-        check_reasoning_screen_stale,
-        reasoning_screen_guard_enabled,
-    )
-
-    if not reasoning_screen_guard_enabled():
-        return {
-            "checked": False,
-            "stale": False,
-            "must_refresh": False,
-            "reason": "disabled",
-        }
+    from agent.runtime.action_guard import check_reasoning_screen_stale
     if not str((state.get("screen_signature") or {}).get("phash") or ""):
         return {
             "checked": False,

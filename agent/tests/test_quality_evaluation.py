@@ -1,11 +1,68 @@
-def test_job_quality_accepts_korean_aliases_and_detects_duplicate_urls():
-    from benchmark.quality_eval import evaluate_job_records
+import pytest
 
+from benchmark.manual_evaluation import RunManualJudgement, evaluate_manual_run
+from benchmark.quality_eval import (
+    evaluate_collection_summary,
+    evaluate_job_records,
+)
+from benchmark.site_adaptation_eval import (
+    SiteAdaptationManifest,
+    evaluate_site_adaptation,
+)
+from benchmark.user_study_eval import UserStudyManifest, evaluate_user_study
+
+
+def _collection(*, target=1, resolved=1, status="completed", items=None):
+    persisted = len(items or [])
+    return {
+        "result": {
+            "target_count": target,
+            "collected_count": persisted,
+            "persisted_count": persisted,
+            "resolved_count": resolved,
+            "status": status,
+            "worker_finished": True,
+            "persisted_items": items or [],
+        }
+    }
+
+
+def _job_judgement(url, *, semantic=True):
+    return {
+        "url": url,
+        "semantic_match": semantic,
+        "company_name": "pass",
+        "job_title": "pass",
+        "responsibilities": "pass",
+        "requirements": "pass",
+    }
+
+
+def _manual(jobs):
+    return RunManualJudgement.model_validate(
+        {
+            "run_id": "manual-run",
+            "summary_path": "unused.json",
+            "site": "example",
+            "query": "AI 엔지니어",
+            "search_conditions_correct": True,
+            "count_handling_correct": True,
+            "no_out_of_scope_actions": True,
+            "jobs": jobs,
+        }
+    )
+
+
+def test_job_quality_accepts_aliases_and_detects_duplicate_urls():
     result = evaluate_job_records(
         {
             "공고목록": [
                 {"회사명": "A", "직무명": "iOS", "공고url": "https://example.com/1"},
-                {"회사명": "B", "직무명": "서버", "공고url": "https://example.com/1?ref=x"},
+                {
+                    "회사명": "B",
+                    "직무명": "서버",
+                    "공고url": "https://example.com/1?ref=x",
+                },
             ]
         }
     )
@@ -15,327 +72,138 @@ def test_job_quality_accepts_korean_aliases_and_detects_duplicate_urls():
     assert result["unique_url_rate"] == 0.5
 
 
-def test_job_quality_uses_strict_reference_identity_without_jaccard():
-    from benchmark.quality_eval import evaluate_job_records
+def test_job_quality_uses_exact_reference_identity():
+    result = evaluate_job_records(
+        [
+            {
+                "company_name": "VoyagerX",
+                "position": "iOS Engineer",
+                "url": "https://example.com/jobs/1?source=test",
+                "requirements": ["Swift"],
+            }
+        ],
+        [
+            {
+                "company_name": "VoyagerX",
+                "position": "iOS Developer",
+                "url": "https://example.com/jobs/1",
+                "requirements": ["Swift"],
+            }
+        ],
+    )["reference"]
 
-    reference = [
-        {
-            "company_name": "VoyagerX",
-            "position": "iOS Developer",
-            "url": "https://example.com/jobs/1",
-            "requirements": ["Swift"],
-        }
-    ]
-    actual = [
-        {
-            "company_name": "VoyagerX",
-            "position": "iOS Engineer",
-            "url": "https://example.com/jobs/1?source=test",
-            "requirements": ["Swift"],
-        }
-    ]
-
-    result = evaluate_job_records(actual, reference)
-
-    assert result["reference"]["url_recall"] == 1.0
-    assert result["reference"]["identity_exact_rate"] == 0.5
-    assert result["reference"]["content_exact_rate"] == 1.0
+    assert result["url_recall"] == 1.0
+    assert result["identity_exact_rate"] == 0.5
+    assert result["content_exact_rate"] == 1.0
 
 
-def test_collection_and_citation_quality_are_separate_metrics():
-    from benchmark.quality_eval import (
-        evaluate_answer_citations,
-        evaluate_collection_summary,
-    )
-
+def test_collection_quality_tracks_persisted_target():
     collection = evaluate_collection_summary(
         {
             "target_count": 2,
-            "item_count": 2,
+            "collected_count": 2,
             "persisted_count": 1,
-            "review": {"decision": "accept"},
-            "is_finished": True,
+            "resolved_count": 1,
+            "status": "partial",
+            "worker_finished": True,
         }
     )
-    citations = evaluate_answer_citations(
-        "결과 [job_id:1], 잘못된 값 [job_id:9]",
-        valid_ids=[1, 2],
-        expected_ids=[1, 2],
-    )
-
     assert collection["target_fulfillment"] == 0.5
-    assert collection["persistence_rate"] == 0.5
     assert collection["passed"] is False
-    assert citations["citation_validity"] == 0.5
-    assert citations["expected_citation_coverage"] == 0.5
 
 
-def test_collection_quality_counts_existing_database_jobs_as_resolved():
-    from benchmark.quality_eval import evaluate_collection_summary
-
-    collection = evaluate_collection_summary(
+def test_collection_quality_counts_existing_jobs_as_resolved():
+    result = evaluate_collection_summary(
         {
             "target_count": 2,
-            "item_count": 0,
-            "persisted_count": 0,
+            "resolved_count": 2,
             "observed_job_ids": [7, 8],
-            "review": {"decision": "accept"},
-            "is_finished": True,
+            "status": "completed",
+            "worker_finished": True,
         }
     )
 
-    assert collection["observed_existing_count"] == 2
-    assert collection["resolved_count"] == 2
-    assert collection["target_fulfillment"] == 1.0
-    assert collection["passed"] is True
+    assert result["observed_existing_count"] == 2
+    assert result["target_fulfillment"] == 1.0
+    assert result["passed"] is True
 
 
-def test_collection_quality_rejects_search_url_saved_as_saramin_job():
-    from benchmark.quality_eval import evaluate_collection_summary
-
-    base = {
-        "target_count": 1,
-        "item_count": 1,
-        "persisted_count": 1,
-        "review": {"decision": "accept"},
-        "is_finished": True,
-    }
-    search_url_result = {
-        **base,
-        "persistence_validation": {
-            "persisted_items": [
-                {
-                    "job_id": 1,
-                    "url": "https://www.saramin.co.kr/zf_user/search?searchword=ML",
-                }
-            ]
-        },
-    }
-    detail_url_result = {
-        **base,
-        "persistence_validation": {
-            "persisted_items": [
-                {
-                    "job_id": 2,
-                    "url": "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=2",
-                }
-            ]
-        },
-    }
-
-    failed = evaluate_collection_summary(search_url_result)
-    passed = evaluate_collection_summary(detail_url_result)
-
-    assert failed["source_url_integrity"] == 0.0
-    assert failed["passed"] is False
-    assert passed["source_url_integrity"] == 1.0
-    assert passed["passed"] is True
-
-
-def test_manual_evaluation_requires_semantic_and_field_judgement():
-    from benchmark.manual_evaluation import (
-        RunManualJudgement,
-        evaluate_manual_run,
-    )
-
-    summary = {
-        "result": {
+@pytest.mark.parametrize(
+    ("url", "passed"),
+    [
+        ("https://www.saramin.co.kr/zf_user/search?searchword=ML", False),
+        ("https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=2", True),
+    ],
+)
+def test_collection_quality_requires_detail_url(url, passed):
+    result = evaluate_collection_summary(
+        {
             "target_count": 1,
-            "item_count": 1,
+            "collected_count": 1,
             "persisted_count": 1,
-            "review": {"decision": "accept"},
-            "is_finished": True,
-        }
-    }
-    judgement = RunManualJudgement.model_validate(
-        {
-            "run_id": "wanted-ios-r1",
-            "summary_path": "unused.json",
-            "site": "wanted",
-            "query": "iOS 개발자",
-            "search_conditions_correct": True,
-            "count_handling_correct": True,
-            "no_out_of_scope_actions": True,
-            "jobs": [
-                {
-                    "url": "https://example.com/jobs/1",
-                    "semantic_match": False,
-                    "company_name": "pass",
-                    "job_title": "pass",
-                    "responsibilities": "pass",
-                    "requirements": "pass",
-                }
-            ],
+            "resolved_count": 1,
+            "status": "completed",
+            "worker_finished": True,
+            "persisted_items": [{"job_id": 1, "url": url}],
         }
     )
 
-    evaluated = evaluate_manual_run(summary, judgement)
-
-    assert evaluated["automatic_contract_passed"] is True
-    assert evaluated["manual_contract_passed"] is False
-    assert evaluated["outcome"] == "failure"
+    assert result["passed"] is passed
+    assert result["source_url_integrity"] == float(passed)
 
 
-def test_manual_evaluation_requires_every_resolved_job_to_be_reviewed():
-    from benchmark.manual_evaluation import (
-        RunManualJudgement,
-        evaluate_manual_run,
-    )
+@pytest.mark.parametrize(
+    ("summary", "judged_jobs", "automatic", "manual", "outcome"),
+    [
+        (
+            _collection(
+                items=[{"job_id": 1, "url": "https://example.com/jobs/1"}]
+            ),
+            [_job_judgement("https://example.com/jobs/1", semantic=False)],
+            True,
+            False,
+            "failure",
+        ),
+        (
+            _collection(
+                target=2,
+                resolved=2,
+                items=[
+                    {"job_id": 1, "url": "https://example.com/jobs/1"},
+                    {"job_id": 2, "url": "https://example.com/jobs/2"},
+                ],
+            ),
+            [_job_judgement("https://example.com/jobs/1")],
+            True,
+            False,
+            "failure",
+        ),
+        (
+            _collection(
+                target=2,
+                resolved=1,
+                status="partial",
+                items=[{"job_id": 1, "url": "https://example.com/jobs/1"}],
+            ),
+            [_job_judgement("https://example.com/jobs/1")],
+            False,
+            True,
+            "partial",
+        ),
+    ],
+)
+def test_manual_evaluation_contracts(summary, judged_jobs, automatic, manual, outcome):
+    result = evaluate_manual_run(summary, _manual(judged_jobs))
 
-    summary = {
-        "result": {
-            "target_count": 2,
-            "item_count": 2,
-            "persisted_count": 2,
-            "review": {"decision": "accept"},
-            "is_finished": True,
-            "persistence_validation": {
-                "persisted_items": [
-                    {
-                        "job_id": 1,
-                        "url": "https://example.com/jobs/1",
-                    },
-                    {
-                        "job_id": 2,
-                        "url": "https://example.com/jobs/2",
-                    },
-                ]
-            },
-        }
-    }
-    judgement = RunManualJudgement.model_validate(
-        {
-            "run_id": "two-jobs",
-            "summary_path": "unused.json",
-            "site": "example",
-            "query": "AI 엔지니어",
-            "search_conditions_correct": True,
-            "count_handling_correct": True,
-            "no_out_of_scope_actions": True,
-            "jobs": [
-                {
-                    "url": "https://example.com/jobs/1",
-                    "semantic_match": True,
-                    "company_name": "pass",
-                    "job_title": "pass",
-                    "responsibilities": "pass",
-                    "requirements": "pass",
-                }
-            ],
-        }
-    )
-
-    evaluated = evaluate_manual_run(summary, judgement)
-
-    assert evaluated["automatic_contract_passed"] is True
-    assert evaluated["manual"]["coverage_passed"] is False
-    assert evaluated["outcome"] == "failure"
+    assert result["automatic_contract_passed"] is automatic
+    assert result["manual_contract_passed"] is manual
+    assert result["outcome"] == outcome
 
 
-def test_manual_evaluation_uses_partial_only_for_valid_count_shortfall():
-    from benchmark.manual_evaluation import (
-        RunManualJudgement,
-        evaluate_manual_run,
-    )
-
-    summary = {
-        "result": {
-            "target_count": 2,
-            "item_count": 1,
-            "persisted_count": 1,
-            "review": {"decision": "accept"},
-            "is_finished": True,
-            "persistence_validation": {
-                "persisted_items": [
-                    {
-                        "job_id": 1,
-                        "url": "https://example.com/jobs/1",
-                    }
-                ]
-            },
-        }
-    }
-    judgement = RunManualJudgement.model_validate(
-        {
-            "run_id": "shortfall",
-            "summary_path": "unused.json",
-            "site": "example",
-            "query": "AI 엔지니어",
-            "search_conditions_correct": True,
-            "count_handling_correct": True,
-            "no_out_of_scope_actions": True,
-            "jobs": [
-                {
-                    "url": "https://example.com/jobs/1",
-                    "semantic_match": True,
-                    "company_name": "pass",
-                    "job_title": "pass",
-                    "responsibilities": "pass",
-                    "requirements": "pass",
-                }
-            ],
-        }
-    )
-
-    evaluated = evaluate_manual_run(summary, judgement)
-
-    assert evaluated["automatic_contract_passed"] is False
-    assert evaluated["manual_contract_passed"] is True
-    assert evaluated["outcome"] == "partial"
-
-
-def test_site_adaptation_evaluation_keeps_common_runtime_changes_visible():
-    from benchmark.site_adaptation_eval import (
-        SiteAdaptationManifest,
-        evaluate_site_adaptation,
-    )
-
-    manifest = SiteAdaptationManifest.model_validate(
-        {
-            "commit_sha": "abc123",
-            "task_contract": {"target_count": 2},
-            "records": [
-                {
-                    "site": "example",
-                    "approach": "classic",
-                    "implementation_minutes": 90,
-                    "site_specific_code_lines": 120,
-                    "modified_file_count": 3,
-                    "common_runtime_code_lines": 0,
-                    "fix_iteration_count": 2,
-                    "successful_runs": 3,
-                    "runtime_sec": [10, 11, 12],
-                },
-                {
-                    "site": "example",
-                    "approach": "vision",
-                    "implementation_minutes": 30,
-                    "site_specific_code_lines": 0,
-                    "modified_file_count": 1,
-                    "common_runtime_code_lines": 20,
-                    "fix_iteration_count": 1,
-                    "successful_runs": 3,
-                    "runtime_sec": [90, 95, 100],
-                },
-            ],
-        }
-    )
-
-    result = evaluate_site_adaptation(manifest)["sites"][0]
-
-    assert result["implementation_minutes_saved"] == 60
-    assert result["vision_profile_only"] is False
-    assert result["comparison_valid"] is True
-
-
-def test_site_adaptation_does_not_claim_profile_only_before_success():
-    from benchmark.site_adaptation_eval import (
-        SiteAdaptationManifest,
-        evaluate_site_adaptation,
-    )
-
-    common = {
+def _adaptation_record(approach, **overrides):
+    record = {
         "site": "example",
+        "approach": approach,
         "implementation_minutes": 10,
         "site_specific_code_lines": 0,
         "modified_file_count": 1,
@@ -345,80 +213,57 @@ def test_site_adaptation_does_not_claim_profile_only_before_success():
         "attempted_runs": 3,
         "runtime_sec": [],
     }
-    manifest = SiteAdaptationManifest.model_validate(
+    record.update(overrides)
+    return record
+
+
+def test_site_adaptation_reports_common_runtime_work_and_validity():
+    valid = SiteAdaptationManifest.model_validate(
+        {
+            "commit_sha": "abc123",
+            "task_contract": {"target_count": 2},
+            "records": [
+                _adaptation_record(
+                    "classic",
+                    implementation_minutes=90,
+                    site_specific_code_lines=120,
+                    successful_runs=3,
+                    runtime_sec=[10, 11, 12],
+                ),
+                _adaptation_record(
+                    "vision",
+                    implementation_minutes=30,
+                    common_runtime_code_lines=20,
+                    successful_runs=3,
+                    runtime_sec=[90, 95, 100],
+                ),
+            ],
+        }
+    )
+    incomplete = SiteAdaptationManifest.model_validate(
         {
             "commit_sha": "abc123",
             "task_contract": {},
-            "records": [
-                {**common, "approach": "classic"},
-                {**common, "approach": "vision"},
-            ],
+            "records": [_adaptation_record(mode) for mode in ("classic", "vision")],
         }
     )
 
-    result = evaluate_site_adaptation(manifest)["sites"][0]
+    valid_result = evaluate_site_adaptation(valid)["sites"][0]
+    incomplete_result = evaluate_site_adaptation(incomplete)["sites"][0]
+    assert valid_result["implementation_minutes_saved"] == 60
+    assert valid_result["vision_profile_only"] is False
+    assert valid_result["comparison_valid"] is True
+    assert incomplete_result["comparison_valid"] is False
 
-    assert result["comparison_valid"] is False
-    assert result["vision_profile_only"] is False
 
-
-def test_user_study_evaluation_uses_human_active_time():
-    from benchmark.user_study_eval import (
-        UserStudyManifest,
-        evaluate_user_study,
-    )
-
-    common = {
+def _study_record(mode, task_id, *, total=100, active=80):
+    return {
         "participant_id": "P1",
-        "task_id": "T1",
+        "task_id": task_id,
+        "mode": mode,
         "order": 1,
-        "result_review_sec": 10,
-        "suitable_job_count": 2,
-        "duplicate_count": 0,
-        "missing_field_count": 0,
-        "factual_error_count": 0,
-        "citation_link_rate": 1,
-        "usefulness_score": 4,
-        "trust_score": 4,
-        "correction_count": 0,
-    }
-    manifest = UserStudyManifest.model_validate(
-        {
-            "study_contract": {},
-            "records": [
-                {
-                    **common,
-                    "mode": "manual",
-                    "total_completion_sec": 300,
-                    "human_active_sec": 300,
-                },
-                {
-                    **common,
-                    "mode": "l2c",
-                    "total_completion_sec": 180,
-                    "human_active_sec": 60,
-                },
-            ],
-        }
-    )
-
-    result = evaluate_user_study(manifest)
-
-    assert result["design_complete"] is True
-    assert result["human_activity_reduction_rate"] == 0.8
-
-
-def test_user_study_hides_efficiency_for_incomplete_crossover():
-    from benchmark.user_study_eval import (
-        UserStudyManifest,
-        evaluate_user_study,
-    )
-
-    base = {
-        "participant_id": "P1",
-        "order": 1,
-        "total_completion_sec": 100,
-        "human_active_sec": 80,
+        "total_completion_sec": total,
+        "human_active_sec": active,
         "result_review_sec": 10,
         "suitable_job_count": 1,
         "duplicate_count": 0,
@@ -429,20 +274,30 @@ def test_user_study_hides_efficiency_for_incomplete_crossover():
         "trust_score": 4,
         "correction_count": 0,
     }
-    manifest = UserStudyManifest.model_validate(
+
+
+def test_user_study_reports_efficiency_only_for_complete_crossover():
+    complete = UserStudyManifest.model_validate(
         {
-            "study_contract": {
-                "participants": 3,
-                "tasks": ["T1", "T2"],
-            },
+            "study_contract": {},
             "records": [
-                {**base, "task_id": "T1", "mode": "manual"},
-                {**base, "task_id": "T2", "mode": "l2c"},
+                _study_record("manual", "T1", total=300, active=300),
+                _study_record("l2c", "T1", total=180, active=60),
+            ],
+        }
+    )
+    incomplete = UserStudyManifest.model_validate(
+        {
+            "study_contract": {"participants": 3, "tasks": ["T1", "T2"]},
+            "records": [
+                _study_record("manual", "T1"),
+                _study_record("l2c", "T2"),
             ],
         }
     )
 
-    result = evaluate_user_study(manifest)
-
-    assert result["design_complete"] is False
-    assert result["human_activity_reduction_rate"] is None
+    complete_result = evaluate_user_study(complete)
+    incomplete_result = evaluate_user_study(incomplete)
+    assert complete_result["human_activity_reduction_rate"] == 0.8
+    assert incomplete_result["design_complete"] is False
+    assert incomplete_result["human_activity_reduction_rate"] is None

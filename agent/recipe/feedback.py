@@ -84,10 +84,6 @@ def _compact_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
     return dict(args or {})
 
 
-def _extracted_job_count(extracted_jd: Any) -> int:
-    return job_count(extracted_jd)
-
-
 def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, Any]) -> ActionFeedback:
     status = result.get("status", "")
     reason = result.get("reason", "") or ""
@@ -163,7 +159,7 @@ def record_action_episode(
             "current_url_stale": bool(after_context.get("current_url_stale", True)),
             "screen_changed": bool(after_context.get("screen_changed", False)),
             "is_finished": bool(after_context.get("is_finished", False)),
-            "extracted_job_count": _extracted_job_count(after_context.get("extracted_jd", {})),
+            "extracted_job_count": job_count(after_context.get("extracted_jd", {})),
         }
         observation = ActionObservation(before=before, after=after, result=dict(enriched_result))
         feedback = _feedback_label(action_name, enriched_result, after)

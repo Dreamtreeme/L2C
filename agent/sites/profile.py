@@ -13,17 +13,6 @@ class SiteModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class NavigationPolicy(SiteModel):
-    allow_direct_search_url: bool = False
-    start_url: str = ""
-    search_url_template: str = ""
-    search_entry: str = ""
-
-
-class PersistencePolicy(SiteModel):
-    require_detail_url_for_job_update: bool = True
-
-
 class PageGuidance(SiteModel):
     url_patterns: tuple[str, ...] = ()
     visible_cues: tuple[str, ...] = ()
@@ -60,25 +49,7 @@ class CollectionPolicy(SiteModel):
         return values
 
 
-class ToolPolicy(SiteModel):
-    allowed_tools: tuple[str, ...]
-    tool_rules: dict[str, str] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_tool_names(self) -> "ToolPolicy":
-        from agent.graph.tool_schema import ACTION_TOOL_SCHEMAS
-
-        unknown = sorted(set(self.allowed_tools) - set(ACTION_TOOL_SCHEMAS))
-        if unknown:
-            raise ValueError(f"알 수 없는 작업자 도구입니다: {', '.join(unknown)}")
-        undeclared_rules = sorted(set(self.tool_rules) - set(self.allowed_tools))
-        if undeclared_rules:
-            raise ValueError(f"허용 목록에 없는 도구 규칙입니다: {', '.join(undeclared_rules)}")
-        return self
-
-
 class SiteProfile(SiteModel):
-    schema_version: int = Field(1, ge=1)
     registration_order: int = Field(100, ge=0)
     slug: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
     display_name: str
@@ -87,12 +58,8 @@ class SiteProfile(SiteModel):
     domains: tuple[str, ...]
     base_url: str
     enabled: bool = True
-    default_query_target: str = "job search"
-    navigation_policy: NavigationPolicy = Field(default_factory=NavigationPolicy)
-    persistence_policy: PersistencePolicy = Field(default_factory=PersistencePolicy)
     page_guidance: dict[str, PageGuidance]
     collection_policy: CollectionPolicy
-    tools: ToolPolicy
     guidance: str = ""
     capabilities: dict[str, str] = Field(default_factory=dict)
 
@@ -137,9 +104,6 @@ class SiteProfile(SiteModel):
 
 __all__ = [
     "CollectionPolicy",
-    "NavigationPolicy",
     "PageGuidance",
-    "PersistencePolicy",
     "SiteProfile",
-    "ToolPolicy",
 ]

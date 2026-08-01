@@ -19,21 +19,8 @@ TABLES = (
     "recipe_sources",
     "recipes",
     "recipe_candidates",
-    "feedback_episodes",
     "worker_submissions",
 )
-
-RECIPE_REQUIRED_COLUMNS = {
-    "recipe_key",
-    "site",
-    "goal",
-    "path_json",
-    "metadata_json",
-    "success_count",
-    "created_at",
-    "updated_at",
-}
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -65,27 +52,7 @@ def main() -> None:
             conn.backup(backup)
 
         conn.execute("BEGIN IMMEDIATE")
-        recipe_columns = (
-            {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(recipes)")
-            }
-            if "recipes" in existing
-            else set()
-        )
-        incompatible_recipe_schema = bool(
-            recipe_columns
-            and not RECIPE_REQUIRED_COLUMNS.issubset(recipe_columns)
-        )
-        if incompatible_recipe_schema:
-            conn.execute("DROP TABLE IF EXISTS recipe_sources")
-            conn.execute("DROP TABLE recipes")
         for table in counts:
-            if incompatible_recipe_schema and table in {
-                "recipes",
-                "recipe_sources",
-            }:
-                continue
             conn.execute(f'DELETE FROM "{table}"')
         conn.commit()
         print(f"backup={backup_path}")

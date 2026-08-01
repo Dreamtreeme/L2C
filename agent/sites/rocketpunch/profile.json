@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "registration_order": 50,
   "slug": "rocketpunch",
   "display_name": "로켓펀치",
@@ -8,9 +7,6 @@
   "domains": ["rocketpunch.com", "www.rocketpunch.com"],
   "base_url": "https://www.rocketpunch.com",
   "enabled": true,
-  "default_query_target": "job search",
-  "navigation_policy": {},
-  "persistence_policy": {"require_detail_url_for_job_update": true},
   "page_guidance": {
     "home": {"instructions": ["왼쪽 통합검색을 사용하지 말고 사이드바의 '채용' 메뉴로 이동한다."]},
     "search": {
@@ -29,10 +25,6 @@
   },
   "collection_policy": {
     "required_fields": ["company_name", "position", "main_tasks", "requirements", "preferred", "benefits", "url"]
-  },
-  "tools": {
-    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
-    "tool_rules": {"click_marker": "직무명과 회사명이 확인되는 채용 항목만 선택한다."}
   },
   "guidance": "직무명과 회사명으로 공고를 식별한다. 상세가 측면 패널에 열리면 활성 상세 화면의 사실을 수집하고, 명확한 원본 상세 링크가 있을 때만 추가 이동한다."
 }

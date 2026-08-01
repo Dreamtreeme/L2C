@@ -17,12 +17,14 @@ flowchart TD
     CLARIFY -->|예| DBQ[SQLite 근거 충분성 검사]
     DBQ -->|근거가 충분함| ANSWER[답변 및 인용 검증]
     DBQ -->|추가 수집 필요| TOOL[realtime_scraping 도구]
-    TOOL --> LOCK[단일 Worker 실행 세션]
+    TOOL --> COLLECTION[CollectionService 요청 정규화]
+    COLLECTION --> LOCK[WorkerExecutionService 실행 세션]
     LOCK --> WG[Vision Worker LangGraph]
     WG --> WEB[브라우저 화면과 물리 입력]
-    WG --> REVIEW[제출물 검토]
-    REVIEW --> DB[(SQLite)]
-    REVIEW --> CANDIDATE[승격 후보 pending_review]
+    WG --> VALIDATION[제출물 구조 검증]
+    VALIDATION --> PERSIST[공고와 제출물 저장]
+    PERSIST --> DB[(SQLite)]
+    PERSIST --> CANDIDATE[승격 후보 pending_replay 또는 pending_review]
     CANDIDATE --> PROMOTION[별도 승격 작업자]
     PROMOTION --> RECIPE[활성 Reflex Recipe]
     DB --> CS
@@ -36,7 +38,7 @@ FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫�
 
 1. `POST /api/chat`이 요청마다 `run_id`를 만들고 최근 실행 레지스트리에 `queued` 상태를 기록합니다.
 2. 동기식 LLM·Vision 실행은 `asyncio.to_thread()`로 이벤트 루프 밖에서 수행합니다.
-3. `RunEvent`가 `received`, `planning`, `database`, `collection`, `review`, `persistence`, `answering` 단계를 SSE로 전달합니다.
+3. `RunEvent`가 `received`, `planning`, `database`, `collection`, `validation`, `persistence`, `answering` 단계를 SSE로 전달합니다.
 4. UI는 문자 단위 가짜 스트리밍 대신 진행 이벤트와 최종 응답을 구분해 표시합니다.
 5. `GET /api/runs/{run_id}`로 최근 실행 상태와 최종 계측값을 다시 조회할 수 있습니다.
 
@@ -52,10 +54,11 @@ flowchart TD
     START -->|없음| REASON[Reasoning]
     START -->|있음| SELECT[결정론적 행동 선택]
     CAPTURE[화면 캡처] --> TRANSITION[전환 판정]
-    TRANSITION -->|OCR 필요| OCR[SoM 및 OCR]
-    OCR --> COLLECT[관찰 및 상세 본문 반영]
+    TRANSITION -->|현재 캡처와 OCR 일치| COLLECT[관찰 및 상세 본문 반영]
+    TRANSITION -->|추가 판정 필요| SELECT
+    OCR[SoM 및 OCR] --> TRANSITION
     COLLECT --> SELECT
-    TRANSITION -->|OCR 불필요| SELECT
+    SELECT -->|OCR 필요| OCR
     SELECT -->|카드 큐 또는 상세 정책| EXECUTION[원자 행동 실행]
     SELECT -->|재생 후보| REFLEX[Reflex ROI 검증]
     SELECT -->|의미 판단 필요| REASON
@@ -82,17 +85,17 @@ flowchart TD
 | 진입점 | `agent/web_server.py` | HTTP 입력과 SSE 응답 |
 | 실행 계약 | `agent/application/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
 | 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py` | 조사 실행 진입과 DB 근거 충분성 검사 |
-| 수집 요청 | `agent/application/collection_request_builder.py` | 검색 의도 정규화, 사이트 프로필 선택, 작업자 목표 생성 |
-| 수집 조율 | `agent/application/collection_service.py` | 작업자 실행, 검토 재시도, 승인 데이터 저장 순서 |
-| 수집 작업자 | `agent/application/collection_worker_runner.py` | 단일 비전 작업자 실행, 제출물 생성, 재귀 한도 보고 |
-| 수집 제출물 | `agent/application/collection_submission_service.py` | Critic 검토, 승인 데이터 저장, 레시피 후보 등록 |
-| 수집 도구 | `agent/tools/realtime_scraping.py` | 구조화 도구 인자와 애플리케이션 수집 서비스 연결 |
+| 수집 요청 | `agent/application/collection_request_builder.py` | 사이트 프로필 선택, 확정된 수집 의도로 작업자 목표 생성 |
+| 수집 조율 | `agent/application/collection_service.py` | 수집 의도 1회 정규화, 작업자 실행, 제출물 검증과 저장 순서 |
+| 수집 작업자 | `agent/application/collection_worker_runner.py` | 확정된 `CollectionIntent`로 단일 비전 작업자 실행과 제출물 생성 |
+| 수집 제출물 | `agent/application/collection_submission_service.py` | 공고 저장, 레시피 후보 등록, 제출물 최종 저장 |
 | 런타임 소유권 | `agent/runtime/application_runtime.py`, `vision_worker_runtime.py` | 체크포인터·그래프·OCR·모델·잠금·승격 작업자의 생성과 종료 |
-| 작업자 실행 | `agent/application/worker_execution_service.py` | 시작 화면 준비, 그래프 실행, 브라우저 정리 순서 |
+| 작업자 실행 | `agent/application/worker_execution_service.py` | 화면 잠금, 시작 화면 준비, 그래프 실행, 브라우저 정리 |
 | 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 공고 정규화·UPSERT, 상세 OCR 최종 구조화 |
 | 비동기 승격 | `agent/application/recipe_promotion_service.py`, `recipe_promotion_worker.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
 | 지휘자 그래프 조립 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
-| 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 요청 해석, 확인 질문, 근거 판정, 수집 실행, 답변 |
+| 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 요청 해석, 근거 판정, 수집 실행, 답변 |
+| 직무 확인 | `agent/application/occupation_clarification_service.py` | 직무 사전 후보 질문 생성과 사용자 승인 별칭 기록 |
 | 작업자 그래프 | `agent/graph/workflow.py`, `state.py`, `state_factory.py` | Vision LangGraph 연결과 WorkerState 계약 |
 | 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 수집, 선택, 추론, 원자 실행, 기록 |
 | 행동 실행 세부 | `agent/graph/worker_action_guard.py`, `worker_execution_dispatch.py`, `worker_action_effects.py` | 실행 전 안전 검증, 물리·상태 도구 전달, 실행 후 상태 반영 |
@@ -118,7 +121,7 @@ flowchart TD
 
 - `ApplicationRuntime`은 FastAPI 시작 때 한 번 생성되고 E2E 실행기에서는 명시적인 컨텍스트로 관리됩니다.
 - Perception·ActionTools·OCR·컴파일된 작업자 그래프·판단 모델은 애플리케이션 수명 동안 재사용합니다.
-- `VisionWorkerRuntime.execution_session()`이 전체 수집, 검토 재시도, 브라우저 정리를 직렬화해 동시 요청이 같은 화면을 조작하지 못하게 합니다.
+- `WorkerExecutionService.run()`이 `VisionWorkerRuntime.execution_session()` 안에서 브라우저 준비와 작업자 그래프를 실행하고 브라우저를 정리합니다. 제출물 검증과 SQLite 저장은 화면 잠금을 해제한 뒤 진행합니다.
 - 브라우저 창은 수집 요청마다 열고 기본적으로 요청 종료 때 닫습니다. 이때 OCR worker는 유지됩니다.
 - PaddleOCR은 별도 subprocess를 요청 간 재사용합니다.
 - OCR subprocess는 요청 횟수로 재시작하지 않으며 실제 timeout이나 프로세스 실패 때만 한 번 복구합니다.

@@ -255,15 +255,13 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - 요청 해석·확인 질문, 근거 검사·계획, 수집 실행, 문서 조회·답변은 각각 `investigation_*_nodes.py`로 분리했다.
 - 각 노드 묶음은 필요한 모델·서비스만 생성자로 받고, 서로를 참조하지 않는다. 최상위 workflow만 노드 묶음을 조립한다.
 
-### 수집 도구와 애플리케이션 책임 분리
+### 수집 실행과 애플리케이션 책임 분리
 
-- `realtime_scraping.py`에는 LangChain 도구 계약, 실행 컨텍스트와 런타임 재사용, `CollectionService` 조립만 남겼다.
+- `InvestigationCollectionNodes`가 `CollectionService.collect`를 직접 호출한다.
 - 검색 의도·사이트 프로필·작업자 목표 생성은 `collection_request_builder.py`가 담당한다.
 - 화면 준비부터 단일 Worker 실행, 제출물 생성과 재귀 한도 보고는 `collection_worker_runner.py`가 담당한다.
 - Critic 검토, 승인 데이터 저장, 완결된 실행의 레시피 후보 등록은 `collection_submission_service.py`가 담당한다.
-- 사용되지 않던 `_result_payload`와 도구 파일의 private 함수에 의존하던 테스트를 제거했다.
-- 수집 경계 집중 테스트 60건과 전체 단위 테스트 214건을 통과했다.
-- 빈 격리 DB의 원티드 2건 자율 탐색 E2E는 67.61초에 2건 저장·정상 종료했다. 기존 운영 DB 실행은 중복 공고를 여러 번 건너뛰며 그래프 예산을 소진해 1건 부분 완료했으므로 별도 수집 정책 문제로 구분한다.
+- 구조화 인자를 다시 조립하던 미사용 LangChain 도구 래퍼는 삭제했다.
 
 ### 레시피 검토와 승격 책임 분리
 

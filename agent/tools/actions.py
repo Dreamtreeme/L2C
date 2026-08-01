@@ -34,30 +34,20 @@ class ActionTools:
         pyautogui.FAILSAFE = True
         pyautogui.PAUSE = self.action_pause_sec
 
-    def _cfg_float(self, attr: str, _env_name: str, default: float) -> float:
-        return max(0.0, float(getattr(self, attr, default)))
-
     def _sleep(self, seconds: float) -> None:
         if seconds > 0:
             time.sleep(seconds)
 
     def _window_id(self, window: Any) -> int | None:
-        helper = getattr(getattr(self, "perception", None), "_window_id", None)
-        if helper:
-            return helper(window)
-        return getattr(window, "_hWnd", None) or getattr(window, "hWnd", None)
+        return self.perception._window_id(window)
 
     def _browser_windows(self) -> list[Any]:
-        perception = getattr(self, "perception", None)
-        looks_like = getattr(perception, "_looks_like_browser_window", self._looks_like_browser_window)
-        is_visible = getattr(
-            perception,
-            "_is_visible_window",
-            lambda win: not bool(getattr(win, "isMinimized", False))
-            and int(getattr(win, "width", 0) or 0) > 0
-            and int(getattr(win, "height", 0) or 0) > 0,
-        )
-        return [win for win in gw.getAllWindows() if is_visible(win) and looks_like(win)]
+        return [
+            window
+            for window in gw.getAllWindows()
+            if self.perception._is_visible_window(window)
+            and self.perception._looks_like_browser_window(window)
+        ]
 
     def _browser_window_ids(self) -> set[int]:
         return {window_id for window_id in (self._window_id(win) for win in self._browser_windows()) if window_id}
@@ -96,9 +86,6 @@ class ActionTools:
             self._normalize_browser_window(target)
         return self._bind_browser_window(target)
 
-    def _browser_window_size_enabled(self) -> bool:
-        return get_settings().browser.use_configured_window_size
-
     def _browser_window_dimensions(self) -> tuple[int, int]:
         settings = get_settings().browser
         return settings.vision_window_width, settings.vision_window_height
@@ -113,8 +100,6 @@ class ActionTools:
     def _normalize_browser_window(self, window: Any) -> bool:
         """전용 브라우저의 실제 창 크기를 고정해 비전 좌표계를 안정화한다."""
 
-        if not self._browser_window_size_enabled():
-            return False
         width, height = self._browser_window_dimensions()
         if width <= 0 or height <= 0:
             return False
@@ -167,8 +152,6 @@ class ActionTools:
             "--hide-crash-restore-bubble",
             "--disable-popup-blocking",
         ]
-        if not self._browser_window_size_enabled():
-            return args
         width, height = self._browser_window_dimensions()
         if width <= 0 or height <= 0:
             return args
@@ -177,8 +160,6 @@ class ActionTools:
     def _reset_browser_zoom(self) -> None:
         """사이트별로 기억된 브라우저 확대율을 100%로 되돌린다."""
 
-        if not get_settings().browser.reset_zoom:
-            return
         wait_sec = get_settings().browser.zoom_reset_wait_sec
         self._sleep(wait_sec)
         modifier = "command" if platform.system() == "Darwin" else "ctrl"
@@ -218,7 +199,7 @@ class ActionTools:
         try:
             pyautogui.hotkey(modifier, "l")
             pyperclip.copy(url)
-            self._sleep(self._cfg_float("clipboard_delay_sec", "VISION_ACTION_CLIPBOARD_DELAY_SEC", 0.02))
+            self._sleep(self.clipboard_delay_sec)
             pyautogui.hotkey(modifier, "v")
             pyautogui.press("enter")
         finally:
@@ -271,7 +252,7 @@ class ActionTools:
         """마커(UI 요소)의 중앙을 클릭합니다."""
         def _click():
             x, y = self._get_absolute_coords(bbox)
-            pyautogui.moveTo(x, y, duration=self._cfg_float("move_duration_sec", "VISION_ACTION_MOVE_DURATION_SEC", 0.05))
+            pyautogui.moveTo(x, y, duration=self.move_duration_sec)
             pyautogui.click()
             return f"Clicked at ({x}, {y})"
 
@@ -281,9 +262,9 @@ class ActionTools:
         """마커를 클릭한 후, 기존 텍스트를 지우고 pyperclip을 통해 안전하게 한글/영문 텍스트를 붙여넣습니다."""
         def _type():
             x, y = self._get_absolute_coords(bbox)
-            pyautogui.moveTo(x, y, duration=self._cfg_float("move_duration_sec", "VISION_ACTION_MOVE_DURATION_SEC", 0.05))
+            pyautogui.moveTo(x, y, duration=self.move_duration_sec)
             pyautogui.click()
-            self._sleep(self._cfg_float("input_delay_sec", "VISION_ACTION_INPUT_DELAY_SEC", 0.02))
+            self._sleep(self.input_delay_sec)
             
             # OS에 따른 제어 특수키 설정 (Mac: command, Windows: ctrl)
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
@@ -294,7 +275,7 @@ class ActionTools:
             
             # 클립보드를 통한 한글 씹힘 방지 타이핑
             pyperclip.copy(text)
-            self._sleep(self._cfg_float("clipboard_delay_sec", "VISION_ACTION_CLIPBOARD_DELAY_SEC", 0.02))
+            self._sleep(self.clipboard_delay_sec)
             
             pyautogui.hotkey(modifier, "v")
             
@@ -320,7 +301,7 @@ class ActionTools:
                 pyautogui.moveTo(
                     x,
                     y,
-                    duration=self._cfg_float("move_duration_sec", "VISION_ACTION_MOVE_DURATION_SEC", 0.05),
+                    duration=self.move_duration_sec,
                 )
             else:
                 region = getattr(self.perception, "last_region", None)
@@ -419,13 +400,8 @@ class ActionTools:
         )
         return self._execute("open_browser", _open)
 
-    @staticmethod
-    def _looks_like_browser_window(window: Any) -> bool:
-        return PerceptionEngine._looks_like_browser_window(window)
-
     def _find_browser_window(self):
-        perception = getattr(self, "perception", None)
-        preferred_id = getattr(perception, "_browser_window_id", None)
+        preferred_id = self.perception._browser_window_id
         if preferred_id:
             for window in self._browser_windows():
                 if self._window_id(window) == preferred_id:
@@ -434,21 +410,19 @@ class ActionTools:
                 "Bound browser window disappeared; refusing to close another window",
                 window_id=preferred_id,
             )
-            clear_binding = getattr(perception, "clear_browser_window", None)
-            if callable(clear_binding):
-                clear_binding()
+            self.perception.clear_browser_window()
             return None
 
         active_window = gw.getActiveWindow()
         if (
             active_window
-            and self._looks_like_browser_window(active_window)
+            and self.perception._looks_like_browser_window(active_window)
             and not bool(getattr(active_window, "isMinimized", False))
         ):
             return active_window
 
         for window in gw.getAllWindows():
-            if not self._looks_like_browser_window(window):
+            if not self.perception._looks_like_browser_window(window):
                 continue
             if getattr(window, "isMinimized", False):
                 continue
@@ -473,8 +447,7 @@ class ActionTools:
                 logger.debug(f"Browser window activation skipped before close: {e}")
 
             window.close()
-            if hasattr(self, "perception") and hasattr(self.perception, "clear_browser_window"):
-                self.perception.clear_browser_window()
+            self.perception.clear_browser_window()
             return {"closed": True, "title": title}
 
         return self._execute("close_browser", _close)

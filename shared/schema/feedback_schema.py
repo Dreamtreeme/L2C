@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from shared.schema.collection_intent import CollectionIntent
+
 FeedbackLabel = Literal[
     "success",
     "partial",
@@ -62,16 +64,7 @@ class FeedbackEpisode(BaseModel):
     feedback: ActionFeedback
 
 
-IssueSeverity = Literal["error", "warning"]
 ReviewDecision = Literal["accept", "revise", "reject"]
-
-
-class SubmissionIssue(BaseModel):
-    """의미 판단 전 구조 검증에서 발견한 문제(submission issue)."""
-
-    field: str
-    reason: str
-    severity: IssueSeverity = "error"
 
 
 class WorkerSubmission(BaseModel):
@@ -79,38 +72,17 @@ class WorkerSubmission(BaseModel):
 
     run_id: str = ""
     goal: str = ""
-    site: str = ""
-    task_category: str = ""
-    keyword: str = ""
     run_status: str = ""
     is_finished: bool = False
     hit_recursion_limit: bool = False
     collected_count: int = 0
     observed_job_ids: List[int] = Field(default_factory=list)
-    target_count: int = 0
     persisted_count: int = 0
-    feedback_saved: int = 0
-    feedback_persistence: Dict[str, Any] = Field(default_factory=dict)
     recorded_steps: List[Dict[str, Any]] = Field(default_factory=list)
     feedback_episodes: List[Dict[str, Any]] = Field(default_factory=list)
     transition_records: List[Dict[str, Any]] = Field(default_factory=list)
-    skill_metadata_evidence: Dict[str, Any] = Field(default_factory=dict)
-    collection_intent: Dict[str, Any] = Field(default_factory=dict)
-    semantic_evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    collection_intent: CollectionIntent = Field(default_factory=CollectionIntent)
     extracted_summary: Dict[str, Any] = Field(default_factory=dict)
-    worker_notes: str = ""
-
-
-class CommanderReview(BaseModel):
-    """작업 제출물에 대한 지휘자/비평가 판정(commander review)."""
-
-    decision: ReviewDecision
-    reasons: List[str] = Field(default_factory=list)
-    feedback_to_worker: str = ""
-    accept_collected_data: bool = False
-    continue_collection: bool = False
-    recipe_candidate: bool = False
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
 
 
 class RecipeStepVerdict(BaseModel):

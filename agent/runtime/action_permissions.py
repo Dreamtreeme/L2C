@@ -35,12 +35,9 @@ def build_public_collection_permission_contract(
     """사이트 프로필과 확정된 요청 인자로 실행 권한을 만든다."""
 
     return {
-        "scope": "public_job_collection",
         "site": site_profile.slug,
-        "allowed_tools": list(site_profile.tools.allowed_tools),
         "allowed_domains": list(site_profile.domains),
         "allowed_input_values": sorted(_collect_input_values(recipe_params)),
-        "require_declared_risk_for_model_actions": True,
     }
 
 
@@ -71,14 +68,6 @@ def task_permission_reason(
     )
     if not contract:
         return ""
-
-    allowed_tools = {
-        str(name)
-        for name in contract.get("allowed_tools", []) or []
-        if str(name)
-    }
-    if allowed_tools and action_name not in allowed_tools:
-        return "task_contract_tool_not_allowed"
 
     if action_name == "open_browser":
         domains = {
@@ -117,7 +106,6 @@ def task_permission_reason(
             "close_current_tab",
             "switch_tab",
         }
-        and contract.get("require_declared_risk_for_model_actions")
     ):
         risk_level = str(args.get("risk_level") or "").strip().casefold()
         if risk_level not in {"safe_read", "safe_navigation", "sensitive"}:

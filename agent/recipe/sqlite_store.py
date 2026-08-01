@@ -4,25 +4,35 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
 
+_SCHEMA_LOCK = threading.RLock()
+_INITIALIZED_SCHEMAS: set[tuple[type, Path]] = set()
+
+
 class SQLiteStore:
     def __init__(self, db_path=None):
         if db_path is None:
-            from shared.config import DB_PATH
+            from agent.config import get_settings
 
-            db_path = DB_PATH
+            db_path = get_settings().paths.db_path
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        schema_key = (type(self), self.db_path.resolve())
+        with _SCHEMA_LOCK:
+            if schema_key not in _INITIALIZED_SCHEMAS:
+                self._ensure_schema()
+                _INITIALIZED_SCHEMAS.add(schema_key)
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             yield conn
             conn.commit()

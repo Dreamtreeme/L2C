@@ -15,7 +15,6 @@ from agent.config import get_settings
 class RetentionPolicy:
     log_days: int = 30
     artifact_days: int = 90
-    audit_days: int = 90
     job_version_days: int = 180
     keep_job_versions: int = 5
 
@@ -25,7 +24,6 @@ class RetentionPolicy:
         return cls(
             log_days=settings.log_days,
             artifact_days=settings.artifact_days,
-            audit_days=settings.audit_days,
             job_version_days=settings.job_version_days,
             keep_job_versions=settings.keep_job_versions,
         )
@@ -70,19 +68,13 @@ def _referenced_job_artifacts(conn: sqlite3.Connection) -> set[Path]:
     return referenced
 
 
-def _database_cleanup_candidates(
+def _job_version_candidates(
     conn: sqlite3.Connection,
     policy: RetentionPolicy,
     now: datetime,
-) -> dict[str, list[Any]]:
-    audit_cutoff = now - timedelta(days=policy.audit_days)
+) -> list[int]:
     version_cutoff = now - timedelta(days=policy.job_version_days)
-    candidates: dict[str, list[Any]] = {
-        "job_versions": [],
-        "feedback_episodes": [],
-        "worker_submissions": [],
-        "recipe_candidates": [],
-    }
+    candidates: list[int] = []
 
     version_rows = conn.execute(
         "SELECT id, job_id, version_number, observed_at FROM job_versions "
@@ -93,39 +85,8 @@ def _database_cleanup_candidates(
         job_id = int(row["job_id"])
         per_job_count[job_id] = per_job_count.get(job_id, 0) + 1
         if per_job_count[job_id] > policy.keep_job_versions and _expired(row["observed_at"], version_cutoff):
-            candidates["job_versions"].append(int(row["id"]))
-
-    for row in conn.execute("SELECT episode_id, created_at FROM feedback_episodes"):
-        if _expired(row["created_at"], audit_cutoff):
-            candidates["feedback_episodes"].append(str(row["episode_id"]))
-    for row in conn.execute("SELECT submission_id, updated_at FROM worker_submissions"):
-        if _expired(row["updated_at"], audit_cutoff):
-            candidates["worker_submissions"].append(str(row["submission_id"]))
-    for row in conn.execute(
-        "SELECT candidate_id, status, updated_at FROM recipe_candidates "
-        "WHERE status IN ('rejected', 'revise', 'review_failed')"
-    ):
-        if _expired(row["updated_at"], audit_cutoff):
-            candidates["recipe_candidates"].append(str(row["candidate_id"]))
+            candidates.append(int(row["id"]))
     return candidates
-
-
-def _delete_database_candidates(conn: sqlite3.Connection, candidates: dict[str, list[Any]]) -> None:
-    contracts = {
-        "job_versions": ("job_versions", "id"),
-        "feedback_episodes": ("feedback_episodes", "episode_id"),
-        "worker_submissions": ("worker_submissions", "submission_id"),
-        "recipe_candidates": ("recipe_candidates", "candidate_id"),
-    }
-    for name, values in candidates.items():
-        if not values:
-            continue
-        table, column = contracts[name]
-        placeholders = ",".join("?" for _ in values)
-        conn.execute(
-            f"DELETE FROM {table} WHERE {column} IN ({placeholders})",
-            values,
-        )
 
 
 def run_retention(
@@ -148,7 +109,7 @@ def run_retention(
     conn.row_factory = sqlite3.Row
     try:
         referenced = _referenced_job_artifacts(conn)
-        db_candidates = _database_cleanup_candidates(conn, policy, current)
+        version_candidates = _job_version_candidates(conn, policy, current)
         log_files = _file_candidates(
             Path(logs_dir),
             current - timedelta(days=policy.log_days),
@@ -162,7 +123,12 @@ def run_retention(
         files = log_files + artifact_files
         reclaimable_bytes = sum(path.stat().st_size for path in files if path.exists())
         if not dry_run:
-            _delete_database_candidates(conn, db_candidates)
+            if version_candidates:
+                placeholders = ",".join("?" for _ in version_candidates)
+                conn.execute(
+                    f"DELETE FROM job_versions WHERE id IN ({placeholders})",
+                    version_candidates,
+                )
             for path in files:
                 path.unlink(missing_ok=True)
             conn.commit()
@@ -171,10 +137,6 @@ def run_retention(
             for table in (
                 "jobs",
                 "job_versions",
-                "recipes",
-                "recipe_candidates",
-                "worker_submissions",
-                "feedback_episodes",
             )
         }
         return {
@@ -185,7 +147,7 @@ def run_retention(
                 "artifact_count": len(artifact_files),
                 "reclaimable_bytes": reclaimable_bytes,
             },
-            "database": {name: len(values) for name, values in db_candidates.items()},
+            "database": {"job_versions": len(version_candidates)},
             "inventory": inventory,
         }
     finally:

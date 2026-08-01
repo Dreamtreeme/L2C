@@ -192,14 +192,17 @@ def _command(scenario: dict[str, Any], log_path: Path, summary_path: Path) -> li
         str(ROOT_DIR / "benchmark" / "run_realtime_e2e.py"),
         "--site",
         str(scenario["site"]),
-        "--query",
-        str(scenario["query"]),
+        "--search-keyword",
+        str(scenario["search_keyword"]),
         "--target-count",
         str(max(0, int(scenario.get("target_count") or 0))),
         "--count-mode",
         str(scenario.get("count_mode") or "unspecified"),
         "--original-query",
-        str(scenario.get("original_query") or scenario["query"]),
+        str(
+            scenario.get("original_query")
+            or scenario["search_keyword"]
+        ),
         "--scenario-id",
         str(scenario["id"]),
         "--execution-mode",
@@ -253,7 +256,9 @@ def _scenario_workload_key(scenario: dict[str, Any]) -> str:
     return json.dumps(
         {
             "site": str(scenario.get("site") or "").strip().casefold(),
-            "query": str(scenario.get("query") or "").strip().casefold(),
+            "search_keyword": str(
+                scenario.get("search_keyword") or ""
+            ).strip().casefold(),
             "target_count": max(0, int(scenario.get("target_count") or 0)),
             "count_mode": str(scenario.get("count_mode") or "unspecified"),
         },

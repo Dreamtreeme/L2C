@@ -48,7 +48,6 @@ def _job_validation_issues(
     date_required = bool(
         posted_from
         or posted_to
-        or filters.get("posted_date_expression")
         or collection_intent.get("freshness_required")
     )
     posted_at = str(getattr(job_posting, "posted_at", None) or "").strip()
@@ -59,20 +58,11 @@ def _job_validation_issues(
     if posted_at and posted_to and posted_at > posted_to:
         issues.append("requested_filter_mismatch:posted_at_after_range")
 
-    requested_fields = {
-        "experience": "experience_text",
-        "location": "location",
-        "employment_type": "employment_type",
-    }
-    for request_field, job_field in requested_fields.items():
-        if filters.get(request_field) and not str(getattr(job_posting, job_field, None) or "").strip():
-            issues.append(f"requested_evidence_missing:{job_field}")
     return issues
 
 
 def persist_collected_data_with_report(
     extracted_jd: dict,
-    keyword: str,
     collection_intent: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """공고별 검증 결과와 저장 건수를 함께 반환한다."""
@@ -81,11 +71,12 @@ def persist_collected_data_with_report(
     from agent.application.search_taxonomy_service import SearchTaxonomyService
     from agent.runtime.job_identity import url_with_source_card_key
     from agent.runtime.site_context import looks_like_job_detail_url
-    from shared.config import DB_PATH
+    from agent.config import get_settings
     from shared.db.database import Database
 
-    db = Database(DB_PATH)
-    taxonomy_service = SearchTaxonomyService(DB_PATH)
+    db_path = get_settings().paths.db_path
+    db = Database(db_path)
+    taxonomy_service = SearchTaxonomyService(db_path)
     jobs = job_list_value(extracted_jd)
     if jobs is not None:
         job_list = jobs if isinstance(jobs, list) else [jobs]
@@ -129,10 +120,10 @@ def persist_collected_data_with_report(
             else []
         )
         normalized_job = normalize_job_for_persistence(job)
-        url = normalized_job.get("url") or job.get("url") or job.get("URL") or job.get("공고url")
+        url = normalized_job.get("url")
         if not url:
-            company_name = job.get("회사명", job.get("company_name", ""))
-            position = job.get("직무명", job.get("position", ""))
+            company_name = normalized_job.get("company_name", "")
+            position = normalized_job.get("position", "")
             logger.warning(
                 "[job_persistence] Skipping job #%s (%s - %s): URL not collected",
                 index,

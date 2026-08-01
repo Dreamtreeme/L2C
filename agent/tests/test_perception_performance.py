@@ -571,11 +571,10 @@ def test_som_engine_normalizes_paddleocr_results_and_scales_boxes():
 
 
 def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
-    from agent.config import clear_settings_cache
+    from agent.config import get_settings
     from agent.tools.som_engine import SomEngine
 
     engine = object.__new__(SomEngine)
-    monkeypatch.delenv("SOM_OCR_RESIZE", raising=False)
     monkeypatch.delenv("SOM_OCR_MAX_DIM", raising=False)
 
     assert engine._ocr_scale_for_image(1024, 900) == 1.0
@@ -583,13 +582,8 @@ def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
     assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1152 / 3846, 3)
 
     monkeypatch.setenv("SOM_OCR_MAX_DIM", "1600")
-    clear_settings_cache()
+    get_settings.cache_clear()
     assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1600 / 3846, 3)
-
-    monkeypatch.setenv("SOM_OCR_RESIZE", "0")
-    clear_settings_cache()
-    assert engine._ocr_scale_for_image(3846, 2094) == 1.0
-
 
 def test_som_engine_removes_icon_containers_that_duplicate_ocr_text():
     from agent.tools.som_engine import SomEngine

@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from agent.application.model_policy import ModelExecutionRole, model_execution_policy
 from agent.config import get_settings
 
 
@@ -89,24 +90,15 @@ def get_google_chat_model(
     model: str,
     *,
     temperature: float = 0.0,
-    request_timeout: float | None = None,
-    retries: int | None = None,
     max_output_tokens: int | None = None,
     thinking_level: str | None = None,
-    execution_role: str | None = None,
+    execution_role: ModelExecutionRole,
 ) -> Any:
     """동일 설정의 Gemini 클라이언트를 한 번만 생성한다."""
 
-    if execution_role:
-        from agent.application.model_policy import model_execution_policy
-
-        execution_policy = model_execution_policy(execution_role)
-        if request_timeout is None:
-            request_timeout = execution_policy.request_timeout_sec
-        if retries is None:
-            retries = execution_policy.retries
-    normalized_timeout = None if request_timeout is None else float(request_timeout)
-    normalized_retries = None if retries is None else max(0, int(retries))
+    execution_policy = model_execution_policy(execution_role)
+    request_timeout = execution_policy.request_timeout_sec
+    retries = execution_policy.retries
     model_name = str(model).strip()
     normalized_max_output_tokens = _resolved_max_output_tokens(
         model_name,
@@ -119,8 +111,8 @@ def get_google_chat_model(
     key = (
         model_name,
         _normalized_temperature(model_name, temperature),
-        normalized_timeout,
-        normalized_retries,
+        request_timeout,
+        retries,
         normalized_max_output_tokens,
         normalized_thinking_level,
     )
@@ -137,10 +129,8 @@ def get_google_chat_model(
                 kwargs["temperature"] = key[1]
             if normalized_thinking_level:
                 kwargs["thinking_level"] = normalized_thinking_level
-            if normalized_timeout is not None:
-                kwargs["request_timeout"] = normalized_timeout
-            if normalized_retries is not None:
-                kwargs["retries"] = normalized_retries
+            kwargs["request_timeout"] = request_timeout
+            kwargs["retries"] = retries
             if normalized_max_output_tokens is not None:
                 # LangChain의 max_tokens 필드가 Gemini max_output_tokens로 변환됩니다.
                 kwargs["max_tokens"] = normalized_max_output_tokens
@@ -159,24 +149,15 @@ def get_structured_google_model(
     schema: type,
     *,
     temperature: float = 0.0,
-    request_timeout: float | None = None,
-    retries: int | None = None,
     max_output_tokens: int | None = None,
     thinking_level: str | None = None,
-    execution_role: str | None = None,
+    execution_role: ModelExecutionRole,
 ) -> Any:
     """동일 모델과 출력 스키마의 구조화 클라이언트를 재사용한다."""
 
-    if execution_role:
-        from agent.application.model_policy import model_execution_policy
-
-        execution_policy = model_execution_policy(execution_role)
-        if request_timeout is None:
-            request_timeout = execution_policy.request_timeout_sec
-        if retries is None:
-            retries = execution_policy.retries
-    normalized_timeout = None if request_timeout is None else float(request_timeout)
-    normalized_retries = None if retries is None else max(0, int(retries))
+    execution_policy = model_execution_policy(execution_role)
+    request_timeout = execution_policy.request_timeout_sec
+    retries = execution_policy.retries
     model_name = str(model).strip()
     normalized_max_output_tokens = _resolved_max_output_tokens(
         model_name,
@@ -189,8 +170,8 @@ def get_structured_google_model(
     key = (
         model_name,
         _normalized_temperature(model_name, temperature),
-        normalized_timeout,
-        normalized_retries,
+        request_timeout,
+        retries,
         normalized_max_output_tokens,
         normalized_thinking_level,
         schema,
@@ -201,8 +182,6 @@ def get_structured_google_model(
             client = get_google_chat_model(
                 model_name,
                 temperature=key[1],
-                request_timeout=normalized_timeout,
-                retries=normalized_retries,
                 max_output_tokens=normalized_max_output_tokens,
                 thinking_level=normalized_thinking_level,
                 execution_role=execution_role,
@@ -211,16 +190,7 @@ def get_structured_google_model(
         return client
 
 
-def clear_model_client_cache() -> None:
-    """테스트와 명시적 런타임 재시작에서 모델 클라이언트 캐시를 비운다."""
-
-    with _LOCK:
-        _GOOGLE_STRUCTURED_CLIENTS.clear()
-        _GOOGLE_CLIENTS.clear()
-
-
 __all__ = [
-    "clear_model_client_cache",
     "get_google_chat_model",
     "get_structured_google_model",
 ]

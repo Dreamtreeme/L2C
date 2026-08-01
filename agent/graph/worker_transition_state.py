@@ -120,14 +120,14 @@ def transition_record(
     pending: dict[str, Any],
     *,
     status: str,
-    outcome: str,
     source: str,
     reason: str,
     attempt: int,
     state: GraphState,
-    phash_distance: int | None,
     visual_change_ratio: float | None,
     ocr_skipped: bool,
+    outcome: str = "",
+    phash_distance: int | None = None,
 ) -> dict[str, Any]:
     started_at = float(pending.get("started_at") or time.time())
     return build_transition_observation(

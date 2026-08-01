@@ -8,7 +8,6 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Callable, Iterator, Mapping
 
-from agent.config import get_settings
 from agent.utils.logger import logger
 
 
@@ -182,9 +181,6 @@ class VisionWorkerRuntime:
     def close_browser_after_run(self) -> bool:
         """요청 종료에는 브라우저만 닫고 OCR 작업자는 유지한다."""
 
-        if not get_settings().browser.close_browser_after_run:
-            logger.info("Browser cleanup disabled")
-            return False
         action_tools = self._action_tools
         if action_tools is None:
             logger.info("Browser cleanup skipped", reason="action_tools_not_initialized")

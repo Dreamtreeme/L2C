@@ -14,7 +14,7 @@ export type RunPhase =
   | "planning"
   | "clarification"
   | "collection"
-  | "review"
+  | "validation"
   | "persistence"
   | "answering"
   | "completed"

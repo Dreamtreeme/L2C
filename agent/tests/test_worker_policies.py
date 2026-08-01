@@ -62,7 +62,6 @@ def test_reflex_no_change_is_blocked_before_ocr():
 
     assert decision.reason == "reflex_no_screen_change"
     assert decision.block_reflex_recipe is True
-    assert decision.reuse_previous_observation is True
 
 
 def test_general_transition_requires_markers_to_verify_change():

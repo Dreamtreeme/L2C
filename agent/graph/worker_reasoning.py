@@ -20,43 +20,17 @@ from agent.runtime.transition_runtime import (
 from agent.utils.logger import logger
 
 
-def _get_ui_llm_with_tools(
-    allowed_tool_names: tuple[str, ...] | None = None,
-):
-    """선택된 사이트가 허용한 도구만 바인딩한 모델을 재사용한다."""
+def _get_ui_llm_with_tools():
+    """작업자 원자 도구를 바인딩한 모델을 재사용한다."""
 
-    names = tuple(
-        name
-        for name in (allowed_tool_names or tuple(ACTION_TOOL_SCHEMAS))
-        if name in ACTION_TOOL_SCHEMAS
-    )
-    if not names:
-        names = tuple(ACTION_TOOL_SCHEMAS)
     from agent.runtime.vision_worker_runtime import (
         current_vision_worker_runtime,
     )
 
     return current_vision_worker_runtime().get_ui_model_with_tools(
-        names,
+        tuple(ACTION_TOOL_SCHEMAS),
         ACTION_TOOL_SCHEMAS,
     )
-
-
-def _allowed_tool_names_for_state(
-    state: GraphState,
-) -> tuple[str, ...]:
-    """현재 사이트 프로필의 허용 도구 목록을 반환한다."""
-
-    from agent.runtime.site_context import site_profile_for_url
-
-    profile = site_profile_for_url(str(state.get("current_url") or ""))
-    configured = profile.tools.allowed_tools if profile else ()
-    names = tuple(
-        str(name)
-        for name in configured
-        if str(name) in ACTION_TOOL_SCHEMAS
-    )
-    return names or tuple(ACTION_TOOL_SCHEMAS)
 
 
 def _is_repeating(history: list[Any], count: int) -> bool:
@@ -181,9 +155,8 @@ def reasoning_node(state: GraphState) -> dict[str, Any]:
         if selector_trace.get("attempted")
         else "general"
     )
-    allowed_tool_names = _allowed_tool_names_for_state(state)
     response = invoke_with_metrics(
-        _get_ui_llm_with_tools(allowed_tool_names),
+        _get_ui_llm_with_tools(),
         build_reasoning_messages(
             state,
             loop_warning,

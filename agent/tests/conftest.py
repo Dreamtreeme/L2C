@@ -5,8 +5,8 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def reset_typed_settings_cache():
-    from agent.config import clear_settings_cache
+    from agent.config import get_settings
 
-    clear_settings_cache()
+    get_settings.cache_clear()
     yield
-    clear_settings_cache()
+    get_settings.cache_clear()

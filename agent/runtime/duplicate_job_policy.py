@@ -5,16 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agent.config import get_settings
 from agent.application.job_lookup_service import (
     find_job_ids_by_card_identities,
     find_job_id_by_url,
 )
 from agent.runtime.job_collection import job_list_value
-
-
-def duplicate_detail_skip_enabled() -> bool:
-    return get_settings().reflex.skip_existing_job_details
 
 
 def _url_key(value: Any) -> str:
@@ -46,15 +41,15 @@ def existing_job_url_trace(
     """현재 실행과 DB에서 동일한 상세 URL을 찾는다."""
 
     target = _url_key(url)
-    if not duplicate_detail_skip_enabled() or not target:
-        return {"matched": False, "reason": "duplicate_skip_disabled_or_url_missing"}
+    if not target:
+        return {"matched": False, "reason": "url_missing"}
     if _current_run_contains_url(extracted_jd, target):
         return {"matched": True, "source": "current_run", "url": target}
 
     if db_path is None:
-        from shared.config import DB_PATH
+        from agent.config import get_settings
 
-        db_path = DB_PATH
+        db_path = get_settings().paths.db_path
     job_id = find_job_id_by_url(target, db_path=db_path)
     if job_id is not None:
         return {"matched": True, "source": "database", "job_id": job_id, "url": target}
@@ -69,8 +64,6 @@ def mark_existing_job_cards(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """목록에서 회사명과 제목이 정확히 같은 DB 공고를 처리 완료로 표시한다."""
 
-    if not duplicate_detail_skip_enabled():
-        return queue, []
     pending_items = [
         item
         for item in queue or []
@@ -115,7 +108,6 @@ def mark_existing_job_cards(
 
 
 __all__ = [
-    "duplicate_detail_skip_enabled",
     "existing_job_url_trace",
     "mark_existing_job_cards",
 ]

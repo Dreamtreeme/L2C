@@ -15,40 +15,27 @@ from agent.utils.model_dump import dump_model
 
 
 def detail_extraction_model_spec() -> str:
+    from agent.config import get_settings
     from agent.application.model_policy import lightweight_model_name
 
-    return lightweight_model_name("VISION_DETAIL_FINAL_EXTRACTION_MODEL")
-
-
-_detail_extraction_llm: Any = None
-_detail_extraction_llm_key: str | None = None
+    return (
+        get_settings().models.detail_final_extraction_model
+        or lightweight_model_name()
+    )
 
 
 def get_detail_extraction_llm() -> Any:
     """상세 OCR 정제용 Gemini 구조화 모델을 지연 초기화한다."""
 
-    global _detail_extraction_llm, _detail_extraction_llm_key
-    model_spec = detail_extraction_model_spec()
-    if _detail_extraction_llm is None or _detail_extraction_llm_key != model_spec:
-        from agent.application.model_clients import get_structured_google_model
-        from shared.schema.jd_schema import JobPosting
+    from agent.application.model_clients import get_structured_google_model
+    from shared.schema.jd_schema import JobPosting
 
-        _detail_extraction_llm = get_structured_google_model(
-            model_spec,
-            JobPosting,
-            temperature=0.0,
-            execution_role="detail",
-        )
-        _detail_extraction_llm_key = model_spec
-    return _detail_extraction_llm
-
-
-def clear_detail_extraction_model_cache() -> None:
-    """애플리케이션 런타임 종료 시 상세 정제 모델 참조를 해제한다."""
-
-    global _detail_extraction_llm, _detail_extraction_llm_key
-    _detail_extraction_llm = None
-    _detail_extraction_llm_key = None
+    return get_structured_google_model(
+        detail_extraction_model_spec(),
+        JobPosting,
+        temperature=0.0,
+        execution_role="detail",
+    )
 
 
 def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[str, Any]:
@@ -140,7 +127,6 @@ def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[st
 
 
 __all__ = [
-    "clear_detail_extraction_model_cache",
     "detail_extraction_model_spec",
     "extract_job_from_job_detail_buffer",
     "get_detail_extraction_llm",

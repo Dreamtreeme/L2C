@@ -17,7 +17,6 @@ from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.job_collection import job_count
 from agent.runtime.job_card_queue import (
     job_card_queue_scope_complete,
-    job_card_queue_enabled,
     resolved_job_card_count,
 )
 from agent.runtime.site_context import site_runtime_guidance
@@ -62,10 +61,6 @@ class JobCardSelection(BaseModel):
     cards: list[VisibleJobCard] = Field(default_factory=list)
 
 
-def job_card_selector_enabled() -> bool:
-    return get_settings().reflex.job_card_selector_enabled
-
-
 def _target_count(state: GraphState) -> int:
     try:
         return max(0, int((state.get("recipe_params") or {}).get("target_count") or 0))
@@ -102,9 +97,7 @@ def should_select_job_cards(state: GraphState) -> bool:
         for item in queue
     )
     return bool(
-        job_card_selector_enabled()
-        and job_card_queue_enabled()
-        and not latest_no_effect_transition(state)
+        not latest_no_effect_transition(state)
         and normalize_page_role(state.get("current_page_role")) == "search"
         and (target_count > collected_count or needs_visible_screen)
         and (not queue or queue_exhausted)
@@ -117,7 +110,10 @@ def should_select_job_cards(state: GraphState) -> bool:
 def _selector_model_name() -> str:
     from agent.application.model_policy import lightweight_model_name
 
-    return lightweight_model_name("VISION_JOB_CARD_SELECTOR_MODEL")
+    return (
+        get_settings().models.job_card_selector_model
+        or lightweight_model_name()
+    )
 
 
 def _get_job_card_selector_model() -> Any:
@@ -532,7 +528,6 @@ __all__ = [
     "JobCardSelection",
     "VisibleJobCard",
     "prepare_job_card_selector_model",
-    "job_card_selector_enabled",
     "select_job_cards",
     "should_select_job_cards",
 ]

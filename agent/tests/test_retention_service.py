@@ -2,28 +2,20 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 
-
-def test_retention_defaults_keep_screen_artifacts_as_long_as_audit_history():
-    from agent.application.retention_service import RetentionPolicy
-
-    policy = RetentionPolicy()
-
-    assert policy.artifact_days == policy.audit_days == 90
-
-
 def test_operations_api_previews_and_requires_confirmation_header(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
 
-    import shared.config as config
+    from agent.config import get_settings
     from agent.web_server import app
 
     logs_dir = tmp_path / "logs"
     screenshot_dir = tmp_path / "screenshots"
     logs_dir.mkdir()
     screenshot_dir.mkdir()
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "operations.db")
-    monkeypatch.setattr(config, "LOGS_DIR", logs_dir)
-    monkeypatch.setattr(config, "SCREENSHOT_DIR", screenshot_dir)
+    paths = get_settings().paths
+    monkeypatch.setattr(paths, "db_path", tmp_path / "operations.db")
+    monkeypatch.setattr(paths, "log_dir", logs_dir)
+    monkeypatch.setattr(paths, "screenshot_dir", screenshot_dir)
 
     client = TestClient(app)
     preview = client.get("/api/operations")
@@ -100,16 +92,10 @@ def test_retention_is_dry_run_by_default_and_preserves_referenced_artifacts(tmp_
         )
     with sqlite3.connect(db_path) as conn:
         conn.execute("UPDATE job_versions SET observed_at = ? WHERE job_id = ?", (old, job_id))
-        conn.execute(
-            "INSERT INTO feedback_episodes (episode_id, run_id, payload_json, created_at) "
-            "VALUES ('old-episode', 'old-run', '{}', ?)",
-            (old,),
-        )
 
     policy = RetentionPolicy(
         log_days=30,
         artifact_days=30,
-        audit_days=90,
         job_version_days=180,
         keep_job_versions=5,
     )
@@ -125,7 +111,6 @@ def test_retention_is_dry_run_by_default_and_preserves_referenced_artifacts(tmp_
     assert preview["files"]["log_count"] == 1
     assert preview["files"]["artifact_count"] == 1
     assert preview["database"]["job_versions"] == 2
-    assert preview["database"]["feedback_episodes"] == 1
     assert old_log.exists() and old_artifact.exists() and referenced_artifact.exists()
 
     applied = run_retention(
@@ -142,5 +127,3 @@ def test_retention_is_dry_run_by_default_and_preserves_referenced_artifacts(tmp_
     assert not old_artifact.exists()
     assert referenced_artifact.exists()
     assert len(db.list_versions(job_id)) == 5
-    with sqlite3.connect(db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM feedback_episodes").fetchone()[0] == 0

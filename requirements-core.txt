@@ -6,18 +6,15 @@ pydantic-settings==2.14.2
 python-dotenv==1.2.2
 Pillow==12.3.0
 beautifulsoup4==4.15.0
-json-repair==0.61.7
 requests==2.34.2
 
 # 브라우저·API
 playwright==1.61.0
-ollama==0.6.2
 fastapi==0.139.2
 uvicorn==0.51.0
 
 # 화면 제어·관측
 structlog==26.1.0
-sentry-sdk==2.66.1
 mss==10.2.0
 PyAutoGUI==0.9.54
 pyperclip==1.11.0

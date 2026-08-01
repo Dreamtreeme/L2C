@@ -22,7 +22,6 @@ from agent.graph.investigation_context import (
     InvestigationModels,
     build_request_prompt_context,
     capabilities_for_investigation,
-    parse_model_payload,
 )
 from agent.graph.investigation_evidence_policy import (
     apply_evidence_validation,
@@ -37,6 +36,7 @@ from agent.prompts.investigation import (
     evidence_plan_prompt,
     evidence_validation_prompt,
 )
+from agent.utils.model_payload import parse_model_payload
 from shared.schema.investigation_schema import (
     EvidencePlan,
     EvidencePolicy,

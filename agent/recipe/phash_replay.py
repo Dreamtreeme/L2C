@@ -6,36 +6,12 @@ from typing import Any
 
 from agent.config import get_settings
 from agent.recipe.text_utils import normalize_text
-from agent.utils.model_dump import dump_model
 from agent.vision.marker_geometry import bbox_to_ratio, marker_bbox, marker_center_ratio
 from agent.vision.screen_signature import (
     compute_roi_signature,
     hamming_distance,
     image_dimensions,
 )
-
-
-def _step_get(step: Any, key: str, default: Any = None) -> Any:
-    if isinstance(step, dict):
-        return step.get(key, default)
-    return getattr(step, key, default)
-
-
-def _target_get(target: Any, key: str, default: Any = None) -> Any:
-    if target is None:
-        return default
-    if isinstance(target, dict):
-        return target.get(key, default)
-    return getattr(target, key, default)
-
-
-def _target_for_step(step: Any) -> Any:
-    return _step_get(step, "target")
-
-
-def _roi_signature_for_step(step: Any) -> dict[str, Any]:
-    raw = _step_get(step, "roi_signature") or {}
-    return dump_model(raw)
 
 
 def _norm_key(value: Any) -> str:
@@ -48,10 +24,6 @@ def anchor_overlap(saved: list[Any], current: list[Any]) -> float:
     if not saved_set or not current_set:
         return 0.0
     return len(saved_set & current_set) / max(1, len(saved_set))
-
-
-# 전체 화면 pHash replay fallback은 ROI pHash 전환 후 비활성화했다.
-# target 주변 ROI가 없는 오래된 레시피는 reasoning으로 폴백한다.
 
 
 def _capture_size(value: Any) -> list[int]:
@@ -198,11 +170,11 @@ def screen_context_signature_match(
     }
 
 
-def _target_center_ratio(target: Any) -> list[float]:
-    center = _target_get(target, "center_ratio") or []
+def _target_center_ratio(target: dict[str, Any]) -> list[float]:
+    center = target.get("center_ratio") or []
     if isinstance(center, list) and len(center) == 2:
         return [float(center[0]), float(center[1])]
-    bbox = _target_get(target, "bbox_ratio") or []
+    bbox = target.get("bbox_ratio") or []
     if isinstance(bbox, list) and len(bbox) == 4:
         return [round((float(bbox[0]) + float(bbox[2])) / 2, 4), round((float(bbox[1]) + float(bbox[3])) / 2, 4)]
     return []
@@ -212,8 +184,8 @@ def _distance(left: list[float], right: list[float]) -> float:
     return ((left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2) ** 0.5
 
 
-def _bbox_ratio(target: Any) -> list[float]:
-    bbox = _target_get(target, "bbox_ratio") or []
+def _bbox_ratio(target: dict[str, Any]) -> list[float]:
+    bbox = target.get("bbox_ratio") or []
     if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
         return []
     try:
@@ -234,15 +206,20 @@ def _bbox_iou(left: list[float], right: list[float]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
-def match_target_by_ratio(target: Any, markers: list[dict[str, Any]], screen_size: list[int]) -> int | None:
+def match_target_by_ratio(
+    target: dict[str, Any] | None,
+    markers: list[dict[str, Any]],
+    screen_size: list[int],
+) -> int | None:
     """저장 좌표와 종류·형상이 가장 잘 맞는 현재 마커를 선택한다."""
 
+    target = target or {}
     target_center = _target_center_ratio(target)
     if len(target_center) != 2 or not screen_size or len(screen_size) != 2:
         return None
     max_distance = get_settings().reflex.target_center_max_distance
     target_bbox = _bbox_ratio(target)
-    target_type = normalize_text(_target_get(target, "marker_type")).casefold()
+    target_type = normalize_text(target.get("marker_type")).casefold()
     scored: list[tuple[float, float, int, str]] = []
     for marker in markers or []:
         if not isinstance(marker, dict):
@@ -273,12 +250,12 @@ def match_target_by_ratio(target: Any, markers: list[dict[str, Any]], screen_siz
 
 
 def match_step_by_screen_signature(
-    step: Any,
+    step: dict[str, Any],
     current_signature: dict[str, Any],
     markers: list[dict[str, Any]],
     current_image_path: str = "",
 ) -> tuple[int | None, dict[str, Any]]:
-    saved_roi_signature = _roi_signature_for_step(step)
+    saved_roi_signature = dict(step.get("roi_signature") or {})
     if not saved_roi_signature:
         return None, {
             "matched": False,
@@ -295,7 +272,7 @@ def match_step_by_screen_signature(
     if not signature_result.get("matched"):
         return None, signature_result
 
-    marker_id = match_target_by_ratio(_target_for_step(step), markers, screen_size)
+    marker_id = match_target_by_ratio(step.get("target"), markers, screen_size)
     if marker_id is None:
         signature_result = dict(signature_result)
         signature_result["matched"] = False

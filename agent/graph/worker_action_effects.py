@@ -7,9 +7,6 @@ from typing import Any
 from agent.graph import worker_execution_dispatch
 from agent.graph.action_request import ActionRequest, build_action_request
 from agent.graph.worker_execution_context import WorkerExecutionContext
-from agent.graph.worker_execution_policy import (
-    auto_finish_on_target_enabled,
-)
 from agent.graph.worker_state import (
     count_mode_from_state,
     extracted_job_count,
@@ -255,8 +252,7 @@ def _apply_job_detail_completion(
         return _confirmed_job_results_return_action(context, result)
 
     if (
-        auto_finish_on_target_enabled()
-        and count_mode_from_state(context.state) == "visible_all"
+        count_mode_from_state(context.state) == "visible_all"
         and context.job_card_queue
         and not pending_cards
     ):
@@ -275,9 +271,6 @@ def _apply_collection_target_completion(
     context: WorkerExecutionContext,
     result: dict[str, Any],
 ) -> None:
-    if not auto_finish_on_target_enabled():
-        return
-
     target_count = target_count_from_state(context.state)
     collected_count = extracted_job_count(context.current_jobs)
     resolved_count = max(

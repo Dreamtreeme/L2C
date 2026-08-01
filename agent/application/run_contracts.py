@@ -29,7 +29,7 @@ class RunPhase(str, Enum):
     PLANNING = "planning"
     CLARIFICATION = "clarification"
     COLLECTION = "collection"
-    REVIEW = "review"
+    VALIDATION = "validation"
     PERSISTENCE = "persistence"
     ANSWERING = "answering"
     COMPLETED = "completed"

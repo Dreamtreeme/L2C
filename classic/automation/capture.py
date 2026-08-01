@@ -12,13 +12,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 
-from shared.config import (
-    CHROME_WINDOW_HEIGHT,
-    CHROME_WINDOW_WIDTH,
-    PAGE_LOAD_WAIT_SEC,
-    PLAYWRIGHT_HEADLESS,
-    PLAYWRIGHT_TIMEOUT_MS,
-)
+from agent.config import get_settings
 
 from .sites import resolve_adapter
 
@@ -36,6 +30,7 @@ def capture_and_extract_dom(url: str) -> dict:
     logger.info(f"[capture_and_extract_dom] URL={url}")
 
     adapter = resolve_adapter(url)
+    browser_settings = get_settings().browser
     logger.info(f"사이트 어댑터: {adapter.name}")
 
     dom_data: dict = {
@@ -46,11 +41,14 @@ def capture_and_extract_dom(url: str) -> dict:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=PLAYWRIGHT_HEADLESS,
+            headless=browser_settings.playwright_headless,
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(
-            viewport={"width": CHROME_WINDOW_WIDTH, "height": CHROME_WINDOW_HEIGHT},
+            viewport={
+                "width": browser_settings.chrome_window_width,
+                "height": browser_settings.chrome_window_height,
+            },
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -60,17 +58,20 @@ def capture_and_extract_dom(url: str) -> dict:
         page = context.new_page()
 
         try:
-            logger.info(f"페이지 접속 시도 중... (timeout={PLAYWRIGHT_TIMEOUT_MS}ms)")
+            logger.info(
+                "페이지 접속 시도 중... (timeout=%sms)",
+                browser_settings.playwright_timeout_ms,
+            )
             try:
                 page.goto(
                     url,
                     wait_until="domcontentloaded",
-                    timeout=PLAYWRIGHT_TIMEOUT_MS,
+                    timeout=browser_settings.playwright_timeout_ms,
                 )
             except Exception as e:
                 logger.warning(f"페이지 로딩 중 타임아웃 발생 (무시하고 진행): {e}")
 
-            time.sleep(PAGE_LOAD_WAIT_SEC)
+            time.sleep(browser_settings.page_load_wait_sec)
 
             # 사이트 어댑터에 추출 위임
             dom_data = adapter.extract(page)

@@ -12,6 +12,9 @@ from langgraph.types import Command
 
 from agent.application.run_context import emit_run_event
 from agent.application.run_contracts import RunPhase, RunStatus
+from agent.application.occupation_clarification_service import (
+    OccupationClarificationService,
+)
 from agent.application.search_taxonomy_review_service import (
     SearchTaxonomyReviewService,
 )
@@ -26,7 +29,6 @@ from agent.graph.investigation_context import (
 from agent.graph.investigation_evidence_nodes import InvestigationEvidenceNodes
 from agent.graph.investigation_request_nodes import InvestigationRequestNodes
 from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
-from agent.tools.realtime_scraping import realtime_scraping
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     InvestigationRequest,
@@ -40,10 +42,10 @@ class InvestigationWorkflow:
         self,
         *,
         db_path: str | Path,
+        collect_jobs: Callable[[Any], Any],
         checkpoint_runtime: InvestigationCheckpointRuntime | None = None,
         models: InvestigationModels | None = None,
         capabilities: list[Any] | None = None,
-        collection_tool: Any = None,
         taxonomy_service: SearchTaxonomyService | None = None,
         taxonomy_review_service: SearchTaxonomyReviewService | None = None,
         now: Callable[[], datetime] | None = None,
@@ -59,7 +61,6 @@ class InvestigationWorkflow:
         )
         resolved_models = models or InvestigationModels()
         self.capabilities = capabilities or build_tool_capability_catalog()
-        resolved_collection_tool = collection_tool or realtime_scraping
         resolved_taxonomy_service = (
             taxonomy_service or SearchTaxonomyService(resolved_db_path)
         )
@@ -69,10 +70,14 @@ class InvestigationWorkflow:
         )
         now_provider = now or (lambda: datetime.now().astimezone())
 
-        self.request_nodes = InvestigationRequestNodes(
-            models=resolved_models,
+        occupation_clarification = OccupationClarificationService(
+            taxonomy_model=resolved_models.taxonomy,
             taxonomy_service=resolved_taxonomy_service,
             taxonomy_review_service=resolved_review_service,
+        )
+        self.request_nodes = InvestigationRequestNodes(
+            models=resolved_models,
+            occupation_clarification=occupation_clarification,
             now=now_provider,
         )
         self.evidence_nodes = InvestigationEvidenceNodes(
@@ -81,9 +86,7 @@ class InvestigationWorkflow:
             taxonomy_service=resolved_taxonomy_service,
             now=now_provider,
         )
-        self.collection_nodes = InvestigationCollectionNodes(
-            resolved_collection_tool
-        )
+        self.collection_nodes = InvestigationCollectionNodes(collect_jobs)
         self.answer_nodes = InvestigationAnswerNodes(
             db_path=resolved_db_path,
             models=resolved_models,

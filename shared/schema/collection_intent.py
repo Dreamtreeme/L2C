@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
-
-from agent.utils.model_dump import dump_model
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from shared.schema.agent_contract import JobCollectionField
 
 
@@ -31,7 +29,8 @@ class CollectionPurpose(str, Enum):
 class JobSearchFilters(BaseModel):
     """사이트에서 적용하거나 공고 내용으로 검증할 검색 조건."""
 
-    posted_date_expression: str = Field(default="", description="오늘, 지난달처럼 사용자가 말한 기간 표현")
+    model_config = ConfigDict(extra="forbid")
+
     posted_from: str = Field(default="", description="명시적으로 확인된 시작일(YYYY-MM-DD)")
     posted_to: str = Field(default="", description="명시적으로 확인된 종료일(YYYY-MM-DD)")
     experience: str = Field(default="", description="경력 조건")
@@ -42,6 +41,8 @@ class JobSearchFilters(BaseModel):
 class CollectionIntent(BaseModel):
     """사용자 요청에서 추출해 실행 계층 전체가 공유하는 수집 의도."""
 
+    model_config = ConfigDict(extra="forbid")
+
     original_query: str = Field(default="", description="조건을 제거하지 않은 원래 사용자 요청")
     site: str = Field(default="", description="수집 대상 사이트 slug")
     search_keyword: str = Field(default="", description="사이트 검색창에 입력할 검색어")
@@ -51,6 +52,7 @@ class CollectionIntent(BaseModel):
     freshness_required: bool = Field(default=False, description="최신 공고 확인이 필요한지 여부")
     purpose: CollectionPurpose = CollectionPurpose.COLLECT
     analysis_goal: str = Field(default="", description="비교·트렌드 등 수집 이후 분석 목적")
+    task_category: str = Field(default="검색", description="Reflex 레시피 조회에 사용하는 작업 분류")
     required_fields: list[JobCollectionField] = Field(
         default_factory=list,
         description="사이트 정책과 답변 근거 요구를 합쳐 반드시 확인할 공고 필드",
@@ -64,52 +66,48 @@ class CollectionIntent(BaseModel):
     ) -> list[JobCollectionField]:
         return list(dict.fromkeys(values))
 
+    @model_validator(mode="after")
+    def align_count_mode(self) -> "CollectionIntent":
+        if self.target_count > 0:
+            self.count_mode = CollectionCountMode.EXPLICIT
+        elif self.count_mode == CollectionCountMode.EXPLICIT:
+            self.count_mode = CollectionCountMode.UNSPECIFIED
+        return self
 
-def normalize_collection_intent(
-    value: CollectionIntent | dict[str, Any] | None = None,
-    *,
-    original_query: str = "",
-    site: str = "",
-    search_keyword: str = "",
-    target_count: int = 0,
-) -> CollectionIntent:
-    """구조화 요청과 기존 평면 인자를 하나의 일관된 계약으로 합친다."""
 
-    if isinstance(value, CollectionIntent):
-        data = dump_model(value)
-    elif isinstance(value, dict):
-        data = dict(value)
-    else:
-        data = {}
+class CollectionResult(BaseModel):
+    """수집 서비스가 지휘자와 E2E 도구에 반환하는 단일 결과 계약."""
 
-    data["original_query"] = str(data.get("original_query") or original_query or "").strip()
-    data["site"] = str(data.get("site") or site or "").strip()
-    data["search_keyword"] = str(data.get("search_keyword") or search_keyword or "").strip()
-    try:
-        normalized_count = max(0, min(100, int(data.get("target_count") or target_count or 0)))
-    except (TypeError, ValueError):
-        normalized_count = 0
+    model_config = ConfigDict(extra="forbid")
 
-    raw_mode = data.get("count_mode") or CollectionCountMode.UNSPECIFIED.value
-    mode = raw_mode.value if isinstance(raw_mode, CollectionCountMode) else str(raw_mode)
-    if mode not in {item.value for item in CollectionCountMode}:
-        mode = CollectionCountMode.UNSPECIFIED.value
-    if normalized_count > 0:
-        mode = CollectionCountMode.EXPLICIT.value
-    elif mode == CollectionCountMode.EXPLICIT.value:
-        mode = CollectionCountMode.UNSPECIFIED.value
-    if mode == CollectionCountMode.VISIBLE_ALL.value:
-        normalized_count = 0
-
-    data["count_mode"] = mode
-    data["target_count"] = normalized_count
-    return CollectionIntent(**data)
-
+    status: Literal["completed", "partial", "failed"]
+    message: str = ""
+    error_code: str = ""
+    site: str = ""
+    site_name: str = ""
+    search_keyword: str = ""
+    task_category: str = ""
+    target_count: int = 0
+    collected_count: int = 0
+    resolved_count: int = 0
+    persisted_count: int = 0
+    created_count: int = 0
+    updated_count: int = 0
+    rejected_count: int = 0
+    persisted_items: list[dict[str, Any]] = Field(default_factory=list)
+    observed_job_ids: list[int] = Field(default_factory=list)
+    document_ids: list[int] = Field(default_factory=list)
+    scope_exhausted: bool = False
+    worker_finished: bool = False
+    hit_recursion_limit: bool = False
+    submission_id: str = ""
+    worker_run_id: str = ""
+    candidate_id: str = ""
 
 __all__ = [
     "CollectionCountMode",
     "CollectionIntent",
     "CollectionPurpose",
+    "CollectionResult",
     "JobSearchFilters",
-    "normalize_collection_intent",
 ]

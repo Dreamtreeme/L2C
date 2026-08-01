@@ -13,10 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from shared.db.reflex_schema import (
-    REFLEX_MEMORY_SCHEMA,
-    ensure_recipe_candidate_queue_schema,
-)
 from shared.db.search_taxonomy_schema import SEARCH_TAXONOMY_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -84,31 +80,6 @@ CREATE TABLE IF NOT EXISTS job_versions (
 CREATE INDEX IF NOT EXISTS idx_job_versions_job ON job_versions(job_id, version_number DESC);
 CREATE INDEX IF NOT EXISTS idx_job_versions_observed ON job_versions(observed_at);
 
-CREATE TABLE IF NOT EXISTS recipes (
-    recipe_key    TEXT PRIMARY KEY,
-    site          TEXT NOT NULL,
-    goal          TEXT,
-    path_json     TEXT NOT NULL,
-    metadata_json TEXT,
-    success_count INTEGER NOT NULL DEFAULT 0,
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_recipes_site ON recipes(site);
-
-CREATE TABLE IF NOT EXISTS recipe_sources (
-    recipe_key   TEXT NOT NULL,
-    candidate_id TEXT NOT NULL,
-    created_at   TEXT NOT NULL,
-    PRIMARY KEY (recipe_key, candidate_id),
-    FOREIGN KEY (recipe_key) REFERENCES recipes(recipe_key) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_recipe_sources_candidate
-ON recipe_sources(candidate_id);
-
-{REFLEX_MEMORY_SCHEMA}
 {SEARCH_TAXONOMY_SCHEMA}
 """
 
@@ -133,179 +104,8 @@ class Database:
 
     def _init_schema(self) -> None:
         with self._conn() as conn:
-            self._migrate_content_hash_to_candidate_index(conn)
             conn.executescript(SCHEMA)
-            ensure_recipe_candidate_queue_schema(conn)
-            
-            # 마이그레이션 지원: 기존 테이블에 신규 컬럼이 없을 경우 동적 추가
-            cursor = conn.execute("PRAGMA table_info(jobs)")
-            columns = [row["name"] for row in cursor.fetchall()]
-            
-            new_cols = {
-                "source_platform": "TEXT",
-                "raw_ocr_text": "TEXT",
-                "content_hash": "TEXT",
-                "experience_min": "INTEGER",
-                "experience_max": "INTEGER",
-                "experience_text": "TEXT",
-                "posted_at": "TEXT",
-                "posted_at_text": "TEXT",
-                "evidence_hash": "TEXT",
-                "taxonomy_index_status": "TEXT NOT NULL DEFAULT 'pending'",
-                "taxonomy_index_error": "TEXT",
-                "taxonomy_index_attempts": "INTEGER NOT NULL DEFAULT 0",
-                "taxonomy_indexed_at": "TEXT",
-                "created_at": "TEXT",
-                "updated_at": "TEXT",
-            }
-            for col, col_type in new_cols.items():
-                if col not in columns:
-                    try:
-                        conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
-                        logger.info(f"마이그레이션: jobs 테이블에 컬럼 '{col}' 추가 완료")
-                    except sqlite3.OperationalError as e:
-                        logger.debug(f"컬럼 '{col}' 추가 건너뜀: {e}")
-
-            conn.execute(
-                """
-                UPDATE jobs
-                SET created_at = COALESCE(created_at, datetime('now')),
-                    updated_at = COALESCE(
-                        updated_at,
-                        created_at,
-                        datetime('now')
-                    )
-                """
-            )
-            conn.execute(
-                """
-                UPDATE jobs
-                SET taxonomy_index_status = 'indexed',
-                    taxonomy_index_attempts = CASE
-                        WHEN taxonomy_index_attempts < 1 THEN 1
-                        ELSE taxonomy_index_attempts
-                    END,
-                    taxonomy_indexed_at = COALESCE(
-                        taxonomy_indexed_at,
-                        updated_at,
-                        created_at
-                    )
-                WHERE taxonomy_index_status = 'pending'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM job_concept_links AS links
-                      WHERE links.job_id = jobs.id
-                  )
-                """
-            )
-            
-            link_columns = {
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(job_concept_links)").fetchall()
-            }
-            if "requirement_type" not in link_columns:
-                conn.execute(
-                    "ALTER TABLE job_concept_links "
-                    "ADD COLUMN requirement_type TEXT NOT NULL DEFAULT 'mentioned'"
-                )
-            if "minimum_months" not in link_columns:
-                conn.execute(
-                    "ALTER TABLE job_concept_links ADD COLUMN minimum_months INTEGER"
-                )
-
-            candidate_columns = {
-                row["name"]
-                for row in conn.execute(
-                    "PRAGMA table_info(search_term_candidates)"
-                ).fetchall()
-            }
-            for column in ("reviewed_at", "review_note", "accepted_concept_key"):
-                if column not in candidate_columns:
-                    conn.execute(
-                        f"ALTER TABLE search_term_candidates ADD COLUMN {column} TEXT"
-                    )
-
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_posted_at ON jobs(posted_at)")
-            
-        logger.debug("schema 확인/생성 및 마이그레이션 완료")
-
-    @staticmethod
-    def _content_hash_has_unique_index(conn: sqlite3.Connection) -> bool:
-        """content_hash를 단독 UNIQUE 키로 쓰는 이전 스키마인지 확인한다."""
-
-        for index in conn.execute("PRAGMA index_list(jobs)").fetchall():
-            if not int(index["unique"]):
-                continue
-            columns = [
-                row["name"]
-                for row in conn.execute(
-                    f"PRAGMA index_info('{index['name']}')"
-                ).fetchall()
-            ]
-            if columns == ["content_hash"]:
-                return True
-        return False
-
-    def _migrate_content_hash_to_candidate_index(
-        self,
-        conn: sqlite3.Connection,
-    ) -> None:
-        """출처가 다른 공고를 보존하도록 content_hash UNIQUE 제약을 제거한다."""
-
-        table_exists = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
-        ).fetchone()
-        if not table_exists or not self._content_hash_has_unique_index(conn):
-            return
-
-        temporary_table = "jobs_content_hash_migration"
-        existing_columns = [
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
-        ]
-        conn.execute("PRAGMA foreign_keys = OFF")
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(f"DROP TABLE IF EXISTS {temporary_table}")
-            conn.execute(
-                f"CREATE TABLE {temporary_table} {JOBS_COLUMNS_SQL}"
-            )
-            target_columns = {
-                row["name"]
-                for row in conn.execute(
-                    f"PRAGMA table_info({temporary_table})"
-                ).fetchall()
-            }
-            copied_columns = [
-                column
-                for column in existing_columns
-                if column in target_columns
-            ]
-            column_sql = ", ".join(copied_columns)
-            conn.execute(
-                f"INSERT INTO {temporary_table} ({column_sql}) "
-                f"SELECT {column_sql} FROM jobs"
-            )
-            conn.execute("DROP TABLE jobs")
-            conn.execute(
-                f"ALTER TABLE {temporary_table} RENAME TO jobs"
-            )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.execute("PRAGMA foreign_keys = ON")
-
-        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
-        if violations:
-            raise sqlite3.IntegrityError(
-                "content_hash 스키마 마이그레이션 후 외래키 불일치가 발생했습니다."
-            )
-        logger.info(
-            "마이그레이션: content_hash를 비고유 중복 후보 인덱스로 변경 완료"
-        )
+        logger.debug("schema 확인/생성 완료")
 
     def exists(self, url: str) -> bool:
         with self._conn() as conn:
@@ -490,16 +290,6 @@ class Database:
         result = self._fetch_one("url = ?", url)
         logger.debug(f"get_by_url({url}) found={result is not None}")
         return result
-
-    def list_recent(self, limit: int = 20) -> list[dict]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT id, url, company_name, position, posted_at, posted_at_text, created_at "
-                "FROM jobs ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        logger.debug(f"list_recent(limit={limit}) → {len(rows)}건")
-        return [dict(row) for row in rows]
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:

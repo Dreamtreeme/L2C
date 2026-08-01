@@ -437,8 +437,6 @@ class SomEngine:
 
     def _ocr_scale_for_image(self, width: int, height: int) -> float:
         settings = get_settings().ocr
-        if not settings.resize_enabled:
-            return 1.0
         max_dim = settings.max_image_dim
         if max_dim <= 0:
             return 1.0

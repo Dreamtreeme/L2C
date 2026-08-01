@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from agent.config import get_settings
 from agent.recipe.page_context import normalize_page_role
 from agent.recipe.replay_actions import (
@@ -71,37 +69,16 @@ def marker_ordinal(target_marker: dict, markers: list[dict]) -> int | None:
     return None
 
 
-def _step_get(step: Any, key: str, default: Any = None) -> Any:
-    if isinstance(step, dict):
-        return step.get(key, default)
-    return getattr(step, key, default)
-
-
-def _target_get(target: Any, key: str, default: Any = None) -> Any:
-    if target is None:
-        return default
-    if isinstance(target, dict):
-        return target.get(key, default)
-    return getattr(target, key, default)
-
-
-def _target_semantic_label(target: Any) -> str:
-    return normalize_text(
-        _target_get(target, "semantic_label", "")
-        or _target_get(target, "target_label", "")
-    )
-
-
-def is_replayable_action(action_item: Any) -> bool:
+def is_replayable_action(action_item: dict) -> bool:
     """저장된 물리 행동이 결정론적 재생 계약을 갖췄는지 확인한다."""
 
-    if _step_get(action_item, "replay_mode", "reasoning") == "reasoning":
+    if action_item.get("replay_mode", "reasoning") == "reasoning":
         return False
-    action = _step_get(action_item, "action")
-    if not normalize_page_role(_step_get(action_item, "page_role", "")):
+    action = action_item.get("action")
+    if not normalize_page_role(action_item.get("page_role", "")):
         return False
     if action in CONTEXTUAL_REPLAY_ACTIONS:
-        param = _step_get(action_item, "param", {})
+        param = action_item.get("param", {})
         if not isinstance(param, dict):
             return False
         if action == "press_key" and not param.get("key"):
@@ -109,9 +86,12 @@ def is_replayable_action(action_item: Any) -> bool:
         if action == "switch_tab" and not param.get("direction"):
             return False
         return bool(
-            _step_get(action_item, "screen_context_signature")
+            action_item.get("screen_context_signature")
         )
     if action not in TARGET_REPLAY_ACTIONS:
         return False
-    target = _step_get(action_item, "target")
-    return bool(normalize_text(_target_get(target, "text", "")) or _target_semantic_label(target))
+    target = action_item.get("target") or {}
+    return isinstance(target, dict) and bool(
+        normalize_text(target.get("text"))
+        or normalize_text(target.get("semantic_label"))
+    )

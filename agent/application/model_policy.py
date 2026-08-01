@@ -22,7 +22,6 @@ ModelExecutionRole = Literal[
 
 @dataclass(frozen=True)
 class ModelExecutionPolicy:
-    role: ModelExecutionRole
     request_timeout_sec: float
     retries: int
 
@@ -43,34 +42,21 @@ def model_execution_policy(
         "critic": settings.recipe.critic_timeout_sec,
     }
     return ModelExecutionPolicy(
-        role=role,
         request_timeout_sec=float(timeout_by_role[role]),
         retries=int(settings.execution.transient_retries),
     )
 
 
-def _first_configured_model(env_names: tuple[str, ...], default: str) -> str:
-    settings = get_settings().models
-    for env_name in env_names:
-        value = settings.model_override(env_name) or ""
-        if value:
-            return value
-    return default
-
-
-def commander_model_name(*override_env_names: str) -> str:
+def commander_model_name() -> str:
     """복잡한 계획·화면 행동·검토에 사용할 지휘자 모델을 반환한다."""
 
-    return _first_configured_model(
-        (*override_env_names, "COMMANDER_MODEL"),
-        DEFAULT_COMMANDER_MODEL,
-    )
+    return get_settings().models.commander_model or DEFAULT_COMMANDER_MODEL
 
 
 def worker_reasoning_model_name() -> str:
     """화면을 보고 다음 물리 행동을 결정할 모델을 반환한다."""
 
-    return commander_model_name("VISION_WORKER_REASONING_MODEL")
+    return get_settings().models.worker_reasoning_model or commander_model_name()
 
 
 def worker_reasoning_thinking_level() -> str:
@@ -79,13 +65,10 @@ def worker_reasoning_thinking_level() -> str:
     return get_settings().models.worker_reasoning_thinking_level
 
 
-def lightweight_model_name(*override_env_names: str) -> str:
+def lightweight_model_name() -> str:
     """구조화·요약·짧은 분류에 사용할 경량 모델을 반환한다."""
 
-    return _first_configured_model(
-        (*override_env_names, "VISION_LIGHTWEIGHT_MODEL"),
-        DEFAULT_LIGHTWEIGHT_MODEL,
-    )
+    return get_settings().models.lightweight_model or DEFAULT_LIGHTWEIGHT_MODEL
 
 
 __all__ = [

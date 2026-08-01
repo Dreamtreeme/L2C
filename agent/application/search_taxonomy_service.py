@@ -12,7 +12,6 @@ from agent.application.search_taxonomy_import_service import import_local_seed, 
 from agent.application.search_taxonomy_constants import (
     CORE_SOURCE_KEY,
     CURATED_SOURCE_KEY,
-    OCCUPATION_DOMAIN_ROOT_KEY,
 )
 from agent.application.search_taxonomy_question_builder import (
     TaxonomyQuestionBuilder,

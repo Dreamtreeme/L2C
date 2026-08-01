@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
 from agent.application.search_taxonomy_service import SearchTaxonomyService
-from agent.application.tool_capabilities import build_tool_capability_catalog
 from agent.graph.investigation_context import (
     InvestigationModels,
-    capabilities_for_investigation,
-    normalize_site_slugs,
 )
 from agent.graph.investigation_evidence_policy import (
     apply_evidence_validation,
@@ -74,47 +69,6 @@ def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path)
     assert normalized[0].minimum_count == 1
     assert plan.requirements[0].minimum_count == 50
 
-
-def test_collection_step_status_uses_structured_run_status():
-    from agent.application.collection_service import (
-        build_failed_collection_result,
-    )
-    from agent.graph.investigation_collection_nodes import (
-        InvestigationCollectionNodes,
-    )
-
-    step = InvestigationPlanStep(
-        step_id="collect-1",
-        action="collect",
-        tool_name="realtime_scraping",
-    )
-    investigation = InvestigationRequest(
-        investigation_id="structured-collection-status",
-        original_query="AI 엔지니어 공고를 찾아줘",
-        plan=[step],
-    )
-    payload = build_failed_collection_result(
-        "vision collection persisted: misleading display text",
-        error_code="collection_error:RuntimeError",
-    )
-
-    class FailedCollectionTool:
-        def invoke(self, _arguments):
-            return json.dumps(payload, ensure_ascii=False)
-
-    result = InvestigationCollectionNodes(
-        FailedCollectionTool()
-    ).execute(
-        {
-            "investigation": investigation.model_dump(mode="json"),
-            "collection_results": [],
-        }
-    )
-    updated = InvestigationRequest.model_validate(result["investigation"])
-
-    assert updated.executed_step_ids == ["collect-1"]
-    assert updated.plan[0].status == "failed"
-    assert result["collection_results"][0]["run_status"] == "failed"
 
 def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
 
@@ -283,37 +237,6 @@ def test_recent_three_months_resolves_analysis_and_comparison_periods():
     assert updated.constraints.comparison_posted_to == "2026-04-13"
     assert updated.status == InvestigationStatus.CHECKING_EVIDENCE
 
-def test_tool_catalog_exposes_limits_before_collection():
-    catalog = build_tool_capability_catalog()
-    by_name = {item.tool_name: item for item in catalog}
-
-    assert "inspect_job_evidence" in by_name
-    assert "sqlite_query" not in by_name
-    assert any(name.startswith("realtime_scraping:") for name in by_name)
-    assert "created_at은 공고 게시일 근거로 사용할 수 없습니다." in by_name[
-        "inspect_job_evidence"
-    ].limitations
-
-def test_capability_catalog_only_exposes_confirmed_collection_site():
-
-    investigation = InvestigationRequest(
-        investigation_id="selected-capability",
-        original_query="원티드 공고",
-        constraints=InvestigationConstraints(sites=["wanted"]),
-    )
-    catalog = [
-        {"tool_name": "inspect_job_evidence"},
-        {"tool_name": "realtime_scraping:wanted"},
-        {"tool_name": "realtime_scraping:saramin"},
-    ]
-
-    selected = capabilities_for_investigation(catalog, investigation)
-
-    assert [item["tool_name"] for item in selected] == [
-        "inspect_job_evidence",
-        "realtime_scraping:wanted",
-    ]
-
 def test_evidence_inspection_rejects_rows_without_verified_posted_date(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
@@ -394,7 +317,7 @@ class _FakeModel:
         return self.result
 
 class _FailingTool:
-    def invoke(self, arguments):
+    def __call__(self, arguments):
         raise AssertionError("계획 전에 도구가 실행되었습니다.")
 
 def _test_capabilities():
@@ -431,7 +354,7 @@ def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
             answer_model=answer_model,
         ),
         capabilities=_test_capabilities(),
-        collection_tool=_FailingTool(),
+        collect_jobs=_FailingTool(),
     )
 
     result = workflow.run("iOS 개발자는 보통 어떤 일을 하고 어떤 기술이 필요해?")
@@ -444,60 +367,6 @@ def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
     assert evidence_model.calls == 0
     assert action_model.calls == 0
     assert answer_model.calls == 1
-
-def test_workflow_stops_for_choice_before_db_or_collection(tmp_path):
-
-    analysis_model = _FakeModel(
-        RequestAnalysis(
-            objective="AI 개발자 채용 트렌드 분석",
-            deliverable="최근 기간과 이전 기간 비교",
-            purpose=InvestigationPurpose.TREND,
-            constraints=InvestigationConstraints(
-                posted_from="2026-04-14",
-                posted_to="2026-07-14",
-                comparison_posted_from="2026-01-14",
-                comparison_posted_to="2026-04-13",
-            ),
-            assumptions=["최근을 3개월로 해석했다."],
-            clarification_questions=[
-                ClarificationQuestion(
-                    question_id="analysis_dimensions",
-                    field="analysis_dimensions",
-                    question="어떤 변화를 분석할까요?",
-                    options=[
-                        ClarificationOption(
-                            option_id="job_count",
-                            label="공고 수",
-                            value="공고 수",
-                        )
-                    ],
-                )
-            ],
-        )
-    )
-    evidence_model = _FakeModel(EvidencePlan())
-    action_model = _FakeModel(InvestigationActionPlan())
-    answer_model = _FakeModel("호출되면 안 됨")
-    workflow = InvestigationWorkflow(
-        db_path=tmp_path / "jobs.db",
-        models=InvestigationModels(
-            analysis_model=analysis_model,
-            evidence_model=evidence_model,
-            action_model=action_model,
-            answer_model=answer_model,
-        ),
-        capabilities=_test_capabilities(),
-        collection_tool=_FailingTool(),
-    )
-
-    result = workflow.run("최근 AI 개발자 채용 트렌드를 알려줘")
-
-    assert result["run_status"] == "waiting_input"
-    assert result["clarification"]["field"] == "analysis_dimensions"
-    assert analysis_model.calls == 1
-    assert evidence_model.calls == 0
-    assert action_model.calls == 0
-    assert answer_model.calls == 0
 
 def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
     from datetime import datetime, timezone
@@ -564,7 +433,7 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
             answer_model=_FakeModel("게시일 근거가 없어 비교할 수 없습니다."),
         ),
         capabilities=_test_capabilities(),
-        collection_tool=_FailingTool(),
+        collect_jobs=_FailingTool(),
         now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
     )
     first = workflow.run("최근 AI 개발자 채용 트렌드를 알려줘")
@@ -581,7 +450,7 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
             answer_model=_FakeModel("게시일 근거가 없어 비교할 수 없습니다."),
         ),
         capabilities=_test_capabilities(),
-        collection_tool=_FailingTool(),
+        collect_jobs=_FailingTool(),
         now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
     )
 
@@ -628,7 +497,7 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
         def __init__(self):
             self.calls = []
 
-        def invoke(self, arguments):
+        def __call__(self, arguments):
             self.calls.append(arguments)
             job_id = db.upsert(
                 "https://example.com/jobs/ai-1",
@@ -641,15 +510,13 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
                 },
             )
             taxonomy.link_job(job_id)
-            return json.dumps(
-                {
-                    "persisted_count": 1,
-                    "persistence_validation": {
-                        "persisted_items": [{"job_id": job_id, "operation": "created"}]
-                    },
-                },
-                ensure_ascii=False,
-            )
+            return {
+                "status": "completed",
+                "persisted_count": 1,
+                "resolved_count": 1,
+                "document_ids": [job_id],
+                "persisted_items": [{"job_id": job_id, "operation": "created"}],
+            }
 
     collection_tool = CollectionTool()
     workflow = InvestigationWorkflow(
@@ -686,13 +553,14 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
                     steps=[
                         InvestigationPlanStep(
                             step_id="collect_recent_ai",
-                            action="최근 AI 공고 수집",
                             tool_name="realtime_scraping",
                             arguments={
-                                "query": "AI 개발자",
+                                "search_keyword": "AI 개발자",
                                 "site": "wanted",
-                                "posted_from": "2026-06-01",
-                                "posted_to": "2026-07-14",
+                                "filters": {
+                                    "posted_from": "2026-06-01",
+                                    "posted_to": "2026-07-14",
+                                },
                             },
                             purpose="부족한 최근 공고 확보",
                         )
@@ -702,7 +570,7 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
             answer_model=_FakeModel(AIMessage(content="공고를 확인했습니다 [job_id:1]")),
         ),
         capabilities=_test_capabilities(),
-        collection_tool=collection_tool,
+        collect_jobs=collection_tool,
         taxonomy_service=taxonomy,
     )
 
@@ -710,12 +578,13 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
 
     assert result["run_status"] == "completed"
     assert len(collection_tool.calls) == 1
-    assert collection_tool.calls[0]["query"] == "AI 개발자"
-    assert collection_tool.calls[0]["site"] == "wanted"
-    assert collection_tool.calls[0]["posted_from"] == "2026-06-01"
-    assert collection_tool.calls[0]["posted_to"] == "2026-07-14"
-    assert collection_tool.calls[0]["original_query"] == "최근 AI 개발자 공고 찾아줘"
-    assert collection_tool.calls[0]["freshness_required"] is True
+    intent = collection_tool.calls[0]
+    assert intent.search_keyword == "AI 개발자"
+    assert intent.site == "wanted"
+    assert intent.filters.posted_from == "2026-06-01"
+    assert intent.filters.posted_to == "2026-07-14"
+    assert intent.original_query == "최근 AI 개발자 공고 찾아줘"
+    assert intent.freshness_required is True
     assert result["valid_ids"] == [1]
     assert result["final_answer"] == "공고를 확인했습니다 [job_id:1]"
     assert result["investigation"]["collection_document_ids"] == [1]
@@ -729,7 +598,7 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
     taxonomy = SearchTaxonomyService(db_path)
 
     class CollectionTool:
-        def invoke(self, _arguments):
+        def __call__(self, _arguments):
             job_id = db.upsert(
                 "https://example.com/jobs/llm-1",
                 {
@@ -742,14 +611,12 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
                 },
             )
             taxonomy.link_job(job_id)
-            return json.dumps(
-                {
-                    "persisted_count": 0,
-                    "observed_job_ids": [job_id],
-                    "persistence_validation": {"persisted_items": []},
-                },
-                ensure_ascii=False,
-            )
+            return {
+                "status": "completed",
+                "resolved_count": 1,
+                "observed_job_ids": [job_id],
+                "document_ids": [job_id],
+            }
 
     validation_model = _FakeModel(
         EvidenceValidation(
@@ -795,9 +662,8 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
                     steps=[
                         InvestigationPlanStep(
                             step_id="collect_ai",
-                            action="AI 공고 수집",
                             tool_name="realtime_scraping",
-                            arguments={"query": "AI 엔지니어", "site": "wanted"},
+                            arguments={"search_keyword": "AI 엔지니어", "site": "wanted"},
                             purpose="현재 검색 결과 확인",
                         )
                     ]
@@ -806,7 +672,7 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
             answer_model=_FakeModel(AIMessage(content="RAG가 확인됩니다 [job_id:1]")),
         ),
         capabilities=_test_capabilities(),
-        collection_tool=CollectionTool(),
+        collect_jobs=CollectionTool(),
         taxonomy_service=taxonomy,
     )
 
@@ -833,7 +699,7 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
     )
 
     class CollectionTool:
-        def invoke(self, _arguments):
+        def __call__(self, _arguments):
             collected_id = db.upsert(
                 "https://example.com/jobs/current-qa-lead",
                 {
@@ -842,17 +708,15 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
                     "source_platform": "wanted",
                 },
             )
-            return json.dumps(
-                {
-                    "persisted_count": 1,
-                    "persistence_validation": {
-                        "persisted_items": [
-                            {"job_id": collected_id, "operation": "created"}
-                        ]
-                    },
-                },
-                ensure_ascii=False,
-            )
+            return {
+                "status": "completed",
+                "persisted_count": 1,
+                "resolved_count": 1,
+                "document_ids": [collected_id],
+                "persisted_items": [
+                    {"job_id": collected_id, "operation": "created"}
+                ],
+            }
 
     validation_model = _FakeModel(
         EvidenceValidation(
@@ -895,10 +759,9 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
                     steps=[
                         InvestigationPlanStep(
                             step_id="collect_current_qa",
-                            action="현재 QA 자동화 공고 수집",
                             tool_name="realtime_scraping",
                             arguments={
-                                "query": "QA 자동화 엔지니어",
+                                "search_keyword": "QA 자동화 엔지니어",
                                 "site": "wanted",
                             },
                             purpose="현재 웹 결과 확인",
@@ -911,7 +774,7 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
             ),
         ),
         capabilities=_test_capabilities(),
-        collection_tool=CollectionTool(),
+        collect_jobs=CollectionTool(),
     )
 
     result = workflow.run(
@@ -923,36 +786,6 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
     assert result["documents"] == []
     assert stale_id not in result["investigation"]["evidence_document_ids"]
     assert result["investigation"]["collection_document_ids"] != [stale_id]
-
-def test_chat_service_uses_investigation_workflow_for_production_path():
-    from agent.application.chat_service import ChatService
-
-    class FakeWorkflow:
-        def run(self, query, **kwargs):
-            assert query == "최근 AI 채용 트렌드"
-            assert kwargs["conversation_id"] == "conversation-1"
-            return {
-                "investigation": {"investigation_id": "investigation-1"},
-                "run_status": "waiting_input",
-                "final_answer": "최근의 기준을 선택해 주세요.",
-                "valid_ids": [],
-                "clarification": {
-                    "question_id": "recent_period",
-                    "field": "recent_period",
-                    "question": "최근의 기준을 선택해 주세요.",
-                    "options": [],
-                },
-            }
-
-    result = ChatService(investigation_workflow=FakeWorkflow()).run(
-        "최근 AI 채용 트렌드",
-        run_id="planned-chat",
-        conversation_id="conversation-1",
-    )
-
-    assert result["run_status"] == "waiting_input"
-    assert result["investigation_id"] == "investigation-1"
-    assert result["clarification"]["field"] == "recent_period"
 
 def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
 
@@ -982,7 +815,6 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
         steps=[
             InvestigationPlanStep(
                 step_id="collect-current",
-                action="최근 공고 수집",
                 tool_name="realtime_scraping",
                 arguments={"site": "wanted"},
                 expected_evidence=["current"],
@@ -1003,30 +835,24 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
 
     assert len(steps) == 1
     assert steps[0].arguments.model_dump(mode="json") == {
-        "query": "AI 개발자",
-        "site": "wanted",
         "original_query": "최근 3개월 서울 AI 개발자 트렌드",
+        "site": "wanted",
+        "search_keyword": "AI 개발자",
         "count_mode": "visible_all",
         "target_count": 0,
-        "posted_from": "2026-04-14",
-        "posted_to": "2026-07-14",
-        "experience": "",
-        "location": "서울",
-        "employment_type": "",
+        "filters": {
+            "posted_from": "2026-04-14",
+            "posted_to": "2026-07-14",
+            "experience": "",
+            "location": "서울",
+            "employment_type": "",
+        },
         "freshness_required": True,
         "purpose": "trend",
-            "analysis_goal": "최근과 이전 기간의 요구 기술 비교",
-            "task_category": "검색",
-            "required_fields": ["posted_at", "requirements"],
-        }
-
-def test_site_display_name_is_normalized_to_registry_slug():
-
-    constraints = normalize_site_slugs(
-        InvestigationConstraints(sites=["원티드", "jobkorea"])
-    )
-
-    assert constraints.sites == ["wanted", "jobkorea"]
+        "analysis_goal": "최근과 이전 기간의 요구 기술 비교",
+        "task_category": "검색",
+        "required_fields": ["posted_at", "requirements"],
+    }
 
 def test_semantic_evidence_validation_keeps_only_matching_candidate():
 

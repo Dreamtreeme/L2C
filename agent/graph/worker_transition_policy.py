@@ -14,7 +14,6 @@ class TransitionDecision:
     reason: str
     needs_ocr: bool = False
     block_reflex_recipe: bool = False
-    reuse_previous_observation: bool = False
 
 
 def decide_transition_probe(
@@ -58,7 +57,6 @@ def decide_before_ocr(
             else "no_screen_change"
         ),
         block_reflex_recipe=is_reflex,
-        reuse_previous_observation=True,
     )
 
 

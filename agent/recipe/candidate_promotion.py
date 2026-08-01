@@ -89,30 +89,32 @@ def _page_roles_from_evidence(candidate: dict[str, Any]) -> dict[int, str]:
 def _candidate_skill_metadata(
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
-    """실행 메타데이터는 Critic 응답이 아닌 자율탐색 제출물에서 만든다."""
+    """재생에 필요한 입력 슬롯을 자율탐색 행동에서 직접 만든다."""
 
-    payload = dict(candidate.get("payload", {}) or {})
-    evidence = dict(payload.get("skill_metadata_evidence", {}) or {})
-    task_category = task_category_from_candidate(candidate)
-    metadata = {
-        "when_to_use": evidence.get("when_to_use")
-        or candidate.get("goal")
-        or "",
-        "goal_pattern": evidence.get("goal_pattern")
-        or candidate.get("goal")
-        or "",
-        "site": candidate.get("site") or evidence.get("site") or "",
-        "task_category": task_category,
-        "page_type": evidence.get("page_type") or "",
-        "inputs": list(evidence.get("inputs") or []),
-        "step_intents": list(evidence.get("step_intents") or []),
-        "fixed_steps_summary": evidence.get("fixed_steps_summary") or "",
-        "decision_points": list(evidence.get("decision_points") or []),
-        "verification": dict(evidence.get("verification") or {}),
-        "confidence": float(evidence.get("confidence") or 0.0),
-        "evidence": dict(evidence.get("evidence") or {}),
-    }
-    return dump_model(RecipeSkillMetadata(**metadata))
+    slots: dict[str, dict[str, Any]] = {}
+    for step in candidate.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        param = step.get("param") if isinstance(step.get("param"), dict) else {}
+        for raw_name in step.get("slot_refs") or []:
+            name = str(raw_name or "").strip()
+            if not name or name in slots:
+                continue
+            slots[name] = {
+                "name": name,
+                "description": str(step.get("intent") or "").strip(),
+                "observed_value": param.get("text"),
+                "required": True,
+                "source": "recorded_step",
+            }
+    return dump_model(
+        RecipeSkillMetadata(
+            when_to_use=str(candidate.get("goal") or ""),
+            site=str(candidate.get("site") or ""),
+            task_category=task_category_from_candidate(candidate),
+            inputs=list(slots.values()),
+        )
+    )
 
 
 def _skip(

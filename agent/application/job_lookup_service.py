@@ -23,9 +23,9 @@ def find_job_id_by_url(url: str, *, db_path: str | Path | None = None) -> int | 
     if not normalized:
         return None
     if db_path is None:
-        from shared.config import DB_PATH
+        from agent.config import get_settings
 
-        db_path = DB_PATH
+        db_path = get_settings().paths.db_path
     resolved = Path(db_path)
     if not resolved.exists():
         return None
@@ -79,9 +79,9 @@ def find_job_ids_by_card_identities(
     }
 
     if db_path is None:
-        from shared.config import DB_PATH
+        from agent.config import get_settings
 
-        db_path = DB_PATH
+        db_path = get_settings().paths.db_path
     resolved = Path(db_path)
     if not resolved.exists():
         return [None] * len(keys)

@@ -6,7 +6,7 @@ export const PHASE_LABELS: Record<RunPhase, string> = {
   planning: "조사 계획",
   clarification: "조건 확인",
   collection: "웹 수집",
-  review: "수집 결과 검토",
+  validation: "수집 결과 검증",
   persistence: "DB 저장",
   answering: "답변 작성",
   completed: "완료",

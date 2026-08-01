@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agent.config import get_settings
 from agent.graph.state import GraphState
 from agent.runtime.job_collection import JOB_LIST_KEYS, job_list_value
 from agent.runtime.job_card_queue import (
@@ -14,7 +13,7 @@ from agent.runtime.job_card_queue import (
 )
 from agent.runtime.site_context import (
     looks_like_job_detail_url,
-    persistence_policy_for_url,
+    site_profile_for_url,
 )
 
 
@@ -28,10 +27,7 @@ def should_skip_job_update_without_detail_url(
     new_data: dict[str, Any],
     current_url: str,
 ) -> bool:
-    policy = persistence_policy_for_url(current_url)
-    if not policy.get("require_detail_url_for_job_update") or looks_like_job_detail_url(
-        current_url
-    ):
+    if not site_profile_for_url(current_url) or looks_like_job_detail_url(current_url):
         return False
 
     incoming_jobs = job_list_value(new_data)
@@ -138,10 +134,6 @@ def merge_extracted_info(
     if not summary["total_jobs"] and isinstance(existing_jobs, list):
         summary["total_jobs"] = len(existing_jobs)
     return merged, summary
-
-
-def auto_finish_on_target_enabled() -> bool:
-    return get_settings().vision.auto_finish_on_target
 
 
 def sensitive_action_reason(
@@ -291,7 +283,6 @@ def repeats_no_effect_target(
 
 
 __all__ = [
-    "auto_finish_on_target_enabled",
     "compact_action_args",
     "merge_extracted_info",
     "repeats_no_effect_target",

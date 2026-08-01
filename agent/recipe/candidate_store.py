@@ -1,4 +1,4 @@
-"""SQLite store for commander-reviewed Reflex recipe candidates."""
+"""작업자 제출물을 참조하는 Reflex 후보 검토 큐."""
 
 from __future__ import annotations
 
@@ -9,37 +9,35 @@ from agent.recipe.payload_sanitizer import strip_full_screen_signatures
 from agent.recipe.sqlite_store import SQLiteStore
 from shared.db.reflex_schema import (
     RECIPE_CANDIDATES_INDEX_SQL,
+    RECIPE_CANDIDATES_QUEUE_INDEX_SQL,
     RECIPE_CANDIDATES_TABLE_SQL,
-    ensure_recipe_candidate_queue_schema,
 )
+
+
+_CANDIDATE_SELECT = """
+SELECT c.*, s.run_id, s.source, s.payload_json
+FROM recipe_candidates AS c
+JOIN worker_submissions AS s ON s.submission_id = c.submission_id
+"""
 
 
 class RecipeCandidateStore(SQLiteStore):
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
             conn.execute(RECIPE_CANDIDATES_TABLE_SQL)
-            for sql in RECIPE_CANDIDATES_INDEX_SQL:
+            for sql in (*RECIPE_CANDIDATES_INDEX_SQL, *RECIPE_CANDIDATES_QUEUE_INDEX_SQL):
                 conn.execute(sql)
-            ensure_recipe_candidate_queue_schema(conn)
 
     def commit_candidate(
         self,
         submission: dict[str, Any],
-        review: dict[str, Any] | None = None,
-        source: str = "vision_worker",
-        submission_id: str = "",
+        *,
+        submission_id: str,
         status: str = "pending_replay",
     ) -> str:
-        review = review or {}
-        if review.get("decision") != "accept" or not review.get("recipe_candidate"):
+        if not submission_id or not submission.get("recorded_steps"):
             return ""
-        clean_submission = strip_full_screen_signatures(submission)
-        steps = [step for step in clean_submission.get("recorded_steps", []) or [] if isinstance(step, dict)]
-        if not steps:
-            return ""
-
-        run_id = clean_submission.get("run_id") or "run-unknown"
-        candidate_id = submission_id or run_id
+        candidate_id = submission_id
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
             existing = conn.execute(
@@ -50,37 +48,23 @@ class RecipeCandidateStore(SQLiteStore):
             conn.execute(
                 """
                 INSERT OR REPLACE INTO recipe_candidates (
-                    candidate_id, run_id, submission_id, source, site, goal, keyword,
-                    status, review_confidence, steps_json, payload_json, review_json,
-                    validation_json, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    candidate_id, submission_id, status, validation_json,
+                    review_attempts, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?)
                 """,
-                (
-                    candidate_id,
-                    run_id,
-                    submission_id or candidate_id,
-                    source,
-                    clean_submission.get("site", "") or "",
-                    clean_submission.get("goal", "") or "",
-                    clean_submission.get("keyword", "") or "",
-                    status,
-                    float(review.get("confidence") or 0.0),
-                    self.dump_json(steps),
-                    self.dump_json(clean_submission),
-                    self.dump_json(review),
-                    "",
-                    created_at,
-                    now,
-                ),
+                (candidate_id, submission_id, status, "", 0, created_at, now),
             )
         return candidate_id
 
+    def _load(self, conn, candidate_id: str):
+        return conn.execute(
+            _CANDIDATE_SELECT + " WHERE c.candidate_id=?",
+            (candidate_id,),
+        ).fetchone()
+
     def get_candidate(self, candidate_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM recipe_candidates WHERE candidate_id=?",
-                (candidate_id,),
-            ).fetchone()
+            row = self._load(conn, candidate_id)
         return self._row_to_item(row) if row else None
 
     def update_status(
@@ -103,8 +87,6 @@ class RecipeCandidateStore(SQLiteStore):
             return result.rowcount > 0
 
     def enqueue_review(self, candidate_id: str) -> bool:
-        """아직 검토되지 않은 후보를 영속 승격 대기열에 넣는다."""
-
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
             result = conn.execute(
@@ -119,8 +101,6 @@ class RecipeCandidateStore(SQLiteStore):
             return result.rowcount > 0
 
     def recover_interrupted_reviews(self) -> int:
-        """이전 프로세스가 처리 중이던 후보를 다시 대기 상태로 돌린다."""
-
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
             result = conn.execute(
@@ -136,28 +116,24 @@ class RecipeCandidateStore(SQLiteStore):
             return result.rowcount
 
     def claim_review(self, candidate_id: str | None = None) -> dict[str, Any] | None:
-        """대기열의 다음 후보 또는 명시한 후보를 원자적으로 선점한다."""
-
         now = datetime.now().isoformat(timespec="seconds")
         candidate_filter = "AND candidate_id=?" if candidate_id else ""
-        select_params: tuple[Any, ...] = (now, candidate_id) if candidate_id else (now,)
+        params: tuple[Any, ...] = (now, candidate_id) if candidate_id else (now,)
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 f"""
-                SELECT candidate_id
-                FROM recipe_candidates
+                SELECT candidate_id FROM recipe_candidates
                 WHERE status='pending_review'
                   AND (next_review_at IS NULL OR next_review_at <= ?)
                   {candidate_filter}
-                ORDER BY created_at ASC, candidate_id ASC
-                LIMIT 1
+                ORDER BY created_at, candidate_id LIMIT 1
                 """,
-                select_params,
+                params,
             ).fetchone()
             if row is None:
                 return None
-            candidate_id = str(row["candidate_id"])
+            resolved_id = str(row["candidate_id"])
             claimed = conn.execute(
                 """
                 UPDATE recipe_candidates
@@ -166,14 +142,9 @@ class RecipeCandidateStore(SQLiteStore):
                     review_error='', updated_at=?
                 WHERE candidate_id=? AND status='pending_review'
                 """,
-                (now, now, candidate_id),
+                (now, now, resolved_id),
             )
-            if claimed.rowcount != 1:
-                return None
-            claimed_row = conn.execute(
-                "SELECT * FROM recipe_candidates WHERE candidate_id=?",
-                (candidate_id,),
-            ).fetchone()
+            claimed_row = self._load(conn, resolved_id) if claimed.rowcount == 1 else None
         return self._row_to_item(claimed_row) if claimed_row else None
 
     def defer_review(
@@ -184,8 +155,6 @@ class RecipeCandidateStore(SQLiteStore):
         retry_delay_sec: float,
         terminal: bool = False,
     ) -> bool:
-        """일시 오류는 재시도하고, 한도를 넘긴 오류는 별도 실패 상태로 남긴다."""
-
         now_value = datetime.now()
         next_review_at = (
             None
@@ -195,7 +164,6 @@ class RecipeCandidateStore(SQLiteStore):
             )
         )
         now = now_value.isoformat(timespec="seconds")
-        status = "review_failed" if terminal else "pending_review"
         with self._conn() as conn:
             result = conn.execute(
                 """
@@ -204,26 +172,42 @@ class RecipeCandidateStore(SQLiteStore):
                     review_error=?, updated_at=?
                 WHERE candidate_id=? AND status='reviewing'
                 """,
-                (status, next_review_at, str(error or "")[:1000], now, candidate_id),
+                (
+                    "review_failed" if terminal else "pending_review",
+                    next_review_at,
+                    str(error or "")[:1000],
+                    now,
+                    candidate_id,
+                ),
             )
             return result.rowcount > 0
 
-    def list_recent(self, limit: int = 20, status: str | None = None) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM recipe_candidates"
-        params: list[Any] = []
-        if status:
-            sql += " WHERE status=?"
-            params.append(status)
-        sql += " ORDER BY updated_at DESC, candidate_id DESC LIMIT ?"
-        params.append(limit)
+    def list_recent(
+        self,
+        limit: int = 20,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        where = " WHERE c.status=?" if status else ""
+        params: tuple[Any, ...] = (status, limit) if status else (limit,)
         with self._conn() as conn:
-            rows = conn.execute(sql, params).fetchall()
+            rows = conn.execute(
+                _CANDIDATE_SELECT
+                + where
+                + " ORDER BY c.updated_at DESC, c.candidate_id DESC LIMIT ?",
+                params,
+            ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
     def _row_to_item(self, row) -> dict[str, Any]:
         item = dict(row)
-        item["steps"] = strip_full_screen_signatures(self.load_json(item.pop("steps_json", ""), []))
-        item["payload"] = strip_full_screen_signatures(self.load_json(item.pop("payload_json", ""), {}))
-        item["review"] = self.load_json(item.pop("review_json", ""), {})
+        payload = strip_full_screen_signatures(
+            self.load_json(item.pop("payload_json", ""), {})
+        )
+        intent = dict(payload.get("collection_intent") or {})
+        item["site"] = str(intent.get("site") or "")
+        item["goal"] = str(payload.get("goal") or "")
+        item["keyword"] = str(intent.get("search_keyword") or "")
+        item["payload"] = payload
+        item["steps"] = list(payload.get("recorded_steps") or [])
         item["validation"] = self.load_json(item.pop("validation_json", ""), {})
         return item

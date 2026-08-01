@@ -29,7 +29,6 @@ def build_ui_context(
             page_role=page_role,
             marker_texts=marker_texts,
         )
-        and settings.detail_section_context_enabled
     ):
         section_context = build_detail_section_context(markers)
         if section_context:

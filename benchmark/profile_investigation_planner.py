@@ -36,11 +36,13 @@ def run_benchmark(
         model_name,
         RequestAnalysis,
         temperature=0.0,
+        execution_role="commander",
     )
     evidence_model = get_structured_google_model(
         model_name,
         EvidencePlan,
         temperature=0.0,
+        execution_role="commander",
     )
     taxonomy = SearchTaxonomyService(db_path)
     selected_ids = {

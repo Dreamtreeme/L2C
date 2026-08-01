@@ -23,7 +23,7 @@ def normalize_text(text) -> str:
 def site_of(url: str) -> str:
     try:
         net = (urlparse(url or "").netloc or "").lower()
-    except Exception:
+    except ValueError:
         return ""
     return net[4:] if net.startswith("www.") else net
 
@@ -34,7 +34,7 @@ def url_template(url: str) -> str:
         return ""
     try:
         p = urlparse(url)
-    except Exception:
+    except ValueError:
         return ""
     net = site_of(url)
     path = _UUID_SEG.sub("/{id}", p.path or "")

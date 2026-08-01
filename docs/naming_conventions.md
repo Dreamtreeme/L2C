@@ -149,7 +149,6 @@ tags:
 | `collection_service.py` | 작업자·검토·저장 순서와 재시도 조율 |
 | `collection_worker_runner.py` | 단일 비전 작업자 실행과 실행 결과 구성 |
 | `collection_submission_service.py` | 제출물 검토, 저장과 레시피 후보 등록 |
-| `tools/realtime_scraping.py` | 수집 도구 계약과 애플리케이션 호출 어댑터 |
 
 ## 피해야 할 이름
 
@@ -196,6 +195,6 @@ def test_candidate_promotion_skips_non_target_action():
 4. [완료] `RecipeStore` 조회를 `recipe_key + site + task_category + URL 범위 + 단계별 화면 서명` 기준으로 정리한다.
 5. [완료] `investigation_workflow.py`를 조립부와 요청·근거·수집·답변 노드로 분리한다.
 6. [완료] 모델 변환과 좌표 계산을 `utils/model_dump.py`, `vision/marker_geometry.py`, `vision/target_snapshot.py`로 통합한다.
-7. [완료] `realtime_scraping.py`에서 요청 생성, 작업자 실행과 제출물 처리를 분리한다.
+7. [완료] 수집 요청, 작업자 실행과 제출물 처리를 애플리케이션 서비스로 분리한다.
 
 입력 검증용 bbox, OCR 줄 병합 bbox, pHash 레거시 비율 복원처럼 의미가 다른 함수는 이름이 비슷하다는 이유만으로 합치지 않는다.

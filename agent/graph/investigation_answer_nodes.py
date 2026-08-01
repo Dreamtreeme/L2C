@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -34,39 +35,34 @@ def compact_collection_results(results: list[dict[str, Any]]) -> list[dict[str, 
 
     compact = []
     keys = (
+        "status",
         "message",
         "site",
         "site_name",
-        "keyword",
+        "search_keyword",
         "target_count",
-        "item_count",
+        "collected_count",
+        "resolved_count",
         "persisted_count",
-        "completion_status",
-        "run_status",
-        "search_scope_exhausted",
-        "missing_count",
+        "created_count",
+        "updated_count",
+        "rejected_count",
+        "scope_exhausted",
         "observed_job_ids",
     )
     for result in results or []:
         if not isinstance(result, dict):
             continue
         item = {key: result.get(key) for key in keys if key in result}
-        validation = result.get("persistence_validation")
-        if isinstance(validation, dict):
-            item["persistence_validation"] = {
-                "created_count": int(validation.get("created_count") or 0),
-                "updated_count": int(validation.get("updated_count") or 0),
-                "rejected_count": int(validation.get("rejected_count") or 0),
-                "persisted_items": [
-                    {
-                        key: persisted.get(key)
-                        for key in ("job_id", "company_name", "position", "operation")
-                        if key in persisted
-                    }
-                    for persisted in (validation.get("persisted_items") or [])
-                    if isinstance(persisted, dict)
-                ],
+        item["persisted_items"] = [
+            {
+                key: persisted.get(key)
+                for key in ("job_id", "company_name", "position", "operation")
+                if key in persisted
             }
+            for persisted in result.get("persisted_items", [])
+            if isinstance(persisted, dict)
+        ]
         compact.append(item)
     return compact
 

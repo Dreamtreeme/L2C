@@ -88,6 +88,10 @@ class _RecordingFakeModel(_FakeModel):
         return self.value
 
 
+def _unexpected_collection(_intent):
+    raise AssertionError("수집 단계가 실행되면 안 됩니다.")
+
+
 def test_onet_archive_tolerates_missing_occupation_file(tmp_path):
     db_path = tmp_path / "jobs.db"
     archive_path = tmp_path / "onet.zip"
@@ -648,6 +652,7 @@ def test_workflow_returns_cardinality_question_before_evidence_planning(tmp_path
     _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
     workflow = InvestigationWorkflow(
         db_path=db_path,
+        collect_jobs=_unexpected_collection,
         taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(
@@ -675,6 +680,7 @@ def test_workflow_returns_cardinality_question_before_evidence_planning(tmp_path
 def test_workflow_progresses_from_generic_request_to_domain_then_family(tmp_path):
     workflow = InvestigationWorkflow(
         db_path=tmp_path / "jobs.db",
+        collect_jobs=_unexpected_collection,
         models=InvestigationModels(
             analysis_model=_FakeModel(
                 RequestAnalysis(
@@ -723,6 +729,7 @@ def test_semantic_resolution_uses_selected_domain_and_promotes_confirmed_alias(t
     )
     workflow = InvestigationWorkflow(
         db_path=db_path,
+        collect_jobs=_unexpected_collection,
         taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(

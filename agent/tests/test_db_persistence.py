@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
+from agent.config import get_settings
 from agent.utils.preprocessor import Preprocessor
 from shared.db.database import Database
 from shared.schema.jd_schema import JobPosting
@@ -16,13 +17,20 @@ from shared.schema.jd_schema import JobPosting
 AGENT_JSON_PATH = Path("data/samples/agent_extracted_multi_jds_decoded.json")
 
 
-def test_preprocessor_accepts_korean_benefits_alias():
-    job_posting = Preprocessor.process_raw_jd({
-        "회사명": "테스트컴퍼니",
-        "직무명": "데이터 엔지니어",
-        "url": "https://www.wanted.co.kr/wd/123",
-        "혜택": ["식대지원", "장비지원"],
-    })
+def test_persistence_normalizer_converts_korean_field_aliases():
+    from agent.application.job_persistence_service import (
+        normalize_job_for_persistence,
+    )
+
+    normalized = normalize_job_for_persistence(
+        {
+            "회사명": "테스트컴퍼니",
+            "직무명": "데이터 엔지니어",
+            "url": "https://www.wanted.co.kr/wd/123",
+            "혜택": ["식대지원", "장비지원"],
+        }
+    )
+    job_posting = Preprocessor.process_raw_jd(normalized)
 
     assert job_posting.benefits == ["식대지원", "장비지원"]
 
@@ -90,131 +98,7 @@ def test_job_posting_rejects_relative_date_from_standard_field():
     assert job_posting.posted_at_text == "3일 전"
 
 
-def test_database_migrates_posted_date_columns_without_rebuilding_jobs(tmp_path):
-    db_path = tmp_path / "legacy_jobs.db"
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "CREATE TABLE jobs ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "url TEXT NOT NULL UNIQUE, "
-            "company_name TEXT, "
-            "content_hash TEXT, "
-            "created_at TEXT NOT NULL"
-            ")"
-        )
-
-    Database(db_path)
-
-    with sqlite3.connect(db_path) as conn:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
-        indexes = {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
-
-    assert {"posted_at", "posted_at_text"} <= columns
-    assert "idx_jobs_posted_at" in indexes
-
-
-def test_database_migrates_unique_content_hash_without_losing_jobs(tmp_path):
-    db_path = tmp_path / "legacy_unique_content_hash.db"
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "CREATE TABLE jobs ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "url TEXT NOT NULL UNIQUE, "
-            "company_name TEXT, "
-            "position TEXT, "
-            "content_hash TEXT UNIQUE, "
-            "created_at TEXT NOT NULL, "
-            "updated_at TEXT NOT NULL"
-            ")"
-        )
-        conn.execute(
-            "INSERT INTO jobs (url, company_name, position, content_hash, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                "https://example.com/jobs/legacy",
-                "Acme",
-                "AI Engineer",
-                "shared-content",
-                "2026-07-01T00:00:00",
-                "2026-07-01T00:00:00",
-            ),
-        )
-        conn.execute(
-            "CREATE TABLE job_versions ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "job_id INTEGER NOT NULL, "
-            "version_number INTEGER NOT NULL, "
-            "observed_at TEXT NOT NULL, "
-            "source_url TEXT NOT NULL, "
-            "source_platform TEXT, "
-            "evidence_hash TEXT NOT NULL, "
-            "changed_fields_json TEXT NOT NULL, "
-            "content_json TEXT NOT NULL, "
-            "UNIQUE(job_id, version_number), "
-            "UNIQUE(job_id, evidence_hash), "
-            "FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE"
-            ")"
-        )
-        conn.execute(
-            "INSERT INTO job_versions ("
-            "job_id, version_number, observed_at, source_url, evidence_hash, "
-            "changed_fields_json, content_json"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                1,
-                1,
-                "2026-07-01T00:00:00",
-                "https://example.com/jobs/legacy",
-                "legacy-evidence",
-                "[]",
-                "{}",
-            ),
-        )
-
-    db = Database(db_path)
-    second_id = db.upsert(
-        "https://another.example.com/jobs/new",
-        {
-            "company_name": "Acme",
-            "position": "AI Engineer",
-            "content_hash": "shared-content",
-        },
-    )
-
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT id, url FROM jobs WHERE content_hash = ? ORDER BY id",
-            ("shared-content",),
-        ).fetchall()
-        version_count = conn.execute(
-            "SELECT COUNT(*) FROM job_versions WHERE job_id = 1"
-        ).fetchone()[0]
-        foreign_key_violations = conn.execute(
-            "PRAGMA foreign_key_check"
-        ).fetchall()
-        unique_content_hash_indexes = []
-        for index in conn.execute("PRAGMA index_list(jobs)").fetchall():
-            if not int(index["unique"]):
-                continue
-            columns = [
-                row["name"]
-                for row in conn.execute(
-                    f"PRAGMA index_info('{index['name']}')"
-                ).fetchall()
-            ]
-            if columns == ["content_hash"]:
-                unique_content_hash_indexes.append(index["name"])
-
-    assert len(rows) == 2
-    assert rows[0]["url"] == "https://example.com/jobs/legacy"
-    assert rows[1]["id"] == second_id
-    assert version_count == 1
-    assert foreign_key_violations == []
-    assert unique_content_hash_indexes == []
-
-
-def test_database_upsert_and_recent_list_include_posted_date(tmp_path):
+def test_database_upsert_preserves_posted_date(tmp_path):
     db = Database(tmp_path / "jobs.db")
     row_id = db.upsert(
         "https://example.com/jobs/posted",
@@ -228,11 +112,8 @@ def test_database_upsert_and_recent_list_include_posted_date(tmp_path):
     )
 
     saved = db.get(row_id)
-    recent = db.list_recent(limit=1)
-
     assert saved["posted_at"] == "2026-07-11"
     assert saved["posted_at_text"] == "2026.07.11 게시"
-    assert recent[0]["posted_at"] == "2026-07-11"
 
 
 def test_database_records_only_meaningful_job_versions(tmp_path):
@@ -265,11 +146,10 @@ def test_database_records_only_meaningful_job_versions(tmp_path):
 
 
 def test_persistence_keeps_collected_ocr_and_screenshot_evidence(monkeypatch, tmp_path):
-    import shared.config as cfg
     from agent.application.job_persistence_service import persist_collected_data_with_report
 
     db_path = tmp_path / "evidence_jobs.db"
-    monkeypatch.setattr(cfg, "DB_PATH", db_path)
+    monkeypatch.setattr(get_settings().paths, "db_path", db_path)
     screenshot_path = str(tmp_path / "detail.png")
     result = persist_collected_data_with_report(
         {
@@ -284,7 +164,6 @@ def test_persistence_keeps_collected_ocr_and_screenshot_evidence(monkeypatch, tm
                 }
             ]
         },
-        "iOS 개발자",
     )
 
     saved = Database(db_path).get(result["persisted_items"][0]["job_id"])
@@ -294,12 +173,11 @@ def test_persistence_keeps_collected_ocr_and_screenshot_evidence(monkeypatch, tm
 
 
 def test_persistence_separates_embedded_detail_cards_sharing_search_url(monkeypatch, tmp_path):
-    import shared.config as cfg
     from agent.application.job_persistence_service import persist_collected_data_with_report
     from agent.runtime.job_identity import source_card_key
 
     db_path = tmp_path / "embedded-details.db"
-    monkeypatch.setattr(cfg, "DB_PATH", db_path)
+    monkeypatch.setattr(get_settings().paths, "db_path", db_path)
     search_url = "https://www.saramin.co.kr/zf_user/search?searchword=ml"
 
     first = {
@@ -333,8 +211,8 @@ def test_persistence_separates_embedded_detail_cards_sharing_search_url(monkeypa
         ]
     }
 
-    first_result = persist_collected_data_with_report(first, "머신러닝 엔지니어")
-    second_result = persist_collected_data_with_report(second, "머신러닝 엔지니어")
+    first_result = persist_collected_data_with_report(first)
+    second_result = persist_collected_data_with_report(second)
 
     assert first_result["created_count"] == 1
     assert second_result["created_count"] == 1
@@ -347,10 +225,13 @@ def test_persistence_separates_embedded_detail_cards_sharing_search_url(monkeypa
 
 
 def test_pre_persistence_validation_rejects_missing_identity_and_date_mismatch(monkeypatch, tmp_path):
-    import shared.config as cfg
     from agent.application.job_persistence_service import persist_collected_data_with_report
 
-    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "validated_jobs.db")
+    monkeypatch.setattr(
+        get_settings().paths,
+        "db_path",
+        tmp_path / "validated_jobs.db",
+    )
     result = persist_collected_data_with_report(
         {
             "jobs": [
@@ -368,7 +249,6 @@ def test_pre_persistence_validation_rejects_missing_identity_and_date_mismatch(m
                 },
             ]
         },
-        "Data Engineer",
         collection_intent={
             "filters": {"posted_from": "2026-07-01", "posted_to": "2026-07-31"}
         },
@@ -381,10 +261,13 @@ def test_pre_persistence_validation_rejects_missing_identity_and_date_mismatch(m
 
 
 def test_pre_persistence_validation_rejects_job_without_actual_content(monkeypatch, tmp_path):
-    import shared.config as cfg
     from agent.application.job_persistence_service import persist_collected_data_with_report
 
-    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "content_required_jobs.db")
+    monkeypatch.setattr(
+        get_settings().paths,
+        "db_path",
+        tmp_path / "content_required_jobs.db",
+    )
     result = persist_collected_data_with_report(
         {
             "jobs": [
@@ -395,7 +278,6 @@ def test_pre_persistence_validation_rejects_job_without_actual_content(monkeypat
                 }
             ]
         },
-        "백엔드 개발자",
         collection_intent={
             "required_fields": [
                 "company_name",
@@ -419,12 +301,15 @@ def test_persistence_accepts_field_confirmed_unavailable_at_page_end(
     monkeypatch,
     tmp_path,
 ):
-    import shared.config as cfg
     from agent.application.job_persistence_service import (
         persist_collected_data_with_report,
     )
 
-    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "unavailable_field.db")
+    monkeypatch.setattr(
+        get_settings().paths,
+        "db_path",
+        tmp_path / "unavailable_field.db",
+    )
     required_fields = [
         "company_name",
         "position",
@@ -448,7 +333,6 @@ def test_persistence_accepts_field_confirmed_unavailable_at_page_end(
                 }
             ]
         },
-        "데이터 엔지니어",
         collection_intent={
             "required_fields": required_fields,
         },
@@ -474,7 +358,6 @@ def test_taxonomy_failure_is_stored_but_not_counted_as_search_ready(
     monkeypatch,
     tmp_path,
 ):
-    import shared.config as cfg
     from agent.application.job_persistence_service import (
         persist_collected_data_with_report,
     )
@@ -483,7 +366,7 @@ def test_taxonomy_failure_is_stored_but_not_counted_as_search_ready(
     )
 
     db_path = tmp_path / "taxonomy_failure.db"
-    monkeypatch.setattr(cfg, "DB_PATH", db_path)
+    monkeypatch.setattr(get_settings().paths, "db_path", db_path)
 
     def fail_alias_load(_self, _connection):
         raise RuntimeError("색인 실패")
@@ -504,7 +387,6 @@ def test_taxonomy_failure_is_stored_but_not_counted_as_search_ready(
                 }
             ]
         },
-        "AI 엔지니어",
     )
 
     with sqlite3.connect(db_path) as connection:
@@ -530,7 +412,7 @@ def test_taxonomy_failure_is_stored_but_not_counted_as_search_ready(
 def test_persistence_report_distinguishes_created_and_updated_jobs(monkeypatch, tmp_path):
     from agent.application.job_persistence_service import persist_collected_data_with_report
 
-    monkeypatch.setattr("shared.config.DB_PATH", tmp_path / "jobs.db")
+    monkeypatch.setattr(get_settings().paths, "db_path", tmp_path / "jobs.db")
     payload = {
         "공고목록": [
             {
@@ -541,8 +423,8 @@ def test_persistence_report_distinguishes_created_and_updated_jobs(monkeypatch, 
         ]
     }
 
-    created = persist_collected_data_with_report(payload, "백엔드 개발자")
-    updated = persist_collected_data_with_report(payload, "백엔드 개발자")
+    created = persist_collected_data_with_report(payload)
+    updated = persist_collected_data_with_report(payload)
 
     assert created["created_count"] == 1
     assert created["updated_count"] == 0
@@ -554,6 +436,10 @@ def test_persistence_report_distinguishes_created_and_updated_jobs(monkeypatch, 
 
 
 def test_persistence_pipeline(tmp_path):
+    from agent.application.job_persistence_service import (
+        normalize_job_for_persistence,
+    )
+
     print("=== [테스트 시작] 전처리 및 DB 적재 파이프라인 검증 ===")
     test_db_path = tmp_path / "test_jobs.db"
     
@@ -585,7 +471,9 @@ def test_persistence_pipeline(tmp_path):
             raw_jd["자격요건"].append("[0] RxSwift 실무 능숙자")
             raw_jd["자격요건"].append("[id: 102] SwiftUI 기반 아키텍처 리팩토링 경험")
         
-        job_posting = Preprocessor.process_raw_jd(raw_jd)
+        job_posting = Preprocessor.process_raw_jd(
+            normalize_job_for_persistence(raw_jd)
+        )
         
         # [B] Pydantic 검증 상태 확인
         assert isinstance(job_posting, JobPosting)
@@ -632,7 +520,9 @@ def test_persistence_pipeline(tmp_path):
     # 4. 중복 적재 방지(Deduplication) 검증
     print("\n--- [중복 적재 방지 및 UPSERT 검증] ---")
     first_jd = jds[0]
-    jp_1 = Preprocessor.process_raw_jd(first_jd)
+    jp_1 = Preprocessor.process_raw_jd(
+        normalize_job_for_persistence(first_jd)
+    )
     
     # 동일 URL로 한번 더 UPSERT 수행
     id_1 = db.upsert(jp_1.url, jp_1.model_dump())
@@ -641,7 +531,9 @@ def test_persistence_pipeline(tmp_path):
     print("✓ URL 중복 충돌 시 정상 UPDATE 확인")
 
     # URL이 다르면 content_hash가 같아도 별도 출처로 보존
-    jp_2 = Preprocessor.process_raw_jd(first_jd)
+    jp_2 = Preprocessor.process_raw_jd(
+        normalize_job_for_persistence(first_jd)
+    )
     jp_2.url = "https://www.wanted.co.kr/wd/9999999999" # 임의의 새 URL
     assert jp_1.content_hash == jp_2.content_hash, "동일 데이터에 대한 hash가 불일치합니다."
 

@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+from agent.application.model_clients import (
+    get_google_chat_model,
+    get_structured_google_model,
+)
+from agent.application.model_policy import commander_model_name
 from shared.schema.investigation_schema import (
     EvidencePlan,
     EvidenceValidation,
@@ -53,98 +58,42 @@ class InvestigationModels:
         value = get_settings().models.commander_max_output_tokens
         return value if value > 0 else None
 
-    def analysis(self) -> Any:
-        if self.analysis_model is None:
-            from agent.application.model_clients import get_structured_google_model
-            from agent.application.model_policy import commander_model_name
+    def _structured(self, injected_model: Any, schema: type) -> Any:
+        if injected_model is not None:
+            return injected_model
+        return get_structured_google_model(
+            commander_model_name(),
+            schema,
+            temperature=0.0,
+            max_output_tokens=self._max_output_tokens(),
+            execution_role="commander",
+        )
 
-            self.analysis_model = get_structured_google_model(
-                commander_model_name(),
-                RequestAnalysis,
-                temperature=0.0,
-                max_output_tokens=self._max_output_tokens(),
-                execution_role="commander",
-            )
-        return self.analysis_model
+    def analysis(self) -> Any:
+        return self._structured(self.analysis_model, RequestAnalysis)
 
     def evidence(self) -> Any:
-        if self.evidence_model is None:
-            from agent.application.model_clients import get_structured_google_model
-            from agent.application.model_policy import commander_model_name
-
-            self.evidence_model = get_structured_google_model(
-                commander_model_name(),
-                EvidencePlan,
-                temperature=0.0,
-                max_output_tokens=self._max_output_tokens(),
-                execution_role="commander",
-            )
-        return self.evidence_model
+        return self._structured(self.evidence_model, EvidencePlan)
 
     def taxonomy(self) -> Any:
-        if self.taxonomy_model is None:
-            from agent.application.model_clients import get_structured_google_model
-            from agent.application.model_policy import commander_model_name
-
-            self.taxonomy_model = get_structured_google_model(
-                commander_model_name(),
-                TaxonomyResolution,
-                temperature=0.0,
-                max_output_tokens=self._max_output_tokens(),
-                execution_role="commander",
-            )
-        return self.taxonomy_model
+        return self._structured(self.taxonomy_model, TaxonomyResolution)
 
     def action(self) -> Any:
-        if self.action_model is None:
-            from agent.application.model_clients import get_structured_google_model
-            from agent.application.model_policy import commander_model_name
-
-            self.action_model = get_structured_google_model(
-                commander_model_name(),
-                InvestigationActionPlan,
-                temperature=0.0,
-                max_output_tokens=self._max_output_tokens(),
-                execution_role="commander",
-            )
-        return self.action_model
+        return self._structured(self.action_model, InvestigationActionPlan)
 
     def validation(self) -> Any:
-        if self.validation_model is None:
-            from agent.application.model_clients import get_structured_google_model
-            from agent.application.model_policy import commander_model_name
-
-            self.validation_model = get_structured_google_model(
-                commander_model_name(),
-                EvidenceValidation,
-                temperature=0.0,
-                max_output_tokens=self._max_output_tokens(),
-                execution_role="commander",
-            )
-        return self.validation_model
+        return self._structured(self.validation_model, EvidenceValidation)
 
     def answer(self) -> Any:
-        if self.answer_model is None:
-            from agent.application.model_clients import get_google_chat_model
-            from agent.application.model_policy import commander_model_name
+        if self.answer_model is not None:
+            return self.answer_model
+        return get_google_chat_model(
+            commander_model_name(),
+            temperature=0.0,
+            max_output_tokens=self._max_output_tokens(),
+            execution_role="commander",
+        )
 
-            self.answer_model = get_google_chat_model(
-                commander_model_name(),
-                temperature=0.0,
-                max_output_tokens=self._max_output_tokens(),
-                execution_role="commander",
-            )
-        return self.answer_model
-
-def parse_model_payload(value: Any, model_type: type) -> Any:
-    if isinstance(value, model_type):
-        return value
-    if isinstance(value, dict):
-        return model_type.model_validate(value)
-    content = getattr(value, "content", value)
-    if isinstance(content, str):
-        return model_type.model_validate_json(content)
-    return model_type.model_validate(content)
 
 def message_text(value: Any) -> str:
     content = getattr(value, "content", value)
@@ -155,33 +104,30 @@ def message_text(value: Any) -> str:
         )
     return str(content or "")
 
+
 def normalize_site_slugs(constraints):
     """모델이 표시명을 반환해도 사이트 레지스트리 slug로 정규화한다."""
 
     if not constraints.sites:
         return constraints
-    try:
-        from agent.sites import list_supported_sites
+    from agent.sites import list_supported_sites
 
-        aliases: dict[str, str] = {}
-        for profile in list_supported_sites(enabled_only=False):
-            slug = profile.slug
-            values = [
-                slug,
-                profile.display_name,
-                *(str(item) for item in profile.domains),
-            ]
-            for value in values:
-                if value.strip():
-                    aliases[value.strip().casefold()] = slug
-        normalized = [
-            aliases.get(str(value).strip().casefold(), str(value).strip())
-            for value in constraints.sites
-            if str(value).strip()
-        ]
-        return constraints.model_copy(update={"sites": list(dict.fromkeys(normalized))})
-    except Exception:
-        return constraints
+    aliases: dict[str, str] = {}
+    for profile in list_supported_sites(enabled_only=False):
+        values = [profile.slug, profile.display_name, *profile.domains]
+        aliases.update(
+            {
+                value.strip().casefold(): profile.slug
+                for value in values
+                if value.strip()
+            }
+        )
+    normalized = [
+        aliases.get(str(value).strip().casefold(), str(value).strip())
+        for value in constraints.sites
+        if str(value).strip()
+    ]
+    return constraints.model_copy(update={"sites": list(dict.fromkeys(normalized))})
 
 def capabilities_for_investigation(
     catalog: list[dict[str, Any]],
@@ -231,5 +177,4 @@ __all__ = [
     "capabilities_for_investigation",
     "message_text",
     "normalize_site_slugs",
-    "parse_model_payload",
 ]

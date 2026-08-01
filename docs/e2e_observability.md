@@ -47,7 +47,8 @@ Standard 유료 단가만 기록하며, 출력 단가는 공개 답변과 내부
 ```powershell
 python -m benchmark.run_realtime_e2e `
   --site wanted `
-  --query "ios 개발자 공고 2개" `
+  --search-keyword "iOS 개발자" `
+  --original-query "ios 개발자 공고 2개" `
   --target-count 2 `
   --count-mode explicit `
   --scenario-id wanted-ios-2 `
@@ -148,7 +149,7 @@ python -m benchmark.profile_investigation_planner `
 - `worker_prepare_screen`, `worker_graph`, `worker_review`, `job_persistence`: 수집 생명주기
 - `ocr_request`: 실제 PaddleOCR worker 요청과 timeout
 - LangGraph 노드와 LLM 호출: 판단 흐름과 모델 토큰
-- Classic Ollama 정제 호출: `classic_extraction` LLM 사용량
+- Classic Gemini 정제 호출: `classic_extraction` LLM 사용량
 
 각 단계에는 `stage`, `component`, 성공 여부와 실패 코드가 붙습니다. `graph:reflex`의 `action_source=reflex`와 `graph:selection`의 `action_source=job_card_queue`가 각각 Reflex와 공고 카드 큐 hit의 기준입니다. 중간 실패 후 복구된 실행은 최종 성공으로 집계하고, 실패 이력은 `recovered_failure_count`와 `internal_failure_codes`에 남깁니다.
 

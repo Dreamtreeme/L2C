@@ -20,15 +20,14 @@ def _site_profile_for_host(host: str) -> SiteProfile | None:
         host = host[4:]
     if not host:
         return None
-    try:
-        from agent.sites import list_supported_sites, load_site_profile
+    from agent.sites import list_supported_sites
 
-        for profile in list_supported_sites(enabled_only=False):
-            domains = [str(domain or "").lower() for domain in profile.domains]
-            if any(host == domain or host.endswith("." + domain) for domain in domains):
-                return load_site_profile(profile.slug)
-    except Exception:
-        return None
+    for profile in list_supported_sites(enabled_only=False):
+        if any(
+            host == domain or host.endswith("." + domain)
+            for domain in profile.domains
+        ):
+            return profile
     return None
 
 
@@ -37,16 +36,9 @@ def site_profile_for_url(url: str) -> SiteProfile | None:
 
     try:
         host = (urlparse(url or "").netloc or "").lower()
-    except Exception:
+    except ValueError:
         return None
     return _site_profile_for_host(host)
-
-
-def persistence_policy_for_url(url: str) -> dict:
-    """URL에 해당하는 사이트의 저장 정책을 반환한다."""
-
-    profile = site_profile_for_url(url)
-    return profile.persistence_policy.model_dump(mode="json") if profile else {}
 
 
 def page_guidance_for_url(url: str, page_role: str) -> dict[str, Any]:
@@ -64,11 +56,8 @@ def _matches_declared_url_pattern(url: str, patterns: list[Any]) -> bool:
         pattern = str(raw_pattern or "").strip()
         if not pattern:
             continue
-        try:
-            if re.search(pattern, url or "", flags=re.IGNORECASE):
-                return True
-        except re.error:
-            continue
+        if re.search(pattern, url or "", flags=re.IGNORECASE):
+            return True
     return False
 
 
@@ -105,18 +94,12 @@ def infer_site_page_role(url: str, marker_texts: list[Any] | None = None) -> str
             raw_config = config.model_dump(mode="json")
             cues = list(raw_config.get("visible_cues") or [])
             matched = _matched_visible_cues(texts, cues)
-            try:
-                minimum = max(1, int(raw_config.get("minimum_visible_cues") or 2))
-            except (TypeError, ValueError):
-                minimum = 2
+            minimum = int(raw_config.get("minimum_visible_cues") or 2)
             if cues and len(matched) >= minimum:
                 return normalize_page_role(raw_role)
-    try:
-        parsed = urlparse(url or "")
-        if profile and parsed.netloc and (parsed.path or "/") in {"", "/"}:
-            return "home"
-    except Exception:
-        pass
+    parsed = urlparse(url or "")
+    if profile and parsed.netloc and (parsed.path or "/") in {"", "/"}:
+        return "home"
     return ""
 
 
@@ -134,10 +117,7 @@ def job_detail_context_evidence(
     url_matched = bool(url and _matches_declared_url_pattern(url, patterns))
     cues = list(guidance.get("visible_cues") or [])
     matched_cues = _matched_visible_cues(list(marker_texts or []), cues)
-    try:
-        minimum = max(1, int(guidance.get("minimum_visible_cues") or 2))
-    except (TypeError, ValueError):
-        minimum = 2
+    minimum = int(guidance.get("minimum_visible_cues") or 2)
     role_matched = role == "job_detail"
     cue_matched = bool(cues and len(matched_cues) >= minimum)
     if role_matched:
@@ -212,7 +192,6 @@ __all__ = [
     "job_detail_context_evidence",
     "looks_like_job_detail_url",
     "page_guidance_for_url",
-    "persistence_policy_for_url",
     "site_runtime_guidance",
     "site_profile_for_url",
 ]

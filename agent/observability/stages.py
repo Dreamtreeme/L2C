@@ -9,7 +9,6 @@ COMPONENT_STAGE = {
     "worker_prepare_screen": "browser_prepare",
     "worker_graph": "collection",
     "vision_worker": "collection",
-    "worker_review": "review",
     "job_persistence": "persistence",
     "browser_cleanup": "cleanup",
     "graph:capture": "perception",

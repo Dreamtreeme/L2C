@@ -7,6 +7,7 @@ from collections import Counter
 from typing import Any
 
 from agent.application.search_taxonomy_service import SearchTaxonomyService
+from shared.schema.collection_intent import CollectionIntent
 from shared.schema.investigation_schema import (
     EvidencePlan,
     EvidenceValidation,
@@ -117,9 +118,9 @@ def normalize_collection_steps(
             "realtime_scraping:"
         ):
             continue
-        arguments = step.arguments.model_dump(mode="json")
+        intent = step.arguments
         site_from_tool = tool_name.split(":", 1)[1] if ":" in tool_name else ""
-        site = str(arguments.get("site") or site_from_tool).strip()
+        site = str(intent.site or site_from_tool).strip()
         if not site and len(investigation.constraints.sites) == 1:
             site = investigation.constraints.sites[0]
         if not site or site not in allowed_sites:
@@ -133,41 +134,42 @@ def normalize_collection_steps(
             ),
             None,
         )
-        query = str(
-            arguments.get("query")
+        search_keyword = str(
+            intent.search_keyword
             or (requirement.collection_search_term if requirement else "")
             or (requirement.occupation_query if requirement else "")
             or investigation.constraints.collection_search_term
             or investigation.constraints.occupation_query
         ).strip()
-        if not query:
+        if not search_keyword:
             continue
         posted_from = str(
-            arguments.get("posted_from")
+            intent.filters.posted_from
             or (requirement.posted_from if requirement else "")
             or investigation.constraints.posted_from
         )
         posted_to = str(
-            arguments.get("posted_to")
+            intent.filters.posted_to
             or (requirement.posted_to if requirement else "")
             or investigation.constraints.posted_to
         )
-        arguments.update(
+        normalized_intent = CollectionIntent.model_validate(
             {
-                "query": query,
+                **intent.model_dump(mode="json"),
                 "site": site,
+                "search_keyword": search_keyword,
                 "original_query": investigation.original_query,
                 "count_mode": investigation.constraints.count_mode,
                 "target_count": investigation.constraints.target_count,
-                "posted_from": posted_from,
-                "posted_to": posted_to,
-                "experience": investigation.constraints.experience,
-                "location": investigation.constraints.location,
-                "employment_type": investigation.constraints.employment_type,
+                "filters": {
+                    "posted_from": posted_from,
+                    "posted_to": posted_to,
+                    "experience": investigation.constraints.experience,
+                    "location": investigation.constraints.location,
+                    "employment_type": investigation.constraints.employment_type,
+                },
                 "freshness_required": bool(
-                    arguments.get("freshness_required")
-                    or posted_from
-                    or posted_to
+                    intent.freshness_required or posted_from or posted_to
                 ),
                 "purpose": investigation.purpose.value,
                 "analysis_goal": investigation.objective,
@@ -175,21 +177,23 @@ def normalize_collection_steps(
                 "required_fields": (
                     list(requirement.required_fields)
                     if requirement is not None
-                    else list(arguments.get("required_fields") or [])
+                    else list(intent.required_fields)
                 ),
             }
         )
-        signature = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+        signature = json.dumps(
+            normalized_intent.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         if signature in signatures:
             continue
         signatures.add(signature)
-        from shared.schema.agent_contract import CollectionToolArguments
-
         normalized.append(
             step.model_copy(
                 update={
                     "tool_name": "realtime_scraping",
-                    "arguments": CollectionToolArguments.model_validate(arguments),
+                    "arguments": normalized_intent,
                 }
             )
         )

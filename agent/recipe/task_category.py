@@ -20,18 +20,9 @@ def task_category_from_candidate(candidate: dict[str, Any]) -> str:
     """레시피 후보가 기록한 작업 분류를 정규화해 반환한다."""
 
     worker_submission = dict(candidate.get("payload", {}) or {})
-    evidence = (
-        worker_submission.get("skill_metadata_evidence")
-        if isinstance(
-            worker_submission.get("skill_metadata_evidence"),
-            dict,
-        )
-        else {}
-    )
+    intent = dict(worker_submission.get("collection_intent") or {})
     return normalize_task_category(
-        worker_submission.get("task_category")
-        or evidence.get("task_category")
-        or ""
+        intent.get("task_category") or ""
     )
 
 

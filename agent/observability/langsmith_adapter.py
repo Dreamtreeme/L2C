@@ -24,10 +24,6 @@ def langsmith_project_name() -> str:
     return get_settings().observability.langsmith_project.strip() or "l2c-local"
 
 
-def _feedback_enabled() -> bool:
-    return get_settings().observability.langsmith_e2e_feedback
-
-
 @contextmanager
 def langsmith_trace(
     name: str,
@@ -119,7 +115,7 @@ def publish_langsmith_feedback(
         return {"status": "skipped", "reason": "trace_id_missing", "published": 0}
     if not langsmith_tracing_enabled():
         return {"status": "skipped", "reason": "tracing_disabled", "published": 0}
-    if not _feedback_enabled():
+    if not get_settings().observability.langsmith_e2e_feedback:
         return {"status": "skipped", "reason": "feedback_disabled", "published": 0}
 
     published = 0

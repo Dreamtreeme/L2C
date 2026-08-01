@@ -31,9 +31,7 @@ from shared.schema.investigation_schema import ClarificationAnswer
 async def _application_lifespan(application: FastAPI):
     """백엔드가 공유하는 체크포인터, 그래프, 비전 및 후처리 자원을 관리합니다."""
 
-    import shared.config as config
-
-    runtime = ApplicationRuntime(config.DB_PATH)
+    runtime = ApplicationRuntime(get_settings().paths.db_path)
     application.state.runtime = runtime
     runtime.start()
     try:
@@ -158,9 +156,7 @@ async def serve_frontend_index():
 @app.get("/api/jobs/{job_id}")
 async def get_job_detail(job_id: int):
     """지정된 job_id 공고의 상세 정보 및 원본 텍스트를 SQLite에서 조회합니다."""
-    import shared.config as config
-
-    db = Database(config.DB_PATH)
+    db = Database(get_settings().paths.db_path)
     job = db.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -181,9 +177,7 @@ async def get_job_detail(job_id: int):
 @app.get("/api/jobs/{job_id}/versions")
 async def get_job_versions(job_id: int):
     """공고 내용이 바뀐 시점별 출처 스냅샷을 반환합니다."""
-    import shared.config as config
-
-    db = Database(config.DB_PATH)
+    db = Database(get_settings().paths.db_path)
     if not db.get(job_id):
         raise HTTPException(status_code=404, detail="Job not found")
     return {"job_id": job_id, "versions": db.list_versions(job_id)}
@@ -216,13 +210,13 @@ async def cancel_run(run_id: str):
 @app.get("/api/operations")
 async def get_operations_summary():
     """최근 실행 상태와 보존 만료 후보를 반환합니다."""
-    import shared.config as config
     from agent.application.retention_service import run_retention
 
+    paths = get_settings().paths
     retention = run_retention(
-        db_path=config.DB_PATH,
-        logs_dir=config.LOGS_DIR,
-        screenshot_dir=config.SCREENSHOT_DIR,
+        db_path=paths.db_path,
+        logs_dir=paths.log_dir,
+        screenshot_dir=paths.screenshot_dir,
         dry_run=True,
     )
     return {
@@ -234,16 +228,16 @@ async def get_operations_summary():
 @app.post("/api/operations/retention")
 async def apply_retention(x_l2c_operation: str = Header(default="")):
     """현재 보존 정책의 만료 후보를 실제로 정리합니다."""
-    import shared.config as config
     from agent.application.retention_service import run_retention
 
     if x_l2c_operation != "apply-retention":
         raise HTTPException(status_code=403, detail="Retention confirmation header required")
 
+    paths = get_settings().paths
     return run_retention(
-        db_path=config.DB_PATH,
-        logs_dir=config.LOGS_DIR,
-        screenshot_dir=config.SCREENSHOT_DIR,
+        db_path=paths.db_path,
+        logs_dir=paths.log_dir,
+        screenshot_dir=paths.screenshot_dir,
         dry_run=False,
     )
 

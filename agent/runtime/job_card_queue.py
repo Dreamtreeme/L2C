@@ -21,10 +21,6 @@ from agent.vision.screen_signature import hamming_distance
 from agent.vision.target_snapshot import marker_by_id
 
 
-def job_card_queue_enabled() -> bool:
-    return get_settings().reflex.job_card_queue_enabled
-
-
 def job_card_label(card: dict) -> str:
     for key in ("title", "target_label", "position", "text", "label"):
         value = card.get(key)
@@ -175,16 +171,6 @@ def pending_job_cards(queue: list[dict]) -> list[dict]:
         for item in queue or []
         if isinstance(item, dict) and str(item.get("status") or "pending") == "pending"
     ]
-
-
-def completed_job_card_count(queue: list[dict]) -> int:
-    """상세 정보를 실제로 수집 완료한 카드 수만 반환한다."""
-
-    return sum(
-        1
-        for item in queue or []
-        if isinstance(item, dict) and str(item.get("status") or "") == "done"
-    )
 
 
 def resolved_job_card_count(queue: list[dict]) -> int:
@@ -442,8 +428,6 @@ def replay_job_card_after_return(
 ) -> tuple[ActionRequest | None, list[dict], dict]:
     """어떤 물리 행동으로 복귀했든 목록 화면이 확인되면 다음 카드를 준비한다."""
 
-    if not job_card_queue_enabled():
-        return None, markers, {"reason": "queue_disabled"}
     if not str(transition_result.get("action") or ""):
         return None, markers, {"reason": "return_transition_missing"}
     queue = [
@@ -508,8 +492,6 @@ def replay_job_card_after_return(
 
 
 __all__ = [
-    "job_card_queue_enabled",
-    "completed_job_card_count",
     "resolved_job_card_count",
     "complete_active_job_card",
     "activate_job_card",

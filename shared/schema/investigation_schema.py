@@ -7,7 +7,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from shared.schema.agent_contract import CollectionToolArguments, EvidenceField
+from shared.schema.agent_contract import EvidenceField
+from shared.schema.collection_intent import CollectionIntent
 
 
 class InvestigationPurpose(str, Enum):
@@ -263,14 +264,10 @@ class InvestigationPlanStep(BaseModel):
     """지휘자가 실행 전에 확정한 하나의 행동 단계."""
 
     step_id: str = Field(min_length=1)
-    action: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
-    arguments: CollectionToolArguments = Field(default_factory=CollectionToolArguments)
+    arguments: CollectionIntent = Field(default_factory=CollectionIntent)
     purpose: str = ""
     expected_evidence: list[str] = Field(default_factory=list)
-    success_criteria: list[str] = Field(default_factory=list)
-    fallback: str = ""
-    status: str = "pending"
 
 
 class InvestigationRequest(BaseModel):

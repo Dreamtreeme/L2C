@@ -10,18 +10,80 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from benchmark.run_product_chat_e2e import (  # noqa: E402
-    _Tee,
-    _database_jobs,
-    _run_chat_request,
-)
+class _Tee:
+    def __init__(self, *streams: TextIO):
+        self.streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
+
+
+def _frame_payload(line: str, label: str) -> dict[str, Any] | None:
+    prefix = f"data: [{label}] "
+    if not line.startswith(prefix):
+        return None
+    try:
+        value = json.loads(line[len(prefix) :])
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _database_jobs(db_path: Path) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        return []
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        if not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+        ).fetchone():
+            return []
+        return [
+            dict(row)
+            for row in connection.execute(
+                "SELECT id, company_name, position, url, source_platform "
+                "FROM jobs ORDER BY id"
+            )
+        ]
+
+
+def _run_chat_request(client: Any, *, query: str, conversation_id: str) -> dict[str, Any]:
+    result: dict[str, Any] = {"final": {}, "events": [], "error": ""}
+    with client.stream(
+        "POST",
+        "/api/chat",
+        json={"query": query, "conversation_id": conversation_id},
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if not line:
+                continue
+            print(line)
+            for label, key in (("EVENT", "events"), ("FINAL", "final"), ("ERROR", "error")):
+                payload = _frame_payload(line, label)
+                if payload is None:
+                    continue
+                if key == "events":
+                    result[key].append(payload)
+                elif key == "error":
+                    result[key] = str(payload.get("message") or payload)
+                else:
+                    result[key] = payload
+    return result
 
 
 def _mode_check(mode: str, value: bool) -> bool:

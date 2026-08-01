@@ -14,7 +14,6 @@ from PIL import Image, ImageFilter, ImageStat
 
 from agent.config import get_settings
 from agent.utils.logger import logger
-from shared.config import SCREENSHOT_DIR
 
 
 from agent.tools.som_engine import SomEngine
@@ -27,7 +26,8 @@ class PerceptionEngine:
     """
 
     def __init__(self):
-        self.screenshot_dir = SCREENSHOT_DIR
+        self.screenshot_dir = get_settings().paths.screenshot_dir
+        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         self.sct = mss.mss()
         self.som_engine = SomEngine()
         self.scale_x = 1.0

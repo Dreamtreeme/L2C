@@ -27,7 +27,7 @@ def test_matrix_repeat_expands_to_independent_run_ids() -> None:
             {
                 "id": "wanted-ios",
                 "site": "wanted",
-                "query": "iOS 개발자",
+                "search_keyword": "iOS 개발자",
                 "execution_mode": "autonomous",
                 "repeat": 3,
             }
@@ -47,7 +47,7 @@ def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
         {
             "id": "wanted-ios-experience-guided",
             "site": "wanted",
-            "query": "iOS 개발자",
+            "search_keyword": "iOS 개발자",
             "target_count": 2,
             "count_mode": "explicit",
             "execution_mode": "experience_guided",
@@ -57,6 +57,8 @@ def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
     )
 
     assert "--execution-mode" in command
+    assert command[command.index("--search-keyword") + 1] == "iOS 개발자"
+    assert "--query" not in command
     assert command[command.index("--execution-mode") + 1] == (
         "experience_guided"
     )
@@ -201,7 +203,7 @@ def test_experience_guided_reset_keeps_recipes_and_removes_jobs(
 def test_scenario_workload_key_matches_both_execution_modes() -> None:
     autonomous = {
         "site": "Wanted",
-        "query": " iOS 개발자 ",
+        "search_keyword": " iOS 개발자 ",
         "target_count": 2,
         "count_mode": "explicit",
         "execution_mode": "autonomous",
@@ -209,7 +211,7 @@ def test_scenario_workload_key_matches_both_execution_modes() -> None:
     experience_guided = {
         **autonomous,
         "site": "wanted",
-        "query": "iOS 개발자",
+        "search_keyword": "iOS 개발자",
         "execution_mode": "experience_guided",
     }
 
@@ -258,7 +260,7 @@ def test_promotion_metrics_are_added_to_collection_metrics() -> None:
 def test_mode_pair_efficiency_includes_critic_break_even() -> None:
     base = {
         "site": "wanted",
-        "query": "iOS 개발자",
+        "search_keyword": "iOS 개발자",
         "target_count": 2,
         "count_mode": "explicit",
         "repeat_index": 1,
@@ -309,31 +311,45 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
 ) -> None:
     from agent.recipe import candidate_reviewer
     from agent.recipe.candidate_store import RecipeCandidateStore
+    from agent.recipe.submission_store import SubmissionStore
 
     db_path = tmp_path / "regression.db"
     store = RecipeCandidateStore(db_path)
-    other_candidate_id = store.commit_candidate(
+    submission_store = SubmissionStore(db_path)
+
+    def commit_candidate(submission):
+        submission_id = submission_store.commit_submission(submission)
+        return store.commit_candidate(
+            submission,
+            submission_id=submission_id,
+        )
+
+    other_candidate_id = commit_candidate(
         {
             "run_id": "other-run",
             "site": "saramin",
             "goal": "다른 후보",
             "keyword": "백엔드",
+            "collection_intent": {
+                "site": "saramin",
+                "search_keyword": "백엔드",
+                "task_category": "검색",
+            },
             "recorded_steps": [{"seq": 0, "action": "click_marker"}],
         },
-        review={
-            "decision": "accept",
-            "recipe_candidate": True,
-            "confidence": 0.8,
-        },
-        submission_id="other-run:0",
     )
     assert store.enqueue_review(other_candidate_id) is True
-    candidate_id = store.commit_candidate(
+    candidate_id = commit_candidate(
         {
             "run_id": "autonomous-run",
             "site": "wanted",
             "goal": "iOS 개발자 공고 수집",
             "keyword": "iOS 개발자",
+            "collection_intent": {
+                "site": "wanted",
+                "search_keyword": "iOS 개발자",
+                "task_category": "검색",
+            },
             "recorded_steps": [
                 {
                     "seq": 0,
@@ -344,12 +360,6 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
                 }
             ],
         },
-        review={
-            "decision": "accept",
-            "recipe_candidate": True,
-            "confidence": 0.8,
-        },
-        submission_id="autonomous-run:0",
     )
     calls = []
 

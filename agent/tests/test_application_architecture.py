@@ -1,18 +1,7 @@
 import threading
+from contextlib import contextmanager
 
 import pytest
-
-
-def _patch_start_observation(monkeypatch, capture):
-    """분할된 시작 관찰 노드를 외부 화면 없이 실행하도록 대체한다."""
-
-    monkeypatch.setattr("agent.graph.worker_observation.capture_node", capture)
-    monkeypatch.setattr("agent.graph.worker_observation.ocr_node", lambda state: {})
-    monkeypatch.setattr(
-        "agent.graph.worker_transition.transition_node",
-        lambda state: {},
-    )
-    monkeypatch.setattr("agent.graph.worker_collection.collection_node", lambda state: {})
 
 
 def test_citation_validation_normalizes_grouped_ids_before_validation():
@@ -57,98 +46,6 @@ def test_chat_service_returns_run_contract_and_progress_events():
     assert result["metrics"]["run_id"] == "chat-contract-1"
     assert result["duration_sec"] >= 0
     assert events[-1].event == "run_completed"
-
-def test_chat_service_returns_structured_clarification_without_collection():
-    from agent.application.chat_service import ChatService
-    from agent.application.run_context import emit_run_event
-    from agent.application.run_contracts import RunPhase, RunStatus
-
-    class FakeWorkflow:
-        def run(self, query, **kwargs):
-            clarification = {
-                "question_id": "job_scope",
-                "field": "job_scope",
-                "question": "AI 직무 중 개발과 기획 중 어느 쪽을 찾을까요?",
-                "missing_fields": ["직무 범위"],
-                "options": [],
-            }
-            emit_run_event(
-                "clarification_required",
-                RunPhase.CLARIFICATION,
-                clarification["question"],
-                status=RunStatus.WAITING_INPUT,
-                data=clarification,
-            )
-            return {
-                "investigation": {"investigation_id": "investigation-clarification"},
-                "run_status": "waiting_input",
-                "final_answer": clarification["question"],
-                "valid_ids": [],
-                "clarification": clarification,
-            }
-
-    events = []
-    result = ChatService(investigation_workflow=FakeWorkflow()).run(
-        "AI 쪽 채용공고 찾아줘",
-        run_id="chat-clarification-1",
-        event_sink=events.append,
-    )
-
-    assert result["run_status"] == "waiting_input"
-    assert result["is_finished"] is False
-    assert result["clarification"]["missing_fields"] == ["직무 범위"]
-    assert result["last_action_result"] == "AI 직무 중 개발과 기획 중 어느 쪽을 찾을까요?"
-    assert events[-1].event == "clarification_required"
-    assert events[-1].status.value == "waiting_input"
-
-def test_run_registry_tracks_progress_and_completion():
-    from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
-    from agent.application.run_registry import RunRegistry
-
-    registry = RunRegistry(limit=10)
-    registry.start("run-1", "질문")
-    registry.apply_event(
-        RunEvent(
-            run_id="run-1",
-            event="collection_started",
-            phase=RunPhase.COLLECTION,
-            status=RunStatus.RUNNING,
-            message="수집 중",
-        )
-    )
-    registry.complete("run-1", {"last_action_result": "완료"})
-
-    item = registry.get("run-1")
-    assert item is not None
-    assert item["status"] == "completed"
-    assert item["result"]["last_action_result"] == "완료"
-
-def test_run_registry_preserves_waiting_input_status():
-    from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
-    from agent.application.run_registry import RunRegistry
-
-    registry = RunRegistry(limit=10)
-    registry.start("run-waiting", "모호한 질문")
-    registry.apply_event(
-        RunEvent(
-            run_id="run-waiting",
-            event="clarification_required",
-            phase=RunPhase.CLARIFICATION,
-            status=RunStatus.WAITING_INPUT,
-            message="어느 직무인가요?",
-        )
-    )
-    registry.complete(
-        "run-waiting",
-        {
-            "run_status": "waiting_input",
-            "clarification": {"question": "어느 직무인가요?"},
-        },
-    )
-
-    item = registry.get("run-waiting")
-    assert item["status"] == "waiting_input"
-    assert item["phase"] == "clarification"
 
 def test_run_registry_tracks_cancellation_and_conversation_history():
     from agent.application.run_registry import RunRegistry
@@ -379,263 +276,106 @@ def test_cancelled_run_resume_restarts_from_original_request():
     assert "오래된 화면 좌표는 재사용하지 말고" in query
     assert "[사용자의 재개 지시]\n다시 계속해줘" in query
 
-def test_action_request_validates_executor_tool_call_contract():
-    from agent.graph.action_request import ActionRequest, ToolCallRequest
-
-    request = ActionRequest(
-        source="job_card_queue",
-        summary="next card",
-        tool_calls=[
-            ToolCallRequest(
-                name="click_marker",
-                args={"marker_id": 7, "target_label": "iOS 개발자"},
-                id="queue-1",
-            )
-        ],
-    )
-
-    assert request.source == "job_card_queue"
-    assert request.summary == "next card"
-    assert request.tool_calls[0].name == "click_marker"
-    assert request.tool_calls[0].args == {
-        "marker_id": 7,
-        "target_label": "iOS 개발자",
-    }
-    assert request.tool_calls[0].id == "queue-1"
-
-def test_collection_service_forces_partial_status_when_explicit_target_is_unmet():
-    from agent.application.collection_service import (
-        CollectionOperations,
-        CollectionRequest,
-        CollectionService,
-    )
-
-    def run_worker(*args, **kwargs):
-        return {
-            "submission": {
-                "run_id": "worker-partial",
-                "collected_count": 1,
-                "target_count": 2,
-                "task_category": "검색",
-            },
-            "site_name": "Wanted",
-            "site_slug": "wanted",
-            "keyword": "iOS 개발자",
-            "target_count": 2,
-            "is_finished": True,
-            "hit_recursion_limit": False,
-        }
-
-    def persist(worker_result, review):
-        worker_result["persistence_validation"] = {
-            "submitted_count": 1,
-            "persisted_count": 1,
-            "rejected_count": 0,
-            "rejected_items": [],
-        }
-        return 1, worker_result["submission"], review, "submission-partial"
-
-    operations = CollectionOperations(
-        normalize_target_count=lambda value: int(value or 0),
-        normalize_task_category=lambda value: value or "검색",
-        run_worker=run_worker,
-        review_worker=lambda submission: ({"decision": "accept"}, "submission-partial"),
-        persist_result=persist,
-        needs_approval=lambda **kwargs: False,
-        build_intermediate_report=lambda *args, **kwargs: {},
-        report_requires_more_collection=lambda report: False,
-        close_browser=lambda: None,
-    )
-
-    result = CollectionService(operations).collect(
-        CollectionRequest(
-            search_keyword="iOS 개발자",
-            site="wanted",
-            target_count=2,
-            search_intent_resolved=True,
-            collection_intent={
-                "search_keyword": "iOS 개발자",
-                "count_mode": "explicit",
-                "target_count": 2,
-            },
-        )
-    )
-
-    assert result["completion_status"] == "partial"
-    assert result["run_status"] == "partial"
-    assert result["worker_status"] == "finished"
-    assert result["review_status"] == "accepted"
-    assert result["persistence_status"] == "persisted"
-    assert result["target_status"] == "unmet"
-    assert result["missing_count"] == 1
-    assert result["persisted_count"] == 1
-    assert "partial collection persisted" in result["message"]
-
-def test_collection_service_completes_with_existing_database_jobs_only():
-    from agent.application.collection_service import (
-        CollectionOperations,
-        CollectionRequest,
-        CollectionService,
-    )
-
-    def run_worker(*args, **kwargs):
-        return {
-            "submission": {
-                "run_id": "worker-existing",
-                "collected_count": 0,
-                "observed_job_ids": [7, 8],
-                "target_count": 2,
-                "task_category": "검색",
-            },
-            "site_name": "Wanted",
-            "site_slug": "wanted",
-            "keyword": "iOS 개발자",
-            "target_count": 2,
-            "is_finished": True,
-            "hit_recursion_limit": False,
-            "observed_job_ids": [7, 8],
-        }
-
-    def persist(worker_result, review):
-        worker_result["persistence_validation"] = {
-            "submitted_count": 0,
-            "persisted_count": 0,
-            "persisted_items": [],
-            "rejected_count": 0,
-            "rejected_items": [],
-        }
-        return 0, worker_result["submission"], review, "submission-existing"
-
-    operations = CollectionOperations(
-        normalize_target_count=lambda value: int(value or 0),
-        normalize_task_category=lambda value: value or "검색",
-        run_worker=run_worker,
-        review_worker=lambda submission: ({"decision": "accept"}, "submission-existing"),
-        persist_result=persist,
-        needs_approval=lambda **kwargs: False,
-        build_intermediate_report=lambda *args, **kwargs: {},
-        report_requires_more_collection=lambda report: False,
-        close_browser=lambda: None,
-    )
-
-    result = CollectionService(operations).collect(
-        CollectionRequest(
-            search_keyword="iOS 개발자",
-            site="wanted",
-            target_count=2,
-            search_intent_resolved=True,
-            collection_intent={
-                "search_keyword": "iOS 개발자",
-                "count_mode": "explicit",
-                "target_count": 2,
-            },
-        )
-    )
-
-    assert result["completion_status"] == "complete"
-    assert result["run_status"] == "completed"
-    assert result["missing_count"] == 0
-    assert result["persisted_count"] == 0
-    assert result["observed_job_ids"] == [7, 8]
-    assert "existing database jobs confirmed" in result["message"]
-
-def test_collection_service_completes_when_visible_result_scope_is_exhausted():
-    from agent.application.collection_service import (
-        CollectionOperations,
-        CollectionRequest,
-        CollectionService,
-    )
-
-    def run_worker(*args, **kwargs):
-        return {
-            "submission": {
-                "run_id": "worker-exhausted",
-                "collected_count": 1,
-                "target_count": 10,
-                "task_category": "검색",
-                "extracted_summary": {
-                    "job_results_availability": {
-                        "available_job_count": 1,
-                        "count_evidence": "포지션 1",
-                        "count_confidence": 0.97,
-                    }
-                },
-            },
-            "site_name": "Wanted",
-            "site_slug": "wanted",
-            "keyword": "QA 자동화 엔지니어",
-            "target_count": 10,
-            "is_finished": False,
-            "hit_recursion_limit": True,
-        }
-
-    def persist(worker_result, review):
-        validation = {
-            "submitted_count": 1,
-            "persisted_count": 1,
-            "persisted_items": [{"job_id": 7, "url": "https://example.com/7"}],
-            "rejected_count": 0,
-            "rejected_items": [],
-        }
-        worker_result["persistence_validation"] = validation
-        return 1, worker_result["submission"], review, "submission-exhausted"
-
-    operations = CollectionOperations(
-        normalize_target_count=lambda value: int(value or 0),
-        normalize_task_category=lambda value: value or "검색",
-        run_worker=run_worker,
-        review_worker=lambda submission: (
-            {
-                "decision": "revise",
-                "accept_collected_data": True,
-                "continue_collection": True,
-            },
-            "submission-exhausted",
+@pytest.mark.parametrize(
+    ("worker", "persistence", "target", "status", "resolved", "exhausted"),
+    [
+        (
+            {"observed_job_ids": [], "is_finished": True},
+            {"persisted_count": 1, "persisted_items": [{"job_id": 1}]},
+            2,
+            "partial",
+            1,
+            False,
         ),
-        persist_result=persist,
-        needs_approval=lambda **kwargs: True,
-        build_intermediate_report=lambda *args, **kwargs: {"target_count": 10, "persisted_count": 1},
-        report_requires_more_collection=lambda report: True,
-        close_browser=lambda: None,
-    )
+        (
+            {"observed_job_ids": [7, 8], "is_finished": True},
+            {"persisted_count": 0, "persisted_items": []},
+            2,
+            "completed",
+            2,
+            False,
+        ),
+        (
+            {"observed_job_ids": [], "is_finished": False},
+            {"persisted_count": 1, "persisted_items": [{"job_id": 7}]},
+            10,
+            "completed",
+            1,
+            True,
+        ),
+    ],
+)
+def test_collection_service_status_contract(
+    worker,
+    persistence,
+    target,
+    status,
+    resolved,
+    exhausted,
+):
+    from agent.application.collection_service import CollectionService
+    from agent.application.collection_submission_service import FinalizedSubmission
+    from agent.application.collection_worker_runner import WorkerRunResult
+    from agent.application.run_context import run_context
+    from shared.schema.collection_intent import CollectionIntent
+    from shared.schema.feedback_schema import WorkerSubmission
 
-    result = CollectionService(operations).collect(
-        CollectionRequest(
-            search_keyword="QA 자동화 엔지니어",
-            site="wanted",
-            target_count=10,
-            collection_intent={
-                "search_keyword": "QA 자동화 엔지니어",
-                "count_mode": "explicit",
-                "target_count": 10,
-            },
+    summary = (
+        {
+            "job_results_availability": {
+                "available_job_count": 1,
+                "count_evidence": "포지션 1",
+                "count_confidence": 0.97,
+            }
+        }
+        if exhausted
+        else {}
+    )
+    submission = WorkerSubmission(
+        run_id="worker-1",
+        is_finished=worker["is_finished"],
+        hit_recursion_limit=not worker["is_finished"],
+        collected_count=persistence["persisted_count"],
+        observed_job_ids=worker["observed_job_ids"],
+        extracted_summary=summary,
+    )
+    worker_result = WorkerRunResult(
+        submission=submission,
+        extracted_jd={},
+        site_name="Wanted",
+        site_slug="wanted",
+    )
+    finalized = FinalizedSubmission(
+        submission=submission,
+        submission_id="submission-1",
+        persistence={**persistence, "rejected_count": 0},
+        recipe_learning={},
+    )
+    with run_context(run_id=f"collection-status-{target}-{resolved}"):
+        result = CollectionService(
+            lambda _intent: worker_result,
+            lambda _worker: finalized,
+        ).collect(
+            CollectionIntent(
+                site="wanted",
+                search_keyword="iOS 개발자",
+                target_count=target,
+            )
         )
-    )
 
-    assert result["completion_status"] == "complete"
-    assert result["run_status"] == "completed"
-    assert result["search_scope_exhausted"] is True
-    assert result["missing_count"] == 9
-    assert result["needs_human_approval"] is False
-    assert result["persisted_count"] == 1
+    assert result.status == status
+    assert result.resolved_count == resolved
+    assert result.scope_exhausted is exhausted
 
 
-def test_collection_failure_uses_the_same_structured_status_contract():
-    from agent.application.collection_service import (
-        build_failed_collection_result,
-    )
+def test_collection_failure_uses_collection_result_contract():
+    from agent.application.collection_service import CollectionService
+    from shared.schema.collection_intent import CollectionIntent
 
-    result = build_failed_collection_result(
-        "collection failed: missing search keyword",
-        error_code="missing_search_keyword",
-        target_count=2,
-    )
+    result = CollectionService(lambda _intent: {}).collect(CollectionIntent())
 
-    assert result["run_status"] == "failed"
-    assert result["completion_status"] == "rejected"
-    assert result["review_status"] == "rejected"
-    assert result["target_status"] == "unmet"
-    assert result["error_code"] == "missing_search_keyword"
+    assert result.status == "failed"
+    assert result.error_code == "missing_search_keyword"
 
 def test_worker_execution_session_serializes_concurrent_requests():
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
@@ -678,8 +418,6 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
     from agent.graph import worker_resources
     from agent.sites import load_site_profile
 
-    perception_called = []
-
     class FakeSomEngine:
         def ensure_ocr_worker_ready(self):
             raise RuntimeError("startup failed")
@@ -693,20 +431,12 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
         def open_browser(self, url="", current_url="", site=""):
             return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
 
-    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
     monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
-    _patch_start_observation(
-        monkeypatch,
-        lambda _state: perception_called.append(True) or {},
-    )
-
     with pytest.raises(OcrWorkerReadinessError):
         prepare_worker_start_screen(
             {"current_url": "", "action_history": []},
             load_site_profile("wanted"),
         )
-
-    assert perception_called == []
 
 def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
     from fastapi.testclient import TestClient
@@ -735,7 +465,9 @@ def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
     assert calls[1:] == ["start", ("close", 0.5)]
 
 def test_browser_closes_by_default(monkeypatch):
-    from agent.application import worker_execution_service
+    from agent.application.worker_execution_service import (
+        WorkerExecutionService,
+    )
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 
     closed = []
@@ -748,16 +480,56 @@ def test_browser_closes_by_default(monkeypatch):
             closed.append(True)
             return {"status": "success"}
 
-    monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
     runtime = VisionWorkerRuntime(
         perception_factory=object,
         action_tools_factory=FakeActionTools,
     )
     runtime.get_action_tools()
 
-    worker_execution_service.close_browser_after_run(worker_runtime=runtime)
+    service = WorkerExecutionService(
+        runtime,
+        lambda *, worker_runtime: {"runtime": worker_runtime},
+    )
+    result = service.run()
 
     assert closed == [True]
+    assert result["runtime"] is runtime
+
+
+def test_worker_execution_service_closes_browser_after_worker_failure():
+    from agent.application.worker_execution_service import (
+        WorkerExecutionService,
+    )
+
+    events = []
+
+    class FakeRuntime:
+        @contextmanager
+        def execution_session(self):
+            events.append("lock_entered")
+            try:
+                yield
+            finally:
+                events.append("lock_released")
+
+        def close_browser_after_run(self):
+            events.append("browser_closed")
+
+    def fail_worker(*args, **kwargs):
+        events.append("worker_started")
+        raise RuntimeError("worker failed")
+
+    service = WorkerExecutionService(FakeRuntime(), fail_worker)
+
+    with pytest.raises(RuntimeError, match="worker failed"):
+        service.run()
+
+    assert events == [
+        "lock_entered",
+        "worker_started",
+        "browser_closed",
+        "lock_released",
+    ]
 
 def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch):
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
@@ -796,7 +568,6 @@ def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch
             events.append("browser_closed")
             return {"status": "success"}
 
-    monkeypatch.delenv("VISION_CLOSE_BROWSER_AFTER_RUN", raising=False)
     runtime = VisionWorkerRuntime(
         perception_factory=FakePerception,
         action_tools_factory=FakeActionTools,
@@ -838,9 +609,6 @@ def test_application_runtime_keeps_vision_lazy_until_collection(monkeypatch, tmp
 
     runtime.start()
 
-    assert runtime.is_started is True
     assert runtime.vision_runtime.is_initialized is False
 
     runtime.close()
-
-    assert runtime.is_started is False

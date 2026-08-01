@@ -9,6 +9,7 @@ from typing import Any
 
 from PIL import Image
 
+from agent.recipe.text_utils import normalize_text
 from agent.vision.marker_geometry import (
     center_ratio_from_bbox,
     marker_bbox,
@@ -18,15 +19,6 @@ from agent.vision.marker_geometry import (
 
 
 CAPTURE_CONTEXT_VERSION = "browser-capture-v1"
-
-
-def _normalize_text(value: Any) -> str:
-    try:
-        from agent.recipe.text_utils import normalize_text
-
-        return normalize_text(value)
-    except Exception:
-        return " ".join(str(value or "").split())
 
 
 def image_dimensions(image_path: str | Path) -> tuple[int, int]:
@@ -47,46 +39,27 @@ def _dct_basis(size: int):
     return basis
 
 
-def _average_hash(image_path: str | Path) -> str:
-    with Image.open(image_path) as img:
-        return _average_hash_image(img)
-
-
-def _average_hash_image(img: Image.Image) -> str:
-    img = img.convert("L").resize((8, 8), Image.Resampling.LANCZOS)
-    values = list(img.getdata())
-    average = sum(values) / max(1, len(values))
-    bits = "".join("1" if value > average else "0" for value in values)
-    return f"{int(bits, 2):016x}"
-
-
 def perceptual_hash(image_path: str | Path) -> str:
-    """64비트 pHash를 계산한다. numpy가 없으면 평균 해시로 안전하게 후퇴한다."""
+    """64비트 DCT pHash를 계산한다."""
 
-    try:
-        with Image.open(image_path) as img:
-            return perceptual_hash_image(img)
-    except Exception:
-        return _average_hash(image_path)
+    with Image.open(image_path) as img:
+        return perceptual_hash_image(img)
 
 
 def perceptual_hash_image(img: Image.Image) -> str:
     """PIL 이미지 객체에서 64비트 pHash를 계산한다."""
 
-    try:
-        import numpy as np
+    import numpy as np
 
-        size = 32
-        img = img.convert("L").resize((size, size), Image.Resampling.LANCZOS)
-        pixels = np.asarray(img, dtype=np.float32)
-        basis = _dct_basis(size)
-        dct = basis @ pixels @ basis.T
-        low = dct[:8, :8].flatten()
-        median = float(np.median(low[1:]))
-        bits = "".join("1" if value > median else "0" for value in low)
-        return f"{int(bits, 2):016x}"
-    except Exception:
-        return _average_hash_image(img)
+    size = 32
+    img = img.convert("L").resize((size, size), Image.Resampling.LANCZOS)
+    pixels = np.asarray(img, dtype=np.float32)
+    basis = _dct_basis(size)
+    dct = basis @ pixels @ basis.T
+    low = dct[:8, :8].flatten()
+    median = float(np.median(low[1:]))
+    bits = "".join("1" if value > median else "0" for value in low)
+    return f"{int(bits, 2):016x}"
 
 
 def hamming_distance(left: str, right: str) -> int | None:
@@ -122,7 +95,7 @@ def anchor_texts(markers: list[dict[str, Any]], limit: int = 36) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for marker in ordered:
-        text = _normalize_text(marker.get("text"))
+        text = normalize_text(marker.get("text"))
         key = text.casefold().replace(" ", "")
         if len(key) < 2 or key.isdigit() or key in seen:
             continue

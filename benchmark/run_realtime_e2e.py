@@ -70,7 +70,6 @@ def _runtime_config() -> dict[str, str]:
         "VISION_WORKER_REASONING_MODEL": DEFAULT_COMMANDER_MODEL,
         "VISION_WORKER_REASONING_THINKING_LEVEL": DEFAULT_WORKER_REASONING_THINKING_LEVEL,
         "VISION_DETAIL_FINAL_EXTRACTION_MODEL": DEFAULT_LIGHTWEIGHT_MODEL,
-        "VISION_SEARCH_INTENT_MODEL": DEFAULT_LIGHTWEIGHT_MODEL,
         "VISION_RECIPE_CRITIC_MODEL": DEFAULT_COMMANDER_MODEL,
         "VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS": "1536",
         "SOM_OCR_MAX_DIM": "1152",
@@ -78,10 +77,8 @@ def _runtime_config() -> dict[str, str]:
         "REFLEX_ENABLED": "",
         "VISION_RECIPE_AUTO_PROMOTE": "",
         "VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT": "",
-        "VISION_BROWSER_WINDOW_SIZE": "",
         "VISION_BROWSER_WINDOW_WIDTH": "",
         "VISION_BROWSER_WINDOW_HEIGHT": "",
-        "VISION_REASONING_SCREEN_GUARD": "",
         "VISION_PAGE_READY_TIMEOUT_SEC": "15",
         "VISION_PAGE_BLANK_MAX_STDDEV": "12",
         "VISION_PAGE_BLANK_MAX_EDGE_MEAN": "3",
@@ -171,7 +168,7 @@ def _finalize_experience_guided_preconditions(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run realtime_scraping E2E and tee stdout/stderr to a log file.")
     parser.add_argument("--site", default="wanted")
-    parser.add_argument("--query", required=True)
+    parser.add_argument("--search-keyword", required=True)
     parser.add_argument("--target-count", type=int, default=0)
     parser.add_argument(
         "--count-mode",
@@ -241,18 +238,18 @@ def main() -> int:
             from agent.observability.langsmith_adapter import publish_langsmith_feedback
             from agent.graph.workflow import build_graph
             from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
-            from agent.tools.realtime_scraping import build_runtime_realtime_scraping_tool
+            from agent.application.collection_service import create_collection_service
             from benchmark.e2e_observability import (
                 build_e2e_observability,
                 build_langsmith_feedback,
             )
             from benchmark.quality_eval import evaluate_collection_summary
-            from shared.config import DB_PATH
+            from agent.config import get_settings
             from shared.db.database import Database
 
-            Database(DB_PATH)
+            Database(get_settings().paths.db_path)
             vision_runtime = VisionWorkerRuntime(graph_factory=build_graph)
-            collection_tool = build_runtime_realtime_scraping_tool(vision_runtime)
+            collection_service = create_collection_service(vision_runtime)
             events = []
             status = "failed"
             result = ""
@@ -261,7 +258,7 @@ def main() -> int:
             recipe_promotion = {}
             started_at = datetime.now(timezone.utc).isoformat()
             with run_context(
-                query=args.query,
+                query=args.original_query or args.search_keyword,
                 event_sink=events.append,
                 prefix="e2e",
                 metadata={
@@ -286,19 +283,20 @@ def main() -> int:
             ) as (context, _created):
                 start = time.perf_counter()
                 try:
-                    result = collection_tool.invoke(
-                        {
-                            "site": args.site,
-                            "query": args.query,
-                            "target_count": max(0, args.target_count),
-                            "count_mode": args.count_mode,
-                            "original_query": args.original_query or args.query,
-                        }
+                    from shared.schema.collection_intent import CollectionIntent
+
+                    result = collection_service.collect(
+                        CollectionIntent(
+                            site=args.site,
+                            search_keyword=args.search_keyword,
+                            target_count=max(0, args.target_count),
+                            count_mode=args.count_mode,
+                            original_query=(
+                                args.original_query or args.search_keyword
+                            ),
+                        )
                     )
-                    try:
-                        parsed_during_run = json.loads(result) if isinstance(result, str) else result
-                    except json.JSONDecodeError:
-                        parsed_during_run = {"raw": str(result)}
+                    parsed_during_run = result.model_dump(mode="json")
                     quality = evaluate_collection_summary(parsed_during_run)
                     status = "completed"
                     context.emit(
@@ -338,17 +336,11 @@ def main() -> int:
                         "RECIPE_PROMOTION="
                         + json.dumps(recipe_promotion, ensure_ascii=False)
                     )
-            if isinstance(result, str):
-                print(result)
-            else:
-                print(json.dumps(result, ensure_ascii=False, indent=2))
+            print(json.dumps(parsed_during_run, ensure_ascii=False, indent=2))
             print(f"EXECUTION_TIME_SEC={elapsed:.3f}")
             print(f"LOG_TARGET={log_path}")
 
-            try:
-                parsed_result = json.loads(result) if isinstance(result, str) else result
-            except json.JSONDecodeError:
-                parsed_result = {"raw": str(result)}
+            parsed_result = parsed_during_run
             final_quality = quality or evaluate_collection_summary(
                 parsed_result
             )
@@ -368,10 +360,10 @@ def main() -> int:
                 "experiment_name": experiment_name,
                 "execution_mode": args.execution_mode,
                 "site": args.site,
-                "query": args.query,
+                "search_keyword": args.search_keyword,
                 "target_count": max(0, args.target_count),
                 "count_mode": args.count_mode,
-                "original_query": args.original_query or args.query,
+                "original_query": args.original_query or args.search_keyword,
                 "execution_time_sec": round(elapsed, 6),
                 "git_commit": commit,
                 "git_dirty": git_dirty,

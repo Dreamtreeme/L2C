@@ -173,10 +173,6 @@ def detail_reveal_controls(current_url: str) -> list[str]:
     return [str(item) for item in guidance.get("reveal_controls", []) if str(item).strip()]
 
 
-def detail_lightweight_marked_image_enabled() -> bool:
-    return get_settings().vision.detail_lightweight_marked_image_enabled
-
-
 def draw_detail_lightweight_marker(draw: Any, marker: dict, color: tuple[int, int, int], font: Any) -> None:
     bbox = marker_bbox(marker)
     if bbox == [0, 0, 0, 0]:
@@ -205,8 +201,6 @@ def build_detail_lightweight_marked_image(
         page_role=page_role,
         marker_texts=marker_texts,
     ):
-        return ""
-    if not detail_lightweight_marked_image_enabled():
         return ""
     try:
         from pathlib import Path
@@ -278,10 +272,6 @@ def build_detail_section_context(markers: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def job_detail_buffer_enabled() -> bool:
-    return get_settings().vision.job_detail_buffer_enabled
-
-
 def detail_context_matches(
     context: dict[str, Any] | None,
     current_url: str,
@@ -337,8 +327,6 @@ def update_job_detail_buffer(
 ) -> dict[str, Any]:
     """상세 페이지 OCR 본문 줄을 공고 단위 버퍼에 누적한다."""
 
-    if not job_detail_buffer_enabled():
-        return dict(existing or {})
     marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
     if not current_url or not is_job_detail_context(
         current_url,
@@ -443,7 +431,7 @@ def compact_job_detail_buffer_context(
     current_url: str,
     detail_key: str = "",
 ) -> str:
-    if not job_detail_buffer_enabled() or not current_url:
+    if not current_url:
         return ""
     buffer = dict(state.get("job_detail_buffer", {}) or {})
     if not detail_context_matches(buffer, current_url, detail_key):
@@ -563,9 +551,7 @@ __all__ = [
     "detail_buffer_text",
     "detail_buffer_line_key",
     "detail_context_matches",
-    "detail_lightweight_marked_image_enabled",
     "detail_lines_for_buffer",
-    "job_detail_buffer_enabled",
     "detail_reveal_controls",
     "draw_detail_lightweight_marker",
     "group_text_markers_into_lines",

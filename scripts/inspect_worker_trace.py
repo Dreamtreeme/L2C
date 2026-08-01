@@ -41,12 +41,10 @@ def _load_submission(
     submission_id: str = "",
     run_id: str = "",
 ) -> dict | None:
-    if submission_id:
-        return store.get_submission(submission_id)
-    if run_id:
-        return store.get_run(run_id)
-    recent = store.list_recent(limit=1)
-    return recent[0] if recent else None
+    return store.find_submission(
+        submission_id=submission_id,
+        run_id=run_id,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

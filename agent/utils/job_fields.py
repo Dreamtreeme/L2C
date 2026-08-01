@@ -66,17 +66,13 @@ def has_job_field_value(value: Any) -> bool:
 
 
 def job_field_value(job: Any, field: str) -> Any:
-    """한글·영문 별칭 또는 JobPosting 속성에서 표준 필드 값을 읽는다."""
+    """딕셔너리 별칭 또는 JobPosting 표준 속성에서 값을 읽는다."""
 
     aliases = JOB_FIELD_ALIASES.get(field, [field])
     if isinstance(job, Mapping):
         return first_present(dict(job), aliases)
-    for alias in aliases:
-        if hasattr(job, alias):
-            value = getattr(job, alias)
-            if has_job_field_value(value):
-                return value
-    return None
+    value = getattr(job, field, None)
+    return value if has_job_field_value(value) else None
 
 
 def job_field_presence(
@@ -146,25 +142,6 @@ def required_job_fields(
             if field not in merged:
                 merged.append(field)
     return merged
-
-
-def summary_text(value: Any) -> str:
-    if value in (None, "", [], {}):
-        return ""
-    if isinstance(value, list):
-        return ", ".join(str(item).strip() for item in value if str(item).strip())
-    if isinstance(value, dict):
-        return ""
-    return str(value).strip()
-
-
-def deterministic_report_item(job: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "company": summary_text(first_present(job, JOB_FIELD_ALIASES["company_name"])),
-        "position": summary_text(first_present(job, JOB_FIELD_ALIASES["position"])),
-        "url": summary_text(first_present(job, JOB_FIELD_ALIASES["url"])),
-        "field_count": len(job.keys()),
-    }
 
 
 def deterministic_job_for_persistence(job: dict[str, Any]) -> dict[str, Any]:

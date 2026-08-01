@@ -71,7 +71,6 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
                 "result": {"url": "https://www.jobkorea.co.kr"},
             }
 
-    monkeypatch.setenv("VISION_WORKER_PREOPEN_BROWSER", "1")
     monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
     monkeypatch.setattr(
         worker_resources,
@@ -127,22 +126,18 @@ def test_load_site_profile_returns_typed_contract():
 
     assert profile.slug == "wanted"
     assert "원티드" in profile.guidance
-    assert "click_marker" in profile.tools.allowed_tools
-    assert "finish_detail_reading" in profile.tools.allowed_tools
-    assert "set_job_card_queue" in profile.tools.allowed_tools
     assert profile.collection_policy.required_fields
 
 
-def test_all_site_profiles_define_collection_and_tool_contracts():
+def test_all_site_profiles_define_collection_contracts():
     from agent.sites import list_supported_sites, load_site_profile
 
     for profile in list_supported_sites():
         loaded = load_site_profile(profile.slug)
         payload = loaded.model_dump()
         assert loaded.collection_policy.required_fields
-        assert loaded.tools.allowed_tools
         assert "reflex_policy" not in payload
-        assert "reflex" not in payload["tools"]
+        assert "tools" not in payload
 
 
 def test_all_site_profiles_define_role_scoped_guidance():
@@ -295,46 +290,30 @@ def test_preprocessor_uses_registry_source_platform():
 def test_realtime_scraping_goal_uses_requested_site_profile():
     from agent.application.collection_request_builder import build_site_goal
     from agent.sites import load_site_profile
+    from shared.schema.collection_intent import CollectionIntent
 
-    goal = build_site_goal("AI 엔지니어", load_site_profile("saramin"))
+    goal = build_site_goal(
+        CollectionIntent(site="saramin", search_keyword="AI 엔지니어"),
+        load_site_profile("saramin"),
+    )
 
     assert "사람인(" in goal
     assert "https://www.saramin.co.kr" in goal
     assert "AI 엔지니어" in goal
     assert "원티드(" not in goal
 
-def test_realtime_scraping_goal_includes_task_context():
-    from agent.application.collection_request_builder import build_site_goal
-    from agent.sites import load_site_profile
-
-    goal = build_site_goal(
-        "AI engineer",
-        load_site_profile("wanted"),
-        task_context={
-            "triage": {"goal_type": "job_collection", "risk_level": "safe_navigation"},
-            "research_report": {"status": "skipped"},
-            "allowed_actions": ["read", "navigate", "search"],
-            "blocked_actions": ["submit", "agree"],
-        },
-    )
-
-    assert "[Task triage and safety context]" in goal
-    assert '"goal_type": "job_collection"' in goal
-    assert "blocked_actions" in goal
-
-
 def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
     from agent.application.collection_request_builder import build_site_goal
     from agent.sites import load_site_profile
+    from shared.schema.collection_intent import CollectionIntent
 
     goal = build_site_goal(
-        "AI 엔지니어",
+        CollectionIntent(
+            site="wanted",
+            search_keyword="AI 엔지니어",
+            count_mode="visible_all",
+        ),
         load_site_profile("wanted"),
-        collection_intent={
-            "site": "wanted",
-            "search_keyword": "AI 엔지니어",
-            "count_mode": "visible_all",
-        },
     )
 
     assert "[선택된 사이트 스킬]" in goal
@@ -342,98 +321,29 @@ def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
     assert "[사이트 공통 흐름]" not in goal
     assert "[허용 도구]" not in goal
 
-def test_realtime_scraping_extracts_user_search_intent_with_llm(monkeypatch):
-    from agent.application.collection_request_builder import extract_search_intent
+def test_realtime_scraping_wanted_starts_from_home_without_query_url():
+    from agent.application.collection_request_builder import build_site_goal
     from agent.sites import load_site_profile
     from shared.schema.collection_intent import CollectionIntent
 
-    class FakeStructuredLLM:
-        def invoke(self, messages):
-            return CollectionIntent(search_keyword="ai\uc751\uc6a9\uc5d4\uc9c0\ub2c8\uc5b4", target_count=8)
-
-    class FakeLLM:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def with_structured_output(self, schema):
-            return FakeStructuredLLM()
-
-    profile = load_site_profile("wanted")
-    query = "\uc6d0\ud2f0\ub4dc\uc5d0\uc11c ai\uc751\uc6a9\uc5d4\uc9c0\ub2c8\uc5b4 \ucc44\uc6a9\uacf5\uace0 \ucc3e\uc544\uc918"
-    monkeypatch.setenv("VISION_SEARCH_INTENT_MODE", "llm")
-    monkeypatch.setattr("langchain_google_genai.ChatGoogleGenerativeAI", FakeLLM)
-
-    intent = extract_search_intent(query, profile)
-    assert intent["search_keyword"] == "ai\uc751\uc6a9\uc5d4\uc9c0\ub2c8\uc5b4"
-    assert intent["target_count"] == 8
-    assert intent["source"] == "llm"
-
-
-def test_realtime_scraping_direct_search_url_encodes_keyword():
-    from urllib.parse import parse_qs, urlparse
-
-    from agent.application.collection_request_builder import (
-        build_direct_search_url,
-        build_site_goal,
-    )
-
-    from agent.sites import load_site_profile
-    from agent.sites.profile import NavigationPolicy
-
-    profile = load_site_profile("wanted").model_copy(
-        update={
-            "slug": "sample",
-            "display_name": "Sample",
-            "domains": ("example.com",),
-            "base_url": "https://example.com",
-            "navigation_policy": NavigationPolicy(
-                allow_direct_search_url=True,
-                search_url_template="https://example.com/search?query={query}&tab=position",
-            ),
-        }
-    )
-    keyword = "AI \uc751\uc6a9 \uc5d4\uc9c0\ub2c8\uc5b4"
-    url = build_direct_search_url(keyword, profile)
-    parsed = urlparse(url)
-
-    assert parsed.scheme == "https"
-    assert parsed.netloc == "example.com"
-    assert parsed.path == "/search"
-    assert parse_qs(parsed.query)["query"] == [keyword]
-    assert parse_qs(parsed.query)["tab"] == ["position"]
-    assert "Code-generated search URL" in build_site_goal(keyword, profile, url)
-
-
-def test_realtime_scraping_wanted_starts_from_home_without_query_url():
-    from agent.application.collection_request_builder import (
-        build_direct_search_url,
-        build_site_goal,
-    )
-    from agent.sites import load_site_profile
-
     profile = load_site_profile("wanted")
     keyword = "android \uac1c\ubc1c\uc790"
-    url = build_direct_search_url(keyword, profile)
-    goal = build_site_goal(keyword, profile, url)
+    goal = build_site_goal(
+        CollectionIntent(site="wanted", search_keyword=keyword),
+        profile,
+    )
 
-    assert url == ""
-    assert "Code-generated search URL" not in goal
     assert "Open only the site home page with open_browser: https://www.wanted.co.kr" in goal
     assert "Do not construct or open a search/query URL yourself" in goal
 
 
-def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
+def test_worker_receives_structured_collection_intent(monkeypatch):
     from agent.application import collection_worker_runner as rt
+    from shared.schema.collection_intent import CollectionIntent
 
     captured = {}
 
-    class FakeApp:
-        pass
-
-    def fake_extract_search_intent(raw_query, profile):
-        return {"search_keyword": "iOS 개발자", "target_count": 0, "source": "test"}
-
-    def fake_run_graph_with_last_state(app, initial_state, recursion_limit):
+    def fake_execute(initial_state, _profile, _recursion_limit, **_kwargs):
         captured["recipe_params"] = dict(initial_state.get("recipe_params") or {})
         captured["job_collection_contract"] = dict(
             initial_state.get("job_collection_contract") or {}
@@ -441,20 +351,25 @@ def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
         captured["goal"] = initial_state.get("goal", "")
         return {**initial_state, "is_finished": True, "extracted_jd": {}}, False
 
-    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
-    monkeypatch.setattr(rt, "extract_search_intent", fake_extract_search_intent)
-    monkeypatch.setattr(rt, "prepare_worker_start_screen", lambda initial_state, profile: initial_state)
-    monkeypatch.setattr(rt, "run_graph_with_last_state", fake_run_graph_with_last_state)
-    monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(rt, "execute_worker_graph", fake_execute)
 
-    result = rt.run_worker_once("iOS 개발자", site="wanted", target_count=2, task_category="검색")
+    result = rt.run_worker_once(
+        CollectionIntent(
+            original_query="7월 서울 iOS 개발자 공고 2개",
+            site="wanted",
+            search_keyword="iOS 개발자",
+            target_count=2,
+            filters={"posted_from": "2026-07-01", "location": "서울"},
+            freshness_required=True,
+            task_category="탐색",
+            required_fields=["posted_at"],
+        )
+    )
 
-    assert result["target_count"] == 2
-    assert result["task_category"] == "검색"
-    assert result["submission"]["target_count"] == 2
-    assert result["submission"]["task_category"] == "검색"
+    assert result.submission.collection_intent.target_count == 2
+    assert result.submission.collection_intent.task_category == "탐색"
     assert captured["recipe_params"]["target_count"] == 2
-    assert captured["recipe_params"]["task_category"] == "검색"
+    assert captured["recipe_params"]["task_category"] == "탐색"
     assert captured["job_collection_contract"]["required_fields"] == [
         "company_name",
         "position",
@@ -463,6 +378,7 @@ def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
         "requirements",
         "preferred",
         "benefits",
+        "posted_at",
     ]
     assert (
         captured["recipe_params"]["collection_intent"][
@@ -472,109 +388,12 @@ def test_realtime_scraping_target_count_argument_overrides_intent(monkeypatch):
     )
     assert "required_record_shape" in captured["goal"]
     assert "Collect up to 2 distinct job postings" in captured["goal"]
-
-
-def test_realtime_scraping_reuses_structured_search_intent(monkeypatch):
-    from agent.application import collection_worker_runner as rt
-
-    class FakeApp:
-        pass
-
-    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
-    monkeypatch.setattr(
-        rt,
-        "extract_search_intent",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("구조화된 검색 인자를 다시 해석함")),
-    )
-    monkeypatch.setattr(rt, "prepare_worker_start_screen", lambda initial_state, profile: initial_state)
-    monkeypatch.setattr(
-        rt,
-        "run_graph_with_last_state",
-        lambda app, initial_state, recursion_limit: ({**initial_state, "is_finished": True, "extracted_jd": {}}, False),
-    )
-    monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
-
-    result = rt.run_worker_once(
-        "iOS 개발자",
-        site="wanted",
-        target_count=2,
-        task_category="검색",
-        search_intent_resolved=True,
-    )
-
-    assert result["keyword"] == "iOS 개발자"
-    assert result["target_count"] == 2
-    assert result["search_intent"]["source"] == "structured_arguments"
-
-
-def test_realtime_scraping_passes_confirmed_collection_constraints_to_worker(monkeypatch):
-    from agent.application import collection_worker_runner as rt
-
-    captured = {}
-
-    def fake_run_graph_with_last_state(app, initial_state, recursion_limit):
-        captured["recipe_params"] = dict(initial_state.get("recipe_params") or {})
-        captured["goal"] = initial_state.get("goal", "")
-        return {**initial_state, "is_finished": True, "extracted_jd": {}}, False
-
-    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: object())
-    monkeypatch.setattr(rt, "prepare_worker_start_screen", lambda initial_state, profile: initial_state)
-    monkeypatch.setattr(rt, "run_graph_with_last_state", fake_run_graph_with_last_state)
-    monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
-
-    intent = {
-        "original_query": "지난달 서울 AI 공고 전부 비교해줘",
-        "site": "wanted",
-        "search_keyword": "AI 개발자",
-        "count_mode": "visible_all",
-        "target_count": 0,
-        "filters": {"posted_date_expression": "지난달", "location": "서울"},
-        "freshness_required": True,
-        "purpose": "compare",
-        "analysis_goal": "회사별 요구 기술 비교",
-        "required_fields": ["posted_at"],
+    assert result.submission.collection_intent.search_keyword == "iOS 개발자"
+    assert captured["recipe_params"]["collection_intent"]["filters"] == {
+        "posted_from": "2026-07-01",
+        "posted_to": "",
+        "experience": "",
+        "location": "서울",
+        "employment_type": "",
     }
-    result = rt.run_worker_once(
-        "AI 개발자",
-        site="wanted",
-        search_intent_resolved=True,
-        collection_intent=intent,
-    )
-
-    assert result["collection_intent"]["filters"]["posted_date_expression"] == "지난달"
-    assert captured["recipe_params"]["count_mode"] == "visible_all"
-    assert captured["recipe_params"]["collection_intent"]["purpose"] == "compare"
     assert "posted_at" in captured["recipe_params"]["collection_intent"]["required_fields"]
-    assert "Collect every relevant job card visible" in captured["goal"]
-    assert "[Confirmed collection constraints]" in captured["goal"]
-    assert '"posted_date_expression": "지난달"' in captured["goal"]
-    assert '"location": "서울"' in captured["goal"]
-    assert "purpose=compare" in captured["goal"]
-    assert "analysis_goal=회사별 요구 기술 비교" in captured["goal"]
-
-
-def test_realtime_scraping_target_count_falls_back_to_intent(monkeypatch):
-    from agent.application import collection_worker_runner as rt
-
-    class FakeApp:
-        pass
-
-    def fake_extract_search_intent(raw_query, profile):
-        return {"search_keyword": "iOS 개발자", "target_count": 3, "source": "test"}
-
-    monkeypatch.setattr("agent.graph.workflow.build_graph", lambda: FakeApp())
-    monkeypatch.setattr(rt, "extract_search_intent", fake_extract_search_intent)
-    monkeypatch.setattr(rt, "prepare_worker_start_screen", lambda initial_state, profile: initial_state)
-    monkeypatch.setattr(
-        rt,
-        "run_graph_with_last_state",
-        lambda app, initial_state, recursion_limit: ({**initial_state, "is_finished": True, "extracted_jd": {}}, False),
-    )
-    monkeypatch.setattr(rt, "_commit_feedback_episodes", lambda *args, **kwargs: 0)
-
-    result = rt.run_worker_once("원티드에서 iOS 개발자 공고 3개", site="wanted")
-
-    assert result["target_count"] == 3
-    assert result["task_category"] == "검색"
-    assert result["submission"]["target_count"] == 3
-    assert result["submission"]["task_category"] == "검색"

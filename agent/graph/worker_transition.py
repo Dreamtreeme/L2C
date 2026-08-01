@@ -75,12 +75,10 @@ def transition_node(state: GraphState) -> dict[str, Any]:
         record = transition_record(
             request,
             status="unknown",
-            outcome="",
             source=str(request.get("source") or ""),
             reason="transition_timeout",
             attempt=attempt,
             state=state,
-            phash_distance=None,
             visual_change_ratio=None,
             ocr_skipped=True,
         )
@@ -130,12 +128,10 @@ def transition_node(state: GraphState) -> dict[str, Any]:
             record = transition_record(
                 request,
                 status="unknown",
-                outcome="",
                 source=source,
                 reason=reason,
                 attempt=attempt,
                 state=record_state,
-                phash_distance=None,
                 visual_change_ratio=visual_ratio,
                 ocr_skipped=True,
             )
@@ -203,18 +199,15 @@ def transition_node(state: GraphState) -> dict[str, Any]:
         )
     status = decision.status
     reason = decision.reason
-    outcome = ""
 
     attempt = int(request.get("attempts") or 0) + 1
     record = transition_record(
         request,
         status=status,
-        outcome=outcome,
         source=source,
         reason=reason,
         attempt=attempt,
         state=state,
-        phash_distance=None,
         visual_change_ratio=visual_ratio,
         ocr_skipped=False,
     )
@@ -236,7 +229,6 @@ def transition_node(state: GraphState) -> dict[str, Any]:
         "transition_result": transition_result(
             evaluated_request,
             status=status,
-            outcome=outcome,
             reason=reason,
             visual_change_detected=visual_changed,
             visual_change_ratio=visual_ratio,

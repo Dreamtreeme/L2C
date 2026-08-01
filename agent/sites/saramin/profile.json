@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "registration_order": 30,
   "slug": "saramin",
   "display_name": "사람인",
@@ -8,9 +7,6 @@
   "domains": ["saramin.co.kr", "www.saramin.co.kr"],
   "base_url": "https://www.saramin.co.kr",
   "enabled": true,
-  "default_query_target": "job search",
-  "navigation_policy": {},
-  "persistence_policy": {"require_detail_url_for_job_update": true},
   "page_guidance": {
     "home": {
       "url_patterns": ["/zf_user/?$"],
@@ -31,10 +27,6 @@
   },
   "collection_policy": {
     "required_fields": ["company_name", "position", "main_tasks", "requirements", "preferred", "location", "employment_type", "url"]
-  },
-  "tools": {
-    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
-    "tool_rules": {"click_marker": "배지나 추천이 아니라 공고 제목 마커를 선택한다."}
   },
   "guidance": "보이는 공고를 직무명과 회사명으로 식별한다. 배지, 추천, 광고는 공고로 취급하지 않고 실제 상세 본문에서 확인한 사실만 수집한다."
 }

@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "registration_order": 20,
   "slug": "jobkorea",
   "display_name": "잡코리아",
@@ -8,9 +7,6 @@
   "domains": ["jobkorea.co.kr", "www.jobkorea.co.kr"],
   "base_url": "https://www.jobkorea.co.kr",
   "enabled": true,
-  "default_query_target": "job search",
-  "navigation_policy": {},
-  "persistence_policy": {"require_detail_url_for_job_update": true},
   "page_guidance": {
     "home": {"instructions": ["보이는 통합검색 입력창에서 사용자 검색어를 입력한다."]},
     "search": {
@@ -30,13 +26,6 @@
   },
   "collection_policy": {
     "required_fields": ["company_name", "position", "main_tasks", "requirements", "preferred", "location", "employment_type", "url"]
-  },
-  "tools": {
-    "allowed_tools": ["open_browser", "click_marker", "type_in_marker", "press_key", "scroll", "go_back", "close_current_tab", "switch_tab", "update_extracted_info", "finish_detail_reading", "set_job_card_queue", "finish_task", "close_browser"],
-    "tool_rules": {
-      "click_marker": "보이는 마커만 클릭하고 공고 제목을 target_label로 보존한다.",
-      "close_current_tab": "상세가 새 탭이고 뒤로가기로 복귀할 수 없을 때 사용한다."
-    }
   },
   "guidance": "잡코리아 채용공고 수집. 현재 화면의 미방문 공고를 직무명과 회사명으로 식별한다. 상세 설명이 메타데이터와 분리되었으면 상세 탭이나 자격요건 영역을 확인하고, 카드 선택과 상세 구역 해석은 현재 화면을 기준으로 판단한다."
 }

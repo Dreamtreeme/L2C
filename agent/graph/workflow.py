@@ -27,17 +27,8 @@ from agent.observability.reflex_paths import (
 from agent.utils.logger import logger
 
 
-def _reflex_enabled() -> bool:
-    return get_settings().reflex.enabled
-
-
-def _request_source(state: GraphState) -> str:
-    request = state.get("pending_action")
-    return str(getattr(request, "source", "") or "")
-
-
 def route_after_start(state: GraphState) -> str:
-    """준비된 시작 화면은 선택 단계로, 없으면 기존 LLM 시작 경로로 보낸다."""
+    """기존 관찰이 있으면 재사용하고, 없으면 첫 화면을 캡처한다."""
 
     if state.get("low_information_screen"):
         return "selection"
@@ -47,7 +38,7 @@ def route_after_start(state: GraphState) -> str:
         and state.get("recent_images")
     ):
         return "selection"
-    return "reasoning"
+    return "capture"
 
 
 def route_after_transition(state: GraphState) -> str:
@@ -92,7 +83,7 @@ def route_after_selection(state: GraphState) -> str:
         in {"no_screen_change", "reflex_no_screen_change"}
     ):
         return "reasoning"
-    if not _reflex_enabled():
+    if not get_settings().reflex.enabled:
         return "reasoning"
     return "reflex"
 
@@ -102,7 +93,7 @@ def route_after_reflex(state: GraphState) -> str:
 
     return (
         "execution"
-        if _request_source(state) == "reflex"
+        if str(getattr(state.get("pending_action"), "source", "") or "") == "reflex"
         else "reasoning"
     )
 
@@ -202,7 +193,7 @@ def build_graph(*, worker_runtime=None):
     workflow.add_conditional_edges(
         START,
         route_after_start,
-        {"selection": "selection", "reasoning": "reasoning"},
+        {"selection": "selection", "capture": "capture"},
     )
     workflow.add_edge("capture", "transition")
     workflow.add_conditional_edges(

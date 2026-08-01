@@ -2,9 +2,7 @@
 Wanted JD Text Extractor — CLI 엔트리포인트 (Playwright 기반).
 
 서브커맨드:
-  extract <url>   원티드 채용공고 URL을 받아 텍스트 추출 실행
-  list            DB에 저장된 최근 추출 이력
-  show <id|url>   특정 공고 상세
+  extract <url>   채용공고 URL을 받아 텍스트 추출 실행
 """
 
 from __future__ import annotations
@@ -17,11 +15,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from shared.config import DB_PATH, JSON_DIR, LOGS_DIR, OLLAMA_MODEL
+from agent.config import get_settings
 from shared.db import Database
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("l2c.classic")
+_PATHS = get_settings().paths
 
 class KSTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -37,7 +36,8 @@ def _setup_logging(verbose: bool, log_file: Path | None = None) -> Path:
     """
     if log_file is None:
         kst_now = datetime.now(ZoneInfo("Asia/Seoul"))
-        log_file = LOGS_DIR / f"run_{kst_now.strftime('%Y%m%d_%H%M%S')}.log"
+        log_file = _PATHS.log_dir / f"run_{kst_now.strftime('%Y%m%d_%H%M%S')}.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
@@ -110,7 +110,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
     from classic.automation.capture import capture_and_extract_dom
 
     logger.info(f"▶ extract URL={args.url}")
-    db = Database(DB_PATH)
+    db = Database(_PATHS.db_path)
 
     if not args.force and db.exists(args.url):
         existing = db.get_by_url(args.url)
@@ -127,15 +127,12 @@ def cmd_extract(args: argparse.Namespace) -> int:
         with _phase("[1/2] Playwright DOM 추출"):
             dom_raw = capture_and_extract_dom(url=args.url)
 
-        with _phase(f"[2/2] LLM 텍스트 정제 ({args.model or OLLAMA_MODEL})"):
+        with _phase(f"[2/2] LLM 텍스트 정제 ({args.model or '기본 경량 모델'})"):
             from classic.extractor.llm_engine import LLMEngine
-            if args.model:
-                from shared import config
-                config.OLLAMA_MODEL = args.model
-            
+
             # DOM에서 가져온 텍스트 전문을 LLM에 전달
             full_text = dom_raw.get("full_text", "")
-            data = LLMEngine().extract_from_text(full_text)
+            data = LLMEngine(args.model).extract_from_text(full_text)
             
             # 메타데이터 보완 (LLM이 놓쳤을 경우 대비)
             if not data.get("company_name"):
@@ -145,7 +142,8 @@ def cmd_extract(args: argparse.Namespace) -> int:
             
         logger.info(f"데이터 정제 완료: {data.get('company_name')} - {data.get('position')}")
 
-        json_path = JSON_DIR / f"{slug}.json"
+        _PATHS.json_dir.mkdir(parents=True, exist_ok=True)
+        json_path = _PATHS.json_dir / f"{slug}.json"
         json_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -165,43 +163,6 @@ def cmd_extract(args: argparse.Namespace) -> int:
     except Exception as e:
         logger.exception(f"파이프라인 실패: {e}")
         return 1
-
-
-def cmd_list(args: argparse.Namespace) -> int:
-    db = Database(DB_PATH)
-    rows = db.list_recent(limit=args.limit)
-    logger.info(f"DB에서 {len(rows)}건 조회 (limit={args.limit})")
-    if not rows:
-        print("(저장된 공고 없음)")
-        return 0
-    print(f"{'id':>4}  {'created_at':19}  {'company':20}  position")
-    print("-" * 80)
-    for r in rows:
-        company = (r.get("company_name") or "-")[:20]
-        position = (r.get("position") or "-")[:60]
-        print(f"{r['id']:>4}  {r['created_at']:19}  {company:20}  {position}")
-    return 0
-
-
-def cmd_show(args: argparse.Namespace) -> int:
-    db = Database(DB_PATH)
-    target = args.target
-    logger.debug(f"show target={target}")
-
-    if target.isdigit():
-        record = db.get(int(target))
-    elif target.startswith("http"):
-        record = db.get_by_url(target)
-    else:
-        logger.error("target은 숫자 id 또는 http URL이어야 합니다.")
-        return 2
-
-    if not record:
-        print("(찾을 수 없음)")
-        return 1
-
-    print(json.dumps(record, ensure_ascii=False, indent=2))
-    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -228,16 +189,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")
-    p_ext.add_argument("--model", help="이번 실행에만 사용할 Ollama 모델명")
+    p_ext.add_argument("--model", help="이번 실행에만 사용할 Gemini 모델명")
     p_ext.set_defaults(func=cmd_extract)
-
-    p_list = sub.add_parser("list", help="추출 이력 조회", parents=[common])
-    p_list.add_argument("-n", "--limit", type=int, default=20)
-    p_list.set_defaults(func=cmd_list)
-
-    p_show = sub.add_parser("show", help="특정 공고 조회 (id 또는 URL)", parents=[common])
-    p_show.add_argument("target", help="DB id 또는 원본 URL")
-    p_show.set_defaults(func=cmd_show)
 
     return parser
 

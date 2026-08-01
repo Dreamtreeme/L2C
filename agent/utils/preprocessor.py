@@ -153,16 +153,14 @@ class Preprocessor:
         비전 수집 raw 공고 데이터를 입력받아 
         정제, 파싱 및 정규화를 거쳐 Pydantic JobPosting 객체로 반환합니다.
         """
-        # 한글/영문 호환 처리
-        company_name = cls.clean_text(raw_data.get("회사명") or raw_data.get("company_name"))
-        position = cls.clean_text(raw_data.get("직무명") or raw_data.get("position"))
-        url = (raw_data.get("공고url") or raw_data.get("url") or "").strip()
+        company_name = cls.clean_text(raw_data.get("company_name"))
+        position = cls.clean_text(raw_data.get("position"))
+        url = str(raw_data.get("url") or "").strip()
 
-        # 리스트 클렌징
-        main_tasks = cls.clean_list(raw_data.get("주요업무") or raw_data.get("main_tasks"))
-        requirements = cls.clean_list(raw_data.get("자격요건") or raw_data.get("requirements"))
-        preferred = cls.clean_list(raw_data.get("우대사항") or raw_data.get("preferred"))
-        benefits = cls.clean_list(raw_data.get("혜택정보") or raw_data.get("혜택") or raw_data.get("benefits"))
+        main_tasks = cls.clean_list(raw_data.get("main_tasks"))
+        requirements = cls.clean_list(raw_data.get("requirements"))
+        preferred = cls.clean_list(raw_data.get("preferred"))
+        benefits = cls.clean_list(raw_data.get("benefits"))
 
         # 플랫폼 분류
         source_platform = cls.parse_source_platform(url)
@@ -201,23 +199,14 @@ class Preprocessor:
         # Pydantic 스키마 생성 및 반환
         # 수집되지 않은 필드는 None으로 둡니다.
         # 추측값(예: "서울", "정규직")을 기본값으로 채우면 잘못된 데이터가 DB에 저장됩니다.
-        job_category = cls.clean_text(raw_data.get("직군") or raw_data.get("job_category")) or None
-        education = cls.clean_text(raw_data.get("학력") or raw_data.get("education")) or None
-        employment_type = cls.clean_text(raw_data.get("고용형태") or raw_data.get("employment_type")) or None
-        location = cls.clean_text(raw_data.get("근무지") or raw_data.get("location")) or None
-        posted_at = cls.clean_text(
-            raw_data.get("게시일")
-            or raw_data.get("등록일")
-            or raw_data.get("posted_at")
-            or raw_data.get("published_at")
-        ) or None
-        posted_at_text = cls.clean_text(
-            raw_data.get("게시일원문")
-            or raw_data.get("등록일원문")
-            or raw_data.get("posted_at_text")
-        ) or posted_at
-        deadline = cls.clean_text(raw_data.get("마감일") or raw_data.get("deadline")) or None
-        salary = cls.clean_text(raw_data.get("연봉") or raw_data.get("salary")) or None
+        job_category = cls.clean_text(raw_data.get("job_category")) or None
+        education = cls.clean_text(raw_data.get("education")) or None
+        employment_type = cls.clean_text(raw_data.get("employment_type")) or None
+        location = cls.clean_text(raw_data.get("location")) or None
+        posted_at = cls.clean_text(raw_data.get("posted_at")) or None
+        posted_at_text = cls.clean_text(raw_data.get("posted_at_text")) or posted_at
+        deadline = cls.clean_text(raw_data.get("deadline")) or None
+        salary = cls.clean_text(raw_data.get("salary")) or None
 
         from shared.integrity import source_evidence_hash
 

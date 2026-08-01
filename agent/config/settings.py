@@ -79,15 +79,11 @@ class ModelSettings(SectionSettings):
         None,
         validation_alias="VISION_DETAIL_FINAL_EXTRACTION_MODEL",
     )
-    search_intent_model: str | None = Field(None, validation_alias="VISION_SEARCH_INTENT_MODEL")
     job_card_selector_model: str | None = Field(
         None,
         validation_alias="VISION_JOB_CARD_SELECTOR_MODEL",
     )
     recipe_critic_model: str | None = Field(None, validation_alias="VISION_RECIPE_CRITIC_MODEL")
-    ollama_host: str = Field("http://localhost:11434", validation_alias="OLLAMA_HOST")
-    ollama_model: str = Field("qwen3:8b", validation_alias="OLLAMA_MODEL")
-    llm_temperature: float = Field(0.1, ge=0.0, le=2.0, validation_alias="LLM_TEMPERATURE")
     gemini_api_key: SecretStr | None = Field(None, validation_alias="GEMINI_API_KEY")
 
     @field_validator("worker_reasoning_thinking_level")
@@ -97,20 +93,6 @@ class ModelSettings(SectionSettings):
         if normalized not in {"minimal", "low", "medium", "high"}:
             raise ValueError("사고 수준은 minimal, low, medium, high 중 하나여야 합니다.")
         return normalized
-
-    def model_override(self, env_name: str) -> str | None:
-        field_by_env = {
-            "VISION_DETAIL_FINAL_EXTRACTION_MODEL": "detail_final_extraction_model",
-            "VISION_SEARCH_INTENT_MODEL": "search_intent_model",
-            "VISION_JOB_CARD_SELECTOR_MODEL": "job_card_selector_model",
-            "VISION_RECIPE_CRITIC_MODEL": "recipe_critic_model",
-            "VISION_WORKER_REASONING_MODEL": "worker_reasoning_model",
-            "COMMANDER_MODEL": "commander_model",
-            "VISION_LIGHTWEIGHT_MODEL": "lightweight_model",
-        }
-        field_name = field_by_env.get(env_name)
-        return str(getattr(self, field_name) or "").strip() if field_name else None
-
 
 class ExecutionSettings(SectionSettings):
     """외부 모델 역할과 전체 사용자 요청의 시간 경계."""
@@ -159,16 +141,12 @@ class BrowserSettings(SectionSettings):
     chrome_window_width: int = Field(1024, ge=640, le=7680, validation_alias="CHROME_WINDOW_WIDTH")
     chrome_window_height: int = Field(768, ge=480, le=4320, validation_alias="CHROME_WINDOW_HEIGHT")
     page_load_wait_sec: float = Field(4.0, ge=0, le=120, validation_alias="PAGE_LOAD_WAIT_SEC")
-    worker_preopen_browser: bool = Field(True, validation_alias="VISION_WORKER_PREOPEN_BROWSER")
-    close_browser_after_run: bool = Field(True, validation_alias="VISION_CLOSE_BROWSER_AFTER_RUN")
     input_capture_initial_wait_sec: float = Field(
         0.7,
         ge=0,
         le=10,
         validation_alias="VISION_INPUT_CAPTURE_INITIAL_WAIT_SEC",
     )
-    use_configured_window_size: bool = Field(True, validation_alias="VISION_BROWSER_WINDOW_SIZE")
-    reset_zoom: bool = Field(True, validation_alias="VISION_BROWSER_RESET_ZOOM")
     executable: str | None = Field(None, validation_alias="VISION_BROWSER_EXECUTABLE")
     vision_window_width: int = Field(1976, ge=640, le=7680, validation_alias="VISION_BROWSER_WINDOW_WIDTH")
     vision_window_height: int = Field(2129, ge=480, le=4320, validation_alias="VISION_BROWSER_WINDOW_HEIGHT")
@@ -235,9 +213,6 @@ class BrowserSettings(SectionSettings):
 
 class VisionSettings(SectionSettings):
     recursion_limit: int = Field(180, ge=10, le=500, validation_alias="VISION_AGENT_RECURSION_LIMIT")
-    recursion_limit_increment: int = Field(90, ge=1, le=500, validation_alias="VISION_AGENT_RECURSION_LIMIT_INCREMENT")
-    hitl_on_recursion_limit: bool = Field(True, validation_alias="VISION_HITL_ON_RECURSION_LIMIT")
-    auto_finish_on_target: bool = Field(True, validation_alias="VISION_AUTO_FINISH_ON_TARGET")
     ui_text_marker_limit: int = Field(90, ge=1, le=1000, validation_alias="VISION_UI_TEXT_MARKER_LIMIT")
     ui_icon_marker_limit: int = Field(45, ge=0, le=1000, validation_alias="VISION_UI_ICON_MARKER_LIMIT")
     reasoning_action_history_limit: int = Field(
@@ -258,7 +233,6 @@ class VisionSettings(SectionSettings):
         le=100,
         validation_alias="VISION_REASONING_IMAGE_QUALITY",
     )
-    reasoning_screen_guard: bool = Field(True, validation_alias="VISION_REASONING_SCREEN_GUARD")
     reasoning_stale_phash_max_distance: int = Field(
         10,
         ge=0,
@@ -272,10 +246,6 @@ class VisionSettings(SectionSettings):
     detail_buffer_max_lines: int = Field(260, ge=1, le=5000, validation_alias="VISION_JOB_DETAIL_BUFFER_MAX_LINES")
     detail_buffer_max_line_chars: int = Field(220, ge=20, le=4000, validation_alias="VISION_JOB_DETAIL_BUFFER_MAX_LINE_CHARS")
     detail_final_ocr_max_chars: int = Field(16000, ge=1000, le=200000, validation_alias="VISION_DETAIL_FINAL_OCR_MAX_CHARS")
-    detail_section_context_enabled: bool = Field(True, validation_alias="VISION_DETAIL_SECTION_CONTEXT_ENABLED")
-    detail_lightweight_marked_image_enabled: bool = Field(True, validation_alias="VISION_DETAIL_LIGHTWEIGHT_MARKED_IMAGE_ENABLED")
-    job_detail_buffer_enabled: bool = Field(True, validation_alias="VISION_JOB_DETAIL_BUFFER_ENABLED")
-    search_intent_mode: str = Field("llm", validation_alias="VISION_SEARCH_INTENT_MODE")
     ui_analysis_cache_limit: int = Field(8, ge=0, le=128, validation_alias="VISION_UI_ANALYSIS_CACHE_LIMIT")
     page_content_top_px: str = Field("auto", validation_alias="VISION_PAGE_CONTENT_TOP_PX")
     som_crop_top: str = Field("auto", validation_alias="VISION_SOM_CROP_TOP")
@@ -345,7 +315,6 @@ class OcrSettings(SectionSettings):
         le=10,
         validation_alias="SOM_OCR_WORKER_MAX_ATTEMPTS",
     )
-    resize_enabled: bool = Field(True, validation_alias="SOM_OCR_RESIZE")
     max_image_dim: int = Field(1152, ge=0, le=8192, validation_alias="SOM_OCR_MAX_DIM")
     inference_max_dim: int = Field(
         1024,
@@ -373,7 +342,6 @@ class ReflexSettings(SectionSettings):
     enabled: bool = Field(True, validation_alias="REFLEX_ENABLED")
     roi_phash_max_distance: int = Field(22, ge=0, le=64, validation_alias="REFLEX_ROI_PHASH_MAX_DISTANCE")
     target_center_max_distance: float = Field(0.065, ge=0, le=1, validation_alias="REFLEX_TARGET_CENTER_MAX_DISTANCE")
-    no_effect_phash_max_distance: int = Field(2, ge=0, le=64, validation_alias="REFLEX_NO_EFFECT_PHASH_MAX_DISTANCE")
     visual_change_pixel_threshold: int = Field(8, ge=0, le=255, validation_alias="REFLEX_VISUAL_CHANGE_PIXEL_THRESHOLD")
     visual_change_min_ratio: float = Field(0.03, ge=0, le=1, validation_alias="REFLEX_VISUAL_CHANGE_MIN_RATIO")
     screen_context_phash_max_distance: int = Field(
@@ -384,9 +352,6 @@ class ReflexSettings(SectionSettings):
     )
     job_card_return_phash_max_distance: int = Field(16, ge=0, le=64, validation_alias="VISION_JOB_CARD_RETURN_PHASH_MAX_DISTANCE")
     job_card_return_min_anchor_overlap: float = Field(0.20, ge=0, le=1, validation_alias="VISION_JOB_CARD_RETURN_MIN_ANCHOR_OVERLAP")
-    job_card_queue_enabled: bool = Field(True, validation_alias="VISION_JOB_CARD_QUEUE_ENABLED")
-    job_card_selector_enabled: bool = Field(True, validation_alias="VISION_JOB_CARD_SELECTOR_ENABLED")
-    skip_existing_job_details: bool = Field(True, validation_alias="VISION_SKIP_EXISTING_JOB_DETAILS")
     transition_cycle_phash_max_distance: int = Field(
         4,
         ge=0,
@@ -426,7 +391,6 @@ class ReflexSettings(SectionSettings):
 
 
 class RecipeSettings(SectionSettings):
-    learning_mode: str = Field("record", validation_alias="VISION_RECIPE_LEARNING_MODE")
     auto_promote: bool = Field(True, validation_alias="VISION_RECIPE_AUTO_PROMOTE")
     critic_evidence_text_limit: int = Field(60, ge=1, le=500, validation_alias="VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT")
     critic_timeout_sec: float = Field(30.0, gt=0, le=300, validation_alias="VISION_RECIPE_CRITIC_TIMEOUT_SEC")
@@ -438,7 +402,6 @@ class RecipeSettings(SectionSettings):
 class RetentionSettings(SectionSettings):
     log_days: int = Field(30, ge=1, le=3650, validation_alias="RETENTION_LOG_DAYS")
     artifact_days: int = Field(90, ge=1, le=3650, validation_alias="RETENTION_ARTIFACT_DAYS")
-    audit_days: int = Field(90, ge=1, le=3650, validation_alias="RETENTION_AUDIT_DAYS")
     job_version_days: int = Field(180, ge=1, le=3650, validation_alias="RETENTION_JOB_VERSION_DAYS")
     keep_job_versions: int = Field(5, ge=1, le=100, validation_alias="RETENTION_KEEP_JOB_VERSIONS")
 
@@ -447,9 +410,6 @@ class ObservabilitySettings(SectionSettings):
     app_env: str = Field("development", validation_alias="APP_ENV")
     log_format: str = Field("console", validation_alias="LOG_FORMAT")
     log_target: str | None = Field(None, validation_alias="LOG_TARGET")
-    sentry_dsn: SecretStr | None = Field(None, validation_alias="SENTRY_DSN")
-    sentry_traces_sample_rate: float = Field(0.0, ge=0, le=1, validation_alias="SENTRY_TRACES_SAMPLE_RATE")
-    sentry_profiles_sample_rate: float = Field(0.0, ge=0, le=1, validation_alias="SENTRY_PROFILES_SAMPLE_RATE")
     langsmith_project: str = Field("l2c-local", validation_alias="LANGSMITH_PROJECT")
     langsmith_e2e_feedback: bool = Field(True, validation_alias="L2C_LANGSMITH_E2E_FEEDBACK")
     langsmith_flush_timeout_sec: float = Field(5.0, gt=0, le=120, validation_alias="LANGSMITH_FLUSH_TIMEOUT_SEC")
@@ -476,12 +436,6 @@ def get_settings() -> AppSettings:
     return AppSettings()
 
 
-def clear_settings_cache() -> None:
-    """테스트와 명시적 설정 재로딩에서만 사용한다."""
-
-    get_settings.cache_clear()
-
-
 __all__ = [
     "AppSettings",
     "BASE_DIR",
@@ -495,6 +449,5 @@ __all__ = [
     "RetentionSettings",
     "ReflexSettings",
     "VisionSettings",
-    "clear_settings_cache",
     "get_settings",
 ]

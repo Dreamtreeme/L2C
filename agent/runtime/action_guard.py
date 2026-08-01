@@ -17,10 +17,6 @@ from agent.vision.screen_signature import (
 )
 
 
-def reasoning_screen_guard_enabled() -> bool:
-    return get_settings().vision.reasoning_screen_guard
-
-
 def _marker_for_id(state: dict[str, Any], marker_id: int | None) -> dict[str, Any] | None:
     if marker_id is None:
         return None
@@ -55,13 +51,6 @@ def check_reasoning_screen_stale(
 ) -> dict[str, Any]:
     """OCR 없이 행동 대상 ROI를 다시 계산해 오래된 마커 클릭을 차단한다."""
 
-    if not reasoning_screen_guard_enabled():
-        return {
-            "checked": False,
-            "stale": False,
-            "must_refresh": False,
-            "reason": "disabled",
-        }
     target_signature = _target_roi_signature(state, marker_id)
     previous_phash = str(target_signature.get("phash") or "")
     mode = "target_roi"
@@ -136,4 +125,4 @@ def check_reasoning_screen_stale(
     return result
 
 
-__all__ = ["check_reasoning_screen_stale", "reasoning_screen_guard_enabled"]
+__all__ = ["check_reasoning_screen_stale"]

@@ -77,6 +77,7 @@ def build_worker_trace(submission: dict[str, Any]) -> dict[str, Any]:
     """저장된 작업자 제출물을 행동 순번 기준 실행 경로로 변환한다."""
 
     payload = _as_dict(submission.get("payload")) or submission
+    collection_intent = _as_dict(payload.get("collection_intent"))
     recorded_by_seq: dict[int, dict[str, Any]] = {}
     feedback_by_seq: dict[int, dict[str, Any]] = {}
     transitions_by_seq: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -186,12 +187,11 @@ def build_worker_trace(submission: dict[str, Any]) -> dict[str, Any]:
     return {
         "submission_id": str(submission.get("submission_id") or ""),
         "run_id": str(payload.get("run_id") or submission.get("run_id") or ""),
-        "site": str(payload.get("site") or submission.get("site") or ""),
+        "site": str(collection_intent.get("site") or ""),
         "goal": str(payload.get("goal") or submission.get("goal") or ""),
         "run_status": str(
             payload.get("run_status") or submission.get("run_status") or ""
         ),
-        "review_decision": str(submission.get("review_decision") or ""),
         "step_count": len(steps),
         "recorded_action_count": len(recorded_by_seq),
         "transition_count": sum(len(items) for items in transitions_by_seq.values()),
@@ -209,10 +209,7 @@ def render_worker_trace(trace: dict[str, Any]) -> str:
         f"실행 ID: {trace.get('run_id') or '-'}",
         f"제출물 ID: {trace.get('submission_id') or '-'}",
         f"사이트: {trace.get('site') or '-'}",
-        (
-            f"상태: {trace.get('run_status') or '-'}"
-            f" / 검토 {trace.get('review_decision') or '-'}"
-        ),
+        f"상태: {trace.get('run_status') or '-'}",
         (
             f"행동: {trace.get('step_count', 0)}개"
             f" / 레시피 기록 {trace.get('recorded_action_count', 0)}개"

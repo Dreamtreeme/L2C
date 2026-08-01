@@ -623,32 +623,6 @@ def invoke_with_metrics(
     return result
 
 
-def record_external_llm_usage(
-    *,
-    component: str,
-    provider: str,
-    model: str,
-    usage: dict[str, Any],
-    duration_sec: float,
-    success: bool = True,
-    error: str = "",
-) -> None:
-    """Classic Ollama 호출의 사용량을 현재 실행 메트릭에 합친다."""
-
-    context = current_run_context()
-    if context is None:
-        return
-    context.record_llm_call(
-        component,
-        provider,
-        model,
-        usage,
-        duration_sec,
-        success=success,
-        error=error,
-    )
-
-
 __all__ = [
     "RunContext",
     "RunCancelled",
@@ -660,7 +634,6 @@ __all__ = [
     "measure_step",
     "normalize_usage",
     "observe_step",
-    "record_external_llm_usage",
     "raise_if_cancelled",
     "run_context",
 ]
