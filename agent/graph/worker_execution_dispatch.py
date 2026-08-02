@@ -20,7 +20,7 @@ from agent.graph.worker_state_action_result import (
 from agent.graph.worker_resources import get_action_tools
 from agent.graph.worker_state import job_detail_key_from_state
 from agent.runtime.duplicate_job_policy import mark_existing_job_cards
-from agent.runtime.job_collection import job_list_value
+from agent.runtime.job_collection import job_items
 from agent.runtime.job_field_contract import (
     detail_coverage_status,
     merge_job_detail_coverage,
@@ -89,15 +89,9 @@ def _attach_active_card_identity(
     if not card_key:
         return data
 
-    jobs = job_list_value(data)
-    if isinstance(jobs, dict):
-        job_items = [jobs]
-    elif isinstance(jobs, list):
-        job_items = [item for item in jobs if isinstance(item, dict)]
-    else:
-        job_items = [data] if isinstance(data, dict) else []
+    extracted_jobs = job_items(data)
 
-    for job in job_items:
+    for job in extracted_jobs:
         job.setdefault("_source_card_key", card_key)
         job.setdefault("_source_context_url", current_url)
         job.setdefault("_listing_company", company)
@@ -353,14 +347,15 @@ def _finish_detail_reading(
         extracted_job["_collection_field_evidence"] = dict(
             coverage_status["field_evidence"]
         )
-        extracted_job = _attach_active_card_identity(
-            extracted_job,
+        wrapped_job = _attach_active_card_identity(
+            {"jobs": [extracted_job]},
             state=state,
             current_url=current_url,
         )
+        extracted_job = wrapped_job["jobs"][0]
         merged_jobs, summary = merge_extracted_info(
             current_jobs,
-            {"공고목록": [extracted_job]},
+            {"jobs": [extracted_job]},
             current_url=current_url,
         )
         return StateActionOutcome(

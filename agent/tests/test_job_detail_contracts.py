@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from agent.graph import (
     worker_execution_dispatch,
     worker_observation,
@@ -7,6 +9,8 @@ from agent.graph import (
     worker_transition,
 )
 from agent.graph.worker_reflex import reflex_node
+from agent.graph.worker_execution_policy import merge_extracted_info
+from agent.runtime.job_collection import job_items
 from agent.runtime.job_card_queue import replay_job_card_after_return
 
 
@@ -52,7 +56,20 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
 
     assert outcome.result["status"] == "success"
     assert outcome.state_update.job_detail_buffer == {}
-    assert outcome.jobs["공고목록"][0]["position"] == "iOS 개발자"
+    assert outcome.jobs["jobs"][0]["position"] == "iOS 개발자"
+
+
+def test_internal_job_collection_accepts_only_canonical_jobs_list():
+    canonical_job = {
+        "company_name": "예시회사",
+        "position": "백엔드 개발자",
+        "url": "https://example.com/jobs/1",
+    }
+
+    assert job_items({"jobs": [canonical_job]}) == [canonical_job]
+    assert job_items({"공고목록": [canonical_job]}) == []
+    with pytest.raises(ValueError, match="jobs 목록"):
+        merge_extracted_info({}, canonical_job)
 
 
 def test_detail_action_args_compaction_is_idempotent():
@@ -309,7 +326,7 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
 
     assert outcome.result["status"] == "success"
     assert calls == [True]
-    job = outcome.jobs["공고목록"][0]
+    job = outcome.jobs["jobs"][0]
     assert job["_collection_required_fields"] == required_fields
     assert job["_collection_unavailable_fields"] == ["benefits"]
 
@@ -371,7 +388,7 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end(
 
     assert outcome.result["status"] == "success"
     assert calls == [True]
-    job = outcome.jobs["공고목록"][0]
+    job = outcome.jobs["jobs"][0]
     assert job["_collection_extraction_missing_fields"] == ["benefits"]
     assert job["_collection_unavailable_fields"] == ["benefits"]
 

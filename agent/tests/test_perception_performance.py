@@ -517,7 +517,7 @@ def test_capture_usable_screen_forwards_input_settle_wait(monkeypatch, tmp_path)
     assert calls == [(None, 0.7)]
 
 
-def test_prepare_som_image_excludes_browser_toolbar_and_bookmarks(monkeypatch, tmp_path):
+def test_prepare_som_image_keeps_full_image_when_boundary_is_weak(monkeypatch, tmp_path):
     from agent.tools.perception import PerceptionEngine
 
     image_path = tmp_path / "screen.png"
@@ -527,9 +527,8 @@ def test_prepare_som_image_excludes_browser_toolbar_and_bookmarks(monkeypatch, t
 
     cropped_path, crop_top = engine._prepare_som_image(image_path)
 
-    assert crop_top == 140
-    with Image.open(cropped_path) as cropped:
-        assert cropped.size == (800, 760)
+    assert crop_top == 0
+    assert cropped_path == image_path
 
 
 def test_prepare_som_image_detects_browser_content_boundary(monkeypatch, tmp_path):

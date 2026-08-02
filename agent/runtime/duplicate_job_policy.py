@@ -9,7 +9,7 @@ from agent.application.job_lookup_service import (
     find_job_ids_by_card_identities,
     find_job_id_by_url,
 )
-from agent.runtime.job_collection import job_list_value
+from agent.runtime.job_collection import job_items
 
 
 def _url_key(value: Any) -> str:
@@ -19,15 +19,11 @@ def _url_key(value: Any) -> str:
 def _current_run_contains_url(extracted_jd: Any, url: str) -> bool:
     if not isinstance(extracted_jd, dict):
         return False
-    jobs = job_list_value(extracted_jd)
-    if isinstance(jobs, dict):
-        jobs = [jobs]
-    if not isinstance(jobs, list):
-        jobs = [extracted_jd] if extracted_jd else []
+    jobs = job_items(extracted_jd)
     target = _url_key(url)
     return any(
         isinstance(job, dict)
-        and _url_key(job.get("url") or job.get("URL") or job.get("공고url")) == target
+        and _url_key(job.get("url")) == target
         for job in jobs
     )
 

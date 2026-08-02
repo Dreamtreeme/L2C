@@ -8,7 +8,7 @@ from shared.schema.agent_contract import (
     JobCollectionField,
 )
 
-JOB_FIELD_ALIASES: dict[str, list[str]] = {
+_PERSISTENCE_FIELD_ALIASES: dict[str, list[str]] = {
     "company_name": ["company_name", "company", "companyName", "\ud68c\uc0ac\uba85", "\uae30\uc5c5\uba85", "\ud68c\uc0ac"],
     "position": ["position", "job_title", "jobTitle", "title", "role", "\uc9c1\ubb34\uba85", "\uacf5\uace0\uba85", "\ud3ec\uc9c0\uc158"],
     "url": ["url", "URL", "job_url", "jobUrl", "posting_url", "\uacf5\uace0url", "\uc0c1\uc138url"],
@@ -44,7 +44,7 @@ DETAIL_JOB_FIELDS: tuple[JobCollectionField, ...] = (
 )
 
 
-def first_present(job: dict[str, Any], aliases: list[str]) -> Any:
+def _first_present(job: dict[str, Any], aliases: list[str]) -> Any:
     lowered = {str(key).strip().lower(): value for key, value in job.items()}
     for alias in aliases:
         if alias in job and job.get(alias) not in (None, "", [], {}):
@@ -66,11 +66,11 @@ def has_job_field_value(value: Any) -> bool:
 
 
 def job_field_value(job: Any, field: str) -> Any:
-    """딕셔너리 별칭 또는 JobPosting 표준 속성에서 값을 읽는다."""
+    """내부 표준 필드 또는 JobPosting 속성에서 값을 읽는다."""
 
-    aliases = JOB_FIELD_ALIASES.get(field, [field])
     if isinstance(job, Mapping):
-        return first_present(dict(job), aliases)
+        value = job.get(field)
+        return value if has_job_field_value(value) else None
     value = getattr(job, field, None)
     return value if has_job_field_value(value) else None
 
@@ -145,12 +145,12 @@ def required_job_fields(
 
 
 def deterministic_job_for_persistence(job: dict[str, Any]) -> dict[str, Any]:
-    """이미 추출된 원본 JSON에서 표준 저장 필드만 얕게 보정합니다."""
+    """외부 수집 JSON의 필드 별칭을 DB 표준 필드로 변환한다."""
+
     normalized = dict(job)
-    for field, aliases in JOB_FIELD_ALIASES.items():
+    for field, aliases in _PERSISTENCE_FIELD_ALIASES.items():
         if normalized.get(field) in (None, "", [], {}):
-            value = first_present(job, aliases)
+            value = _first_present(job, aliases)
             if value not in (None, "", [], {}):
                 normalized[field] = value
-    normalized["_normalization_source"] = "deterministic"
     return normalized

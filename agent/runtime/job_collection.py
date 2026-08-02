@@ -5,25 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 
-JOB_LIST_KEYS = ("공고목록", "jobs", "job_list")
+JOB_LIST_KEY = "jobs"
 JOB_IDENTITY_KEYS = (
     "company_name",
-    "회사명",
     "position",
-    "직무명",
-    "job_title",
     "url",
-    "source_url",
 )
 
 
 def job_list_value(data: dict) -> Any:
-    """지원하는 공고 목록 키 중 실제로 존재하는 값을 반환한다."""
+    """내부 표준 공고 목록을 반환한다."""
 
-    for key in JOB_LIST_KEYS:
-        if key in data:
-            return data.get(key)
-    return None
+    return data.get(JOB_LIST_KEY)
 
 
 def job_items(data: Any) -> list[dict[str, Any]]:
@@ -42,9 +35,7 @@ def job_items(data: Any) -> list[dict[str, Any]]:
     value = job_list_value(data)
     if isinstance(value, list):
         return [item for item in value if is_job_item(item)]
-    if is_job_item(value):
-        return [value]
-    return [data] if value is None and is_job_item(data) else []
+    return []
 
 
 def job_count(data: Any) -> int:
@@ -53,7 +44,7 @@ def job_count(data: Any) -> int:
 
 __all__ = [
     "JOB_IDENTITY_KEYS",
-    "JOB_LIST_KEYS",
+    "JOB_LIST_KEY",
     "job_count",
     "job_items",
     "job_list_value",

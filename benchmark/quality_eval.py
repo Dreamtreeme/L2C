@@ -13,19 +13,14 @@ from pydantic import ValidationError
 from agent.utils.job_fields import (
     DETAIL_JOB_FIELDS,
     IDENTITY_JOB_FIELDS,
-    JOB_FIELD_ALIASES,
     normalize_job_collection_fields,
 )
+from shared.schema.agent_contract import JOB_COLLECTION_FIELDS
 from shared.schema.jd_schema import JobPosting
 
 
-FIELD_ALIASES = {
-    field: tuple(aliases)
-    for field, aliases in JOB_FIELD_ALIASES.items()
-}
 REQUIRED_FIELDS = IDENTITY_JOB_FIELDS
 CONTENT_FIELDS = DETAIL_JOB_FIELDS
-RECORD_KEYS = ("jobs", "job_postings", "공고목록", "collected_data")
 
 
 def _normalized_text(value: Any) -> str:
@@ -42,15 +37,8 @@ def _normalized_url(value: Any) -> str:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
 
 
-def _field(record: dict[str, Any], name: str) -> Any:
-    for alias in FIELD_ALIASES.get(name, (name,)):
-        if alias in record:
-            return record[alias]
-    return None
-
-
 def normalize_job_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {name: _field(record, name) for name in FIELD_ALIASES}
+    return {name: record.get(name) for name in JOB_COLLECTION_FIELDS}
 
 
 def extract_job_records(payload: Any) -> list[dict[str, Any]]:
@@ -58,11 +46,10 @@ def extract_job_records(payload: Any) -> list[dict[str, Any]]:
         return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict):
         return []
-    for key in RECORD_KEYS:
-        value = payload.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    if any(alias in payload for aliases in FIELD_ALIASES.values() for alias in aliases):
+    value = payload.get("jobs")
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if any(field in payload for field in JOB_COLLECTION_FIELDS):
         return [payload]
     return []
 

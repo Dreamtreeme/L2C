@@ -9,7 +9,6 @@ from typing import Any
 
 _VOLATILE_FIELDS = {
     "_normalization_error",
-    "_normalization_source",
     "content_hash",
     "evidence_hash",
     "created_at",

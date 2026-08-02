@@ -6,7 +6,12 @@ import json
 from typing import Any
 
 from agent.graph.state import GraphState
-from agent.runtime.job_collection import JOB_LIST_KEYS, job_list_value
+from agent.runtime.job_collection import (
+    JOB_IDENTITY_KEYS,
+    JOB_LIST_KEY,
+    job_items,
+    job_list_value,
+)
 from agent.runtime.job_card_queue import (
     job_card_label,
     job_card_entries_from_args,
@@ -18,9 +23,7 @@ from agent.runtime.site_context import (
 
 
 def _has_job_url(job: dict[str, Any]) -> bool:
-    return bool(
-        (job.get("url") or job.get("URL") or job.get("공고url") or "").strip()
-    )
+    return bool(str(job.get("url") or "").strip())
 
 
 def should_skip_job_update_without_detail_url(
@@ -30,10 +33,8 @@ def should_skip_job_update_without_detail_url(
     if not site_profile_for_url(current_url) or looks_like_job_detail_url(current_url):
         return False
 
-    incoming_jobs = job_list_value(new_data)
-    if isinstance(incoming_jobs, dict):
-        incoming_jobs = [incoming_jobs]
-    if not isinstance(incoming_jobs, list):
+    incoming_jobs = job_items(new_data)
+    if not incoming_jobs:
         return False
     return any(
         isinstance(job, dict) and not _has_job_url(job) for job in incoming_jobs
@@ -41,9 +42,9 @@ def should_skip_job_update_without_detail_url(
 
 
 def _job_identity(job: dict[str, Any]) -> tuple[str, str, str]:
-    url = (job.get("url") or job.get("URL") or job.get("공고url") or "").strip()
-    company = (job.get("회사명") or job.get("company_name") or "").strip()
-    position = (job.get("직무명") or job.get("position") or "").strip()
+    url = str(job.get("url") or "").strip()
+    company = str(job.get("company_name") or "").strip()
+    position = str(job.get("position") or "").strip()
     return url, company, position
 
 
@@ -78,13 +79,16 @@ def merge_extracted_info(
     new_data: dict[str, Any],
     current_url: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if any(key in new_data for key in JOB_IDENTITY_KEYS) and JOB_LIST_KEY not in new_data:
+        raise ValueError("공고 데이터는 jobs 목록 안에 있어야 합니다.")
+    if JOB_LIST_KEY in new_data and not isinstance(new_data[JOB_LIST_KEY], list):
+        raise ValueError("jobs 값은 공고 딕셔너리 목록이어야 합니다.")
+
     merged = dict(current_jd)
     summary: dict[str, Any] = {"incoming_jobs": 0, "total_jobs": 0, "fields": []}
-    incoming_jobs = job_list_value(new_data)
-    if isinstance(incoming_jobs, dict):
-        incoming_jobs = [incoming_jobs]
+    incoming_jobs = job_items(new_data)
 
-    if isinstance(incoming_jobs, list):
+    if incoming_jobs or JOB_LIST_KEY in new_data:
         existing_jobs = job_list_value(merged)
         if not isinstance(existing_jobs, list):
             existing_jobs = []
@@ -92,9 +96,7 @@ def merge_extracted_info(
             if not isinstance(incoming, dict):
                 continue
             job = dict(incoming)
-            if looks_like_job_detail_url(current_url) and not (
-                job.get("url") or job.get("URL") or job.get("공고url")
-            ):
+            if looks_like_job_detail_url(current_url) and not job.get("url"):
                 job["url"] = current_url
 
             summary["incoming_jobs"] += 1
@@ -120,11 +122,11 @@ def merge_extracted_info(
             else:
                 existing_jobs[match_index] = _merge_value(existing_jobs[match_index], job)
 
-        merged["공고목록"] = existing_jobs
+        merged[JOB_LIST_KEY] = existing_jobs
         summary["total_jobs"] = len(existing_jobs)
 
     for key, value in new_data.items():
-        if key in JOB_LIST_KEYS:
+        if key == JOB_LIST_KEY:
             continue
         summary["fields"].append(key)
         merged[key] = _merge_value(merged.get(key), value)
@@ -229,15 +231,13 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
         data = json.loads(args.get("data_json", "{}"))
     except Exception:
         return {"data_json": "<invalid json>"}
-    jobs = job_list_value(data)
-    if isinstance(jobs, dict):
-        jobs = [jobs]
+    jobs = job_items(data)
     fields = []
     if isinstance(jobs, list):
         for job in jobs:
             if isinstance(job, dict):
                 fields.extend(job.keys())
-    fields.extend(key for key in data.keys() if key not in JOB_LIST_KEYS)
+    fields.extend(key for key in data.keys() if key != JOB_LIST_KEY)
     return {
         "incoming_jobs": len(jobs) if isinstance(jobs, list) else 0,
         "fields": sorted({str(field) for field in fields}),

@@ -587,14 +587,13 @@ class PerceptionEngine:
         """브라우저 chrome과 페이지 사이의 전체 폭 수평 경계를 찾는다."""
 
         settings = get_settings().vision
-        fallback_top = settings.som_crop_fallback_top_px
         min_y = settings.som_crop_scan_min_y
         max_y = min(
             settings.som_crop_scan_max_y,
             max(0, image.height - 400),
         )
         if max_y <= min_y:
-            return fallback_top
+            return 0
 
         sample_width = settings.som_crop_sample_width
         sample = image.convert("RGB")
@@ -605,7 +604,7 @@ class PerceptionEngine:
             ImageStat.Stat(sample.crop((0, y, sample.width, y + 1))).mean
             for y in range(max_y + 1)
         ]
-        best_y = fallback_top
+        best_y = 0
         best_delta = 0.0
         for y in range(max(1, min_y), max_y + 1):
             delta = sum(abs(row_means[y][channel] - row_means[y - 1][channel]) for channel in range(3))
@@ -616,11 +615,10 @@ class PerceptionEngine:
         min_delta = settings.som_crop_min_row_delta
         if best_delta < min_delta:
             logger.debug(
-                "Browser content boundary was weak; using crop fallback",
+                "Browser content boundary was weak; using full image",
                 best_delta=round(best_delta, 2),
-                fallback_top=fallback_top,
             )
-            return fallback_top
+            return 0
         logger.info(
             "Detected browser content boundary",
             crop_top=best_y,

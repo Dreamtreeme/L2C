@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.runtime.job_collection import job_list_value
 from agent.utils.model_dump import dump_model
 
 
@@ -117,7 +116,14 @@ def _job_validation_issues(
 
 
 def _collected_jobs(extracted_jd: dict[str, Any]) -> list[Any]:
-    jobs = job_list_value(extracted_jd)
+    jobs = next(
+        (
+            extracted_jd[key]
+            for key in ("jobs", "공고목록", "job_list")
+            if key in extracted_jd
+        ),
+        None,
+    )
     if jobs is None:
         return [extracted_jd] if extracted_jd else []
     return jobs if isinstance(jobs, list) else [jobs]

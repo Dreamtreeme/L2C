@@ -203,7 +203,14 @@ class switch_tab(_ReplayProposal):
 class update_extracted_info(BaseModel):
     """상세 OCR 버퍼가 없는 화면에서 식별한 정보를 수집 상태에 병합합니다."""
 
-    data_json: str = Field(..., description="업데이트할 정보 키-값 딕셔너리의 JSON 문자열")
+    data_json: str = Field(
+        ...,
+        description=(
+            "업데이트할 정보의 JSON 문자열. 공고 목록은 "
+            '{"jobs": [{"company_name": ..., "position": ..., "url": ...}]} '
+            "형식을 사용합니다."
+        ),
+    )
     page_role: Optional[str] = Field(None, description="현재 정보를 읽은 페이지 역할(page_role). 상세 공고면 job_detail.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")

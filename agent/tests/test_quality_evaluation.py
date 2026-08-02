@@ -53,15 +53,19 @@ def _manual(jobs):
     )
 
 
-def test_job_quality_accepts_aliases_and_detects_duplicate_urls():
+def test_job_quality_uses_canonical_fields_and_detects_duplicate_urls():
     result = evaluate_job_records(
         {
-            "공고목록": [
-                {"회사명": "A", "직무명": "iOS", "공고url": "https://example.com/1"},
+            "jobs": [
                 {
-                    "회사명": "B",
-                    "직무명": "서버",
-                    "공고url": "https://example.com/1?ref=x",
+                    "company_name": "A",
+                    "position": "iOS",
+                    "url": "https://example.com/1",
+                },
+                {
+                    "company_name": "B",
+                    "position": "서버",
+                    "url": "https://example.com/1?ref=x",
                 },
             ]
         }

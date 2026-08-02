@@ -10,7 +10,7 @@ import json
 from typing import Any
 
 from agent.recipe.text_utils import site_of
-from agent.runtime.job_collection import job_count
+from agent.runtime.job_collection import job_count, job_items
 from agent.runtime.worker_actions import (
     STATE_UPDATE_ACTIONS,
     TERMINAL_ACTIONS,
@@ -66,15 +66,13 @@ def _compact_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
             data = json.loads(raw or "{}")
         except Exception:
             return {"data_json": "<invalid json>", "payload_chars": len(raw)}
-        jobs = data.get("공고목록")
-        if isinstance(jobs, dict):
-            jobs = [jobs]
+        jobs = job_items(data)
         fields = []
         if isinstance(jobs, list):
             for job in jobs:
                 if isinstance(job, dict):
                     fields.extend(job.keys())
-        fields.extend(key for key in data.keys() if key != "공고목록")
+        fields.extend(key for key in data.keys() if key != "jobs")
         return {
             "incoming_jobs": len(jobs) if isinstance(jobs, list) else 0,
             "fields": sorted({str(field) for field in fields}),
