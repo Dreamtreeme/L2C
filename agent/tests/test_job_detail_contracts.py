@@ -22,7 +22,7 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
         },
     )
 
-    result, extracted = worker_execution_dispatch.dispatch_state_action(
+    outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
             "page_role": "job_detail",
@@ -50,9 +50,9 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
         },
     )
 
-    assert result["status"] == "success"
-    assert result["_job_detail_buffer"] == {}
-    assert extracted["공고목록"][0]["position"] == "iOS 개발자"
+    assert outcome.result["status"] == "success"
+    assert outcome.state_update.job_detail_buffer == {}
+    assert outcome.jobs["공고목록"][0]["position"] == "iOS 개발자"
 
 
 def test_detail_action_args_compaction_is_idempotent():
@@ -215,7 +215,7 @@ def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
         fail_if_called,
     )
 
-    result, _extracted = worker_execution_dispatch.dispatch_state_action(
+    outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
             "page_role": "job_detail",
@@ -243,9 +243,9 @@ def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
         },
     )
 
-    assert result["status"] == "skipped"
-    assert result["reason"] == "required_field_evidence_incomplete"
-    assert result["_job_detail_followup"]["missing_fields"] == [
+    assert outcome.result["status"] == "skipped"
+    assert outcome.result["reason"] == "required_field_evidence_incomplete"
+    assert outcome.state_update.job_detail_followup["missing_fields"] == [
         "main_tasks",
         "requirements",
     ]
@@ -281,7 +281,7 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
         "benefits",
     ]
 
-    result, extracted = worker_execution_dispatch.dispatch_state_action(
+    outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
             "page_role": "job_detail",
@@ -307,9 +307,9 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
         },
     )
 
-    assert result["status"] == "success"
+    assert outcome.result["status"] == "success"
     assert calls == [True]
-    job = extracted["공고목록"][0]
+    job = outcome.jobs["공고목록"][0]
     assert job["_collection_required_fields"] == required_fields
     assert job["_collection_unavailable_fields"] == ["benefits"]
 
@@ -343,7 +343,7 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end(
         "benefits",
     ]
 
-    result, extracted = worker_execution_dispatch.dispatch_state_action(
+    outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
             "page_role": "job_detail",
@@ -369,9 +369,9 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end(
         },
     )
 
-    assert result["status"] == "success"
+    assert outcome.result["status"] == "success"
     assert calls == [True]
-    job = extracted["공고목록"][0]
+    job = outcome.jobs["공고목록"][0]
     assert job["_collection_extraction_missing_fields"] == ["benefits"]
     assert job["_collection_unavailable_fields"] == ["benefits"]
 
@@ -390,7 +390,7 @@ def test_detail_finish_retries_missing_extraction_before_page_end(
         },
     )
 
-    result, _extracted = worker_execution_dispatch.dispatch_state_action(
+    outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
             "page_role": "job_detail",
@@ -420,6 +420,7 @@ def test_detail_finish_retries_missing_extraction_before_page_end(
         },
     )
 
+    result = outcome.result
     assert result["status"] == "skipped"
     assert result["reason"] == "required_field_extraction_incomplete"
     assert result["missing_fields"] == ["requirements"]

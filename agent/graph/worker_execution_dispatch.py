@@ -13,6 +13,10 @@ from agent.graph.worker_execution_policy import (
     merge_extracted_info,
     should_skip_job_update_without_detail_url,
 )
+from agent.graph.worker_state_action_result import (
+    StateActionOutcome,
+    StateActionUpdate,
+)
 from agent.graph.worker_resources import get_action_tools
 from agent.graph.worker_state import job_detail_key_from_state
 from agent.runtime.duplicate_job_policy import mark_existing_job_cards
@@ -107,7 +111,7 @@ def _update_extracted_info(
     *,
     current_url: str,
     state: GraphState,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> StateActionOutcome:
     try:
         new_data = _attach_active_card_identity(
             json.loads(args["data_json"]),
@@ -120,8 +124,8 @@ def _update_extracted_info(
             and detail_buffer.get("lines")
         )
         if detail_buffer_active:
-            return (
-                {
+            return StateActionOutcome(
+                result={
                     "action": "update_extracted_info",
                     "status": "skipped",
                     "result": (
@@ -130,11 +134,11 @@ def _update_extracted_info(
                     ),
                     "reason": "detail_buffer_requires_finish",
                 },
-                current_jobs,
+                jobs=current_jobs,
             )
         if should_skip_job_update_without_detail_url(new_data, current_url):
-            return (
-                {
+            return StateActionOutcome(
+                result={
                     "action": "update_extracted_info",
                     "status": "skipped",
                     "result": (
@@ -143,7 +147,7 @@ def _update_extracted_info(
                     ),
                     "reason": "job_update_requires_detail_url",
                 },
-                current_jobs,
+                jobs=current_jobs,
             )
 
         merged_jobs, summary = merge_extracted_info(
@@ -151,8 +155,8 @@ def _update_extracted_info(
             new_data,
             current_url=current_url,
         )
-        return (
-            {
+        return StateActionOutcome(
+            result={
                 "action": "update_extracted_info",
                 "status": "success",
                 "result": (
@@ -162,16 +166,16 @@ def _update_extracted_info(
                     f"fields={summary['fields']})"
                 ),
             },
-            merged_jobs,
+            jobs=merged_jobs,
         )
     except Exception as exc:
-        return (
-            {
+        return StateActionOutcome(
+            result={
                 "action": "update_extracted_info",
                 "status": "error",
                 "result": f"Failed to parse data_json: {exc}",
             },
-            current_jobs,
+            jobs=current_jobs,
         )
 
 
@@ -232,7 +236,7 @@ def _finish_detail_reading(
     *,
     current_url: str,
     state: GraphState,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> StateActionOutcome:
     try:
         detail_key = job_detail_key_from_state(state)
         coverage = merge_job_detail_coverage(
@@ -249,8 +253,8 @@ def _finish_detail_reading(
         )
         if coverage_status["missing_fields"]:
             missing = list(coverage_status["missing_fields"])
-            return (
-                {
+            return StateActionOutcome(
+                result={
                     "action": "finish_detail_reading",
                     "status": "skipped",
                     "result": (
@@ -260,18 +264,20 @@ def _finish_detail_reading(
                     "reason": "required_field_evidence_incomplete",
                     "required_fields": required_fields,
                     "field_coverage": coverage_status,
-                    "_job_detail_buffer": dict(
+                },
+                jobs=current_jobs,
+                state_update=StateActionUpdate(
+                    job_detail_buffer=dict(
                         state.get("job_detail_buffer", {}) or {}
                     ),
-                    "_job_detail_coverage": coverage,
-                    "_job_detail_followup": _detail_followup(
+                    job_detail_coverage=coverage,
+                    job_detail_followup=_detail_followup(
                         state,
                         current_url=current_url,
                         reason="required_field_evidence_incomplete",
                         missing_fields=missing,
                     ),
-                },
-                current_jobs,
+                ),
             )
 
         extraction_state = {
@@ -283,16 +289,18 @@ def _finish_detail_reading(
             current_url,
         )
         if not extracted_job:
-            return (
-                {
+            return StateActionOutcome(
+                result={
                     "action": "finish_detail_reading",
                     "status": "skipped",
                     "result": "No accumulated detail OCR text to extract.",
                     "reason": "empty_job_detail_buffer",
-                    "_job_detail_buffer": {},
-                    "_job_detail_coverage": {},
                 },
-                current_jobs,
+                jobs=current_jobs,
+                state_update=StateActionUpdate(
+                    job_detail_buffer={},
+                    job_detail_coverage={},
+                ),
             )
 
         (
@@ -305,8 +313,8 @@ def _finish_detail_reading(
             coverage_status,
         )
         if missing:
-            return (
-                {
+            return StateActionOutcome(
+                result={
                     "action": "finish_detail_reading",
                     "status": "skipped",
                     "result": (
@@ -317,18 +325,20 @@ def _finish_detail_reading(
                     "required_fields": required_fields,
                     "missing_fields": missing,
                     "field_coverage": coverage_status,
-                    "_job_detail_buffer": dict(
+                },
+                jobs=current_jobs,
+                state_update=StateActionUpdate(
+                    job_detail_buffer=dict(
                         state.get("job_detail_buffer", {}) or {}
                     ),
-                    "_job_detail_coverage": coverage,
-                    "_job_detail_followup": _detail_followup(
+                    job_detail_coverage=coverage,
+                    job_detail_followup=_detail_followup(
                         state,
                         current_url=current_url,
                         reason="required_field_extraction_incomplete",
                         missing_fields=missing,
                     ),
-                },
-                current_jobs,
+                ),
             )
 
         if extraction_missing_fields:
@@ -353,8 +363,8 @@ def _finish_detail_reading(
             {"공고목록": [extracted_job]},
             current_url=current_url,
         )
-        return (
-            {
+        return StateActionOutcome(
+            result={
                 "action": "finish_detail_reading",
                 "status": "success",
                 "result": (
@@ -367,20 +377,22 @@ def _finish_detail_reading(
                 "total_jobs": summary["total_jobs"],
                 "fields": summary["fields"],
                 "extraction_missing_fields": extraction_missing_fields,
-                "_job_detail_buffer": {},
-                "_job_detail_coverage": {},
-                "_job_detail_followup": {},
             },
-            merged_jobs,
+            jobs=merged_jobs,
+            state_update=StateActionUpdate(
+                job_detail_buffer={},
+                job_detail_coverage={},
+                job_detail_followup={},
+            ),
         )
     except Exception as exc:
-        return (
-            {
+        return StateActionOutcome(
+            result={
                 "action": "finish_detail_reading",
                 "status": "error",
                 "result": f"Failed to extract detail OCR buffer: {exc}",
             },
-            current_jobs,
+            jobs=current_jobs,
         )
 
 
@@ -390,7 +402,7 @@ def _set_job_card_queue(
     *,
     current_url: str,
     state: GraphState,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> StateActionOutcome:
     queue, memory = normalize_job_card_queue(args, state, current_url)
     queue, existing_cards = mark_existing_job_cards(queue, current_url)
     selector_trace = dict(state.get("job_card_selection_trace", {}) or {})
@@ -422,8 +434,8 @@ def _set_job_card_queue(
             "count_confidence": count_confidence,
         }
 
-    return (
-        {
+    return StateActionOutcome(
+        result={
             "action": "set_job_card_queue",
             "status": "success" if queue else "skipped",
             "result": (
@@ -435,11 +447,13 @@ def _set_job_card_queue(
             "queued_titles": [item.get("title", "") for item in queue],
             "existing_card_count": len(existing_cards),
             "existing_cards": existing_cards,
-            "_job_card_queue": queue,
-            "_job_results_memory": memory,
-            "_job_results_availability": availability,
         },
-        current_jobs,
+        jobs=current_jobs,
+        state_update=StateActionUpdate(
+            job_card_queue=queue,
+            job_results_memory=memory,
+            job_results_availability=availability,
+        ),
     )
 
 
@@ -450,7 +464,7 @@ def dispatch_state_action(
     *,
     current_url: str = "",
     state: GraphState | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> StateActionOutcome:
     """공고 추출과 카드 큐처럼 그래프 상태를 변경하는 행동을 실행한다."""
 
     state = state or {}

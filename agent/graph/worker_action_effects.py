@@ -7,6 +7,7 @@ from typing import Any
 from agent.graph import worker_execution_dispatch
 from agent.graph.action_request import ActionRequest, build_action_request
 from agent.graph.worker_execution_context import WorkerExecutionContext
+from agent.graph.worker_state_action_result import StateActionUpdate
 from agent.graph.worker_state import (
     count_mode_from_state,
     extracted_job_count,
@@ -157,18 +158,6 @@ def _apply_job_card_queue_result(
     context: WorkerExecutionContext,
     result: dict[str, Any],
 ) -> ActionRequest | None:
-    context.job_card_queue = list(
-        result.pop("_job_card_queue", []) or []
-    )
-    context.job_results_memory = dict(
-        result.pop("_job_results_memory", {}) or {}
-    )
-    observed_availability = dict(
-        result.pop("_job_results_availability", {}) or {}
-    )
-    if observed_availability:
-        context.job_results_availability = observed_availability
-
     pending_cards = pending_job_cards(context.job_card_queue)
     first_card_action = _first_pending_job_card_action(pending_cards)
     if first_card_action is not None:
@@ -190,6 +179,28 @@ def _apply_job_card_queue_result(
         result["auto_finished"] = True
         result["resolved_count"] = resolved_count
     return None
+
+
+def _apply_state_action_update(
+    context: WorkerExecutionContext,
+    update: StateActionUpdate,
+) -> None:
+    """명시된 필드만 실행 문맥에 반영한다."""
+
+    if update.job_card_queue is not None:
+        context.job_card_queue = list(update.job_card_queue)
+    if update.job_results_memory is not None:
+        context.job_results_memory = dict(update.job_results_memory)
+    if update.job_results_availability is not None:
+        context.job_results_availability = dict(
+            update.job_results_availability
+        )
+    if update.job_detail_buffer is not None:
+        context.job_detail_buffer = dict(update.job_detail_buffer)
+    if update.job_detail_coverage is not None:
+        context.job_detail_coverage = dict(update.job_detail_coverage)
+    if update.job_detail_followup is not None:
+        context.job_detail_followup = dict(update.job_detail_followup)
 
 
 def _confirmed_job_results_return_action(
@@ -309,41 +320,20 @@ def execute_state_action(
 ) -> tuple[dict[str, Any], ActionRequest | None]:
     """상태 행동을 실행하고 카드·상세 완료 후속 효과를 반영한다."""
 
-    result, next_jobs = worker_execution_dispatch.dispatch_state_action(
+    outcome = worker_execution_dispatch.dispatch_state_action(
         action_name,
         args,
         context.current_jobs,
         current_url=context.current_url,
         state=context.state_for_dispatch(),
     )
-    raise_for_action_failure(result)
-    context.current_jobs = next_jobs
+    raise_for_action_failure(outcome.result)
+    context.current_jobs = outcome.jobs
+    _apply_state_action_update(context, outcome.state_update)
+    result = outcome.result
     follow_up: ActionRequest | None = None
     if action_name == "set_job_card_queue":
         follow_up = _apply_job_card_queue_result(context, result)
-
-    if action_name == "finish_detail_reading":
-        context.job_detail_buffer = dict(
-            result.pop(
-                "_job_detail_buffer",
-                context.job_detail_buffer,
-            )
-            or {}
-        )
-        context.job_detail_coverage = dict(
-            result.pop(
-                "_job_detail_coverage",
-                context.job_detail_coverage,
-            )
-            or {}
-        )
-        context.job_detail_followup = dict(
-            result.pop(
-                "_job_detail_followup",
-                context.job_detail_followup,
-            )
-            or {}
-        )
 
     is_successful_detail_update = (
         action_name == "finish_detail_reading"

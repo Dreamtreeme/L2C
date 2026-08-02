@@ -19,6 +19,10 @@ from agent.graph.workflow import (
     route_after_transition,
 )
 from agent.graph.worker_state_contract import current_observation_matches_capture
+from agent.graph.worker_state_action_result import (
+    StateActionOutcome,
+    StateActionUpdate,
+)
 
 
 def _request(source: str, tool_calls: list[dict]):
@@ -584,13 +588,13 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
     monkeypatch.setattr(
         worker_execution_dispatch,
         "dispatch_state_action",
-        lambda *args, **kwargs: (
-            {
+        lambda *args, **kwargs: StateActionOutcome(
+            result={
                 "action": "update_extracted_info",
                 "status": "error",
                 "result": "invalid payload",
             },
-            {"jobs": [{"company_name": "기존 회사"}]},
+            jobs={"jobs": [{"company_name": "기존 회사"}]},
         ),
     )
     request = _request(
@@ -628,16 +632,18 @@ def test_stored_job_card_queue_schedules_first_card(monkeypatch):
     }
 
     def fake_dispatch(*args, **kwargs):
-        return (
-            {
+        return StateActionOutcome(
+            result={
                 "action": "set_job_card_queue",
                 "status": "success",
                 "result": "stored",
-                "_job_card_queue": [queued_card],
-                "_job_results_memory": {"url": "https://example.com/jobs"},
-                "_job_results_availability": {},
             },
-            {},
+            jobs={},
+            state_update=StateActionUpdate(
+                job_card_queue=[queued_card],
+                job_results_memory={"url": "https://example.com/jobs"},
+                job_results_availability={},
+            ),
         )
 
     monkeypatch.setattr(
@@ -685,16 +691,18 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
     ]
 
     def fake_dispatch(*args, **kwargs):
-        return (
-            {
+        return StateActionOutcome(
+            result={
                 "action": "set_job_card_queue",
                 "status": "success",
                 "result": "stored",
-                "_job_card_queue": existing_cards,
-                "_job_results_memory": {"url": "https://example.com/jobs"},
-                "_job_results_availability": {},
             },
-            {},
+            jobs={},
+            state_update=StateActionUpdate(
+                job_card_queue=existing_cards,
+                job_results_memory={"url": "https://example.com/jobs"},
+                job_results_availability={},
+            ),
         )
 
     monkeypatch.setattr(
