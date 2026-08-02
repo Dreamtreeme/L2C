@@ -9,6 +9,7 @@ import zipfile
 from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
 from agent.application.search_taxonomy_import_service import import_onet_archive
+from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
 from agent.application.search_taxonomy_review_service import SearchTaxonomyReviewService
 from agent.application.search_taxonomy_service import (
     DEFAULT_LOCAL_SEED,
@@ -57,6 +58,10 @@ def _small_onet_archive(path) -> None:
             ],
             [["15-1252.00", "Software Developers", "Python", "2.E.1", "Development", "Y", "Y"]],
         )
+
+
+def _prepared_taxonomy(db_path) -> SearchTaxonomyService:
+    return prepare_search_taxonomy(db_path)
 
 
 def _insert_and_link(
@@ -124,7 +129,7 @@ def test_local_domain_families_cover_each_soc_major_group_once():
 
 
 def test_common_short_job_terms_resolve_to_specific_local_occupations(tmp_path):
-    taxonomy = SearchTaxonomyService(tmp_path / "jobs.db")
+    taxonomy = _prepared_taxonomy(tmp_path / "jobs.db")
 
     assert taxonomy.resolve_occupation_concepts("AI 개발자") == [
         "l2c:occupation:ai_ml_engineer"
@@ -132,6 +137,52 @@ def test_common_short_job_terms_resolve_to_specific_local_occupations(tmp_path):
     assert taxonomy.resolve_occupation_concepts("iOS") == [
         "l2c:occupation:ios_engineer"
     ]
+
+
+def test_search_taxonomy_constructor_does_not_initialize_storage(tmp_path):
+    db_path = tmp_path / "jobs.db"
+
+    SearchTaxonomyService(db_path)
+
+    assert db_path.exists() is False
+
+
+def test_evidence_inspection_does_not_reindex_pending_job(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    taxonomy = _prepared_taxonomy(db_path)
+    db = Database(db_path)
+    job_id = db.upsert(
+        "https://example.com/jobs/pending",
+        {
+            "company_name": "대기회사",
+            "position": "대기 공고",
+            "source_platform": "wanted",
+        },
+    )
+
+    report = inspect_job_evidence(
+        db_path,
+        [
+            EvidenceRequirement(
+                requirement_id="pending",
+                description="색인 대기 공고",
+                required_sites=["wanted"],
+            )
+        ],
+        InvestigationConstraints(),
+        taxonomy_service=taxonomy,
+    )
+    connection = sqlite3.connect(db_path)
+    try:
+        status = connection.execute(
+            "SELECT taxonomy_index_status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert report["search_ready_db_rows"] == 0
+    assert status == "pending"
 
 
 def test_onet_occupations_are_imported_under_local_domain_hierarchy(tmp_path):
@@ -160,7 +211,7 @@ def test_onet_occupations_are_imported_under_local_domain_hierarchy(tmp_path):
         )
 
     counts = import_onet_archive(db_path, archive_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     candidates = taxonomy.occupation_resolution_candidates(
         ["l2c:domain:it_data"]
     )
@@ -180,7 +231,7 @@ def test_onet_occupations_are_imported_under_local_domain_hierarchy(tmp_path):
 
 
 def test_generic_job_request_starts_with_all_occupation_domains(tmp_path):
-    taxonomy = SearchTaxonomyService(tmp_path / "jobs.db")
+    taxonomy = _prepared_taxonomy(tmp_path / "jobs.db")
     question = taxonomy.build_next_scope_question(
         InvestigationConstraints(occupation_scope_required=True)
     )
@@ -200,7 +251,7 @@ def test_generic_job_request_starts_with_all_occupation_domains(tmp_path):
 
 
 def test_domain_selection_advances_to_family_options_even_without_jobs(tmp_path):
-    taxonomy = SearchTaxonomyService(tmp_path / "jobs.db")
+    taxonomy = _prepared_taxonomy(tmp_path / "jobs.db")
     domain_question = taxonomy.build_next_scope_question(
         InvestigationConstraints(occupation_scope_required=True)
     )
@@ -246,7 +297,7 @@ def test_domain_selection_advances_to_family_options_even_without_jobs(tmp_path)
 
 
 def test_explicit_whole_domain_skips_family_question(tmp_path):
-    taxonomy = SearchTaxonomyService(tmp_path / "jobs.db")
+    taxonomy = _prepared_taxonomy(tmp_path / "jobs.db")
     constraints = taxonomy.enrich_constraints(
         InvestigationConstraints(
             occupation_domain_query="IT",
@@ -261,7 +312,7 @@ def test_explicit_whole_domain_skips_family_question(tmp_path):
 def test_cardinality_question_lists_every_nonempty_direct_child(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     _insert_and_link(db, taxonomy, "backend-1", position="백엔드 개발자", job_category="백엔드 개발")
     _insert_and_link(db, taxonomy, "backend-2", position="Backend Engineer", job_category="Backend Engineer")
     _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
@@ -292,7 +343,7 @@ def test_cardinality_question_lists_every_nonempty_direct_child(tmp_path):
 def test_child_selection_updates_scope_and_collection_search_term(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     _insert_and_link(db, taxonomy, "ios", position="iOS 개발자", job_category="모바일 앱 개발")
     _insert_and_link(db, taxonomy, "android", position="Android 개발자", job_category="Android 개발자")
     constraints = taxonomy.enrich_constraints(
@@ -329,7 +380,7 @@ def test_child_selection_updates_scope_and_collection_search_term(tmp_path):
 def test_all_selection_preserves_original_collection_search_term(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     _insert_and_link(db, taxonomy, "backend", position="백엔드 개발자", job_category="백엔드 개발")
     _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
     _insert_and_link(db, taxonomy, "ai", position="AI 엔지니어", job_category="AI/ML")
@@ -360,7 +411,7 @@ def test_all_selection_preserves_original_collection_search_term(tmp_path):
 def test_dictionary_scope_does_not_union_unclassified_jobs(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     backend_id = _insert_and_link(
         db,
         taxonomy,
@@ -391,7 +442,7 @@ def test_dictionary_scope_does_not_union_unclassified_jobs(tmp_path):
 def test_skill_links_preserve_required_and_preferred_sections(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     job_id = _insert_and_link(
         db,
         taxonomy,
@@ -428,7 +479,7 @@ def test_skill_links_preserve_required_and_preferred_sections(tmp_path):
 def test_candidate_can_be_accepted_as_existing_concept_alias(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     job_id = _insert_and_link(
         db,
         taxonomy,
@@ -455,7 +506,7 @@ def test_candidate_can_be_accepted_as_existing_concept_alias(tmp_path):
 def test_candidate_can_be_accepted_as_new_curated_concept(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     job_id = _insert_and_link(
         db,
         taxonomy,
@@ -482,7 +533,7 @@ def test_candidate_can_be_accepted_as_new_curated_concept(tmp_path):
 def test_reindex_resolves_candidate_that_now_exists_in_active_dictionary(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     job_id = _insert_and_link(
         db,
         taxonomy,
@@ -515,7 +566,7 @@ def test_reindex_resolves_candidate_that_now_exists_in_active_dictionary(tmp_pat
 def test_reindex_is_idempotent_and_does_not_rewrite_source_tech_stack(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     job_id = _insert_and_link(
         db,
         taxonomy,
@@ -549,7 +600,7 @@ def test_reindex_is_idempotent_and_does_not_rewrite_source_tech_stack(tmp_path):
 def test_failed_taxonomy_index_is_retried_once_before_search(tmp_path):
     db_path = tmp_path / "retry-index.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     job_id = db.upsert(
         "https://example.com/jobs/retry-index",
         {
@@ -616,7 +667,7 @@ def test_onet_reimport_preserves_curated_alias_on_existing_concept(tmp_path):
         )
     import_onet_archive(db_path, archive_path)
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     job_id = _insert_and_link(
         db,
         taxonomy,
@@ -638,7 +689,7 @@ def test_onet_reimport_preserves_curated_alias_on_existing_concept(tmp_path):
     review.accept_as_alias(int(candidate["id"]), str(onet_key))
 
     import_onet_archive(db_path, archive_path)
-    SearchTaxonomyService(db_path).relink_all_jobs()
+    _prepared_taxonomy(db_path).relink_all_jobs()
 
     assert taxonomy.resolve_skill_concepts(["ER Tool"]) == [onet_key]
     assert taxonomy.matching_skill_job_ids([onet_key]) == {job_id}
@@ -647,7 +698,7 @@ def test_onet_reimport_preserves_curated_alias_on_existing_concept(tmp_path):
 def test_workflow_returns_cardinality_question_before_evidence_planning(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     _insert_and_link(db, taxonomy, "backend", position="백엔드 개발자", job_category="백엔드 개발")
     _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
     workflow = InvestigationWorkflow(
@@ -678,9 +729,12 @@ def test_workflow_returns_cardinality_question_before_evidence_planning(tmp_path
 
 
 def test_workflow_progresses_from_generic_request_to_domain_then_family(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    taxonomy = _prepared_taxonomy(db_path)
     workflow = InvestigationWorkflow(
-        db_path=tmp_path / "jobs.db",
+        db_path=db_path,
         collect_jobs=_unexpected_collection,
+        taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(
                 RequestAnalysis(
@@ -719,7 +773,7 @@ def test_workflow_progresses_from_generic_request_to_domain_then_family(tmp_path
 
 def test_semantic_resolution_uses_selected_domain_and_promotes_confirmed_alias(tmp_path):
     db_path = tmp_path / "jobs.db"
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
     taxonomy_model = _RecordingFakeModel(
         TaxonomyResolution(
             decision="match",

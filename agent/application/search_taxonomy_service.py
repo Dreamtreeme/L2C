@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
 from agent.application.job_taxonomy_linker import JobTaxonomyLinker
-from agent.application.search_taxonomy_import_service import import_local_seed, normalize_term
+from agent.application.search_taxonomy_import_service import normalize_term
 from agent.application.search_taxonomy_constants import (
     CORE_SOURCE_KEY,
     CURATED_SOURCE_KEY,
@@ -20,7 +19,6 @@ from agent.application.search_taxonomy_utils import (
     contains_taxonomy_alias,
     taxonomy_timestamp,
 )
-from shared.db.database import Database
 from shared.schema.investigation_schema import (
     ClarificationQuestion,
     EvidenceRequirement,
@@ -37,25 +35,10 @@ DEFAULT_LOCAL_SEED = (
 class SearchTaxonomyService:
     """SQLite 사전을 기준으로 공고와 사용자 검색 범위를 연결한다."""
 
-    def __init__(self, db_path: str | Path, *, ensure_local_seed: bool = True):
+    def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
-        Database(self.db_path)
         self._question_builder = TaxonomyQuestionBuilder(self)
         self._job_linker = JobTaxonomyLinker(self.db_path)
-        if ensure_local_seed and DEFAULT_LOCAL_SEED.exists():
-            payload = json.loads(DEFAULT_LOCAL_SEED.read_text(encoding="utf-8"))
-            expected_version = str(payload.get("source", {}).get("version") or "")
-            connection = self._connect()
-            try:
-                source = connection.execute(
-                    "SELECT version FROM taxonomy_sources WHERE source_key = ?",
-                    (LOCAL_SOURCE_KEY,),
-                ).fetchone()
-            finally:
-                connection.close()
-            if source is None or str(source["version"]) != expected_version:
-                import_local_seed(self.db_path, DEFAULT_LOCAL_SEED)
-                self.relink_all_jobs()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
@@ -612,9 +595,6 @@ class SearchTaxonomyService:
     def link_job(self, job_id: int) -> dict[str, int]:
         return self._job_linker.link_job(job_id)
 
-    def restore_original_tech_stacks(self) -> int:
-        return self._job_linker.restore_original_tech_stacks()
-
     def relink_all_jobs(self) -> dict[str, int]:
         return self._job_linker.relink_all_jobs()
 
@@ -635,6 +615,5 @@ class SearchTaxonomyService:
 __all__ = [
     "DEFAULT_LOCAL_SEED",
     "LOCAL_SOURCE_KEY",
-    "OCCUPATION_DOMAIN_ROOT_KEY",
     "SearchTaxonomyService",
 ]

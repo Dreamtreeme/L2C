@@ -4,7 +4,7 @@ import pytest
 
 from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
-from agent.application.search_taxonomy_service import SearchTaxonomyService
+from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
 from agent.graph.investigation_context import (
     InvestigationModels,
 )
@@ -63,7 +63,7 @@ def test_visible_all_evidence_does_not_keep_model_invented_fixed_count(tmp_path)
     normalized = normalize_evidence_requirements(
         plan,
         investigation,
-        SearchTaxonomyService(tmp_path / "jobs.db"),
+        prepare_search_taxonomy(tmp_path / "jobs.db"),
     )
 
     assert normalized[0].minimum_count == 1
@@ -95,7 +95,7 @@ def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
     normalized = normalize_evidence_requirements(
         plan,
         investigation,
-        SearchTaxonomyService(tmp_path / "jobs.db"),
+        prepare_search_taxonomy(tmp_path / "jobs.db"),
     )
 
     assert normalized[0].minimum_count == 2
@@ -103,6 +103,7 @@ def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
 def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
+    taxonomy = prepare_search_taxonomy(db_path)
     expected_ids = {
         db.upsert(
             "https://example.com/jobs/ai",
@@ -132,7 +133,7 @@ def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
             },
         ),
     }
-    db.upsert(
+    other_site_id = db.upsert(
         "https://example.com/jobs/other-site",
         {
             "company_name": "다른회사",
@@ -141,6 +142,8 @@ def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
             "source_platform": "jobkorea",
         },
     )
+    for job_id in expected_ids | {other_site_id}:
+        taxonomy.link_job(job_id)
     requirement = EvidenceRequirement(
         requirement_id="ai-engineer",
         description="AI 엔지니어 공고",
@@ -164,6 +167,7 @@ def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
 def test_evidence_inspection_limits_candidates_to_document_scope(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
+    taxonomy = prepare_search_taxonomy(db_path)
     excluded_id = db.upsert(
         "https://example.com/jobs/old",
         {
@@ -180,6 +184,8 @@ def test_evidence_inspection_limits_candidates_to_document_scope(tmp_path):
             "source_platform": "wanted",
         },
     )
+    taxonomy.link_job(excluded_id)
+    taxonomy.link_job(included_id)
 
     report = inspect_job_evidence(
         db_path,
@@ -539,7 +545,7 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
 
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = prepare_search_taxonomy(db_path)
 
     class CollectionTool:
         def __init__(self):
@@ -643,7 +649,7 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
 
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = SearchTaxonomyService(db_path)
+    taxonomy = prepare_search_taxonomy(db_path)
 
     class CollectionTool:
         def __call__(self, _arguments):
@@ -737,6 +743,7 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
 
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
+    taxonomy = prepare_search_taxonomy(db_path)
     stale_id = db.upsert(
         "https://example.com/jobs/stale-qa-automation",
         {
@@ -745,6 +752,7 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
             "source_platform": "wanted",
         },
     )
+    taxonomy.link_job(stale_id)
 
     class CollectionTool:
         def __call__(self, _arguments):
@@ -756,6 +764,7 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
                     "source_platform": "wanted",
                 },
             )
+            taxonomy.link_job(collected_id)
             return {
                 "status": "completed",
                 "persisted_count": 1,
@@ -823,6 +832,7 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
         ),
         capabilities=_test_capabilities(),
         collect_jobs=CollectionTool(),
+        taxonomy_service=taxonomy,
     )
 
     result = workflow.run(

@@ -118,6 +118,7 @@ class InvestigationEvidenceNodes:
                 else None
             ),
             force_semantic_review=collected_web_evidence,
+            taxonomy_service=self.taxonomy_service,
         )
         if needs_semantic_evidence_validation(report):
             validation = parse_model_payload(

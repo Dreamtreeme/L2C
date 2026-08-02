@@ -9,6 +9,7 @@ from agent.application.chat_service import ChatService
 from agent.application.collection_service import create_collection_service
 from agent.application.recipe_promotion_service import auto_promotion_enabled
 from agent.application.recipe_promotion_worker import RecipePromotionWorker
+from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
 from agent.graph.investigation_workflow import InvestigationWorkflow
 from agent.graph.workflow import build_graph
 from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
@@ -30,6 +31,7 @@ class ApplicationRuntime:
         promotion_worker: RecipePromotionWorker | None = None,
     ) -> None:
         self.db_path = Path(db_path)
+        self.taxonomy_service = prepare_search_taxonomy(self.db_path)
         self.checkpoint_runtime = checkpoint_runtime or InvestigationCheckpointRuntime(
             self.db_path
         )
@@ -43,6 +45,7 @@ class ApplicationRuntime:
                 db_path=self.db_path,
                 checkpoint_runtime=self.checkpoint_runtime,
                 collect_jobs=self.collection_service.collect,
+                taxonomy_service=self.taxonomy_service,
             )
         )
         self.chat_service = chat_service or ChatService(

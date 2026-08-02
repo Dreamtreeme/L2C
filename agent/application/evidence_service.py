@@ -6,10 +6,13 @@ import sqlite3
 from collections import Counter
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from shared.schema.agent_contract import EVIDENCE_FIELDS, EvidenceDocument
 from shared.schema.investigation_schema import EvidenceRequirement, InvestigationConstraints
+
+if TYPE_CHECKING:
+    from agent.application.search_taxonomy_service import SearchTaxonomyService
 
 
 def _parse_date(value: Any) -> date | None:
@@ -83,16 +86,13 @@ def inspect_job_evidence(
     *,
     document_scope_ids: list[int] | set[int] | None = None,
     force_semantic_review: bool = False,
+    taxonomy_service: SearchTaxonomyService | None = None,
 ) -> dict[str, Any]:
     """요구사항별 표본 수, 날짜 근거, 필드 충족률을 반환한다."""
 
     from agent.application.search_taxonomy_service import SearchTaxonomyService
 
-    taxonomy = SearchTaxonomyService(db_path)
-    taxonomy_reindex = taxonomy.relink_pending_jobs(
-        limit=100,
-        max_attempts=2,
-    )
+    taxonomy = taxonomy_service or SearchTaxonomyService(db_path)
     conn = sqlite3.connect(Path(db_path))
     conn.row_factory = sqlite3.Row
     try:
@@ -249,7 +249,6 @@ def inspect_job_evidence(
     return {
         "total_db_rows": total_db_rows,
         "search_ready_db_rows": len(rows),
-        "taxonomy_reindex": taxonomy_reindex,
         "document_scope_ids": (
             sorted(document_scope)
             if document_scope is not None

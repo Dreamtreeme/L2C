@@ -564,46 +564,11 @@ class JobTaxonomyLinker:
             connection.close()
         return counts
 
-    def restore_original_tech_stacks(self) -> int:
-        """과거 색인이 덮어쓴 기술 목록을 수집 당시 원본으로 복원한다."""
-
-        connection = self._connect()
-        restored = 0
-        try:
-            with connection:
-                rows = connection.execute(
-                    "SELECT id, tech_stack, raw_json FROM jobs"
-                ).fetchall()
-                for row in rows:
-                    try:
-                        payload = json.loads(
-                            str(row["raw_json"] or "{}")
-                        )
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(payload, dict):
-                        continue
-                    original = payload.get("tech_stack")
-                    if not isinstance(original, list):
-                        continue
-                    encoded = json.dumps(original, ensure_ascii=False)
-                    if encoded == str(row["tech_stack"] or "[]"):
-                        continue
-                    connection.execute(
-                        "UPDATE jobs SET tech_stack = ? WHERE id = ?",
-                        (encoded, int(row["id"])),
-                    )
-                    restored += 1
-        finally:
-            connection.close()
-        return restored
-
     def relink_all_jobs(self) -> dict[str, int]:
         """기존 공고 전체를 현재 사전 버전으로 다시 연결한다."""
 
         self._occupation_alias_cache = None
         self._skill_alias_cache = None
-        restored_tech_stacks = self.restore_original_tech_stacks()
         connection = self._connect()
         try:
             job_ids = [
@@ -620,7 +585,6 @@ class JobTaxonomyLinker:
             "skills": 0,
             "candidate_observations": 0,
             "resolved_candidates": 0,
-            "restored_tech_stacks": restored_tech_stacks,
         }
         for job_id in job_ids:
             linked = self.link_job(job_id)
