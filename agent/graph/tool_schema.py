@@ -140,7 +140,10 @@ class scroll(_DetailObservation):
     reason: Optional[str] = Field(None, description="스크롤을 수행한 이유(reason)")
     expected_after: Optional[str] = Field(None, description="스크롤 후 정상이라면 보여야 할 화면 변화(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        "safe_read",
+        description="스크롤은 화면 내용을 더 읽는 읽기 전용 행동입니다.",
+    )
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 

@@ -263,6 +263,35 @@ def test_safe_read_does_not_require_redundant_confirmation_false():
     )
 
 
+def test_scroll_request_defaults_to_safe_read():
+    request = _action_request(
+        [
+            {
+                "name": "scroll",
+                "args": {
+                    "direction": "down",
+                    "amount": "page",
+                    "page_role": "job_detail",
+                },
+                "id": "scroll_detail",
+            }
+        ]
+    )
+
+    args = request.tool_calls[0].args
+
+    assert args["risk_level"] == "safe_read"
+    assert (
+        task_permission_reason(
+            {"action_permission_contract": {"site": "wanted"}},
+            "scroll",
+            args,
+            source="llm",
+        )
+        == ""
+    )
+
+
 def test_explicit_sensitive_recipe_step_is_not_promotion_eligible():
     from agent.recipe.promotion_policy import (
         evaluate_candidate_step_evidence,
