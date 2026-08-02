@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.graph.state import GraphState
+from agent.recipe.page_context import normalize_page_role
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,26 @@ def verify_reflex_after_state(
         return False, "recipe_after_url_mismatch", {
             "expected_url_template": expected_url,
             "current_url": current_url,
+        }
+
+    before_role = normalize_page_role(request.get("before_page_role"))
+    expected_role = normalize_page_role(expected.get("page_role"))
+    current_role = normalize_page_role(state.get("current_page_role"))
+    if (
+        before_role
+        and expected_role
+        and expected_role != before_role
+        and current_role
+    ):
+        matched = current_role == expected_role
+        return matched, (
+            "recipe_after_page_role_matched"
+            if matched
+            else "recipe_after_page_role_mismatch"
+        ), {
+            "before_page_role": before_role,
+            "expected_page_role": expected_role,
+            "current_page_role": current_role,
         }
 
     anchor_target = expected.get("anchor_target")

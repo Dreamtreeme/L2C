@@ -151,6 +151,63 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
     ]
 
 
+def test_reflex_transition_accepts_changed_page_role_with_dynamic_content():
+    from agent.graph.worker_transition_policy import verify_reflex_after_state
+
+    matched, reason, evidence = verify_reflex_after_state(
+        {
+            "before_page_role": "search_overlay",
+            "expected_after_state": {
+                "url_template": "wanted.co.kr/search?query",
+                "page_role": "search_results",
+                "screen_context_signature": {
+                    "phash": "0" * 16,
+                    "size": [1920, 1080],
+                },
+            },
+        },
+        {
+            "current_url": "https://www.wanted.co.kr/search?query=ios",
+            "current_page_role": "search",
+            "screen_signature": {
+                "phash": "f" * 16,
+                "size": [1920, 1080],
+            },
+        },
+    )
+
+    assert matched is True
+    assert reason == "recipe_after_page_role_matched"
+    assert evidence["expected_page_role"] == "search"
+
+
+def test_reflex_transition_keeps_phash_check_within_same_page_role():
+    from agent.graph.worker_transition_policy import verify_reflex_after_state
+
+    matched, reason, _ = verify_reflex_after_state(
+        {
+            "before_page_role": "job_detail",
+            "expected_after_state": {
+                "page_role": "job_detail",
+                "screen_context_signature": {
+                    "phash": "0" * 16,
+                    "size": [1920, 1080],
+                },
+            },
+        },
+        {
+            "current_page_role": "job_detail",
+            "screen_signature": {
+                "phash": "f" * 16,
+                "size": [1920, 1080],
+            },
+        },
+    )
+
+    assert matched is False
+    assert reason == "screen_context_phash_distance"
+
+
 def test_target_phash_wait_skips_capture_until_match(monkeypatch):
     class FakePerception:
         def wait_for_transition_phash_match(

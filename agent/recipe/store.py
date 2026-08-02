@@ -123,6 +123,10 @@ class RecipeStore(SQLiteStore):
             "anchor_roi_signature"
         ):
             return True
+        before_role = normalize_page_role(before.get("page_role"))
+        after_role = normalize_page_role(after.get("page_role"))
+        if before_role and after_role and before_role != after_role:
+            return True
         if dict(after.get("screen_context_signature") or {}).get("phash"):
             return True
         return bool(

@@ -434,8 +434,13 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
                 "type_in_marker",
                 "press_key",
             ],
+            "before_state": {
+                "url_template": "example.com/search-overlay",
+                "page_role": "search_overlay",
+            },
             "expected_after_state": {
                 "url_template": "example.com/jobs",
+                "page_role": "search",
                 "screen_context_signature": {
                     "phash": "f" * 16,
                     "size": [1920, 1080],
@@ -469,6 +474,10 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
         "type_in_marker",
         "press_key",
     ]
+    assert (
+        result["transition_request"]["before_page_role"]
+        == "search_overlay"
+    )
     assert (
         result["transition_request"]["expected_after_state"][
             "url_template"

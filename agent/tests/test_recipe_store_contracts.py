@@ -217,6 +217,59 @@ def test_recipe_store_keeps_cross_page_steps_in_one_path(tmp_path):
     assert len(recipes[0]["transitions"]) == 2
 
 
+def test_recipe_path_accepts_page_role_change_without_full_screen_hash(
+    tmp_path,
+):
+    from agent.recipe.path_builder import build_recipe_path
+    from agent.recipe.store import RecipeStore
+
+    before = {
+        "capture_id": "capture:0001",
+        "url_template": "example.com/search",
+        "page_role": "search_overlay",
+        "screen_context_signature": {
+            "phash": "1" * 16,
+            "size": [1920, 1080],
+        },
+    }
+    after = {
+        "capture_id": "capture:0002",
+        "url_template": "example.com/search",
+        "page_role": "search",
+    }
+    step = {
+        "seq": 1,
+        "action": "click_marker",
+        "replay_mode": "fixed",
+        "target": {"text": "검색", "center_ratio": [0.5, 0.5]},
+        "roi_signature": {
+            "phash": "2" * 16,
+            "crop_rect_ratio": [0.4, 0.4, 0.6, 0.6],
+        },
+        "before_state": before,
+    }
+    candidate = {
+        "steps": [step],
+        "payload": {
+            "transition_records": [
+                {"action_seq": 1, "after_state": after}
+            ]
+        },
+    }
+
+    path, issues = build_recipe_path(candidate, [step])
+
+    assert path is not None
+    assert issues == []
+    assert path["completion_state"]["screen_context_signature"] == {}
+    assert RecipeStore(tmp_path / "role-change.db").commit_recipe_path(
+        "example",
+        "검색",
+        path,
+        metadata={"task_category": "검색"},
+    ) == 1
+
+
 def test_recipe_store_preserves_two_paths_with_overlapping_steps(tmp_path):
     from agent.recipe.store import RecipeStore
 

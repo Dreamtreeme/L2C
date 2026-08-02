@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import get_settings
+from agent.recipe.page_context import normalize_page_role
 from agent.recipe.replay_actions import (
     TARGET_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
@@ -245,6 +246,10 @@ def _has_verifiable_identity(
     after: dict[str, Any],
 ) -> bool:
     if after.get("anchor_target") and after.get("anchor_roi_signature"):
+        return True
+    before_role = normalize_page_role(before.get("page_role"))
+    after_role = normalize_page_role(after.get("page_role"))
+    if before_role and after_role and before_role != after_role:
         return True
     if dict(after.get("screen_context_signature") or {}).get("phash"):
         return True

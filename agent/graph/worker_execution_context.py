@@ -251,6 +251,11 @@ class WorkerExecutionContext:
                 or ""
             )
         request_metadata = dict(self.action_request.metadata or {})
+        before_state = (
+            dict(request_metadata.get("before_state") or {})
+            if isinstance(request_metadata.get("before_state"), dict)
+            else {}
+        )
         recent_images = self.state.get("recent_images", []) or []
         self.transition_request = {
             "action_seq": action_sequence,
@@ -273,16 +278,9 @@ class WorkerExecutionContext:
                 request_metadata.get("expected_after_state") or {}
             ),
             "before_url_template": str(
-                (
-                    request_metadata.get("before_state")
-                    if isinstance(
-                        request_metadata.get("before_state"),
-                        dict,
-                    )
-                    else {}
-                ).get("url_template")
-                or ""
+                before_state.get("url_template") or ""
             ),
+            "before_page_role": str(before_state.get("page_role") or ""),
             "transition_actions": list(
                 request_metadata.get("transition_actions") or []
             ),
