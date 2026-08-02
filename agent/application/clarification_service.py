@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     ClarificationQuestion,
+    InvestigationConstraints,
     InvestigationPurpose,
     InvestigationRequest,
     InvestigationStatus,
@@ -200,12 +201,27 @@ def apply_clarification_answer(
         constraints.occupation_scope_required = False
         constraints.occupation_scope_mode = "unspecified"
         constraints.occupation_resolution = "unresolved"
-    elif question.field in {"skill_queries", "analysis_dimensions", "sites"}:
-        setattr(constraints, question.field, [selected_value])
-        if question.field == "skill_queries":
-            constraints.skill_concept_keys = []
-    elif hasattr(constraints, question.field):
-        setattr(constraints, question.field, selected_value)
+    elif question.field == "skill_queries":
+        constraints.skill_queries = [selected_value]
+        constraints.skill_concept_keys = []
+    elif question.field == "analysis_dimensions":
+        constraints.analysis_dimensions = [selected_value]
+    elif question.field == "sites":
+        constraints.sites = [selected_value]
+    elif question.field == "posted_from":
+        constraints.posted_from = selected_value
+    elif question.field == "posted_to":
+        constraints.posted_to = selected_value
+    elif question.field == "location":
+        constraints.location = selected_value
+    elif question.field == "experience":
+        constraints.experience = selected_value
+    elif question.field == "employment_type":
+        constraints.employment_type = selected_value
+
+    constraints = InvestigationConstraints.model_validate(
+        constraints.model_dump(mode="python")
+    )
 
     remaining_questions = [
         item

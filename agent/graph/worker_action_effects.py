@@ -28,6 +28,15 @@ from agent.runtime.worker_actions import (
 )
 
 
+def raise_for_action_failure(result: dict[str, Any]) -> None:
+    """도구가 반환값으로 보고한 실패를 실행 예외로 통일한다."""
+
+    if result.get("status") != "error":
+        return
+    message = result.get("error") or result.get("result") or "action failed"
+    raise RuntimeError(str(message))
+
+
 def execute_ui_action(
     context: WorkerExecutionContext,
     action_name: str,
@@ -44,6 +53,7 @@ def execute_ui_action(
         context.marker_bbox,
         current_url=context.current_url,
     )
+    raise_for_action_failure(result)
     screen_changed = True
     if action_name == "open_browser":
         result_payload = (
@@ -299,15 +309,15 @@ def execute_state_action(
 ) -> tuple[dict[str, Any], ActionRequest | None]:
     """상태 행동을 실행하고 카드·상세 완료 후속 효과를 반영한다."""
 
-    result, context.current_jobs = (
-        worker_execution_dispatch.dispatch_state_action(
-            action_name,
-            args,
-            context.current_jobs,
-            current_url=context.current_url,
-            state=context.state_for_dispatch(),
-        )
+    result, next_jobs = worker_execution_dispatch.dispatch_state_action(
+        action_name,
+        args,
+        context.current_jobs,
+        current_url=context.current_url,
+        state=context.state_for_dispatch(),
     )
+    raise_for_action_failure(result)
+    context.current_jobs = next_jobs
     follow_up: ActionRequest | None = None
     if action_name == "set_job_card_queue":
         follow_up = _apply_job_card_queue_result(context, result)
@@ -361,4 +371,5 @@ __all__ = [
     "activate_clicked_job_card",
     "execute_state_action",
     "execute_ui_action",
+    "raise_for_action_failure",
 ]

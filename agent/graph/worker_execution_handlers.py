@@ -10,6 +10,7 @@ from agent.graph.worker_action_effects import (
     activate_clicked_job_card,
     execute_state_action,
     execute_ui_action,
+    raise_for_action_failure,
 )
 from agent.graph.worker_action_guard import (
     guard_return_to_results,
@@ -163,6 +164,7 @@ def execute_action_request(
                 screen_changed = False
             elif action_name in TERMINAL_ACTIONS:
                 result = get_action_tools().finish_task(args["result"])
+                raise_for_action_failure(result)
                 context.is_finished = True
                 context.collected_data.append(args["result"])
                 screen_changed = False

@@ -11,6 +11,7 @@ from agent.graph import (
 )
 from agent.graph.action_request import build_action_request
 from agent.graph.workflow import (
+    route_after_start,
     route_after_recording,
     route_after_reasoning,
     route_after_reflex,
@@ -181,6 +182,30 @@ def test_worker_observation_contract_rejects_mixed_capture_state():
 
     assert current_observation_matches_capture(valid) is True
     assert current_observation_matches_capture(mixed) is False
+
+
+def test_worker_start_does_not_reuse_ocr_from_another_capture():
+    stale_observation = {
+        "ocr_complete": True,
+        "current_capture_id": "capture:2",
+        "ocr_capture_id": "capture:1",
+        "current_markers": [
+            {"id": 1, "bbox": [0, 0, 10, 10], "text": "검색"},
+        ],
+        "current_page_role": "search",
+        "recent_images": ["screen.png"],
+    }
+
+    assert route_after_start(stale_observation) == "capture"
+    assert (
+        route_after_start(
+            {
+                **stale_observation,
+                "ocr_capture_id": "capture:2",
+            }
+        )
+        == "selection"
+    )
 
 
 def test_unchanged_transition_probe_clears_ocr_capture_owner(monkeypatch):
@@ -518,6 +543,80 @@ def test_failed_ui_dispatch_is_recorded_once(monkeypatch):
     assert result["action_history"][0]["error"] == "physical input failed"
     assert len(result["execution_records"]) == 1
     assert result["error_count"] == 1
+
+
+def test_returned_ui_error_does_not_create_screen_transition(monkeypatch):
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        lambda *args, **kwargs: {
+            "action": "click_marker",
+            "status": "error",
+            "error": "physical input failed",
+        },
+    )
+    request = _request(
+        "job_card_queue",
+        [
+            {
+                "name": "click_marker",
+                "args": {"marker_id": 1},
+                "id": "click",
+            }
+        ],
+    )
+
+    result = worker_execution.execution_node(
+        _execution_state(
+            request,
+            current_markers=[
+                {"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"},
+            ],
+        )
+    )
+
+    assert result["action_history"][0]["status"] == "error"
+    assert result["error_count"] == 1
+    assert not result["transition_request"]
+
+
+def test_returned_state_error_is_recorded_as_failure(monkeypatch):
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_state_action",
+        lambda *args, **kwargs: (
+            {
+                "action": "update_extracted_info",
+                "status": "error",
+                "result": "invalid payload",
+            },
+            {"jobs": [{"company_name": "기존 회사"}]},
+        ),
+    )
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "update_extracted_info",
+                "args": {"data_json": "{}"},
+                "id": "update",
+            }
+        ],
+    )
+
+    result = worker_execution.execution_node(
+        _execution_state(
+            request,
+            extracted_jd={"jobs": [{"company_name": "원래 회사"}]},
+        )
+    )
+
+    assert result["action_history"][0]["status"] == "error"
+    assert result["action_history"][0]["error"] == "invalid payload"
+    assert result["error_count"] == 1
+    assert result["extracted_jd"] == {
+        "jobs": [{"company_name": "원래 회사"}]
+    }
 
 
 def test_stored_job_card_queue_schedules_first_card(monkeypatch):

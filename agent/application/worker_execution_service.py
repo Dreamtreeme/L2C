@@ -50,9 +50,11 @@ class WorkerExecutionService:
                 )
             finally:
                 try:
-                    self.worker_runtime.close_browser_after_run()
+                    closed = self.worker_runtime.close_browser_after_run()
+                    if not closed:
+                        logger.warning("Browser cleanup did not close a browser")
                 except Exception as exc:
-                    logger.debug("Browser cleanup skipped", error=str(exc))
+                    logger.warning("Browser cleanup failed", error=str(exc))
 
 
 def _ensure_ocr_ready(action_tools: Any) -> float:

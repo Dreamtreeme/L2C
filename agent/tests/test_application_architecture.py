@@ -496,6 +496,31 @@ def test_browser_closes_by_default(monkeypatch):
     assert result["runtime"] is runtime
 
 
+def test_browser_cleanup_reports_returned_failure():
+    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+
+    class FakeActionTools:
+        def __init__(self, _perception):
+            pass
+
+        def close_browser(self):
+            return {
+                "status": "success",
+                "result": {
+                    "closed": False,
+                    "reason": "browser_not_found",
+                },
+            }
+
+    runtime = VisionWorkerRuntime(
+        perception_factory=object,
+        action_tools_factory=FakeActionTools,
+    )
+    runtime.get_action_tools()
+
+    assert runtime.close_browser_after_run() is False
+
+
 def test_worker_execution_service_closes_browser_after_worker_failure():
     from agent.application.worker_execution_service import (
         WorkerExecutionService,

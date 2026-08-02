@@ -237,6 +237,54 @@ def test_recent_three_months_resolves_analysis_and_comparison_periods():
     assert updated.constraints.comparison_posted_to == "2026-04-13"
     assert updated.status == InvestigationStatus.CHECKING_EVIDENCE
 
+
+def test_clarification_question_rejects_unknown_constraint_field():
+    with pytest.raises(ValueError):
+        ClarificationQuestion(
+            question_id="unknown",
+            field="arbitrary_runtime_field",
+            question="임의 필드를 바꿀까요?",
+            options=[
+                ClarificationOption(
+                    option_id="yes",
+                    label="예",
+                    value="yes",
+                )
+            ],
+        )
+
+
+def test_clarification_answer_revalidates_updated_constraints():
+    investigation = InvestigationRequest(
+        investigation_id="invalid-count",
+        original_query="공고를 찾아줘",
+        status=InvestigationStatus.AWAITING_CLARIFICATION,
+        clarification_questions=[
+            ClarificationQuestion(
+                question_id="target_count",
+                field="target_count",
+                question="몇 개를 수집할까요?",
+                options=[
+                    ClarificationOption(
+                        option_id="too_many",
+                        label="101개",
+                        value="101",
+                    )
+                ],
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError):
+        apply_clarification_answer(
+            investigation,
+            ClarificationAnswer(
+                question_id="target_count",
+                selected_option_id="too_many",
+            ),
+        )
+
+
 def test_evidence_inspection_rejects_rows_without_verified_posted_date(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)

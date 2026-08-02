@@ -186,6 +186,19 @@ class VisionWorkerRuntime:
             logger.info("Browser cleanup skipped", reason="action_tools_not_initialized")
             return False
         result = action_tools.close_browser()
+        if result.get("status") != "success":
+            logger.warning(
+                "Browser cleanup failed",
+                error=result.get("error") or result.get("result"),
+            )
+            return False
+        payload = result.get("result")
+        if isinstance(payload, dict) and payload.get("closed") is False:
+            logger.warning(
+                "Browser cleanup incomplete",
+                reason=payload.get("reason") or "browser_not_closed",
+            )
+            return False
         logger.info("Browser cleanup completed", result=result)
         return True
 
@@ -201,9 +214,14 @@ class VisionWorkerRuntime:
                 bound_window_id = getattr(perception, "_browser_window_id", None)
                 if action_tools is not None and bound_window_id:
                     try:
-                        action_tools.close_browser()
+                        result = action_tools.close_browser()
+                        if result.get("status") != "success":
+                            logger.warning(
+                                "Browser shutdown failed",
+                                error=result.get("error") or result.get("result"),
+                            )
                     except Exception as exc:
-                        logger.debug("Browser shutdown skipped", error=str(exc))
+                        logger.warning("Browser shutdown failed", error=str(exc))
                 close_perception = getattr(perception, "close", None)
                 if callable(close_perception):
                     close_perception()

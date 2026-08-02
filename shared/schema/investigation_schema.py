@@ -61,11 +61,32 @@ class ClarificationOption(BaseModel):
     description: str = ""
 
 
+ClarificationField = Literal[
+    "recent_period",
+    "comparison_period",
+    "site_scope",
+    "target_count",
+    "occupation_domain_concept_keys",
+    "occupation_concept_keys",
+    "occupation_query",
+    "skill_queries",
+    "analysis_dimensions",
+    "sites",
+    "posted_from",
+    "posted_to",
+    "location",
+    "experience",
+    "employment_type",
+]
+
+
 class ClarificationQuestion(BaseModel):
     """한 가지 의미 단위를 확정하는 객관식 질문."""
 
+    model_config = ConfigDict(extra="forbid")
+
     question_id: str = Field(min_length=1)
-    field: str = Field(min_length=1)
+    field: ClarificationField
     question: str = Field(min_length=1)
     options: list[ClarificationOption] = Field(default_factory=list)
     allow_custom: bool = True
@@ -349,6 +370,7 @@ class EvidenceValidation(BaseModel):
 
 __all__ = [
     "ClarificationAnswer",
+    "ClarificationField",
     "ClarificationOption",
     "ClarificationQuestion",
     "EvidencePolicy",

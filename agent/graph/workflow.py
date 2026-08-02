@@ -28,15 +28,11 @@ from agent.utils.logger import logger
 
 
 def route_after_start(state: GraphState) -> str:
-    """기존 관찰이 있으면 재사용하고, 없으면 첫 화면을 캡처한다."""
+    """현재 캡처에 속한 관찰만 재사용하고 나머지는 다시 캡처한다."""
 
     if state.get("low_information_screen"):
         return "selection"
-    if current_observation_matches_capture(state) or (
-        state.get("current_markers")
-        and state.get("current_page_role")
-        and state.get("recent_images")
-    ):
+    if current_observation_matches_capture(state):
         return "selection"
     return "capture"
 
