@@ -16,7 +16,6 @@ COMPONENT_STAGE = {
     "graph:transition": "transition",
     "graph:collection": "collection",
     "graph:selection": "selection",
-    "graph:recording": "recording",
     "graph:reasoning": "reasoning",
     "graph:reflex": "reflex",
     "graph:execution": "execution",

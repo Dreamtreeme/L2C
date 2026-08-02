@@ -9,6 +9,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.config import get_settings
+from agent.graph.action_request import action_event_results
 from agent.graph.state import GraphState
 from agent.graph.worker_execution_policy import compact_action_args
 from agent.graph.worker_state import (
@@ -423,7 +424,9 @@ def build_reasoning_messages(
     extracted_jd = state.get("extracted_jd", {})
     ui_context = state.get("ui_context", "")
     current_url = state.get("current_url", "")
-    action_history = state.get("action_history", [])
+    action_history = action_event_results(
+        state.get("action_events", []) or []
+    )
     recipe_params = dict(state.get("recipe_params", {}) or {})
     target_count = int(recipe_params.get("target_count") or 0)
     collected_count = job_count(extracted_jd)

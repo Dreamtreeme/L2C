@@ -8,7 +8,7 @@ from agent.graph import (
     worker_selection,
     worker_transition,
 )
-from agent.graph.worker_reflex import reflex_node
+from agent.runtime.reflex_runtime import attempt_reflex_replay as reflex_node
 from agent.graph.worker_execution_policy import merge_extracted_info
 from agent.runtime.job_collection import job_items
 from agent.runtime.job_card_queue import replay_job_card_after_return
@@ -96,10 +96,13 @@ def test_card_queue_identity_does_not_overwrite_detail_ocr_evidence():
     from agent.runtime.job_field_contract import merge_job_detail_coverage
 
     state = {
-        "active_job_card": {
-            "company": "잘못 연결된 회사",
-            "title": "잘못 연결된 직무",
-        }
+        "job_card_queue": [
+            {
+                "status": "active",
+                "company": "잘못 연결된 회사",
+                "title": "잘못 연결된 직무",
+            }
+        ]
     }
     current_url = "https://www.wanted.co.kr/wd/365869"
     coverage = merge_job_detail_coverage(
@@ -160,10 +163,13 @@ def test_detail_extraction_does_not_use_card_identity_as_fallback(
     result = (
         detail_extraction_service.extract_job_from_job_detail_buffer(
             {
-                "active_job_card": {
-                    "company": "글로벌머니익스프레스",
-                    "title": "[텀블벅] iOS 개발자(1~3년)",
-                },
+                "job_card_queue": [
+                    {
+                        "status": "active",
+                        "company": "글로벌머니익스프레스",
+                        "title": "[텀블벅] iOS 개발자(1~3년)",
+                    }
+                ],
                 "job_detail_coverage": {
                     "url": current_url,
                     "field_evidence": {

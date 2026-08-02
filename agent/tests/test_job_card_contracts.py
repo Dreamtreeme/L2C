@@ -27,7 +27,6 @@ def _state(image_path: Path) -> dict:
         ],
         "recipe_params": {"query": "iOS 개발자", "target_count": 2},
         "job_card_queue": [],
-        "active_job_card": {},
         "extracted_jd": {},
     }
 
@@ -176,7 +175,7 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
         ),
     )
 
-    result = worker_reasoning.reasoning_node({"action_history": []})
+    result = worker_reasoning.reasoning_node({"action_events": []})
 
     assert result["pending_action"].tool_calls[0].name == "scroll"
     assert result["reflex_trace"]["source"] == "reasoning"

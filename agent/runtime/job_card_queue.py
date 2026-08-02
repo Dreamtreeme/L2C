@@ -154,7 +154,7 @@ def normalize_job_card_queue(args: dict, state: GraphState, current_url: str) ->
     memory = {
         "url": current_url or state.get("current_url", "") or "",
         "screen_signature": signature,
-        "screenshot": str((state.get("recent_images") or [""])[-1] or "") if state.get("recent_images") else "",
+        "screenshot": str(state.get("current_screenshot") or ""),
         "marked_image": state.get("marked_image", "") or "",
     }
     previous_return_action = dict(
@@ -220,16 +220,33 @@ def same_job_card(item: dict, args: dict) -> bool:
     return marker_id is not None and str(marker_id) == str(item.get("source_marker_id"))
 
 
-def activate_job_card(queue: list[dict], args: dict) -> tuple[list[dict], dict]:
+def active_job_card(queue: list[dict]) -> dict:
+    """큐에서 현재 상세 화면과 연결된 활성 카드 하나를 반환한다."""
+
+    return next(
+        (
+            dict(item)
+            for item in queue or []
+            if isinstance(item, dict) and item.get("status") == "active"
+        ),
+        {},
+    )
+
+
+def activate_job_card(queue: list[dict], args: dict) -> list[dict]:
     updated = []
-    active: dict = {}
+    activated = False
     for raw in queue or []:
         item = dict(raw)
-        if not active and item.get("status") == "pending" and same_job_card(item, args):
+        if (
+            not activated
+            and item.get("status") == "pending"
+            and same_job_card(item, args)
+        ):
             item["status"] = "active"
-            active = dict(item)
+            activated = True
         updated.append(item)
-    return updated, active
+    return updated
 
 
 def job_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
@@ -249,9 +266,10 @@ def job_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
     )
 
 
-def complete_active_job_card(queue: list[dict], active_card: dict) -> tuple[list[dict], dict]:
+def complete_active_job_card(queue: list[dict]) -> list[dict]:
+    active_card = active_job_card(queue)
     if not active_card:
-        return queue, {}
+        return queue
     active_id = str(active_card.get("queue_id") or "")
     updated = []
     for raw in queue or []:
@@ -259,21 +277,21 @@ def complete_active_job_card(queue: list[dict], active_card: dict) -> tuple[list
         if active_id and str(item.get("queue_id") or "") == active_id:
             item["status"] = "done"
         updated.append(item)
-    return updated, {}
+    return updated
 
 
 def skip_active_job_card(
     queue: list[dict],
-    active_card: dict,
     *,
     reason: str,
     url: str,
     job_id: int | None = None,
-) -> tuple[list[dict], dict]:
+) -> list[dict]:
     """이미 수집한 상세 URL의 활성 카드를 DB 근거가 확인된 상태로 끝낸다."""
 
+    active_card = active_job_card(queue)
     if not active_card:
-        return queue, {}
+        return queue
     active_id = str(active_card.get("queue_id") or "")
     updated = []
     for raw in queue or []:
@@ -283,7 +301,7 @@ def skip_active_job_card(
             if job_id is not None:
                 item["job_id"] = int(job_id)
         updated.append(item)
-    return updated, {}
+    return updated
 
 
 def job_results_page_matches(
@@ -438,7 +456,7 @@ def replay_job_card_after_return(
     pending = pending_job_cards(queue)
     if not pending:
         return None, markers, {"reason": "queue_empty"}
-    active_card = dict(state.get("active_job_card", {}) or {})
+    active_card = active_job_card(queue)
     if active_card:
         return None, markers, {
             "reason": "active_card_not_completed",
@@ -492,6 +510,7 @@ def replay_job_card_after_return(
 
 
 __all__ = [
+    "active_job_card",
     "resolved_job_card_count",
     "complete_active_job_card",
     "activate_job_card",

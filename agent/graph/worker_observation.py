@@ -8,8 +8,20 @@ from typing import Any
 from agent.config import get_settings
 
 from agent.graph.state import GraphState
-from agent.graph.worker_observation_context import build_ui_context
-from agent.runtime.detail_runtime import build_detail_lightweight_marked_image
+from agent.graph.worker_state import job_detail_key_from_state
+from agent.runtime.detail_runtime import (
+    build_detail_lightweight_marked_image,
+    build_detail_section_context,
+    detail_context_matches,
+    is_icon_marker,
+    marker_prompt_rank,
+    update_job_detail_buffer,
+)
+from agent.runtime.job_field_contract import (
+    detail_coverage_matches,
+    merge_job_detail_coverage,
+)
+from agent.runtime.site_context import is_job_detail_context
 from agent.runtime.transition_runtime import raw_screen_phash_signature
 from agent.utils.logger import logger
 
@@ -22,6 +34,62 @@ _WAIT_ACTIONS = {
     "close_current_tab",
     "switch_tab",
 }
+
+
+def _build_ui_context(
+    markers: list[dict[str, Any]],
+    current_url: str,
+    page_role: str,
+) -> str:
+    """상세 화면은 섹션을, 다른 화면은 제한된 마커 목록을 만든다."""
+
+    marker_texts = [
+        marker.get("text")
+        for marker in markers
+        if isinstance(marker, dict)
+    ]
+    if current_url and is_job_detail_context(
+        current_url,
+        page_role=page_role,
+        marker_texts=marker_texts,
+    ):
+        section_context = build_detail_section_context(markers)
+        if section_context:
+            return section_context
+
+    text_markers = sorted(
+        [marker for marker in markers if not is_icon_marker(marker)],
+        key=marker_prompt_rank,
+    )
+    icon_markers = sorted(
+        [marker for marker in markers if is_icon_marker(marker)],
+        key=marker_prompt_rank,
+    )
+    settings = get_settings().vision
+    shown_text = text_markers[: settings.ui_text_marker_limit]
+    shown_icons = icon_markers[: settings.ui_icon_marker_limit]
+    parts: list[str] = []
+    if shown_text:
+        parts.append(
+            "식별된 텍스트 요소:\n"
+            + "\n".join(
+                f"[id: {marker['id']}] {marker.get('text', '')}"
+                for marker in shown_text
+            )
+        )
+    if shown_icons:
+        parts.append(
+            "기타 아이콘/버튼 마커 ID 목록: "
+            f"{[marker['id'] for marker in shown_icons]}"
+        )
+    omitted_text = len(text_markers) - len(shown_text)
+    omitted_icons = len(icon_markers) - len(shown_icons)
+    if omitted_text or omitted_icons:
+        parts.append(
+            "프롬프트 경량화를 위해 생략된 마커: "
+            f"텍스트 {omitted_text}개, 아이콘 {omitted_icons}개"
+        )
+    return "\n".join(parts) if parts else "발견된 UI 마커 없음"
 
 
 def _perception_engine() -> Any:
@@ -147,7 +215,6 @@ def capture_node(state: GraphState) -> dict[str, Any]:
         "raw_screen_signature": raw_signature,
         "analysis_mode": "",
         "ocr_complete": False,
-        "recent_images": [str(image_path)],
         "current_url": current_url,
         "current_url_stale": current_url_stale,
         "low_information_screen": low_information,
@@ -197,7 +264,7 @@ def ocr_node(state: GraphState) -> dict[str, Any]:
 
     current_url = str(state.get("current_url") or "")
     page_role = infer_current_page_role(current_url, markers)
-    ui_context = build_ui_context(
+    ui_context = _build_ui_context(
         markers,
         current_url=current_url,
         page_role=page_role,
@@ -217,7 +284,7 @@ def ocr_node(state: GraphState) -> dict[str, Any]:
         marker_count=len(markers),
         analysis_mode=analysis_mode,
     )
-    return {
+    observation = {
         "marked_image": marked_image,
         "current_markers": markers,
         "ui_context": ui_context,
@@ -227,6 +294,59 @@ def ocr_node(state: GraphState) -> dict[str, Any]:
         "ocr_complete": True,
         "ocr_capture_id": str(state.get("current_capture_id") or ""),
         "low_information_screen": False,
+    }
+    return {
+        **observation,
+        **_collect_job_detail_observation({**state, **observation}),
+    }
+
+
+def _collect_job_detail_observation(state: GraphState) -> dict[str, Any]:
+    """현재 OCR 결과를 상세 공고 판독 상태에 한 번 반영한다."""
+
+    if not state.get("ocr_complete"):
+        return {}
+    current_url = str(state.get("current_url") or "")
+    detail_key = job_detail_key_from_state(state)
+    detail_buffer = update_job_detail_buffer(
+        dict(state.get("job_detail_buffer", {}) or {}),
+        list(state.get("current_markers") or []),
+        current_url,
+        str(state.get("current_screenshot") or ""),
+        page_role=str(state.get("current_page_role") or ""),
+        detail_key=detail_key,
+    )
+    detail_followup = dict(state.get("job_detail_followup", {}) or {})
+    if detail_followup and not detail_context_matches(
+        detail_followup,
+        current_url,
+        detail_key,
+    ):
+        detail_followup = {}
+    return_to_results = dict(state.get("return_to_job_results", {}) or {})
+    if return_to_results and return_to_results.get("url") != current_url:
+        return_to_results = {}
+    detail_coverage = dict(state.get("job_detail_coverage", {}) or {})
+    if (
+        detail_context_matches(detail_buffer, current_url, detail_key)
+        and not detail_coverage_matches(
+            detail_coverage,
+            current_url,
+            detail_key,
+        )
+    ):
+        detail_coverage = merge_job_detail_coverage(
+            {},
+            {},
+            state=state,
+            current_url=current_url,
+            detail_key=detail_key,
+        )
+    return {
+        "job_detail_buffer": detail_buffer,
+        "job_detail_coverage": detail_coverage,
+        "job_detail_followup": detail_followup,
+        "return_to_job_results": return_to_results,
     }
 
 

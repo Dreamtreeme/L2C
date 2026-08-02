@@ -9,21 +9,24 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.config import get_settings
 from agent.graph.worker_reasoning import reasoning_node
-from agent.graph.worker_reflex import reflex_node
 from agent.graph.state import GraphState
-from agent.graph.worker_collection import collection_node
-from agent.graph.worker_observation import capture_node, ocr_node
-from agent.graph.worker_recording import recording_node
+from agent.graph.worker_observation import (
+    capture_node,
+    ocr_node,
+)
 from agent.graph.worker_selection import selection_node
 from agent.graph.worker_transition import transition_node
 from agent.graph.worker_execution import execution_node
-from agent.graph.worker_state import return_to_job_results_for_url
-from agent.graph.worker_state_contract import current_observation_matches_capture
+from agent.graph.worker_state import (
+    current_observation_matches_capture,
+    return_to_job_results_for_url,
+)
 from agent.observability.graph_events import graph_step
 from agent.observability.reflex_paths import (
     reflex_selection_observation,
     reflex_transition_observation,
 )
+from agent.runtime.reflex_runtime import attempt_reflex_replay
 from agent.utils.logger import logger
 
 
@@ -35,16 +38,6 @@ def route_after_start(state: GraphState) -> str:
     if current_observation_matches_capture(state):
         return "selection"
     return "capture"
-
-
-def route_after_transition(state: GraphState) -> str:
-    """OCR 완료 관찰만 수집 상태에 반영하고 나머지는 바로 선택한다."""
-
-    return (
-        "collection"
-        if current_observation_matches_capture(state)
-        else "selection"
-    )
 
 
 def route_after_selection(state: GraphState) -> str:
@@ -106,7 +99,7 @@ def route_after_reasoning(state: GraphState) -> str:
     return "execution"
 
 
-def route_after_recording(state: GraphState) -> str:
+def route_after_execution(state: GraphState) -> str:
     """원자 실행 뒤 종료, 후속 정책, 새 관찰 또는 새 판단을 선택한다."""
 
     if state.get("is_finished", False):
@@ -176,12 +169,10 @@ def build_graph(*, worker_runtime=None):
         "capture": capture_node,
         "transition": transition_node,
         "ocr": ocr_node,
-        "collection": collection_node,
         "selection": selection_node,
-        "reflex": reflex_node,
+        "reflex": attempt_reflex_replay,
         "reasoning": reasoning_node,
         "execution": execution_node,
-        "recording": recording_node,
     }
     for name, node in nodes.items():
         workflow.add_node(name, bind(_instrument_node(name, node)))
@@ -192,13 +183,8 @@ def build_graph(*, worker_runtime=None):
         {"selection": "selection", "capture": "capture"},
     )
     workflow.add_edge("capture", "transition")
-    workflow.add_conditional_edges(
-        "transition",
-        route_after_transition,
-        {"collection": "collection", "selection": "selection"},
-    )
+    workflow.add_edge("transition", "selection")
     workflow.add_edge("ocr", "transition")
-    workflow.add_edge("collection", "selection")
     workflow.add_conditional_edges(
         "selection",
         route_after_selection,
@@ -220,10 +206,9 @@ def build_graph(*, worker_runtime=None):
         route_after_reasoning,
         {"execution": "execution", "capture": "capture"},
     )
-    workflow.add_edge("execution", "recording")
     workflow.add_conditional_edges(
-        "recording",
-        route_after_recording,
+        "execution",
+        route_after_execution,
         {
             "execution": "execution",
             "capture": "capture",
@@ -238,10 +223,9 @@ def build_graph(*, worker_runtime=None):
 
 __all__ = [
     "build_graph",
-    "route_after_recording",
+    "route_after_execution",
     "route_after_reasoning",
     "route_after_reflex",
     "route_after_selection",
     "route_after_start",
-    "route_after_transition",
 ]

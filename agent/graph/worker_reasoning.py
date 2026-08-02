@@ -8,6 +8,8 @@ from typing import Any
 
 from agent.graph.action_request import (
     ActionRequest,
+    action_event_results,
+    action_event_transitions,
     action_request_from_model_response,
 )
 from agent.graph.state import GraphState
@@ -55,7 +57,9 @@ def _loop_warning(
 ) -> tuple[str, int]:
     """최근 행동과 화면 전환 기록에서 반복 경고를 만든다."""
 
-    action_history = state.get("action_history", [])
+    action_history = action_event_results(
+        state.get("action_events", []) or []
+    )
     warning = ""
     error_increment = 0
     if _is_repeating(action_history, 3):
@@ -73,7 +77,7 @@ def _loop_warning(
         )
 
     transition_cycle = detect_two_screen_transition_cycle(
-        list(state.get("transition_records", []) or [])
+        action_event_transitions(state.get("action_events", []) or [])
     )
     if transition_cycle.get("detected"):
         logger.warning(

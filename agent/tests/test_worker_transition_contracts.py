@@ -5,8 +5,9 @@ from agent.graph import (
     worker_selection,
     worker_transition,
 )
+from agent.graph.action_request import action_event_transitions
 from agent.graph.workflow import route_after_selection
-from agent.graph.worker_reflex import reflex_node
+from agent.runtime.reflex_runtime import attempt_reflex_replay as reflex_node
 from agent.runtime.job_card_queue import replay_job_card_after_return
 
 
@@ -36,6 +37,15 @@ def test_queue_phash_match_records_return_transition(monkeypatch):
                     "args": {"page_role": "job_detail"},
                 },
             },
+            "action_events": [
+                {
+                    "seq": 9,
+                    "result": {
+                        "action": "go_back",
+                        "status": "success",
+                    },
+                }
+            ],
             "job_card_queue": [
                 {
                     "queue_id": "card-2",
@@ -52,12 +62,11 @@ def test_queue_phash_match_records_return_transition(monkeypatch):
                     "anchors": ["검색 결과", "두 번째 iOS 개발자"],
                 },
             },
-            "active_job_card": {},
         }
     )
 
     assert result["pending_action"].source == "job_card_queue"
-    record = result["transition_records"][0]
+    record = action_event_transitions(result["action_events"])[0]
     assert record["action_seq"] == 9
     assert record["action"] == "go_back"
     assert record["status"] == "ready"
@@ -108,7 +117,6 @@ def test_queue_phash_mismatch_falls_through_to_ocr():
                 "anchors": ["검색 결과", "두 번째 iOS 개발자"],
             },
         },
-        "active_job_card": {},
     }
 
     result = worker_selection.selection_node(state)
@@ -148,11 +156,18 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
     ]
 
 
-def test_reflex_transition_accepts_changed_page_role_with_dynamic_content():
-    from agent.graph.worker_transition_policy import verify_reflex_after_state
-
-    matched, reason, evidence = verify_reflex_after_state(
+def test_reflex_transition_accepts_changed_page_role_with_dynamic_content(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (True, 0.5),
+    )
+    result = worker_transition.transition_node(
         {
+            "transition_request": {
+                "source": "reflex",
             "before_page_role": "search_overlay",
             "expected_after_state": {
                 "url_template": "wanted.co.kr/search?query",
@@ -162,27 +177,35 @@ def test_reflex_transition_accepts_changed_page_role_with_dynamic_content():
                     "size": [1920, 1080],
                 },
             },
-        },
-        {
+            },
             "current_url": "https://www.wanted.co.kr/search?query=ios",
             "current_page_role": "search",
+            "current_markers": [{"id": 1, "text": "검색 결과"}],
             "screen_signature": {
                 "phash": "f" * 16,
                 "size": [1920, 1080],
             },
+            "ocr_complete": True,
         },
     )
 
-    assert matched is True
-    assert reason == "recipe_after_page_role_matched"
+    transition = result["transition_result"]
+    evidence = transition["after_state_match"]
+    assert transition["status"] == "ready"
+    assert transition["reason"] == "recipe_after_page_role_matched"
     assert evidence["expected_page_role"] == "search"
 
 
-def test_reflex_transition_keeps_phash_check_within_same_page_role():
-    from agent.graph.worker_transition_policy import verify_reflex_after_state
-
-    matched, reason, _ = verify_reflex_after_state(
+def test_reflex_transition_keeps_phash_check_within_same_page_role(monkeypatch):
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (True, 0.5),
+    )
+    result = worker_transition.transition_node(
         {
+            "transition_request": {
+                "source": "reflex",
             "before_page_role": "job_detail",
             "expected_after_state": {
                 "page_role": "job_detail",
@@ -191,15 +214,17 @@ def test_reflex_transition_keeps_phash_check_within_same_page_role():
                     "size": [1920, 1080],
                 },
             },
-        },
-        {
+            },
             "current_page_role": "job_detail",
+            "current_markers": [{"id": 1, "text": "상세"}],
             "screen_signature": {
                 "phash": "f" * 16,
                 "size": [1920, 1080],
             },
+            "ocr_complete": True,
         },
     )
 
-    assert matched is False
-    assert reason == "screen_context_phash_distance"
+    transition = result["transition_result"]
+    assert transition["status"] == "unknown"
+    assert transition["reason"] == "screen_context_phash_distance"

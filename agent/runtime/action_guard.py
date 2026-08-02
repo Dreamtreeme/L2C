@@ -31,8 +31,7 @@ def _target_roi_signature(
     marker_id: int | None,
 ) -> dict[str, Any]:
     marker = _marker_for_id(state, marker_id)
-    recent_images = state.get("recent_images", []) or []
-    image_path = str(recent_images[-1]) if recent_images else ""
+    image_path = str(state.get("current_screenshot") or "")
     screen_size = list((state.get("screen_signature") or {}).get("size") or [])
     if marker is None or not image_path or len(screen_size) != 2:
         return {}

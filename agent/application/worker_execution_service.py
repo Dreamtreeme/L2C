@@ -12,6 +12,7 @@ from langgraph.errors import GraphRecursionError
 
 from agent.application.run_context import emit_run_event, measure_step
 from agent.application.run_contracts import RunPhase
+from agent.graph.action_request import build_action_event
 from agent.observability.graph_events import forward_graph_event
 from agent.utils.logger import logger
 
@@ -207,14 +208,17 @@ def prepare_worker_start_screen(
         prepared = dict(initial_state)
         prepared["current_url"] = start_url
         prepared["current_url_stale"] = True
-        prepared["action_history"] = [
-            {
-                "action": "open_browser",
-                "status": result.get("status", "unknown"),
-                "result": result.get("result"),
-                "args": {"url": start_url, "site": site_slug},
-                "screen_change_expected": True,
-            }
+        prepared["action_events"] = [
+            build_action_event(
+                0,
+                {
+                    "action": "open_browser",
+                    "status": result.get("status", "unknown"),
+                    "result": result.get("result"),
+                    "args": {"url": start_url, "site": site_slug},
+                    "screen_change_expected": True,
+                },
+            )
         ]
         logger.info("Worker resources prepared", start_url=start_url)
         return prepared

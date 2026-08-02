@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agent.application.detail_extraction_service import (
@@ -12,10 +13,6 @@ from agent.graph.state import GraphState
 from agent.graph.worker_execution_policy import (
     merge_extracted_info,
     should_skip_job_update_without_detail_url,
-)
-from agent.graph.worker_state_action_result import (
-    StateActionOutcome,
-    StateActionUpdate,
 )
 from agent.graph.worker_resources import get_action_tools
 from agent.graph.worker_state import job_detail_key_from_state
@@ -27,8 +24,32 @@ from agent.runtime.job_field_contract import (
     required_fields_from_state,
 )
 from agent.runtime.job_identity import source_card_key
-from agent.runtime.job_card_queue import normalize_job_card_queue
+from agent.runtime.job_card_queue import (
+    active_job_card,
+    normalize_job_card_queue,
+)
 from agent.utils.job_fields import missing_job_fields
+
+
+@dataclass(frozen=True)
+class StateActionUpdate:
+    """상태 행동이 선택적으로 갱신하는 작업자 필드."""
+
+    job_card_queue: list[dict[str, Any]] | None = None
+    job_results_memory: dict[str, Any] | None = None
+    job_results_availability: dict[str, Any] | None = None
+    job_detail_buffer: dict[str, Any] | None = None
+    job_detail_coverage: dict[str, Any] | None = None
+    job_detail_followup: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class StateActionOutcome:
+    """상태 행동의 결과와 작업자 상태 변경."""
+
+    result: dict[str, Any]
+    jobs: dict[str, Any]
+    state_update: StateActionUpdate = field(default_factory=StateActionUpdate)
 
 
 def dispatch_ui_action(
@@ -82,7 +103,9 @@ def _attach_active_card_identity(
 ) -> dict[str, Any]:
     """상세 화면에서 추출한 공고에 목록 카드 식별 정보를 붙인다."""
 
-    active_card = dict(state.get("active_job_card", {}) or {})
+    active_card = active_job_card(
+        list(state.get("job_card_queue", []) or [])
+    )
     company = str(active_card.get("company") or "").strip()
     title = str(active_card.get("title") or "").strip()
     card_key = source_card_key(current_url, company, title)
@@ -487,4 +510,9 @@ def dispatch_state_action(
     raise ValueError(f"Unknown state action: {action_name}")
 
 
-__all__ = ["dispatch_state_action", "dispatch_ui_action"]
+__all__ = [
+    "StateActionOutcome",
+    "StateActionUpdate",
+    "dispatch_state_action",
+    "dispatch_ui_action",
+]

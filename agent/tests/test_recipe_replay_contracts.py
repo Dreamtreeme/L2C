@@ -6,7 +6,7 @@ from agent.graph import (
     worker_selection,
     worker_transition,
 )
-from agent.graph.worker_reflex import reflex_node
+from agent.runtime.reflex_runtime import attempt_reflex_replay as reflex_node
 from agent.runtime.job_card_queue import replay_job_card_after_return
 
 
@@ -95,7 +95,7 @@ def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
             "current_url": "https://www.wanted.co.kr",
             "current_page_role": "home",
             "screen_signature": {"size": [200, 120]},
-            "recent_images": [screenshot],
+            "current_screenshot": str(screenshot),
             "current_markers": [
                 {"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"},
             ],
@@ -247,7 +247,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
             "current_url": "https://www.saramin.co.kr/zf_user/",
             "current_page_role": "home",
             "screen_signature": input_context,
-            "recent_images": [input_screen],
+            "current_screenshot": str(input_screen),
             "current_markers": [
                 {
                     "id": 7,
@@ -323,7 +323,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
             "current_url": "https://www.saramin.co.kr/zf_user/",
             "current_page_role": "search_results",
             "screen_signature": result_context,
-            "recent_images": [result_screen],
+            "current_screenshot": str(result_screen),
             "current_markers": [
                 {
                     "id": 8,

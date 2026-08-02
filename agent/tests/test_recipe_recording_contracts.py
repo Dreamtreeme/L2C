@@ -6,7 +6,8 @@ from agent.graph import (
     worker_selection,
     worker_transition,
 )
-from agent.graph.worker_reflex import reflex_node
+from agent.graph.action_request import action_event_transitions
+from agent.runtime.reflex_runtime import attempt_reflex_replay as reflex_node
 from agent.runtime.job_card_queue import replay_job_card_after_return
 
 
@@ -34,7 +35,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
             "current_url": "https://www.wanted.co.kr",
             "current_page_role": "home",
             "screen_signature": {"phash": "f" * 16, "size": [200, 200]},
-            "recent_images": [saved],
+            "current_screenshot": str(saved),
             "current_markers": [
                 {"id": 1, "bbox": [150, 20, 170, 40], "text": "검색"},
             ],
@@ -249,6 +250,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                 "markers": [{"id": 4, "bbox": [10, 20, 30, 40]}],
             },
             "transition_request": {
+                "action_seq": 0,
                 "action": "click_marker",
                 "from_capture_id": "worker-test:capture:0002",
                 "source": "autonomous",
@@ -256,8 +258,17 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                 "before_screenshot": str(screenshot),
                 "started_at": time.time(),
             },
+            "action_events": [
+                {
+                    "seq": 0,
+                    "result": {
+                        "action": "click_marker",
+                        "status": "success",
+                    },
+                }
+            ],
         }
     )
 
     assert stale.get("ocr_complete") is None
-    assert stale["transition_records"][0]["marker_count"] == 0
+    assert action_event_transitions(stale["action_events"])[0]["marker_count"] == 0

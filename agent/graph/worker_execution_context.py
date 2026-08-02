@@ -6,7 +6,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.graph.action_request import ActionRequest, ActionResult
+from agent.graph.action_request import (
+    ActionEvent,
+    ActionRequest,
+    build_action_event,
+)
 from agent.graph.state import GraphState
 from agent.graph.worker_execution_policy import (
     compact_action_args,
@@ -25,12 +29,11 @@ class WorkerExecutionContext:
 
     state: GraphState
     action_request: ActionRequest
-    prior_actions: list[dict[str, Any]]
+    prior_events: list[ActionEvent]
     new_actions: list[dict[str, Any]] = field(default_factory=list)
-    execution_records: list[dict[str, Any]] = field(default_factory=list)
+    new_events: list[ActionEvent] = field(default_factory=list)
     current_jobs: dict[str, Any] = field(default_factory=dict)
     is_finished: bool = False
-    collected_data: list[Any] = field(default_factory=list)
     error_count: int = 0
     current_url: str = ""
     current_url_stale: bool = True
@@ -39,11 +42,9 @@ class WorkerExecutionContext:
     current_markers: list[dict[str, Any]] = field(default_factory=list)
     ui_context: str = ""
     marked_image: str = ""
-    recent_images_update: list[str] = field(default_factory=list)
     job_card_queue: list[dict[str, Any]] = field(default_factory=list)
     job_results_memory: dict[str, Any] = field(default_factory=dict)
     job_results_availability: dict[str, Any] = field(default_factory=dict)
-    active_job_card: dict[str, Any] = field(default_factory=dict)
     job_detail_buffer: dict[str, Any] = field(default_factory=dict)
     job_detail_coverage: dict[str, Any] = field(default_factory=dict)
     job_detail_followup: dict[str, Any] = field(default_factory=dict)
@@ -63,10 +64,13 @@ class WorkerExecutionContext:
         return cls(
             state=state,
             action_request=action_request,
-            prior_actions=list(state.get("action_history", []) or []),
+            prior_events=[
+                dict(event)
+                for event in (state.get("action_events", []) or [])
+                if isinstance(event, dict)
+            ],
             current_jobs=dict(state.get("extracted_jd", {}) or {}),
             is_finished=bool(state.get("is_finished", False)),
-            collected_data=list(state.get("collected_data", []) or []),
             error_count=int(state.get("error_count", 0) or 0),
             current_url=str(state.get("current_url") or ""),
             current_url_stale=bool(state.get("current_url_stale", True)),
@@ -94,9 +98,6 @@ class WorkerExecutionContext:
             job_results_availability=dict(
                 state.get("job_results_availability", {}) or {}
             ),
-            active_job_card=dict(
-                state.get("active_job_card", {}) or {}
-            ),
             job_detail_buffer=dict(
                 state.get("job_detail_buffer", {}) or {}
             ),
@@ -118,7 +119,6 @@ class WorkerExecutionContext:
             **self.state,
             "extracted_jd": self.current_jobs,
             "current_url": self.current_url,
-            "active_job_card": self.active_job_card,
             "job_detail_buffer": self.job_detail_buffer,
             "job_detail_coverage": self.job_detail_coverage,
             "job_detail_followup": self.job_detail_followup,
@@ -163,7 +163,7 @@ class WorkerExecutionContext:
         )
 
     def next_action_sequence(self) -> int:
-        return len(self.prior_actions) + len(self.new_actions)
+        return len(self.prior_events) + len(self.new_events)
 
     def marker_bbox(self, marker_id: int) -> list[int]:
         marker = marker_by_id(self.current_markers, marker_id)
@@ -242,7 +242,6 @@ class WorkerExecutionContext:
         args: dict[str, Any],
         source: str,
         tool_call_id: str = "",
-        strategy_key: str = "",
     ) -> None:
         recipe_key = ""
         if source == "reflex":
@@ -256,7 +255,6 @@ class WorkerExecutionContext:
             if isinstance(request_metadata.get("before_state"), dict)
             else {}
         )
-        recent_images = self.state.get("recent_images", []) or []
         self.transition_request = {
             "action_seq": action_sequence,
             "action": action_name,
@@ -265,7 +263,6 @@ class WorkerExecutionContext:
                 or self.state.get("current_capture_id")
                 or ""
             ),
-            "expected_after": str(args.get("expected_after") or ""),
             "source": source,
             "recipe_key": recipe_key,
             "recipe_transition_index": request_metadata.get(
@@ -277,15 +274,10 @@ class WorkerExecutionContext:
             "expected_after_state": dict(
                 request_metadata.get("expected_after_state") or {}
             ),
-            "before_url_template": str(
-                before_state.get("url_template") or ""
-            ),
             "before_page_role": str(before_state.get("page_role") or ""),
             "transition_actions": list(
                 request_metadata.get("transition_actions") or []
             ),
-            "strategy_key": strategy_key,
-            "tool_call_id": tool_call_id,
             "step": self.transition_step(
                 action_sequence,
                 action_name,
@@ -296,10 +288,9 @@ class WorkerExecutionContext:
             or self.state.get("current_url", "")
             or "",
             "before_screenshot": (
-                str(recent_images[-1]) if recent_images else ""
+                str(self.state.get("current_screenshot") or "")
             ),
             "started_at": time.time(),
-            "attempts": 0,
         }
 
     def enrich_result(
@@ -356,7 +347,7 @@ class WorkerExecutionContext:
             result["requested_action"] = action_name
         return result
 
-    def append_execution_record(
+    def append_action_event(
         self,
         action_name: str,
         args: dict[str, Any],
@@ -367,40 +358,57 @@ class WorkerExecutionContext:
         *,
         record_ui: bool = False,
     ) -> None:
-        """기록 노드가 후처리할 직렬화 가능한 실행 결과를 추가한다."""
+        """실행 결과와 학습 증거를 같은 행동 이벤트에 기록한다."""
 
-        self.execution_records.append(
-            {
-                "request": self.action_request.model_dump(mode="json"),
-                "action_name": action_name,
-                "args": dict(args),
-                "result": dict(enriched_result),
-                "before_snapshot": dict(before_snapshot),
-                "after_context": dict(after_context),
-                "seq": action_sequence,
-                "record_ui": record_ui,
-                "record_state": {
-                    "goal": self.state.get("goal", ""),
-                    "current_capture_id": str(
-                        before_snapshot.get("capture_id") or ""
-                    ),
-                    "current_markers": list(
-                        self.state.get("current_markers", []) or []
-                    ),
-                    "current_url": before_snapshot.get("url", ""),
-                    "current_page_role": self.state.get(
-                        "current_page_role",
-                        "",
-                    ),
-                    "screen_signature": dict(
-                        self.state.get("screen_signature", {}) or {}
-                    ),
-                    "recent_images": list(
-                        self.state.get("recent_images", []) or []
-                    ),
-                    "marked_image": self.state.get("marked_image", ""),
-                },
-            }
+        from agent.recipe.feedback import record_action_episode
+        from agent.recipe.record import record_ui_step
+
+        record_state = {
+            "goal": self.state.get("goal", ""),
+            "current_capture_id": str(
+                before_snapshot.get("capture_id") or ""
+            ),
+            "current_markers": list(
+                self.state.get("current_markers", []) or []
+            ),
+            "current_url": before_snapshot.get("url", ""),
+            "current_page_role": self.state.get("current_page_role", ""),
+            "screen_signature": dict(
+                self.state.get("screen_signature", {}) or {}
+            ),
+            "current_screenshot": str(
+                self.state.get("current_screenshot") or ""
+            ),
+            "marked_image": self.state.get("marked_image", ""),
+        }
+        recipe_steps: list[dict[str, Any]] = []
+        if record_ui:
+            record_ui_step(
+                recipe_steps,
+                record_state,
+                action_name,
+                args,
+                action_sequence,
+            )
+        feedback: list[dict[str, Any]] = []
+        record_action_episode(
+            feedback,
+            record_state,
+            self.action_request,
+            action_name,
+            args,
+            enriched_result,
+            before_snapshot,
+            after_context,
+            action_sequence,
+        )
+        self.new_events.append(
+            build_action_event(
+                action_sequence,
+                enriched_result,
+                recipe_step=recipe_steps[0] if recipe_steps else None,
+                feedback_episode=feedback[0] if feedback else None,
+            )
         )
 
     def append_guard_result(
@@ -447,7 +455,7 @@ class WorkerExecutionContext:
             before_snapshot,
         )
         self.new_actions.append(enriched)
-        self.append_execution_record(
+        self.append_action_event(
             action_name,
             args,
             enriched,
@@ -507,34 +515,11 @@ class WorkerExecutionContext:
         }
 
     def build_state_update(self) -> dict[str, Any]:
-        statuses = [
-            str(item.get("status") or "") for item in self.new_actions
-        ]
-        if statuses and all(status == "success" for status in statuses):
-            request_status = "success"
-        elif any(status == "success" for status in statuses):
-            request_status = "partial"
-        elif statuses and all(status == "error" for status in statuses):
-            request_status = "error"
-        else:
-            request_status = "partial" if statuses else "error"
-
-        action_result = ActionResult(
-            source=self.action_request.source,
-            summary=self.action_request.summary,
-            status=request_status,
-            tool_results=self.new_actions,
-            screen_changed=self.screen_changed,
-            is_finished=self.is_finished,
-        )
         return {
             "pending_action": self.next_pending_action,
-            "last_action_result": action_result,
-            "execution_records": self.execution_records,
-            "action_history": self.new_actions,
+            "action_events": [*self.prior_events, *self.new_events],
             "extracted_jd": self.current_jobs,
             "is_finished": self.is_finished,
-            "collected_data": self.collected_data,
             "error_count": self.error_count,
             "current_url": self.current_url,
             "current_url_stale": self.current_url_stale,
@@ -544,7 +529,6 @@ class WorkerExecutionContext:
             "screen_signature": dict(
                 self.state.get("screen_signature", {}) or {}
             ),
-            "recent_images": self.recent_images_update,
             "transition_request": self.transition_request,
             "transition_result": {
                 **self.transition_request,
@@ -562,9 +546,6 @@ class WorkerExecutionContext:
             "job_card_queue": self.job_card_queue,
             "job_results_memory": self.job_results_memory,
             "job_results_availability": self.job_results_availability,
-            "active_job_card": self.active_job_card,
-            "job_card_replay_trace": {},
-            "job_page_policy_trace": {},
             "job_detail_buffer": self.job_detail_buffer,
             "job_detail_coverage": self.job_detail_coverage,
             "job_detail_followup": self.job_detail_followup,

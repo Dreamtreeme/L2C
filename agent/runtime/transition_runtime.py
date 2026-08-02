@@ -7,6 +7,10 @@ from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
 from agent.config import get_settings
+from agent.graph.action_request import (
+    action_event_results,
+    action_event_transitions,
+)
 from agent.graph.state import GraphState
 from agent.recipe.text_utils import normalize_text, url_template
 from agent.utils.logger import logger
@@ -94,7 +98,9 @@ def detect_two_screen_transition_cycle(
 def latest_no_effect_transition(state: GraphState) -> dict[str, Any]:
     """현재 화면에서 효과가 없다고 확인된 가장 최근 물리 행동을 반환한다."""
 
-    observations = state.get("transition_records", []) or []
+    observations = action_event_transitions(
+        state.get("action_events", []) or []
+    )
     if not observations:
         return {}
     latest = observations[-1]
@@ -102,8 +108,7 @@ def latest_no_effect_transition(state: GraphState) -> dict[str, Any]:
         return {}
     if latest.get("reason") not in {"reflex_no_screen_change", "no_screen_change"}:
         return {}
-    recent_images = state.get("recent_images", []) or []
-    latest_screen = str(recent_images[-1]) if recent_images else ""
+    latest_screen = str(state.get("current_screenshot") or "")
     observed_screen = str(latest.get("screenshot") or "")
     if latest_screen and observed_screen and latest_screen != observed_screen:
         return {}
@@ -191,7 +196,7 @@ def used_idempotent_recipe_keys_on_url(state: GraphState, current_url: str) -> s
         return set()
     out: set[str] = set()
     components = idempotent_control_components()
-    for action in state.get("action_history", []) or []:
+    for action in action_event_results(state.get("action_events", []) or []):
         if not isinstance(action, dict) or action.get("status") != "success":
             continue
         recipe_key = str(action.get("reflex_recipe_key") or "")
@@ -267,7 +272,9 @@ def build_transition_observation(
         ),
         "to_capture_id": str(to_capture_id or ""),
         "step": dict(transition_request.get("step", {}) or {}),
-        "expected_after": transition_request.get("expected_after", ""),
+        "expected_after": dict(
+            transition_request.get("step") or {}
+        ).get("expected_after", ""),
         "source": source,
         "recipe_key": transition_request.get("recipe_key", ""),
         "recipe_transition_index": transition_request.get(

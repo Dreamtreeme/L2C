@@ -82,7 +82,7 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
         lambda state: {
             "current_url": "https://www.jobkorea.co.kr",
             "current_url_stale": False,
-            "recent_images": ["screen.png"],
+            "current_screenshot": "screen.png",
             "low_information_screen": False,
         },
     )
@@ -94,13 +94,8 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
         "agent.graph.worker_transition.transition_node",
         lambda state: {},
     )
-    monkeypatch.setattr(
-        "agent.graph.worker_collection.collection_node",
-        lambda state: {},
-    )
-
     result = prepare_worker_start_screen(
-        {"current_url": "", "action_history": []},
+        {"current_url": "", "action_events": []},
         load_site_profile("잡코리아"),
     )
 

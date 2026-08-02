@@ -255,8 +255,7 @@ def load_reflex_replay_context(state: GraphState) -> ReflexReplayContext:
     params.setdefault("goal", state.get("goal", ""))
     task_category = str(params.get("task_category") or "").strip()
     site = str(params.get("site") or "").strip()
-    recent_images = state.get("recent_images", []) or []
-    current_image_path = str(recent_images[-1]) if recent_images else ""
+    current_image_path = str(state.get("current_screenshot") or "")
     current_page_role = normalize_page_role(state.get("current_page_role", ""))
     current_url = str(state.get("current_url") or "")
     active_recipe = dict(state.get("active_reflex_recipe", {}) or {})

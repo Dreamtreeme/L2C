@@ -246,11 +246,10 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
 
 
 def state_snapshot_for_action(state: GraphState, current_url: str) -> dict[str, Any]:
-    recent_images = state.get("recent_images", []) or []
     return {
         "capture_id": str(state.get("current_capture_id") or ""),
         "url": current_url or state.get("current_url", "") or "",
-        "screenshot": str(recent_images[-1]) if recent_images else "",
+        "screenshot": str(state.get("current_screenshot") or ""),
         "marked_image": state.get("marked_image", "") or "",
         "screen_signature": dict(state.get("screen_signature", {}) or {}),
     }

@@ -7,19 +7,17 @@ from agent.graph import (
     worker_execution,
     worker_execution_dispatch,
     worker_observation,
-    worker_recording,
 )
-from agent.graph.action_request import build_action_request
+from agent.graph.action_request import action_event_results, build_action_request
 from agent.graph.workflow import (
+    route_after_execution,
     route_after_start,
-    route_after_recording,
     route_after_reasoning,
     route_after_reflex,
     route_after_selection,
-    route_after_transition,
 )
-from agent.graph.worker_state_contract import current_observation_matches_capture
-from agent.graph.worker_state_action_result import (
+from agent.graph.worker_state import current_observation_matches_capture
+from agent.graph.worker_execution_dispatch import (
     StateActionOutcome,
     StateActionUpdate,
 )
@@ -38,10 +36,9 @@ def _execution_state(request, **overrides):
         "current_url_stale": False,
         "current_capture_id": "worker-test:capture:0003",
         "screen_signature": {},
-        "recent_images": [],
-        "action_history": [],
+        "current_screenshot": "",
+        "action_events": [],
         "extracted_jd": {},
-        "collected_data": [],
         "error_count": 0,
         "is_finished": False,
     }
@@ -157,21 +154,6 @@ def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
     )
 
 
-def test_transition_requires_collection_only_after_ocr():
-    assert route_after_transition({"ocr_complete": False}) == "selection"
-    assert route_after_transition({"ocr_complete": True}) == "collection"
-    assert (
-        route_after_transition(
-            {
-                "ocr_complete": True,
-                "current_capture_id": "capture:2",
-                "ocr_capture_id": "capture:1",
-            }
-        )
-        == "selection"
-    )
-
-
 def test_worker_observation_contract_rejects_mixed_capture_state():
     valid = {
         "ocr_complete": True,
@@ -197,7 +179,7 @@ def test_worker_start_does_not_reuse_ocr_from_another_capture():
             {"id": 1, "bbox": [0, 0, 10, 10], "text": "검색"},
         ],
         "current_page_role": "search",
-        "recent_images": ["screen.png"],
+        "current_screenshot": "screen.png",
     }
 
     assert route_after_start(stale_observation) == "capture"
@@ -268,12 +250,12 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
 
 def test_screen_changing_action_always_routes_to_capture():
     assert (
-        route_after_recording(
+        route_after_execution(
             {"transition_request": {"action": "click_marker"}}
         )
         == "capture"
     )
-    assert route_after_recording({}) == "reasoning"
+    assert route_after_execution({}) == "reasoning"
 
 
 def test_loading_card_screen_routes_from_reasoning_to_recapture():
@@ -340,7 +322,7 @@ def test_worker_state_factory_matches_the_declared_state_contract():
     assert state["goal"] == "테스트 목표"
 
 
-def test_atomic_execution_and_recording_are_separate(monkeypatch):
+def test_execution_records_one_complete_action_event(monkeypatch):
     calls: list[str] = []
 
     def fake_dispatch(action_name, args, get_bbox, current_url=""):
@@ -378,39 +360,36 @@ def test_atomic_execution_and_recording_are_separate(monkeypatch):
             "current_url_stale": False,
             "current_capture_id": "worker-test:capture:0003",
             "screen_signature": {},
-            "recent_images": [],
-            "action_history": [],
+            "current_screenshot": "",
+            "action_events": [],
             "extracted_jd": {},
-            "collected_data": [],
             "error_count": 0,
             "is_finished": False,
         }
     )
 
     assert calls == ["click_marker"]
-    assert [item["status"] for item in result["action_history"]] == ["success"]
+    action_results = action_event_results(result["action_events"])
+    assert [item["status"] for item in action_results] == ["success"]
     assert result["transition_request"]["action"] == "click_marker"
     assert (
         result["transition_request"]["from_capture_id"]
         == "worker-test:capture:0003"
     )
     assert (
-        result["action_history"][0]["decision_capture_id"]
+        action_results[0]["decision_capture_id"]
         == "worker-test:capture:0003"
     )
-    assert "recorded_steps" not in result
-
-    recorded = worker_recording.recording_node(result)
-    assert recorded["recorded_steps"][0]["action"] == "click_marker"
+    event = result["action_events"][0]
+    assert event["recipe_step"]["action"] == "click_marker"
     assert (
-        recorded["recorded_steps"][0]["decision_capture_id"]
+        event["recipe_step"]["decision_capture_id"]
         == "worker-test:capture:0003"
     )
     assert (
-        recorded["feedback_episodes"][0]["observation"]["before"]["capture_id"]
+        event["feedback_episode"]["observation"]["before"]["capture_id"]
         == "worker-test:capture:0003"
     )
-    assert len(recorded["feedback_episodes"]) == 1
 
 
 def test_reflex_transition_executes_input_and_enter_without_recapture(
@@ -494,7 +473,7 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
     )
 
     assert calls == ["type_in_marker", "press_key"]
-    assert len(result["action_history"]) == 2
+    assert len(result["action_events"]) == 2
     assert result["transition_request"]["action"] == "press_key"
     assert result["transition_request"]["transition_actions"] == [
         "type_in_marker",
@@ -541,9 +520,10 @@ def test_detail_completion_guard_blocks_more_screen_exploration(monkeypatch):
         )
     )
 
-    assert result["action_history"][0]["status"] == "skipped"
+    action_result = action_event_results(result["action_events"])[0]
+    assert action_result["status"] == "skipped"
     assert (
-        result["action_history"][0]["reason"]
+        action_result["reason"]
         == "return_to_job_results"
     )
     assert result["error_count"] == 0
@@ -577,10 +557,10 @@ def test_failed_ui_dispatch_is_recorded_once(monkeypatch):
         )
     )
 
-    assert len(result["action_history"]) == 1
-    assert result["action_history"][0]["status"] == "error"
-    assert result["action_history"][0]["error"] == "physical input failed"
-    assert len(result["execution_records"]) == 1
+    action_results = action_event_results(result["action_events"])
+    assert len(action_results) == 1
+    assert action_results[0]["status"] == "error"
+    assert action_results[0]["error"] == "physical input failed"
     assert result["error_count"] == 1
 
 
@@ -614,7 +594,7 @@ def test_returned_ui_error_does_not_create_screen_transition(monkeypatch):
         )
     )
 
-    assert result["action_history"][0]["status"] == "error"
+    assert action_event_results(result["action_events"])[0]["status"] == "error"
     assert result["error_count"] == 1
     assert not result["transition_request"]
 
@@ -650,8 +630,9 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
         )
     )
 
-    assert result["action_history"][0]["status"] == "error"
-    assert result["action_history"][0]["error"] == "invalid payload"
+    action_result = action_event_results(result["action_events"])[0]
+    assert action_result["status"] == "error"
+    assert action_result["error"] == "invalid payload"
     assert result["error_count"] == 1
     assert result["extracted_jd"] == {
         "jobs": [{"company_name": "원래 회사"}]
@@ -768,7 +749,7 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
     assert result["is_finished"] is True
     assert result["pending_action"] is None
     assert result["job_card_queue"] == existing_cards
-    assert result["action_history"][0]["resolved_count"] == 2
+    assert action_event_results(result["action_events"])[0]["resolved_count"] == 2
 
 
 def test_graph_custom_event_is_shared_by_metrics_and_sse():

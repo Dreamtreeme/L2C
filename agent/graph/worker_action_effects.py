@@ -7,7 +7,6 @@ from typing import Any
 from agent.graph import worker_execution_dispatch
 from agent.graph.action_request import ActionRequest, build_action_request
 from agent.graph.worker_execution_context import WorkerExecutionContext
-from agent.graph.worker_state_action_result import StateActionUpdate
 from agent.graph.worker_state import (
     count_mode_from_state,
     extracted_job_count,
@@ -89,7 +88,6 @@ def execute_ui_action(
             args,
             transition_source,
             tool_call_id,
-            str(call_metadata.get("strategy_key") or ""),
         )
     return result, screen_changed
 
@@ -111,10 +109,7 @@ def activate_clicked_job_card(
         )
     ):
         return
-    (
-        context.job_card_queue,
-        context.active_job_card,
-    ) = activate_job_card(
+    context.job_card_queue = activate_job_card(
         context.job_card_queue,
         action_context_args,
     )
@@ -172,10 +167,6 @@ def _apply_job_card_queue_result(
         resolved_count = resolved_job_card_count(
             context.job_card_queue
         )
-        context.collected_data.append(
-            "Auto-finished after resolving "
-            f"{resolved_count} existing job card(s)."
-        )
         result["auto_finished"] = True
         result["resolved_count"] = resolved_count
     return None
@@ -183,7 +174,7 @@ def _apply_job_card_queue_result(
 
 def _apply_state_action_update(
     context: WorkerExecutionContext,
-    update: StateActionUpdate,
+    update: worker_execution_dispatch.StateActionUpdate,
 ) -> None:
     """명시된 필드만 실행 문맥에 반영한다."""
 
@@ -248,12 +239,8 @@ def _apply_job_detail_completion(
     target_count = target_count_from_state(context.state)
     collected_count = extracted_job_count(context.current_jobs)
 
-    (
-        context.job_card_queue,
-        context.active_job_card,
-    ) = complete_active_job_card(
-        context.job_card_queue,
-        context.active_job_card,
+    context.job_card_queue = complete_active_job_card(
+        context.job_card_queue
     )
     result["detail_policy"] = "required_fields_complete"
     pending_cards = pending_job_cards(context.job_card_queue)
@@ -278,10 +265,6 @@ def _apply_job_detail_completion(
         and not pending_cards
     ):
         context.is_finished = True
-        context.collected_data.append(
-            "Auto-finished after collecting all "
-            f"{collected_count} visible jobs."
-        )
         result["auto_finished"] = True
         result["count_mode"] = "visible_all"
         result["collected_count"] = collected_count
@@ -303,9 +286,6 @@ def _apply_collection_target_completion(
 
     context.return_to_job_results = {}
     context.is_finished = True
-    context.collected_data.append(
-        f"Auto-finished after collecting target_count={target_count} jobs."
-    )
     result["auto_finished"] = True
     result["target_count"] = target_count
     result["collected_count"] = collected_count

@@ -7,6 +7,7 @@ from agent.graph import (
     worker_execution,
     worker_execution_dispatch,
 )
+from agent.graph.action_request import action_event_results
 from agent.prompts.detail_extraction import (
     build_detail_extraction_system_prompt,
 )
@@ -38,7 +39,6 @@ def test_sensitive_action_requires_user_approval_before_physical_input(monkeypat
             "current_url_stale": False,
             "extracted_jd": {},
             "is_finished": False,
-            "collected_data": [],
             "error_count": 0,
             "pending_action": _action_request(
                 [
@@ -59,7 +59,7 @@ def test_sensitive_action_requires_user_approval_before_physical_input(monkeypat
 
     assert result["pending_human_approval"] is True
     assert result["human_approval_request"]["action"] == "click_marker"
-    assert result["action_history"][0]["status"] == "skipped"
+    assert action_event_results(result["action_events"])[0]["status"] == "skipped"
 
 
 def test_screen_guard_capture_failure_requires_fresh_observation(monkeypatch):
@@ -100,7 +100,7 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
             ],
             "current_url": "https://example.com/jobs",
             "current_url_stale": False,
-            "action_history": [],
+            "action_events": [],
         },
         request,
     )

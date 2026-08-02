@@ -6,7 +6,56 @@ from typing import Any
 
 from agent.graph.state import GraphState
 from agent.runtime.job_collection import job_count
+from agent.runtime.job_card_queue import active_job_card
 from agent.runtime.site_context import infer_site_page_role
+
+
+def current_observation_matches_capture(state: GraphState) -> bool:
+    """OCR 관찰이 현재 캡처에 속하는지 확인한다."""
+
+    if not state.get("ocr_complete"):
+        return False
+    current_capture_id = str(state.get("current_capture_id") or "")
+    ocr_capture_id = str(state.get("ocr_capture_id") or "")
+    if current_capture_id or ocr_capture_id:
+        return bool(
+            current_capture_id
+            and ocr_capture_id
+            and current_capture_id == ocr_capture_id
+        )
+    return True
+
+
+def current_observation_matches_capture(state: GraphState) -> bool:
+    """OCR 관찰이 현재 캡처에 속하는지 확인한다."""
+
+    if not state.get("ocr_complete"):
+        return False
+    current_capture_id = str(state.get("current_capture_id") or "")
+    ocr_capture_id = str(state.get("ocr_capture_id") or "")
+    if current_capture_id or ocr_capture_id:
+        return bool(
+            current_capture_id
+            and ocr_capture_id
+            and current_capture_id == ocr_capture_id
+        )
+    return True
+
+
+def current_observation_matches_capture(state: GraphState) -> bool:
+    """OCR 관찰이 현재 캡처에 속하는지 확인한다."""
+
+    if not state.get("ocr_complete"):
+        return False
+    current_capture_id = str(state.get("current_capture_id") or "")
+    ocr_capture_id = str(state.get("ocr_capture_id") or "")
+    if current_capture_id or ocr_capture_id:
+        return bool(
+            current_capture_id
+            and ocr_capture_id
+            and current_capture_id == ocr_capture_id
+        )
+    return True
 
 
 def extracted_job_count(extracted_jd: dict[str, Any]) -> int:
@@ -46,7 +95,7 @@ def infer_current_page_role(
 def job_detail_key_from_state(state: GraphState) -> str:
     """같은 URL의 패널형 상세 화면도 공고별로 OCR 버퍼를 분리한다."""
 
-    card = dict(state.get("active_job_card", {}) or {})
+    card = active_job_card(list(state.get("job_card_queue", []) or []))
     queue_id = str(card.get("queue_id") or "").strip()
     if queue_id:
         return queue_id
@@ -73,6 +122,9 @@ def return_to_job_results_for_url(
 
 __all__ = [
     "count_mode_from_state",
+    "current_observation_matches_capture",
+    "current_observation_matches_capture",
+    "current_observation_matches_capture",
     "job_detail_key_from_state",
     "return_to_job_results_for_url",
     "extracted_job_count",

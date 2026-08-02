@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -105,15 +105,91 @@ class ActionRequest(BaseModel):
         return self
 
 
-class ActionResult(BaseModel):
-    """하나의 행동 요청을 실행한 최종 결과."""
+class ActionEvent(TypedDict, total=False):
+    """행동 선택부터 화면 전환 검증까지 한 생명주기로 보관하는 기록."""
 
-    source: str
-    summary: str = ""
-    status: Literal["success", "partial", "error"]
-    tool_results: list[dict[str, Any]] = Field(default_factory=list)
-    screen_changed: bool = False
-    is_finished: bool = False
+    seq: int
+    result: dict[str, Any]
+    recipe_step: dict[str, Any]
+    feedback_episode: dict[str, Any]
+    transition: dict[str, Any]
+
+
+def build_action_event(
+    seq: int,
+    result: dict[str, Any],
+    *,
+    recipe_step: dict[str, Any] | None = None,
+    feedback_episode: dict[str, Any] | None = None,
+) -> ActionEvent:
+    event: ActionEvent = {
+        "seq": int(seq),
+        "result": dict(result),
+    }
+    if recipe_step:
+        event["recipe_step"] = dict(recipe_step)
+    if feedback_episode:
+        event["feedback_episode"] = dict(feedback_episode)
+    return event
+
+
+def action_event_results(events: Sequence[ActionEvent | dict]) -> list[dict[str, Any]]:
+    return [
+        dict(event.get("result") or {})
+        for event in events or []
+        if isinstance(event, Mapping) and isinstance(event.get("result"), Mapping)
+    ]
+
+
+def action_event_recipe_steps(events: Sequence[ActionEvent | dict]) -> list[dict[str, Any]]:
+    return [
+        dict(event.get("recipe_step") or {})
+        for event in events or []
+        if isinstance(event, Mapping) and isinstance(event.get("recipe_step"), Mapping)
+    ]
+
+
+def action_event_feedback(events: Sequence[ActionEvent | dict]) -> list[dict[str, Any]]:
+    return [
+        dict(event.get("feedback_episode") or {})
+        for event in events or []
+        if isinstance(event, Mapping)
+        and isinstance(event.get("feedback_episode"), Mapping)
+    ]
+
+
+def action_event_transitions(events: Sequence[ActionEvent | dict]) -> list[dict[str, Any]]:
+    return [
+        dict(event.get("transition") or {})
+        for event in events or []
+        if isinstance(event, Mapping) and isinstance(event.get("transition"), Mapping)
+    ]
+
+
+def attach_action_transition(
+    events: Sequence[ActionEvent | dict],
+    transition: dict[str, Any],
+) -> list[ActionEvent]:
+    """행동 순번이 같은 이벤트에 화면 전환 검증 결과를 연결한다."""
+
+    try:
+        target_seq = int(transition.get("action_seq"))
+    except (TypeError, ValueError):
+        return [dict(event) for event in events or [] if isinstance(event, Mapping)]
+
+    updated: list[ActionEvent] = []
+    for raw_event in events or []:
+        if not isinstance(raw_event, Mapping):
+            continue
+        event: ActionEvent = dict(raw_event)
+        try:
+            event_seq = int(event.get("seq"))
+        except (TypeError, ValueError):
+            event_seq = -1
+        if event_seq == target_seq:
+            event["transition"] = dict(transition)
+        updated.append(event)
+    return updated
 
 
 def build_action_request(
@@ -165,9 +241,15 @@ def action_request_from_model_response(
 
 
 __all__ = [
+    "ActionEvent",
     "ActionRequest",
-    "ActionResult",
     "ToolCallRequest",
+    "action_event_feedback",
+    "action_event_recipe_steps",
+    "action_event_results",
+    "action_event_transitions",
     "action_request_from_model_response",
+    "attach_action_transition",
+    "build_action_event",
     "build_action_request",
 ]

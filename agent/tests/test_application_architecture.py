@@ -434,7 +434,7 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
     monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
     with pytest.raises(OcrWorkerReadinessError):
         prepare_worker_start_screen(
-            {"current_url": "", "action_history": []},
+            {"current_url": "", "action_events": []},
             load_site_profile("wanted"),
         )
 

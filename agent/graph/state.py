@@ -1,7 +1,6 @@
-import operator
-from typing import Annotated, Any, TypedDict
+from typing import Any, TypedDict
 
-from agent.graph.action_request import ActionRequest, ActionResult
+from agent.graph.action_request import ActionEvent, ActionRequest
 
 
 class TransitionRequest(TypedDict, total=False):
@@ -10,7 +9,6 @@ class TransitionRequest(TypedDict, total=False):
     action_seq: int
     action: str
     from_capture_id: str
-    expected_after: str
     source: str
     recipe_key: str
     recipe_transition_index: int
@@ -18,15 +16,11 @@ class TransitionRequest(TypedDict, total=False):
     transition_actions: list[str]
     expected_after_state: dict[str, Any]
     after_state_match: dict[str, Any]
-    strategy_key: str
-    tool_call_id: str
     step: dict[str, Any]
     before_url: str
-    before_url_template: str
     before_page_role: str
     before_screenshot: str
     started_at: float
-    attempts: int
     execution_failed: bool
     failed_action: str
 
@@ -68,7 +62,6 @@ class ObservationState(TypedDict, total=False):
     low_information_screen: bool
     low_information_capture_count: int
     current_markers: list[dict[str, Any]]
-    recent_images: Annotated[list[str], operator.add]
     marked_image: str
     screen_signature: dict[str, Any]
 
@@ -76,22 +69,17 @@ class ObservationState(TypedDict, total=False):
 class ActionExecutionState(TypedDict, total=False):
     """선택된 행동의 실행과 화면 전환 판정 상태."""
 
-    action_history: Annotated[list[dict[str, Any]], operator.add]
+    action_events: list[ActionEvent]
     pending_action: ActionRequest | None
-    last_action_result: ActionResult | None
-    execution_records: list[dict[str, Any]]
     error_count: int
     is_finished: bool
     transition_request: TransitionRequest
     transition_result: TransitionResult
-    transition_records: Annotated[list[dict[str, Any]], operator.add]
 
 
 class RecipeReplayState(TypedDict, total=False):
     """자율탐색 기록과 경험 기반 탐색 재생 상태."""
 
-    recorded_steps: Annotated[list[dict[str, Any]], operator.add]
-    feedback_episodes: Annotated[list[dict[str, Any]], operator.add]
     reflex_trace: dict[str, Any]
     active_reflex_recipe: dict[str, Any]
     reflex_blocked_recipe_keys: list[str]
@@ -101,16 +89,12 @@ class RecipeReplayState(TypedDict, total=False):
 class JobCollectionState(TypedDict, total=False):
     """공고 목록 선택, 상세 판독과 결과 누적 상태."""
 
-    collected_data: list[Any]
     extracted_jd: dict[str, Any]
     job_collection_contract: dict[str, Any]
     job_card_queue: list[dict[str, Any]]
     job_results_memory: dict[str, Any]
-    active_job_card: dict[str, Any]
-    job_card_replay_trace: dict[str, Any]
     job_card_selection_trace: dict[str, Any]
     job_results_availability: dict[str, Any]
-    job_page_policy_trace: dict[str, Any]
     job_detail_buffer: dict[str, Any]
     job_detail_coverage: dict[str, Any]
     job_detail_followup: dict[str, Any]

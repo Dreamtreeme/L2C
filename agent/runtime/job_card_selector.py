@@ -16,6 +16,7 @@ from agent.recipe.page_context import normalize_page_role
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.job_collection import job_count
 from agent.runtime.job_card_queue import (
+    active_job_card,
     job_card_queue_scope_complete,
     resolved_job_card_count,
 )
@@ -101,7 +102,7 @@ def should_select_job_cards(state: GraphState) -> bool:
         and normalize_page_role(state.get("current_page_role")) == "search"
         and (target_count > collected_count or needs_visible_screen)
         and (not queue or queue_exhausted)
-        and not state.get("active_job_card")
+        and not active_job_card(queue)
         and state.get("current_markers")
         and state.get("marked_image")
     )

@@ -200,8 +200,7 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
             screen_size = screen_signature.get("size") or []
             if isinstance(screen_size, list) and len(screen_size) == 2:
                 bbox = marker_bbox(marker)
-                recent_images = state.get("recent_images", []) or []
-                image_path = recent_images[-1] if recent_images else ""
+                image_path = str(state.get("current_screenshot") or "")
                 roi_signature = (
                     compute_target_roi_signature(
                         image_path,

@@ -6,6 +6,12 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from agent.graph.action_request import (
+    action_event_feedback,
+    action_event_recipe_steps,
+    action_event_results,
+    action_event_transitions,
+)
 from agent.runtime.job_collection import job_items as _job_items
 from shared.schema.feedback_schema import WorkerSubmission
 
@@ -28,11 +34,10 @@ def build_worker_submission(
     current_url = final_state.get("current_url", "") or ""
     recipe_params = final_state.get("recipe_params", {}) if isinstance(final_state.get("recipe_params"), dict) else {}
     run_id = run_id or new_worker_run_id()
-    recorded_steps = list(final_state.get("recorded_steps", []) or [])
-    feedback_episodes = list(final_state.get("feedback_episodes", []) or [])
-    transition_records = list(
-        final_state.get("transition_records", []) or []
-    )
+    action_events = list(final_state.get("action_events", []) or [])
+    recorded_steps = action_event_recipe_steps(action_events)
+    feedback_episodes = action_event_feedback(action_events)
+    transition_records = action_event_transitions(action_events)
     observed_job_ids = sorted(
         {
             int(item["job_id"])
@@ -48,7 +53,7 @@ def build_worker_submission(
         "job_count": len(jobs),
         "observed_job_count": len(observed_job_ids),
         "current_url": current_url,
-        "action_count": len(final_state.get("action_history", []) or []),
+        "action_count": len(action_event_results(action_events)),
         "job_results_availability": dict(final_state.get("job_results_availability", {}) or {}),
     }
     submission = WorkerSubmission(
