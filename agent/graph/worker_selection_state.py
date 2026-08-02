@@ -115,30 +115,6 @@ def duplicate_detail_update(
     }
 
 
-def queue_return_wait_update(
-    state: GraphState,
-    *,
-    transition_result: dict[str, Any],
-    trace: dict[str, Any],
-    target_phash: str,
-) -> dict[str, Any]:
-    pending = dict(state.get("transition_request") or transition_result)
-    pending["pending_target_phash"] = target_phash
-    pending["pending_target_max_distance"] = int(
-        trace.get("max_distance") or 0
-    )
-    return {
-        "transition_request": pending,
-        "transition_result": {
-            **transition_result,
-            "status": "pending",
-            "reason": "queue_return_phash_wait",
-            "needs_ocr": False,
-        },
-        "job_card_replay_trace": trace,
-    }
-
-
 def _queue_return_transition_record(
     state: GraphState,
     transition_result: dict[str, Any],
@@ -233,5 +209,4 @@ __all__ = [
     "duplicate_detail_update",
     "low_information_stop_update",
     "queue_replay_update",
-    "queue_return_wait_update",
 ]

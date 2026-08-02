@@ -9,14 +9,12 @@ from agent.graph.state import GraphState
 from agent.graph.worker_selection_policy import (
     SelectionPolicy,
     decide_duplicate_detail,
-    decide_queue_return,
     decide_selection_entry,
 )
 from agent.graph.worker_selection_state import (
     duplicate_detail_update,
     low_information_stop_update,
     queue_replay_update,
-    queue_return_wait_update,
 )
 from agent.runtime.duplicate_job_policy import existing_job_url_trace
 from agent.runtime.job_card_queue import (
@@ -115,29 +113,7 @@ def selection_node(state: GraphState) -> dict[str, Any]:
         )
         memory = dict(state.get("job_results_memory", {}) or {})
         saved_signature = dict(memory.get("screen_signature", {}) or {})
-        target_phash = str(saved_signature.get("phash") or "")
-        queue_decision = decide_queue_return(
-            replay_available=request is not None,
-            is_return_action=bool(return_action),
-            ocr_complete=ocr_complete,
-            replay_reason=str(trace.get("reason") or ""),
-            transition_needs_ocr=bool(transition_result.get("needs_ocr")),
-            target_phash_available=bool(target_phash),
-        )
-        if queue_decision.policy == SelectionPolicy.WAIT_FOR_RESULTS_SCREEN:
-            logger.info(
-                "Waiting for cached job results pHash",
-                phash_distance=trace.get("distance"),
-                max_distance=trace.get("max_distance"),
-            )
-            return queue_return_wait_update(
-                state,
-                transition_result=transition_result,
-                trace=trace,
-                target_phash=target_phash,
-            )
-        if queue_decision.policy == SelectionPolicy.REPLAY_JOB_CARD:
-            assert request is not None
+        if request is not None:
             logger.info(
                 "Job card queue action selected",
                 queue_id=trace.get("queue_id", ""),

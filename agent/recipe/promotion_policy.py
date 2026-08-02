@@ -15,7 +15,6 @@ _BLOCKING_RESULT_STATUSES = {"error", "skipped"}
 _BLOCKING_TRANSITION_REASONS = {
     "no_screen_change",
     "reflex_no_screen_change",
-    "transition_timeout",
 }
 _CODE_MANAGED_TRANSITION_SOURCES = {
     "page_policy": "managed_by_page_policy",

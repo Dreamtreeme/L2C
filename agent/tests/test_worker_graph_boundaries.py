@@ -212,15 +212,36 @@ def test_worker_start_does_not_reuse_ocr_from_another_capture():
     )
 
 
-def test_unchanged_transition_probe_clears_ocr_capture_owner(monkeypatch):
-    class ProbeOnlyPerception:
-        def wait_for_transition_phash_match(self, *args, **kwargs):
-            return False
+def test_go_back_waits_for_cv_change_before_stable_capture(
+    monkeypatch,
+    tmp_path,
+):
+    from PIL import Image
+
+    before = tmp_path / "detail.png"
+    after = tmp_path / "results.png"
+    Image.new("RGB", (80, 60), "black").save(before)
+    Image.new("RGB", (80, 60), "white").save(after)
+    calls = []
+
+    class CvPerception:
+        last_capture_quality = {
+            "low_information": False,
+            "stable": True,
+        }
+
+        def wait_for_transition_change(self, reference_image_path):
+            calls.append(("change", reference_image_path))
+            return True
+
+        def capture_usable_screen(self):
+            calls.append(("stable_capture", str(after)))
+            return after
 
     monkeypatch.setattr(
         worker_observation,
         "_perception_engine",
-        lambda: ProbeOnlyPerception(),
+        lambda: CvPerception(),
     )
 
     result = worker_observation.capture_node(
@@ -229,13 +250,18 @@ def test_unchanged_transition_probe_clears_ocr_capture_owner(monkeypatch):
             "ocr_capture_id": "capture:0001",
             "ocr_complete": True,
             "transition_request": {
-                "pending_target_phash": "abcd",
+                "action": "go_back",
+                "before_screenshot": str(before),
                 "started_at": time.time(),
             },
         }
     )
 
-    assert result["transition_probe_unchanged"] is True
+    assert calls == [
+        ("change", str(before)),
+        ("stable_capture", str(after)),
+    ]
+    assert result["current_screenshot"] == str(after)
     assert result["ocr_complete"] is False
     assert result["ocr_capture_id"] == ""
 

@@ -23,9 +23,8 @@ class TransitionRequest(TypedDict, total=False):
     step: dict[str, Any]
     before_url: str
     before_url_template: str
+    before_page_role: str
     before_screenshot: str
-    pending_target_phash: str
-    pending_target_max_distance: int
     started_at: float
     attempts: int
     execution_failed: bool
@@ -86,7 +85,6 @@ class ActionExecutionState(TypedDict, total=False):
     transition_request: TransitionRequest
     transition_result: TransitionResult
     transition_records: Annotated[list[dict[str, Any]], operator.add]
-    transition_probe_unchanged: bool
 
 
 class RecipeReplayState(TypedDict, total=False):

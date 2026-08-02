@@ -4,7 +4,6 @@ from typing import Any, Optional
 
 import cv2
 import numpy as np
-from PIL import Image
 
 from agent.config import get_settings
 from agent.utils.logger import logger
@@ -66,20 +65,6 @@ class WaitStable:
             logger.exception("Failed to capture memory image for stabilization check", error=str(e))
             raise
 
-    def _capture_memory_image(
-        self,
-        region: Optional[dict] = None,
-        sample_width: int = 360,
-    ) -> Image.Image:
-        """저장 상태 pHash 비교가 필요할 때만 PIL 이미지로 변환합니다."""
-
-        return Image.fromarray(
-            self._capture_memory_frame(
-                region=region,
-                sample_width=sample_width,
-            )
-        )
-
     def wait_for_change(
         self,
         reference_image_path: str,
@@ -126,54 +111,6 @@ class WaitStable:
         logger.info(
             "Transition screen change wait expired",
             max_wait_sec=max_wait_sec,
-        )
-        return False
-
-    def wait_for_phash_match(
-        self,
-        target_phash: str,
-        *,
-        max_distance: int,
-        max_wait_sec: Optional[float] = None,
-        check_interval_sec: Optional[float] = None,
-        region: Optional[dict] = None,
-    ) -> bool:
-        """저장된 목표 화면 pHash가 나타날 때까지 파일 저장 없이 확인합니다."""
-
-        if not target_phash:
-            return False
-        if max_wait_sec is None:
-            max_wait_sec = get_settings().vision.transition_change_max_wait_sec
-        if check_interval_sec is None:
-            check_interval_sec = get_settings().vision.transition_change_check_sec
-
-        from agent.vision.screen_signature import (
-            hamming_distance,
-            perceptual_hash_image,
-        )
-
-        started = time.perf_counter()
-        while (time.perf_counter() - started) < max(0.0, max_wait_sec):
-            current = self._capture_memory_image(
-                region=region,
-                sample_width=0,
-            )
-            distance = hamming_distance(
-                target_phash,
-                perceptual_hash_image(current),
-            )
-            if distance is not None and distance <= max(0, max_distance):
-                logger.info(
-                    "Transition target pHash matched",
-                    elapsed_sec=round(time.perf_counter() - started, 3),
-                    phash_distance=distance,
-                )
-                return True
-            time.sleep(max(0.0, check_interval_sec))
-
-        logger.info(
-            "Transition target pHash wait pending",
-            max_wait_sec=round(max(0.0, max_wait_sec), 3),
         )
         return False
 

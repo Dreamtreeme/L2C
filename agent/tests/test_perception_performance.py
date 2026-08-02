@@ -109,12 +109,12 @@ def test_wait_stable_uses_supplied_region_without_window_lookup():
     perception = FakePerception()
     wait_stable = WaitStable(perception)
 
-    img = wait_stable._capture_memory_image(
+    frame = wait_stable._capture_memory_frame(
         region={"top": 0, "left": 0, "width": 4, "height": 4},
         sample_width=2,
     )
 
-    assert img.size == (2, 2)
+    assert frame.shape == (2, 2)
     assert perception.region_calls == 0
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import time
 from typing import Any
 
 from agent.config import get_settings
@@ -75,56 +74,8 @@ def capture_node(state: GraphState) -> dict[str, Any]:
     perception = _perception_engine()
     transition_request = dict(state.get("transition_request", {}) or {})
     pending_action = str(transition_request.get("action") or "")
-    pending_target_phash = str(
-        transition_request.get("pending_target_phash") or ""
-    )
 
-    if pending_target_phash:
-        wait_for_phash = getattr(
-            perception,
-            "wait_for_transition_phash_match",
-            None,
-        )
-        if callable(wait_for_phash):
-            timeout_sec = get_settings().vision.page_ready_timeout_sec
-            elapsed_sec = max(
-                0.0,
-                time.time()
-                - float(transition_request.get("started_at") or time.time()),
-            )
-            remaining_sec = max(0.0, timeout_sec - elapsed_sec)
-            probe_wait_sec = min(
-                get_settings().vision.transition_change_max_wait_sec,
-                remaining_sec,
-            )
-            try:
-                changed = wait_for_phash(
-                    pending_target_phash,
-                    max_distance=int(
-                        transition_request.get(
-                            "pending_target_max_distance"
-                        )
-                        or 0
-                    ),
-                    max_wait_sec=probe_wait_sec,
-                )
-            except Exception as exc:
-                logger.debug(
-                    "Transition pHash wait skipped",
-                    error=str(exc),
-                )
-                changed = True
-            if not changed:
-                return {
-                    "ocr_complete": False,
-                    "ocr_capture_id": "",
-                    "transition_probe_unchanged": True,
-                }
-
-    if (
-        pending_action in _WAIT_ACTIONS
-        and not pending_target_phash
-    ):
+    if pending_action in _WAIT_ACTIONS:
         wait_for_change = getattr(perception, "wait_for_transition_change", None)
         before_screenshot = str(
             transition_request.get("before_screenshot") or ""
@@ -196,7 +147,6 @@ def capture_node(state: GraphState) -> dict[str, Any]:
         "raw_screen_signature": raw_signature,
         "analysis_mode": "",
         "ocr_complete": False,
-        "transition_probe_unchanged": False,
         "recent_images": [str(image_path)],
         "current_url": current_url,
         "current_url_stale": current_url_stale,

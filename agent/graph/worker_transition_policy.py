@@ -17,25 +17,6 @@ class TransitionDecision:
     block_reflex_recipe: bool = False
 
 
-def decide_transition_probe(
-    *,
-    elapsed_sec: float,
-    timeout_sec: float,
-) -> TransitionDecision:
-    """저비용 화면 대조가 아직 목표 화면에 도달하지 못한 경우를 판정한다."""
-
-    if elapsed_sec < timeout_sec:
-        return TransitionDecision(
-            status="pending",
-            reason="target_screen_not_ready",
-        )
-    return TransitionDecision(
-        status="unknown",
-        reason="transition_timeout",
-        needs_ocr=True,
-    )
-
-
 def decide_before_ocr(
     *,
     source: str,
@@ -221,6 +202,5 @@ __all__ = [
     "TransitionDecision",
     "decide_after_ocr",
     "decide_before_ocr",
-    "decide_transition_probe",
     "verify_reflex_after_state",
 ]

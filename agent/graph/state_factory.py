@@ -55,7 +55,6 @@ def create_worker_state(goal: str = "", **overrides: Any) -> GraphState:
             "needs_ocr": False,
         },
         "transition_records": [],
-        "transition_probe_unchanged": False,
         "job_card_queue": [],
         "job_results_memory": {},
         "active_job_card": {},

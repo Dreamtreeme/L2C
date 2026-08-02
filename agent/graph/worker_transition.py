@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
-from agent.config import get_settings
 from agent.graph.state import GraphState
 from agent.graph.worker_transition_policy import (
     decide_after_ocr,
     decide_before_ocr,
-    decide_transition_probe,
     verify_reflex_after_state,
 )
 from agent.graph.worker_transition_state import (
@@ -46,59 +43,6 @@ def _result_without_transition(
             ),
         }
     return None
-
-
-def _resolve_target_screen_wait(
-    state: GraphState,
-    request: dict[str, Any],
-) -> dict[str, Any]:
-    started_at = float(request.get("started_at") or time.time())
-    elapsed_sec = max(0.0, time.time() - started_at)
-    attempt = int(request.get("attempts") or 0) + 1
-    decision = decide_transition_probe(
-        elapsed_sec=elapsed_sec,
-        timeout_sec=get_settings().vision.page_ready_timeout_sec,
-    )
-    if decision.status == "pending":
-        request["attempts"] = attempt
-        return {
-            "transition_request": request,
-            "transition_result": transition_result(
-                request,
-                status=decision.status,
-                reason=decision.reason,
-                needs_ocr=decision.needs_ocr,
-            ),
-            "transition_probe_unchanged": False,
-        }
-
-    source = str(request.get("source") or "")
-    record = transition_record(
-        request,
-        status="unknown",
-        source=source,
-        reason="transition_timeout",
-        attempt=attempt,
-        state=state,
-        visual_change_ratio=None,
-        ocr_skipped=True,
-    )
-    return {
-        "transition_request": {},
-        "transition_result": transition_result(
-            request,
-            status=decision.status,
-            reason=decision.reason,
-            needs_ocr=decision.needs_ocr,
-        ),
-        "transition_records": [record],
-        "transition_probe_unchanged": False,
-        "active_reflex_recipe": active_reflex_recipe_after_transition(
-            state,
-            source=source,
-            status="unknown",
-        ),
-    }
 
 
 def _blocked_keys_after_decision(
@@ -256,7 +200,6 @@ def _evaluate_after_ocr(
             source=source,
             status=decision.status,
         ),
-        "transition_probe_unchanged": False,
     }
 
 
@@ -267,9 +210,6 @@ def transition_node(state: GraphState) -> dict[str, Any]:
     initial_result = _result_without_transition(state, request)
     if initial_result is not None:
         return initial_result
-
-    if state.get("transition_probe_unchanged"):
-        return _resolve_target_screen_wait(state, request)
 
     visual_changed, visual_ratio = transition_has_visual_change(
         request,

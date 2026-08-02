@@ -13,8 +13,6 @@ class SelectionPolicy(str, Enum):
     STOP_LOW_INFORMATION = "stop_low_information"
     DEFER_TO_ACTIVE_REFLEX = "defer_to_active_reflex"
     SKIP_DUPLICATE_DETAIL = "skip_duplicate_detail"
-    WAIT_FOR_RESULTS_SCREEN = "wait_for_results_screen"
-    REPLAY_JOB_CARD = "replay_job_card"
 
 
 @dataclass(frozen=True)
@@ -70,44 +68,9 @@ def decide_duplicate_detail(
     return SelectionDecision(SelectionPolicy.CONTINUE, "not_duplicate_detail")
 
 
-def decide_queue_return(
-    *,
-    replay_available: bool,
-    is_return_action: bool,
-    ocr_complete: bool,
-    replay_reason: str,
-    transition_needs_ocr: bool,
-    target_phash_available: bool,
-) -> SelectionDecision:
-    """목록 복귀 뒤 큐 재생, 저비용 대기 또는 일반 폴백을 고른다."""
-
-    if replay_available:
-        return SelectionDecision(
-            SelectionPolicy.REPLAY_JOB_CARD,
-            "queue_card_replay_available",
-        )
-    should_wait = (
-        is_return_action
-        and not ocr_complete
-        and replay_reason == "phash_mismatch"
-        and not transition_needs_ocr
-        and target_phash_available
-    )
-    if should_wait:
-        return SelectionDecision(
-            SelectionPolicy.WAIT_FOR_RESULTS_SCREEN,
-            "queue_return_phash_wait",
-        )
-    return SelectionDecision(
-        SelectionPolicy.CONTINUE,
-        replay_reason or "no_queue_replay",
-    )
-
-
 __all__ = [
     "SelectionDecision",
     "SelectionPolicy",
     "decide_duplicate_detail",
-    "decide_queue_return",
     "decide_selection_entry",
 ]
