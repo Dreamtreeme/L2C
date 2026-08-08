@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.graph import worker_execution_dispatch
+from agent.graph.worker_transition_recording import set_transition_request
 from agent.runtime.worker_contracts import ActionRequest, build_action_request
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.runtime.worker_state import (
@@ -94,7 +95,8 @@ def execute_ui_action(
         transition_source = str(
             call_metadata.get("transition_source") or transition_source
         )
-        context.set_transition_request(
+        set_transition_request(
+            context,
             action_sequence,
             action_name,
             args,
@@ -338,6 +340,7 @@ def execute_state_action(
         current_jobs,
         current_url=str(observation.get("current_url") or ""),
         state=state,
+        data_services=context.input.data_services,
     )
     raise_for_action_failure(outcome.result)
     collection["extracted_jd"] = dict(outcome.jobs)

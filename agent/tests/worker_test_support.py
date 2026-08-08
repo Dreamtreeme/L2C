@@ -16,6 +16,7 @@ from agent.runtime.worker_contracts import (
     apply_worker_state_update,
     create_worker_state,
 )
+from agent.runtime.worker_data_services import WorkerDataServices
 
 
 def worker_state(
@@ -50,12 +51,43 @@ def apply_update(
     return apply_worker_state_update(state, update)
 
 
-def node_runtime(vision: Any = None) -> Runtime[WorkerDependencies]:
+def worker_data_services(
+    *,
+    extract_job_detail=None,
+    mark_existing_job_cards=None,
+    find_existing_job_url=None,
+) -> WorkerDataServices:
+    """노드 단위 테스트에서 외부 DB와 모델 호출을 제거한다."""
+
+    return WorkerDataServices(
+        extract_job_detail=(
+            extract_job_detail or (lambda _state, _url: {})
+        ),
+        mark_existing_job_cards=(
+            mark_existing_job_cards or (lambda queue, _url: (queue, []))
+        ),
+        find_existing_job_url=(
+            find_existing_job_url
+            or (lambda _url, _jobs: {"matched": False})
+        ),
+    )
+
+
+def node_runtime(
+    vision: Any = None,
+    data: WorkerDataServices | None = None,
+) -> Runtime[WorkerDependencies]:
     return Runtime(
         context=WorkerDependencies(
-            vision=cast(VisionWorkerRuntime, vision or object())
+            vision=cast(VisionWorkerRuntime, vision or object()),
+            data=data or worker_data_services(),
         )
     )
 
 
-__all__ = ["apply_update", "node_runtime", "worker_state"]
+__all__ = [
+    "apply_update",
+    "node_runtime",
+    "worker_data_services",
+    "worker_state",
+]

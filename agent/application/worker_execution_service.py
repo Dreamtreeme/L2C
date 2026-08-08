@@ -16,6 +16,7 @@ from agent.runtime.vision_worker_runtime import (
     VisionWorkerRuntime,
     WorkerDependencies,
 )
+from agent.runtime.worker_data_services import WorkerDataServices
 from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
 from agent.observability.graph_events import forward_graph_event
 from agent.utils.logger import logger
@@ -30,6 +31,24 @@ class WorkerStartScreenError(RuntimeError):
 
 
 WorkerResult = TypeVar("WorkerResult")
+
+
+def _worker_data_services() -> WorkerDataServices:
+    """작업자 그래프의 데이터 포트를 애플리케이션 구현에 연결한다."""
+
+    from agent.application.detail_extraction_service import (
+        extract_job_from_job_detail_buffer,
+    )
+    from agent.application.duplicate_job_service import (
+        existing_job_url_trace,
+        mark_existing_job_cards,
+    )
+
+    return WorkerDataServices(
+        extract_job_detail=extract_job_from_job_detail_buffer,
+        mark_existing_job_cards=mark_existing_job_cards,
+        find_existing_job_url=existing_job_url_trace,
+    )
 
 
 class WorkerExecutionService:
@@ -148,7 +167,10 @@ def run_graph_with_last_state(
         for item in app.stream(
             initial_state,
             config={"recursion_limit": recursion_limit},
-            context=WorkerDependencies(vision=worker_runtime),
+            context=WorkerDependencies(
+                vision=worker_runtime,
+                data=_worker_data_services(),
+            ),
             stream_mode=["values", "custom"],
         ):
             from agent.observability.run_context import raise_if_cancelled

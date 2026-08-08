@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
 from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_data_services import WorkerDataServices
 
 from agent.utils.logger import logger
 
@@ -229,6 +230,7 @@ class WorkerDependencies:
     """그래프 실행 동안 노드에 주입하는 불변 작업자 의존성."""
 
     vision: VisionWorkerRuntime
+    data: WorkerDataServices
 
 
 __all__ = [

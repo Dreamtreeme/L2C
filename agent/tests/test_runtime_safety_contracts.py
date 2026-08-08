@@ -91,6 +91,7 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
     monkeypatch,
 ):
     from agent.graph.worker_execution_context import WorkerExecutionContext
+    from agent.tests.worker_test_support import worker_data_services
 
     request = _action_request(
         [
@@ -122,6 +123,7 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
         ),
         request,
         FakeRuntime(),
+        worker_data_services(),
     )
 
     blocked = worker_action_guard.guard_ui_action(

@@ -6,16 +6,13 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from agent.application.detail_extraction_service import (
-    extract_job_from_job_detail_buffer,
-)
 from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_data_services import WorkerDataServices
 from agent.graph.worker_execution_policy import (
     merge_extracted_info,
     should_skip_job_update_without_detail_url,
 )
 from agent.runtime.worker_state import job_detail_key_from_state
-from agent.application.duplicate_job_service import mark_existing_job_cards
 from agent.runtime.job_collection import job_items
 from agent.runtime.job_field_contract import (
     detail_coverage_status,
@@ -336,12 +333,13 @@ def _extract_detail_job(
     state: WorkerState,
     assessment: DetailReadingAssessment,
     current_url: str,
+    data_services: WorkerDataServices,
 ) -> dict[str, Any]:
     extraction_state = {
         **state,
         "job_detail_coverage": assessment.coverage,
     }
-    return extract_job_from_job_detail_buffer(
+    return data_services.extract_job_detail(
         extraction_state,
         current_url,
     )
@@ -468,6 +466,7 @@ def _finish_detail_reading(
     *,
     current_url: str,
     state: WorkerState,
+    data_services: WorkerDataServices,
 ) -> StateActionOutcome:
     try:
         assessment = _assess_detail_reading(args, state, current_url)
@@ -483,6 +482,7 @@ def _finish_detail_reading(
             state,
             assessment,
             current_url,
+            data_services,
         )
         if not extracted_job:
             return _empty_detail_outcome(current_jobs)
@@ -534,9 +534,13 @@ def _set_job_card_queue(
     *,
     current_url: str,
     state: WorkerState,
+    data_services: WorkerDataServices,
 ) -> StateActionOutcome:
     queue, memory = normalize_job_card_queue(args, state, current_url)
-    queue, existing_cards = mark_existing_job_cards(queue, current_url)
+    queue, existing_cards = data_services.mark_existing_job_cards(
+        queue,
+        current_url,
+    )
     selector_trace = dict(
         state["decision"].get("job_card_selection_trace", {}) or {}
     )
@@ -598,6 +602,7 @@ def dispatch_state_action(
     *,
     current_url: str = "",
     state: WorkerState | None = None,
+    data_services: WorkerDataServices,
 ) -> StateActionOutcome:
     """공고 추출과 카드 큐처럼 그래프 상태를 변경하는 행동을 실행한다."""
 
@@ -615,6 +620,7 @@ def dispatch_state_action(
             current_jobs,
             current_url=current_url,
             state=state,
+            data_services=data_services,
         )
     if action_name == "set_job_card_queue":
         return _set_job_card_queue(
@@ -622,6 +628,7 @@ def dispatch_state_action(
             current_jobs,
             current_url=current_url,
             state=state,
+            data_services=data_services,
         )
     raise ValueError(f"Unknown state action: {action_name}")
 

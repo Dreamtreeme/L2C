@@ -23,13 +23,17 @@ from agent.graph.worker_action_guard import (
     guard_return_to_results,
     guard_ui_action,
 )
+from agent.graph.worker_action_recording import record_action_result
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.graph.worker_execution_policy import compact_action_args
+from agent.runtime.detail_runtime import is_job_detail_context
+from agent.runtime.job_field_contract import merge_job_detail_coverage
 from agent.runtime.worker_actions import (
     STATE_UPDATE_ACTIONS,
     TERMINAL_ACTIONS,
     UI_ACTIONS,
 )
+from agent.runtime.worker_state import job_detail_key_from_state
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.utils.logger import logger
 
@@ -46,24 +50,17 @@ def _record_successful_call(
     tool_call_id: str,
     call_metadata: dict[str, Any],
 ) -> None:
-    enriched = context.enrich_result(
-        result,
-        action_name,
-        args,
-        before_snapshot,
-        screen_change_expected=screen_changed,
+    record_action_result(
+        context,
+        action_name=action_name,
+        args=args,
+        result=result,
+        before_snapshot=before_snapshot,
+        action_sequence=action_sequence,
+        screen_changed=screen_changed,
+        record_ui=action_name in UI_ACTIONS,
         tool_call_id=tool_call_id,
         tool_call_metadata=call_metadata,
-    )
-    context.result.new_actions.append(enriched)
-    context.append_action_event(
-        action_name,
-        args,
-        enriched,
-        before_snapshot,
-        context.after_context(screen_changed=screen_changed),
-        action_sequence,
-        record_ui=action_name in UI_ACTIONS,
     )
 
 
@@ -78,31 +75,57 @@ def _record_failed_call(
     call_metadata: dict[str, Any],
 ) -> None:
     before_snapshot = context.before_snapshot()
-    enriched = context.enrich_result(
-        {
+    record_action_result(
+        context,
+        action_name=action_name,
+        args=args,
+        result={
             "action": action_name,
             "status": "error",
             "error": str(error),
         },
-        action_name,
-        args,
-        before_snapshot,
+        before_snapshot=before_snapshot,
+        action_sequence=action_sequence,
         tool_call_id=tool_call_id,
         tool_call_metadata=call_metadata,
-    )
-    context.result.new_actions.append(enriched)
-    context.append_action_event(
-        action_name,
-        args,
-        enriched,
-        before_snapshot,
-        context.after_context(screen_changed=False),
-        action_sequence,
     )
     transition = context.result.state["transition"]
     transition["error_count"] = int(
         transition.get("error_count", 0) or 0
     ) + 1
+
+
+def _observe_job_detail_fields(
+    context: WorkerExecutionContext,
+    action_name: str,
+    args: dict[str, Any],
+) -> None:
+    """기존 추론 호출이 읽은 상세 필드 근거를 현재 공고에 누적한다."""
+
+    if action_name not in {
+        "click_marker",
+        "scroll",
+        "finish_detail_reading",
+    }:
+        return
+    state = context.result.state
+    observation = state["observation"]
+    current_url = str(observation.get("current_url") or "")
+    page_role = str(
+        args.get("page_role")
+        or observation.get("current_page_role")
+        or ""
+    )
+    if not is_job_detail_context(current_url, page_role=page_role):
+        return
+    collection = state["collection"]
+    collection["job_detail_coverage"] = merge_job_detail_coverage(
+        dict(collection.get("job_detail_coverage", {}) or {}),
+        args,
+        state=state,
+        current_url=current_url,
+        detail_key=job_detail_key_from_state(state),
+    )
 
 
 def _execute_action_request(context: WorkerExecutionContext) -> None:
@@ -117,7 +140,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
         action_context_args = {**args, **call_metadata}
         if action_name == "finish_detail_reading":
             args.setdefault("page_role", "job_detail")
-        context.observe_job_detail_fields(action_name, args)
+        _observe_job_detail_fields(context, action_name, args)
 
         logger.info(
             "Executing requested tool",
@@ -303,6 +326,7 @@ def execution_node(
         state,
         request,
         runtime.context.vision,
+        runtime.context.data,
     )
     _execute_action_request(context)
     logger.info(

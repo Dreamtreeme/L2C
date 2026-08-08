@@ -19,7 +19,6 @@ from agent.runtime.worker_state import (
     count_mode_from_state,
     target_count_from_state,
 )
-from agent.application.duplicate_job_service import existing_job_url_trace
 from agent.runtime.job_card_queue import (
     active_job_card,
     job_card_queue_scope_complete,
@@ -249,7 +248,7 @@ def selection_node(
     )
 
     if active_card and looks_like_job_detail_url(current_url):
-        duplicate_trace = existing_job_url_trace(
+        duplicate_trace = runtime.context.data.find_existing_job_url(
             current_url,
             dict(collection.get("extracted_jd", {}) or {}),
         )

@@ -12,20 +12,17 @@ from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
 from agent.graph.worker_execution_policy import merge_extracted_info
 from agent.runtime.job_collection import job_items
 from agent.runtime.job_card_queue import replay_job_card_after_return
-from agent.tests.worker_test_support import worker_state
+from agent.tests.worker_test_support import worker_data_services, worker_state
 
 
-def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "extract_job_from_job_detail_buffer",
-        lambda _state, current_url: {
+def test_detail_finish_extracts_once_and_clears_buffer():
+    def extract_job_detail(_state, current_url):
+        return {
             "company_name": "보이저엑스",
             "position": "iOS 개발자",
             "url": current_url,
             "requirements": ["Swift"],
-        },
-    )
+        }
 
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
@@ -52,6 +49,9 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
                 "url": "https://www.wanted.co.kr/wd/1",
                 "lines": [{"text": "자격요건 Swift"}],
             }},
+        ),
+        data_services=worker_data_services(
+            extract_job_detail=extract_job_detail,
         ),
     )
 
@@ -226,20 +226,12 @@ def test_detail_observation_accepts_multiple_evidence_lines():
     }
 
 
-def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
-    monkeypatch,
-):
+def test_detail_finish_skips_extraction_until_required_evidence_is_complete():
     calls = []
 
     def fail_if_called(_state, _current_url):
         calls.append(True)
         return {}
-
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "extract_job_from_job_detail_buffer",
-        fail_if_called,
-    )
 
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
@@ -267,6 +259,9 @@ def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
                 "lines": [{"text": "백엔드 개발자"}],
             }},
         ),
+        data_services=worker_data_services(
+            extract_job_detail=fail_if_called,
+        ),
     )
 
     assert outcome.result["status"] == "skipped"
@@ -278,9 +273,7 @@ def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
     assert calls == []
 
 
-def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
-    monkeypatch,
-):
+def test_detail_finish_allows_explicit_unavailable_field_at_page_end():
     calls = []
 
     def extract_once(_state, current_url):
@@ -293,11 +286,6 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
             "requirements": ["Python"],
         }
 
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "extract_job_from_job_detail_buffer",
-        extract_once,
-    )
     required_fields = [
         "company_name",
         "position",
@@ -331,6 +319,9 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
                 "lines": [{"text": "API 개발"}, {"text": "Python"}],
             }},
         ),
+        data_services=worker_data_services(
+            extract_job_detail=extract_once,
+        ),
     )
 
     assert outcome.result["status"] == "success"
@@ -340,9 +331,7 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
     assert job["_collection_unavailable_fields"] == ["benefits"]
 
 
-def test_detail_finish_does_not_repeat_extraction_after_page_end(
-    monkeypatch,
-):
+def test_detail_finish_does_not_repeat_extraction_after_page_end():
     calls = []
 
     def extract_once(_state, current_url):
@@ -355,11 +344,6 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end(
             "requirements": ["Python"],
         }
 
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "extract_job_from_job_detail_buffer",
-        extract_once,
-    )
     required_fields = [
         "company_name",
         "position",
@@ -393,6 +377,9 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end(
                 "lines": [{"text": "API 개발"}, {"text": "Python"}],
             }},
         ),
+        data_services=worker_data_services(
+            extract_job_detail=extract_once,
+        ),
     )
 
     assert outcome.result["status"] == "success"
@@ -402,19 +389,14 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end(
     assert job["_collection_unavailable_fields"] == ["benefits"]
 
 
-def test_detail_finish_retries_missing_extraction_before_page_end(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "extract_job_from_job_detail_buffer",
-        lambda _state, current_url: {
+def test_detail_finish_retries_missing_extraction_before_page_end():
+    def extract_job_detail(_state, current_url):
+        return {
             "company_name": "예시회사",
             "position": "백엔드 개발자",
             "url": current_url,
             "main_tasks": ["API 개발"],
-        },
-    )
+        }
 
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
@@ -443,6 +425,9 @@ def test_detail_finish_retries_missing_extraction_before_page_end(
                 "url": "https://www.wanted.co.kr/wd/5",
                 "lines": [{"text": "API 개발"}, {"text": "Python"}],
             }},
+        ),
+        data_services=worker_data_services(
+            extract_job_detail=extract_job_detail,
         ),
     )
 
