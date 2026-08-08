@@ -10,7 +10,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agent.config import get_settings
-from agent.runtime.worker_contracts import WorkerState, build_action_request
+from agent.runtime.worker_contracts import (
+    ActionRequest,
+    WorkerState,
+    build_action_request,
+)
 from agent.runtime.site_context import normalize_page_role, site_runtime_guidance
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.job_collection import job_count
@@ -365,12 +369,7 @@ def _validated_refinement_target(
     return {"action": action, "marker_id": marker_id, "label": label, "text": text}
 
 
-def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
-    """전용 VLM 결과를 카드 큐 저장과 첫 카드 클릭 요청으로 변환한다."""
-
-    if not should_select_job_cards(state):
-        return None, {"attempted": False, "reason": "selector_not_applicable"}
-
+def _remaining_job_count(state: WorkerState) -> int:
     target_count = _target_count(state)
     resolved_count = max(
         _collected_count(state),
@@ -378,29 +377,31 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
             list(state["collection"].get("job_card_queue") or [])
         ),
     )
-    remaining_count = (
+    return (
         target_count - resolved_count
         if target_count > 0
         else len(state["observation"].get("current_markers") or [])
     )
-    try:
-        from agent.observability.run_context import invoke_with_metrics
 
-        raw = invoke_with_metrics(
-            _get_job_card_selector_model(),
-            _selection_messages(state, remaining_count),
-            "job_card_selection",
-            stream=True,
-        )
-        selection = dump_model(raw)
-    except Exception as exc:
-        logger.warning("Job card selector failed; falling back to general reasoning", error=str(exc))
-        return None, {
-            "attempted": True,
-            "reason": "selector_failed",
-            "error": str(exc)[:200],
-        }
 
+def _invoke_job_card_selector(
+    state: WorkerState,
+    remaining_count: int,
+) -> dict[str, Any]:
+    from agent.observability.run_context import invoke_with_metrics
+
+    raw = invoke_with_metrics(
+        _get_job_card_selector_model(),
+        _selection_messages(state, remaining_count),
+        "job_card_selection",
+        stream=True,
+    )
+    return dump_model(raw)
+
+
+def _selection_availability(
+    selection: dict[str, Any],
+) -> dict[str, Any]:
     availability: dict[str, Any] = {}
     try:
         available_count = int(selection.get("available_job_count"))
@@ -415,77 +416,124 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
             "count_evidence": count_evidence,
             "count_confidence": count_confidence,
         }
+    return availability
+
+
+def _screen_selection_exit(
+    selection: dict[str, Any],
+    availability: dict[str, Any],
+) -> dict[str, Any] | None:
     if selection.get("is_loading"):
-        return None, {
+        return {
             "attempted": True,
             "reason": "screen_loading",
             "model": _selector_model_name(),
         }
     if not selection.get("is_job_results_page"):
-        return None, {"attempted": True, "reason": "not_result_list", **availability}
-    if selection.get("needs_refinement"):
-        refinement_target = _validated_refinement_target(
-            selection,
-            list(state["observation"].get("current_markers") or []),
+        return {
+            "attempted": True,
+            "reason": "not_result_list",
+            **availability,
+        }
+    return None
+
+
+def _refinement_action_args(
+    refinement_target: dict[str, Any],
+    refinement_reason: str,
+) -> tuple[str, dict[str, Any]]:
+    action_name = (
+        "type_in_marker"
+        if refinement_target["action"] == "type"
+        else "click_marker"
+    )
+    action_args: dict[str, Any] = {
+        "marker_id": refinement_target["marker_id"],
+        "target_label": refinement_target["label"],
+        "target_role": "input" if action_name == "type_in_marker" else "filter",
+        "target_component": (
+            "job_results_filter_input"
+            if action_name == "type_in_marker"
+            else "job_results_filter"
+        ),
+        "page_role": "search",
+        "risk_level": "safe_navigation",
+        "needs_user_confirmation": False,
+        "reason": refinement_reason or "검색 결과를 요청에 맞게 좁힙니다.",
+        "expected_after": (
+            "필터 검색어와 일치하는 선택지가 표시된다."
+            if action_name == "type_in_marker"
+            else "필터 선택지가 열리거나 검색 결과가 요청에 맞게 좁혀진다."
+        ),
+    }
+    if action_name == "type_in_marker":
+        action_args.update(
+            {
+                "text": refinement_target["text"],
+                "slot_name": "job_results_filter_query",
+            }
         )
-        refinement_reason = str(selection.get("refinement_reason") or "").strip()[:300]
-        if refinement_target:
-            action_name = "type_in_marker" if refinement_target["action"] == "type" else "click_marker"
-            action_args = {
-                "marker_id": refinement_target["marker_id"],
-                "target_label": refinement_target["label"],
-                "target_role": "input" if action_name == "type_in_marker" else "filter",
-                "target_component": "job_results_filter_input" if action_name == "type_in_marker" else "job_results_filter",
-                "page_role": "search",
-                "risk_level": "safe_navigation",
-                "needs_user_confirmation": False,
-                "reason": refinement_reason or "검색 결과를 요청에 맞게 좁힙니다.",
-                "expected_after": (
-                    "필터 검색어와 일치하는 선택지가 표시된다."
-                    if action_name == "type_in_marker"
-                    else "필터 선택지가 열리거나 검색 결과가 요청에 맞게 좁혀진다."
-                ),
-            }
-            if action_name == "type_in_marker":
-                action_args.update(
-                    {
-                        "text": refinement_target["text"],
-                        "slot_name": "job_results_filter_query",
-                    }
-                )
-            request = build_action_request(
-                "card_selector",
-                f"refine results with {action_name} on {refinement_target['label']}",
-                [
-                    {
-                        "name": action_name,
-                        "args": action_args,
-                        "id": "card_selector_refinement",
-                    }
-                ],
-            )
-            logger.info(
-                "Job card selector prepared refinement action",
-                action=action_name,
-                marker_id=refinement_target["marker_id"],
-                label=refinement_target["label"],
-            )
-            return request, {
-                "attempted": True,
-                "reason": "job_results_refinement_action",
-                "refinement_reason": refinement_reason,
-                "action": action_name,
-                "marker_id": refinement_target["marker_id"],
-                "label": refinement_target["label"],
-                "model": _selector_model_name(),
-                **availability,
-            }
+    return action_name, action_args
+
+
+def _build_refinement_selection(
+    state: WorkerState,
+    selection: dict[str, Any],
+    availability: dict[str, Any],
+) -> tuple[ActionRequest | None, dict[str, Any]]:
+    refinement_target = _validated_refinement_target(
+        selection,
+        list(state["observation"].get("current_markers") or []),
+    )
+    refinement_reason = str(
+        selection.get("refinement_reason") or ""
+    ).strip()[:300]
+    if not refinement_target:
         return None, {
             "attempted": True,
             "reason": "job_results_refinement_needed",
             "refinement_reason": refinement_reason,
             **availability,
         }
+
+    action_name, action_args = _refinement_action_args(
+        refinement_target,
+        refinement_reason,
+    )
+    request = build_action_request(
+        "card_selector",
+        f"refine results with {action_name} on {refinement_target['label']}",
+        [
+            {
+                "name": action_name,
+                "args": action_args,
+                "id": "card_selector_refinement",
+            }
+        ],
+    )
+    logger.info(
+        "Job card selector prepared refinement action",
+        action=action_name,
+        marker_id=refinement_target["marker_id"],
+        label=refinement_target["label"],
+    )
+    return request, {
+        "attempted": True,
+        "reason": "job_results_refinement_action",
+        "refinement_reason": refinement_reason,
+        "action": action_name,
+        "marker_id": refinement_target["marker_id"],
+        "label": refinement_target["label"],
+        "model": _selector_model_name(),
+        **availability,
+    }
+
+
+def _unvisited_cards(
+    state: WorkerState,
+    selection: dict[str, Any],
+    remaining_count: int,
+) -> list[dict[str, Any]]:
     cards = _validated_cards(
         selection,
         list(state["observation"].get("current_markers") or []),
@@ -499,7 +547,7 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
         for item in (state["collection"].get("job_card_queue") or [])
         if isinstance(item, dict)
     }
-    cards = [
+    return [
         card
         for card in cards
         if (
@@ -508,11 +556,12 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
         ) not in excluded
         and (str(card.get("title") or "").strip().casefold(), "") not in excluded
     ]
-    if availability and availability["available_job_count"] < len(cards):
-        availability = {}
-    if not cards:
-        return None, {"attempted": True, "reason": "no_valid_card", **availability}
 
+
+def _build_queue_selection(
+    cards: list[dict[str, Any]],
+    availability: dict[str, Any],
+) -> tuple[ActionRequest, dict[str, Any]]:
     request = build_action_request(
         "card_selector",
         f"selected {len(cards)} visible job card(s)",
@@ -542,6 +591,43 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
         "model": _selector_model_name(),
         **availability,
     }
+
+
+def select_job_cards(
+    state: WorkerState,
+) -> tuple[ActionRequest | None, dict[str, Any]]:
+    """전용 VLM 결과를 카드 큐 저장과 첫 카드 클릭 요청으로 변환한다."""
+
+    if not should_select_job_cards(state):
+        return None, {"attempted": False, "reason": "selector_not_applicable"}
+
+    remaining_count = _remaining_job_count(state)
+    try:
+        selection = _invoke_job_card_selector(state, remaining_count)
+    except Exception as exc:
+        logger.warning(
+            "Job card selector failed; falling back to general reasoning",
+            error=str(exc),
+        )
+        return None, {
+            "attempted": True,
+            "reason": "selector_failed",
+            "error": str(exc)[:200],
+        }
+
+    availability = _selection_availability(selection)
+    screen_exit = _screen_selection_exit(selection, availability)
+    if screen_exit is not None:
+        return None, screen_exit
+    if selection.get("needs_refinement"):
+        return _build_refinement_selection(state, selection, availability)
+
+    cards = _unvisited_cards(state, selection, remaining_count)
+    if availability and availability["available_job_count"] < len(cards):
+        availability = {}
+    if not cards:
+        return None, {"attempted": True, "reason": "no_valid_card", **availability}
+    return _build_queue_selection(cards, availability)
 
 
 __all__ = [
