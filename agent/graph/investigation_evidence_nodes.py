@@ -10,15 +10,15 @@ from typing import Callable
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.application.evidence_service import inspect_job_evidence
-from agent.application.run_context import (
+from agent.observability.run_context import (
     emit_run_event,
     invoke_with_metrics,
     raise_if_cancelled,
 )
-from agent.application.run_contracts import RunPhase
+from agent.observability.run_contracts import RunPhase
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.graph.investigation_context import (
-    InvestigationGraphState,
+    InvestigationWorkerState,
     InvestigationModels,
     build_request_prompt_context,
     capabilities_for_investigation,
@@ -63,7 +63,7 @@ class InvestigationEvidenceNodes:
         self.taxonomy_service = taxonomy_service
         self.now = now
 
-    def define_evidence(self, state: InvestigationGraphState) -> dict[str, Any]:
+    def define_evidence(self, state: InvestigationWorkerState) -> dict[str, Any]:
         raise_if_cancelled()
         investigation = InvestigationRequest.model_validate(state["investigation"])
         emit_run_event("evidence_planning", RunPhase.PLANNING, "답변에 필요한 근거를 정리하고 있습니다.")
@@ -100,7 +100,7 @@ class InvestigationEvidenceNodes:
         )
         return {"investigation": updated.model_dump(mode="json")}
 
-    def inspect_evidence(self, state: InvestigationGraphState) -> dict[str, Any]:
+    def inspect_evidence(self, state: InvestigationWorkerState) -> dict[str, Any]:
         raise_if_cancelled()
         investigation = InvestigationRequest.model_validate(state["investigation"])
         emit_run_event("database_check", RunPhase.DATABASE, "DB에 필요한 근거가 있는지 확인하고 있습니다.")
@@ -165,7 +165,7 @@ class InvestigationEvidenceNodes:
         }
 
     @staticmethod
-    def route_after_evidence(state: InvestigationGraphState) -> str:
+    def route_after_evidence(state: InvestigationWorkerState) -> str:
         investigation = InvestigationRequest.model_validate(state["investigation"])
         if investigation.evidence_policy == EvidencePolicy.DATABASE_ONLY:
             return "load_documents"
@@ -187,7 +187,7 @@ class InvestigationEvidenceNodes:
             return "load_documents"
         return "plan_actions"
 
-    def plan_actions(self, state: InvestigationGraphState) -> dict[str, Any]:
+    def plan_actions(self, state: InvestigationWorkerState) -> dict[str, Any]:
         raise_if_cancelled()
         investigation = InvestigationRequest.model_validate(state["investigation"])
         emit_run_event("action_planning", RunPhase.PLANNING, "부족한 자료를 확보할 행동계획을 세우고 있습니다.")
@@ -236,7 +236,7 @@ class InvestigationEvidenceNodes:
         }
 
     @staticmethod
-    def route_after_plan(state: InvestigationGraphState) -> str:
+    def route_after_plan(state: InvestigationWorkerState) -> str:
         investigation = InvestigationRequest.model_validate(state["investigation"])
         return "execute" if investigation.plan else "load_documents"
 

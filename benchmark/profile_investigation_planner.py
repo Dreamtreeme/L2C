@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agent.application.model_clients import get_structured_google_model
+from agent.llm.clients import get_structured_google_model
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.prompts.investigation import evidence_plan_prompt, request_analysis_prompt
 from benchmark.investigation_quality_eval import evaluate_investigation_analysis

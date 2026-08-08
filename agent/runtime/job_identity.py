@@ -6,7 +6,7 @@ import hashlib
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from agent.recipe.text_utils import normalize_text, site_of
+from agent.utils.text import normalize_text, site_of
 from agent.sites.loader import SiteProfileError, load_site_profile
 
 

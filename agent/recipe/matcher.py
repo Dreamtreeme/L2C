@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from agent.config import get_settings
-from agent.recipe.page_context import normalize_page_role
-from agent.recipe.replay_actions import (
+from agent.runtime.site_context import normalize_page_role
+from agent.runtime.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
-from agent.recipe.text_utils import normalize_text
+from agent.utils.text import normalize_text
 from agent.vision.marker_geometry import marker_bbox, marker_center
 
 

@@ -1,4 +1,4 @@
-"""Reflex 후보 기록과 승격에서 사용하는 행동 종류 계약."""
+"""기록·재생 가능한 작업자 행동 종류 계약."""
 
 from __future__ import annotations
 

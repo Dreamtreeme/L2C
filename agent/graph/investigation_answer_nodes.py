@@ -9,14 +9,14 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.application.evidence_service import load_job_evidence_documents
-from agent.application.run_context import (
+from agent.observability.run_context import (
     emit_run_event,
     invoke_with_metrics,
     raise_if_cancelled,
 )
-from agent.application.run_contracts import RunPhase, RunStatus
+from agent.observability.run_contracts import RunPhase, RunStatus
 from agent.graph.investigation_context import (
-    InvestigationGraphState,
+    InvestigationWorkerState,
     InvestigationModels,
     build_request_prompt_context,
     message_text,
@@ -91,7 +91,7 @@ class InvestigationAnswerNodes:
         self.db_path = Path(db_path)
         self.models = models
 
-    def load_documents(self, state: InvestigationGraphState) -> dict[str, Any]:
+    def load_documents(self, state: InvestigationWorkerState) -> dict[str, Any]:
         investigation = InvestigationRequest.model_validate(state["investigation"])
         ids = sorted(set(investigation.evidence_document_ids))
         if not ids:
@@ -102,7 +102,7 @@ class InvestigationAnswerNodes:
             "valid_ids": [document.id for document in documents],
         }
 
-    def answer(self, state: InvestigationGraphState) -> dict[str, Any]:
+    def answer(self, state: InvestigationWorkerState) -> dict[str, Any]:
         raise_if_cancelled()
         investigation = InvestigationRequest.model_validate(state["investigation"])
         emit_run_event("answering_started", RunPhase.ANSWERING, "검증된 근거로 답변을 정리하고 있습니다.")

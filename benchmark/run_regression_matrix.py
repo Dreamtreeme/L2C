@@ -73,7 +73,7 @@ def _git_execution_contract() -> dict[str, Any]:
 
 
 def _runtime_execution_contract() -> dict[str, Any]:
-    from agent.application.model_policy import (
+    from agent.llm.policy import (
         commander_model_name,
         lightweight_model_name,
         worker_reasoning_model_name,

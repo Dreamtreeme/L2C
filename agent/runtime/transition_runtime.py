@@ -7,12 +7,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
 from agent.config import get_settings
-from agent.graph.action_request import (
+from agent.runtime.worker_contracts import (
+    WorkerState,
     action_event_results,
     action_event_transitions,
 )
-from agent.graph.state import GraphState
-from agent.recipe.text_utils import normalize_text, url_template
+from agent.utils.text import normalize_text, url_template
 from agent.utils.logger import logger
 from agent.vision.screen_signature import compact_screen_context_signature
 
@@ -95,7 +95,7 @@ def detect_two_screen_transition_cycle(
     }
 
 
-def latest_no_effect_transition(state: GraphState) -> dict[str, Any]:
+def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
     """현재 화면에서 효과가 없다고 확인된 가장 최근 물리 행동을 반환한다."""
 
     observations = action_event_transitions(
@@ -189,7 +189,7 @@ def same_idempotent_page_scope(left_url: str, right_url: str) -> bool:
     return bool(left_url and right_url and idempotent_page_scope(left_url) == idempotent_page_scope(right_url))
 
 
-def used_idempotent_recipe_keys_on_url(state: GraphState, current_url: str) -> set[str]:
+def used_idempotent_recipe_keys_on_url(state: WorkerState, current_url: str) -> set[str]:
     """같은 페이지 범위에서 이미 실행한 고정 UI recipe key를 찾는다."""
 
     if not current_url:

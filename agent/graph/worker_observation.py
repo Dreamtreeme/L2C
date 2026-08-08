@@ -7,8 +7,8 @@ from typing import Any
 
 from agent.config import get_settings
 
-from agent.graph.state import GraphState
-from agent.graph.worker_state import job_detail_key_from_state
+from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_state import job_detail_key_from_state
 from agent.runtime.detail_runtime import (
     build_detail_lightweight_marked_image,
     build_detail_section_context,
@@ -23,6 +23,7 @@ from agent.runtime.job_field_contract import (
 )
 from agent.runtime.site_context import is_job_detail_context
 from agent.runtime.transition_runtime import raw_screen_phash_signature
+from agent.runtime.vision_worker_runtime import current_vision_worker_runtime
 from agent.utils.logger import logger
 
 
@@ -93,12 +94,10 @@ def _build_ui_context(
 
 
 def _perception_engine() -> Any:
-    from agent.graph.worker_resources import get_perception
-
-    return get_perception()
+    return current_vision_worker_runtime().get_perception()
 
 
-def _next_capture_identity(state: GraphState) -> tuple[int, str]:
+def _next_capture_identity(state: WorkerState) -> tuple[int, str]:
     """작업자 실행 안에서 읽기 쉬운 단조 증가 캡처 ID를 만든다."""
 
     try:
@@ -110,7 +109,7 @@ def _next_capture_identity(state: GraphState) -> tuple[int, str]:
     return sequence, f"{prefix}capture:{sequence:04d}"
 
 
-def _previous_screen_observation(state: GraphState) -> dict[str, Any]:
+def _previous_screen_observation(state: WorkerState) -> dict[str, Any]:
     """새 캡처 전에 현재 OCR 관찰을 캡처 ID와 함께 보존한다."""
 
     if (
@@ -133,10 +132,10 @@ def _previous_screen_observation(state: GraphState) -> dict[str, Any]:
     return dict(state.get("previous_screen_observation") or {})
 
 
-def capture_node(state: GraphState) -> dict[str, Any]:
+def capture_node(state: WorkerState) -> dict[str, Any]:
     """화면 변화 대기, 캡처, URL 읽기와 원본 pHash 계산만 수행한다."""
 
-    from agent.application.run_context import raise_if_cancelled
+    from agent.observability.run_context import raise_if_cancelled
 
     raise_if_cancelled()
     perception = _perception_engine()
@@ -228,11 +227,11 @@ def capture_node(state: GraphState) -> dict[str, Any]:
     }
 
 
-def ocr_node(state: GraphState) -> dict[str, Any]:
+def ocr_node(state: WorkerState) -> dict[str, Any]:
     """현재 캡처 한 장에 SoM/OCR을 한 번 실행하고 화면 문맥을 만든다."""
 
-    from agent.application.run_context import raise_if_cancelled
-    from agent.graph.worker_state import infer_current_page_role
+    from agent.observability.run_context import raise_if_cancelled
+    from agent.runtime.worker_state import infer_current_page_role
     from agent.vision.screen_signature import build_capture_context, compute_screen_signature
 
     raise_if_cancelled()
@@ -301,7 +300,7 @@ def ocr_node(state: GraphState) -> dict[str, Any]:
     }
 
 
-def _collect_job_detail_observation(state: GraphState) -> dict[str, Any]:
+def _collect_job_detail_observation(state: WorkerState) -> dict[str, Any]:
     """현재 OCR 결과를 상세 공고 판독 상태에 한 번 반영한다."""
 
     if not state.get("ocr_complete"):

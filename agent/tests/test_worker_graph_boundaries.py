@@ -8,7 +8,7 @@ from agent.graph import (
     worker_execution_dispatch,
     worker_observation,
 )
-from agent.graph.action_request import action_event_results, build_action_request
+from agent.runtime.worker_contracts import action_event_results, build_action_request
 from agent.graph.workflow import (
     route_after_execution,
     route_after_start,
@@ -16,7 +16,7 @@ from agent.graph.workflow import (
     route_after_reflex,
     route_after_selection,
 )
-from agent.graph.worker_state import current_observation_matches_capture
+from agent.runtime.worker_state import current_observation_matches_capture
 from agent.graph.worker_execution_dispatch import (
     StateActionOutcome,
     StateActionUpdate,
@@ -312,12 +312,12 @@ def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
 
 
 def test_worker_state_factory_matches_the_declared_state_contract():
-    from agent.graph.state import GraphState
-    from agent.graph.state_factory import create_worker_state
+    from agent.runtime.worker_contracts import WorkerState
+    from agent.runtime.worker_contracts import create_worker_state
 
     state = create_worker_state("테스트 목표")
 
-    assert set(state).issubset(GraphState.__annotations__)
+    assert set(state).issubset(WorkerState.__annotations__)
     assert "worker_attempt_index" not in state
     assert state["goal"] == "테스트 목표"
 
@@ -335,15 +335,19 @@ def test_execution_records_one_complete_action_event(monkeypatch):
         "dispatch_ui_action",
         fake_dispatch,
     )
+    class FakeRuntime:
+        def check_reasoning_screen(self, *_args, **_kwargs):
+            return {
+                "checked": True,
+                "stale": False,
+                "must_refresh": False,
+                "reason": "screen_unchanged",
+            }
+
     monkeypatch.setattr(
         worker_action_guard,
-        "check_current_reasoning_screen",
-        lambda *_args, **_kwargs: {
-            "checked": True,
-            "stale": False,
-            "must_refresh": False,
-            "reason": "screen_unchanged",
-        },
+        "current_vision_worker_runtime",
+        lambda: FakeRuntime(),
     )
     request = _request(
         "llm",
@@ -753,7 +757,7 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
 
 
 def test_graph_custom_event_is_shared_by_metrics_and_sse():
-    from agent.application.run_context import run_context
+    from agent.observability.run_context import run_context
     from agent.observability.graph_events import forward_graph_event
 
     events = []

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.recipe.text_utils import normalize_text
+from agent.utils.text import normalize_text
 
 
 DEFAULT_SEARCH_TASK_CATEGORY = "검색"

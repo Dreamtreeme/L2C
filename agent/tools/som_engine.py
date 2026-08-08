@@ -240,7 +240,7 @@ class SomEngine:
                     pid=self._ocr_worker.pid,
                     startup=f"{startup_duration:.2f}s",
                 )
-                from agent.application.run_context import current_run_context
+                from agent.observability.run_context import current_run_context
 
                 context = current_run_context()
                 if context is not None:
@@ -287,7 +287,7 @@ class SomEngine:
         attempts = self._ocr_worker_attempts()
         request_timeout = self._ocr_worker_request_timeout_sec()
         last_error: Exception | None = None
-        from agent.application.run_context import observe_step
+        from agent.observability.run_context import observe_step
 
         for attempt in range(1, attempts + 1):
             worker = self._start_ocr_worker()

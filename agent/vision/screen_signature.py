@@ -9,7 +9,7 @@ from typing import Any
 
 from PIL import Image
 
-from agent.recipe.text_utils import normalize_text
+from agent.utils.text import normalize_text
 from agent.vision.marker_geometry import (
     center_ratio_from_bbox,
     marker_bbox,

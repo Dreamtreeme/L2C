@@ -1,4 +1,4 @@
-"""Reflex 레시피에서 공통으로 쓰는 텍스트/URL 정규화 유틸."""
+"""영역에 종속되지 않는 텍스트와 URL 정규화 함수."""
 
 from __future__ import annotations
 

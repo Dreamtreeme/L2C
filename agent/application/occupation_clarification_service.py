@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agent.application.run_context import invoke_with_metrics
+from agent.observability.run_context import invoke_with_metrics
 from agent.application.search_taxonomy_review_service import (
     SearchTaxonomyReviewService,
 )

@@ -94,7 +94,7 @@ def test_paddle_worker_emits_explicit_error_instead_of_empty_result(monkeypatch,
 
 
 def test_wait_stable_uses_supplied_region_without_window_lookup():
-    from agent.utils.wait_stable import WaitStable
+    from agent.vision.wait_stable import WaitStable
 
     class FakePerception:
         sct = FakeSct()
@@ -704,7 +704,7 @@ def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):
 def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
     import numpy as np
 
-    from agent.utils.wait_stable import WaitStable
+    from agent.vision.wait_stable import WaitStable
 
     reference_path = tmp_path / "before.png"
     Image.new("RGB", (200, 200), "white").save(reference_path)
@@ -728,7 +728,7 @@ def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
 def test_wait_stable_requires_consecutive_stable_frames(monkeypatch):
     import numpy as np
 
-    from agent.utils.wait_stable import WaitStable
+    from agent.vision.wait_stable import WaitStable
 
     white = np.full((200, 200), 255, dtype=np.uint8)
     black = np.zeros((200, 200), dtype=np.uint8)
@@ -749,7 +749,7 @@ def test_wait_stable_requires_consecutive_stable_frames(monkeypatch):
         capture_frame,
     )
     monkeypatch.setattr(
-        "agent.utils.wait_stable.time.sleep",
+        "agent.vision.wait_stable.time.sleep",
         lambda _seconds: None,
     )
 

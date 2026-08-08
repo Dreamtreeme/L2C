@@ -7,7 +7,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
-from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
+from agent.observability.run_contracts import RunEvent, RunPhase, RunStatus
 
 
 class RunRegistry:

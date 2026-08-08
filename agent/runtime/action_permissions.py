@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlsplit
 
-from agent.graph.state import GraphState
+from agent.runtime.worker_contracts import WorkerState
 from agent.sites.profile import SiteProfile
 
 
@@ -53,7 +53,7 @@ def _url_host_allowed(url: str, domains: set[str]) -> bool:
 
 
 def task_permission_reason(
-    state: GraphState,
+    state: WorkerState,
     action_name: str,
     args: dict[str, Any],
     *,

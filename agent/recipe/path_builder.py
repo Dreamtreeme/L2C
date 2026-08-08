@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import get_settings
-from agent.recipe.page_context import normalize_page_role
-from agent.recipe.replay_actions import (
+from agent.runtime.site_context import normalize_page_role
+from agent.runtime.replay_actions import (
     TARGET_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
 )
-from agent.recipe.text_utils import url_template
+from agent.utils.text import url_template
 from agent.vision.screen_signature import (
     compact_screen_context_signature,
     hamming_distance,

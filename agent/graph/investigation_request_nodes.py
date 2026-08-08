@@ -12,14 +12,14 @@ from agent.application.clarification_service import apply_clarification_answer
 from agent.application.occupation_clarification_service import (
     OccupationClarificationService,
 )
-from agent.application.run_context import (
+from agent.observability.run_context import (
     emit_run_event,
     invoke_with_metrics,
     raise_if_cancelled,
 )
-from agent.application.run_contracts import RunPhase
+from agent.observability.run_contracts import RunPhase
 from agent.graph.investigation_context import (
-    InvestigationGraphState,
+    InvestigationWorkerState,
     InvestigationModels,
     normalize_site_slugs,
 )
@@ -48,7 +48,7 @@ class InvestigationRequestNodes:
         self.occupation_clarification = occupation_clarification
         self.now = now
 
-    def understand(self, state: InvestigationGraphState) -> dict[str, Any]:
+    def understand(self, state: InvestigationWorkerState) -> dict[str, Any]:
         raise_if_cancelled()
         existing = InvestigationRequest.model_validate(state["investigation"])
         if existing.objective:
@@ -103,7 +103,7 @@ class InvestigationRequestNodes:
         return {"investigation": updated.model_dump(mode="json")}
 
     @staticmethod
-    def route_after_understand(state: InvestigationGraphState) -> str:
+    def route_after_understand(state: InvestigationWorkerState) -> str:
         investigation = InvestigationRequest.model_validate(state["investigation"])
         if investigation.clarification_questions:
             return "clarify"
@@ -111,7 +111,7 @@ class InvestigationRequestNodes:
             return "answer"
         return "define_evidence"
 
-    def clarify(self, state: InvestigationGraphState) -> dict[str, Any]:
+    def clarify(self, state: InvestigationWorkerState) -> dict[str, Any]:
         investigation = InvestigationRequest.model_validate(state["investigation"])
         question = next(iter(investigation.clarification_questions), None)
         if question is None:

@@ -1,4 +1,4 @@
-"""상세 OCR 전에 이미 수집한 공고 URL인지 확인한다."""
+"""현재 실행과 DB에서 이미 수집한 공고인지 확인한다."""
 
 from __future__ import annotations
 

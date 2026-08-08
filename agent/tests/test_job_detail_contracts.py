@@ -8,7 +8,7 @@ from agent.graph import (
     worker_selection,
     worker_transition,
 )
-from agent.runtime.reflex_runtime import attempt_reflex_replay as reflex_node
+from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
 from agent.graph.worker_execution_policy import merge_extracted_info
 from agent.runtime.job_collection import job_items
 from agent.runtime.job_card_queue import replay_job_card_after_return
@@ -197,7 +197,7 @@ def test_detail_extraction_does_not_use_card_identity_as_fallback(
 
 
 def test_detail_observation_accepts_multiple_evidence_lines():
-    from agent.graph.action_request import build_action_request
+    from agent.runtime.worker_contracts import build_action_request
 
     request = build_action_request(
         "llm",

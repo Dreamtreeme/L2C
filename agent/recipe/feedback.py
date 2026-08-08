@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agent.recipe.text_utils import site_of
+from agent.utils.text import site_of
 from agent.runtime.job_collection import job_count, job_items
 from agent.runtime.worker_actions import (
     STATE_UPDATE_ACTIONS,

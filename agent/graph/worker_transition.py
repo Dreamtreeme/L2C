@@ -5,9 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from agent.graph.action_request import attach_action_transition
-from agent.graph.state import GraphState
-from agent.recipe.page_context import normalize_page_role
+from agent.runtime.worker_contracts import WorkerState, attach_action_transition
+from agent.runtime.site_context import normalize_page_role
 from agent.runtime.transition_runtime import (
     build_transition_observation,
     transition_has_visual_change,
@@ -17,7 +16,7 @@ from agent.utils.logger import logger
 
 def _verify_reflex_after_state(
     request: dict[str, Any],
-    state: GraphState,
+    state: WorkerState,
 ) -> tuple[bool, str, dict[str, Any]]:
     """저장된 레시피 도착 화면과 현재 관찰이 같은지 확인한다."""
 
@@ -31,7 +30,7 @@ def _verify_reflex_after_state(
         match_step_by_screen_signature,
         screen_context_signature_match,
     )
-    from agent.recipe.text_utils import recipe_url_scope_matches, url_template
+    from agent.utils.text import recipe_url_scope_matches, url_template
 
     expected_url = str(expected.get("url_template") or "")
     current_url = str(state.get("current_url") or "")
@@ -113,7 +112,7 @@ def _verify_reflex_after_state(
     return False, "recipe_after_state_unverifiable", {}
 
 
-def _blocked_recipe_keys(state: GraphState) -> list[str]:
+def _blocked_recipe_keys(state: WorkerState) -> list[str]:
     return [
         str(key)
         for key in (state.get("reflex_blocked_recipe_keys") or [])
@@ -122,7 +121,7 @@ def _blocked_recipe_keys(state: GraphState) -> list[str]:
 
 
 def _active_recipe_after_transition(
-    state: GraphState,
+    state: WorkerState,
     *,
     source: str,
     status: str,
@@ -145,7 +144,7 @@ def _active_recipe_after_transition(
 
 
 def _reused_observation(
-    state: GraphState,
+    state: WorkerState,
     request: dict[str, Any],
 ) -> dict[str, Any]:
     """변화가 없을 때 직전 캡처의 OCR만 동일 화면에 다시 연결한다."""
@@ -206,7 +205,7 @@ def _transition_record(
     source: str,
     reason: str,
     attempt: int,
-    state: GraphState,
+    state: WorkerState,
     visual_change_ratio: float | None,
     ocr_skipped: bool,
 ) -> dict[str, Any]:
@@ -252,7 +251,7 @@ def _transition_result(
 
 
 def _result_without_transition(
-    state: GraphState,
+    state: WorkerState,
     request: dict[str, Any],
 ) -> dict[str, Any] | None:
     if state.get("low_information_screen"):
@@ -276,7 +275,7 @@ def _result_without_transition(
 
 
 def _blocked_keys_after_decision(
-    state: GraphState,
+    state: WorkerState,
     request: dict[str, Any],
     *,
     should_block: bool,
@@ -289,7 +288,7 @@ def _blocked_keys_after_decision(
 
 
 def _evaluate_before_ocr(
-    state: GraphState,
+    state: WorkerState,
     request: dict[str, Any],
     *,
     visual_changed: bool,
@@ -359,7 +358,7 @@ def _evaluate_before_ocr(
 
 
 def _evaluate_after_ocr(
-    state: GraphState,
+    state: WorkerState,
     request: dict[str, Any],
     *,
     visual_changed: bool,
@@ -443,7 +442,7 @@ def _evaluate_after_ocr(
     }
 
 
-def transition_node(state: GraphState) -> dict[str, Any]:
+def transition_node(state: WorkerState) -> dict[str, Any]:
     """직전 원자 행동과 현재 캡처를 비교하고 OCR 필요 여부를 결정한다."""
 
     request = dict(state.get("transition_request", {}) or {})

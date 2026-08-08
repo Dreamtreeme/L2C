@@ -143,7 +143,7 @@ def test_loading_result_recaptures_without_general_reasoning(tmp_path, monkeypat
 
 
 def test_general_reasoning_converts_model_tool_call(monkeypatch):
-    from agent.application import run_context
+    from agent.observability import run_context
 
     monkeypatch.setattr(
         worker_reasoning,

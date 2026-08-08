@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from agent.graph.state import GraphState
+from agent.runtime.worker_contracts import WorkerState
 from agent.runtime.job_collection import (
     JOB_IDENTITY_KEYS,
     JOB_LIST_KEY,
@@ -139,7 +139,7 @@ def merge_extracted_info(
 
 
 def sensitive_action_reason(
-    state: GraphState,
+    state: WorkerState,
     action_name: str,
     args: dict[str, Any],
     *,
@@ -245,7 +245,7 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
     }
 
 
-def state_snapshot_for_action(state: GraphState, current_url: str) -> dict[str, Any]:
+def state_snapshot_for_action(state: WorkerState, current_url: str) -> dict[str, Any]:
     return {
         "capture_id": str(state.get("current_capture_id") or ""),
         "url": current_url or state.get("current_url", "") or "",

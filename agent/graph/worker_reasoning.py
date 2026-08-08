@@ -6,14 +6,14 @@ import json
 import time
 from typing import Any
 
-from agent.graph.action_request import (
+from agent.runtime.worker_contracts import (
     ActionRequest,
+    WorkerState,
     action_event_results,
     action_event_transitions,
     action_request_from_model_response,
 )
-from agent.graph.state import GraphState
-from agent.graph.tool_schema import ACTION_TOOL_SCHEMAS
+from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
 from agent.graph.worker_reasoning_prompt import build_reasoning_messages
 from agent.runtime.job_card_selector import select_job_cards
 from agent.runtime.transition_runtime import (
@@ -53,7 +53,7 @@ def _is_repeating(history: list[Any], count: int) -> bool:
 
 
 def _loop_warning(
-    state: GraphState,
+    state: WorkerState,
 ) -> tuple[str, int]:
     """최근 행동과 화면 전환 기록에서 반복 경고를 만든다."""
 
@@ -103,10 +103,10 @@ def _loop_warning(
     return warning, error_increment
 
 
-def reasoning_node(state: GraphState) -> dict[str, Any]:
+def reasoning_node(state: WorkerState) -> dict[str, Any]:
     """카드 선택기로 먼저 판단하고 필요할 때만 LLM을 호출한다."""
 
-    from agent.application.run_context import (
+    from agent.observability.run_context import (
         invoke_with_metrics,
         raise_if_cancelled,
     )

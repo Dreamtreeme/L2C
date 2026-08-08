@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from agent.graph import worker_execution_dispatch
-from agent.graph.action_request import ActionRequest, build_action_request
+from agent.runtime.worker_contracts import ActionRequest, build_action_request
 from agent.graph.worker_execution_context import WorkerExecutionContext
-from agent.graph.worker_state import (
+from agent.runtime.worker_state import (
     count_mode_from_state,
     extracted_job_count,
     target_count_from_state,

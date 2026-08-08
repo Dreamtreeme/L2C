@@ -13,7 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from agent.config import get_settings
 
 from shared.db.database import Database
-from agent.application.run_contracts import (
+from agent.observability.run_contracts import (
     ChatErrorPayload,
     ChatFinalPayload,
     ChatRequest,
@@ -21,8 +21,8 @@ from agent.application.run_contracts import (
     RunStatus,
     new_run_id,
 )
-from agent.application.run_registry import get_run_registry
-from agent.runtime.application_runtime import ApplicationRuntime
+from agent.observability.run_registry import get_run_registry
+from agent.bootstrap import ApplicationRuntime
 from agent.utils.logger import logger
 from shared.schema.investigation_schema import ClarificationAnswer
 

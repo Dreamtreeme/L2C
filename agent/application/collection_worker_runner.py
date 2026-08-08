@@ -13,7 +13,7 @@ from agent.application.worker_execution_service import (
     execute_worker_graph,
 )
 from agent.config import get_settings
-from agent.graph.state_factory import create_worker_state
+from agent.runtime.worker_contracts import create_worker_state
 from agent.recipe.task_category import (
     DEFAULT_SEARCH_TASK_CATEGORY,
     normalize_task_category,

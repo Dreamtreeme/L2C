@@ -10,8 +10,8 @@ from typing import Any, Callable
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from agent.application.run_context import emit_run_event
-from agent.application.run_contracts import RunPhase, RunStatus
+from agent.observability.run_context import emit_run_event
+from agent.observability.run_contracts import RunPhase, RunStatus
 from agent.application.occupation_clarification_service import (
     OccupationClarificationService,
 )
@@ -23,7 +23,7 @@ from agent.application.tool_capabilities import build_tool_capability_catalog
 from agent.graph.investigation_answer_nodes import InvestigationAnswerNodes
 from agent.graph.investigation_collection_nodes import InvestigationCollectionNodes
 from agent.graph.investigation_context import (
-    InvestigationGraphState,
+    InvestigationWorkerState,
     InvestigationModels,
 )
 from agent.graph.investigation_evidence_nodes import InvestigationEvidenceNodes
@@ -100,7 +100,7 @@ class InvestigationWorkflow:
             self.checkpoint_runtime.close()
 
     def _build_graph(self):
-        workflow = StateGraph(InvestigationGraphState)
+        workflow = StateGraph(InvestigationWorkerState)
         workflow.add_node("understand", self.request_nodes.understand)
         workflow.add_node("clarify", self.request_nodes.clarify)
         workflow.add_node("define_evidence", self.evidence_nodes.define_evidence)
@@ -220,7 +220,7 @@ class InvestigationWorkflow:
             conversation_id=conversation_id,
             original_query=str(query or "").strip(),
         )
-        state: InvestigationGraphState = {
+        state: InvestigationWorkerState = {
             "investigation": investigation.model_dump(mode="json"),
             "capability_catalog": [item.model_dump(mode="json") for item in self.capabilities],
             "collection_results": [],

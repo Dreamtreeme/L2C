@@ -1,4 +1,4 @@
-"""로컬 백엔드 프로세스가 공유하는 애플리케이션 자원을 소유한다."""
+"""백엔드, 그래프와 장기 실행 자원을 하나의 프로세스로 조립한다."""
 
 from __future__ import annotations
 
@@ -82,5 +82,6 @@ class ApplicationRuntime:
             self.checkpoint_runtime.close()
             self._closed = True
             self._started = False
+
 
 __all__ = ["ApplicationRuntime"]

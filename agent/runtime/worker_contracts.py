@@ -1,4 +1,4 @@
-"""작업자 행동 요청과 실행 결과의 도메인 계약."""
+"""작업자 상태, 행동 요청과 실행 결과의 단일 도메인 계약."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from agent.graph.tool_schema import ACTION_TOOL_SCHEMAS
+from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
+from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
 
 
 def _message_text(content: Any) -> str:
@@ -82,7 +83,7 @@ class ActionRequest(BaseModel):
                     normalized_args.pop(empty_collection_field, None)
             call.args = normalized_args
         if len(self.tool_calls) > 1:
-            from agent.recipe.replay_actions import (
+            from agent.runtime.replay_actions import (
                 is_supported_recipe_action_group,
             )
 
@@ -240,10 +241,193 @@ def action_request_from_model_response(
     )
 
 
+class TransitionRequest(TypedDict, total=False):
+    """화면 변경 행동 뒤 다음 캡처에서 확인할 전환 요청."""
+
+    action_seq: int
+    action: str
+    from_capture_id: str
+    source: str
+    recipe_key: str
+    recipe_transition_index: int
+    recipe_transition_count: int
+    transition_actions: list[str]
+    expected_after_state: dict[str, Any]
+    after_state_match: dict[str, Any]
+    step: dict[str, Any]
+    before_url: str
+    before_page_role: str
+    before_screenshot: str
+    started_at: float
+    execution_failed: bool
+    failed_action: str
+
+
+class TransitionResult(TransitionRequest, total=False):
+    """전환 요청과 현재 캡처를 비교한 판정 결과."""
+
+    status: str
+    outcome: str
+    reason: str
+    visual_change_detected: bool
+    visual_change_ratio: float | None
+    needs_ocr: bool
+
+
+class WorkerIdentityState(TypedDict, total=False):
+    """작업 실행과 캡처를 연결하는 식별 상태."""
+
+    worker_run_id: str
+    current_capture_id: str
+    ocr_capture_id: str
+    capture_sequence: int
+    goal: str
+
+
+class ObservationState(TypedDict, total=False):
+    """한 캡처에서 얻은 화면, OCR과 브라우저 상태."""
+
+    current_screenshot: str
+    capture_quality: dict[str, Any]
+    raw_screen_signature: dict[str, Any]
+    analysis_mode: str
+    ocr_complete: bool
+    previous_screen_observation: dict[str, Any]
+    ui_context: str
+    current_url: str
+    current_page_role: str
+    current_url_stale: bool
+    low_information_screen: bool
+    low_information_capture_count: int
+    current_markers: list[dict[str, Any]]
+    marked_image: str
+    screen_signature: dict[str, Any]
+
+
+class ActionExecutionState(TypedDict, total=False):
+    """선택된 행동의 실행과 화면 전환 판정 상태."""
+
+    action_events: list[ActionEvent]
+    pending_action: ActionRequest | None
+    error_count: int
+    is_finished: bool
+    transition_request: TransitionRequest
+    transition_result: TransitionResult
+
+
+class RecipeReplayState(TypedDict, total=False):
+    """자율탐색 기록과 경험 기반 탐색 재생 상태."""
+
+    reflex_trace: dict[str, Any]
+    active_reflex_recipe: dict[str, Any]
+    reflex_blocked_recipe_keys: list[str]
+    recipe_params: dict[str, Any]
+
+
+class JobCollectionState(TypedDict, total=False):
+    """공고 목록 선택, 상세 판독과 결과 누적 상태."""
+
+    extracted_jd: dict[str, Any]
+    job_collection_contract: dict[str, Any]
+    job_card_queue: list[dict[str, Any]]
+    job_results_memory: dict[str, Any]
+    job_card_selection_trace: dict[str, Any]
+    job_results_availability: dict[str, Any]
+    job_detail_buffer: dict[str, Any]
+    job_detail_coverage: dict[str, Any]
+    job_detail_followup: dict[str, Any]
+    return_to_job_results: dict[str, Any]
+
+
+class ActionSafetyState(TypedDict, total=False):
+    """작업 권한과 사용자 승인 대기 상태."""
+
+    action_permission_contract: dict[str, Any]
+    pending_human_approval: bool
+    human_approval_request: dict[str, Any]
+
+
+class WorkerState(
+    WorkerIdentityState,
+    ObservationState,
+    ActionExecutionState,
+    RecipeReplayState,
+    JobCollectionState,
+    ActionSafetyState,
+    total=False,
+):
+    """작업자 노드와 결정 로직이 공유하는 상태 계약."""
+
+
+def create_worker_state(goal: str = "", **overrides: Any) -> WorkerState:
+    """모든 작업자 진입점에서 동일한 초기 상태를 만든다."""
+
+    state: WorkerState = {
+        "goal": goal,
+        "worker_run_id": "",
+        "current_capture_id": "",
+        "ocr_capture_id": "",
+        "capture_sequence": 0,
+        "current_screenshot": "",
+        "capture_quality": {},
+        "raw_screen_signature": {},
+        "analysis_mode": "",
+        "ocr_complete": False,
+        "ui_context": "",
+        "current_url": "",
+        "current_page_role": "",
+        "current_url_stale": True,
+        "low_information_screen": False,
+        "low_information_capture_count": 0,
+        "current_markers": [],
+        "action_events": [],
+        "marked_image": "",
+        "screen_signature": {},
+        "error_count": 0,
+        "is_finished": False,
+        "extracted_jd": {},
+        "pending_action": None,
+        "reflex_trace": {},
+        "active_reflex_recipe": {},
+        "reflex_blocked_recipe_keys": [],
+        "recipe_params": {},
+        "job_collection_contract": {
+            "required_fields": list(DEFAULT_JOB_COLLECTION_FIELDS),
+        },
+        "transition_request": {},
+        "transition_result": {
+            "status": "idle",
+            "needs_ocr": False,
+        },
+        "job_card_queue": [],
+        "job_results_memory": {},
+        "job_card_selection_trace": {},
+        "job_results_availability": {},
+        "job_detail_buffer": {},
+        "job_detail_coverage": {},
+        "job_detail_followup": {},
+        "return_to_job_results": {},
+        "action_permission_contract": {},
+        "pending_human_approval": False,
+        "human_approval_request": {},
+    }
+    state.update(overrides)
+    return state
+
+
 __all__ = [
+    "ActionExecutionState",
     "ActionEvent",
     "ActionRequest",
+    "ActionSafetyState",
+    "WorkerState",
+    "JobCollectionState",
+    "ObservationState",
+    "RecipeReplayState",
     "ToolCallRequest",
+    "TransitionRequest",
+    "TransitionResult",
+    "WorkerIdentityState",
     "action_event_feedback",
     "action_event_recipe_steps",
     "action_event_results",
@@ -252,4 +436,5 @@ __all__ = [
     "attach_action_transition",
     "build_action_event",
     "build_action_request",
+    "create_worker_state",
 ]

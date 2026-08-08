@@ -5,10 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from agent.config import get_settings
-from agent.graph.action_request import ActionRequest, build_action_request
-from agent.graph.state import GraphState
-from agent.recipe.phash_replay import anchor_overlap, match_target_by_ratio
-from agent.recipe.text_utils import normalize_text
+from agent.runtime.worker_contracts import (
+    ActionRequest,
+    WorkerState,
+    build_action_request,
+)
+from agent.runtime.target_matching import anchor_overlap, match_target_by_ratio
+from agent.utils.text import normalize_text
 from agent.runtime.job_collection import job_count
 from agent.runtime.site_context import looks_like_job_detail_url
 from agent.vision.marker_geometry import (
@@ -48,7 +51,7 @@ def job_card_match_text(value: Any) -> str:
     return text.casefold().replace(" ", "")
 
 
-def _target_count_from_state(state: GraphState) -> int:
+def _target_count_from_state(state: WorkerState) -> int:
     params = state.get("recipe_params", {}) or {}
     try:
         return max(0, int(params.get("target_count") or 0))
@@ -56,7 +59,7 @@ def _target_count_from_state(state: GraphState) -> int:
         return 0
 
 
-def normalize_job_card_queue(args: dict, state: GraphState, current_url: str) -> tuple[list[dict], dict]:
+def normalize_job_card_queue(args: dict, state: WorkerState, current_url: str) -> tuple[list[dict], dict]:
     """LLM이 고른 현재 화면의 공고 카드를 좌표비율 기반 큐로 정규화한다."""
 
     cards = job_card_entries_from_args(args)
@@ -436,7 +439,7 @@ def job_card_marker_for_item(item: dict, markers: list[dict], signature: dict) -
 
 
 def replay_job_card_after_return(
-    state: GraphState,
+    state: WorkerState,
     transition_result: dict,
     current_url: str,
     markers: list[dict],

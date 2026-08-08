@@ -1,3 +1,5 @@
+"""연속 화면 프레임 비교로 렌더링 변화와 안정화를 기다린다."""
+
 import time
 import os
 from typing import Any, Optional

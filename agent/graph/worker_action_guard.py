@@ -9,10 +9,10 @@ from agent.graph.worker_execution_policy import (
     repeats_no_effect_target,
     sensitive_action_reason,
 )
-from agent.graph.worker_resources import check_current_reasoning_screen
-from agent.graph.worker_state import return_to_job_results_for_url
+from agent.runtime.worker_state import return_to_job_results_for_url
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.transition_runtime import latest_no_effect_transition
+from agent.runtime.vision_worker_runtime import current_vision_worker_runtime
 from agent.runtime.worker_actions import (
     DIRECT_SCREEN_ACTION_SOURCES,
     RETURN_ACTIONS,
@@ -92,7 +92,7 @@ def guard_ui_action(
         action_name in {"click_marker", "type_in_marker"}
         and context.action_request.source not in DIRECT_SCREEN_ACTION_SOURCES
     ):
-        guard_result = check_current_reasoning_screen(
+        guard_result = current_vision_worker_runtime().check_reasoning_screen(
             context.state,
             marker_id=args.get("marker_id"),
         )

@@ -1,3 +1,6 @@
+from contextlib import nullcontext
+
+
 def test_site_registry_lists_existing_profiles():
     from agent.sites import list_supported_sites
 
@@ -47,7 +50,6 @@ def test_open_browser_uses_requested_site_official_url(monkeypatch):
 
 def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch):
     from agent.application.worker_execution_service import prepare_worker_start_screen
-    from agent.graph import worker_resources
     from agent.sites import load_site_profile
 
     calls = []
@@ -71,12 +73,16 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
                 "result": {"url": "https://www.jobkorea.co.kr"},
             }
 
-    monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
-    monkeypatch.setattr(
-        worker_resources,
-        "prepare_reasoning_models",
-        lambda: reasoning_warmed.append(True),
-    )
+    class FakeRuntime:
+        def activate(self):
+            return nullcontext()
+
+        def get_action_tools(self):
+            return FakeActionTools()
+
+        def prepare_reasoning_models(self, _tool_schemas):
+            reasoning_warmed.append(True)
+
     monkeypatch.setattr(
         "agent.graph.worker_observation.capture_node",
         lambda state: {
@@ -97,6 +103,7 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
     result = prepare_worker_start_screen(
         {"current_url": "", "action_events": []},
         load_site_profile("잡코리아"),
+        worker_runtime=FakeRuntime(),
     )
 
     assert calls == [{"url": "", "current_url": "", "site": "jobkorea"}]
@@ -272,7 +279,7 @@ def test_runtime_guidance_contains_only_current_site_and_role():
 
 
 def test_preprocessor_uses_registry_source_platform():
-    from agent.utils.preprocessor import Preprocessor
+    from agent.application.job_preprocessor import Preprocessor
 
     assert (
         Preprocessor.parse_source_platform(

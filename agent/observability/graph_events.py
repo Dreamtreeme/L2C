@@ -6,8 +6,8 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-from agent.application.run_contracts import RunPhase
-from agent.application.run_context import current_run_context
+from agent.observability.run_contracts import RunPhase
+from agent.observability.run_context import current_run_context
 from agent.utils.logger import logger
 
 

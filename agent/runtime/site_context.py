@@ -7,9 +7,27 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
 
-from agent.recipe.page_context import normalize_page_role
-from agent.recipe.text_utils import normalize_text
+from agent.utils.text import normalize_text
 from agent.sites.profile import PageGuidance, SiteProfile
+
+
+_PAGE_ROLE_ALIASES = {
+    "detail": "job_detail",
+    "posting_detail": "job_detail",
+    "jobdetail": "job_detail",
+    "detail_tab": "job_detail",
+    "side_panel_detail": "job_detail",
+    "list": "search",
+    "results": "search",
+    "search_results": "search",
+}
+
+
+def normalize_page_role(value: Any) -> str:
+    """화면 역할 값을 사이트 안내와 비교 가능한 이름으로 정규화한다."""
+
+    role = normalize_text(value).casefold().replace(" ", "_").replace("-", "_")
+    return _PAGE_ROLE_ALIASES.get(role, role)
 
 
 @lru_cache(maxsize=32)

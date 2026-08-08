@@ -41,7 +41,7 @@ class PerceptionEngine:
         self._analysis_cache_limit = get_settings().vision.ui_analysis_cache_limit
 
         # WaitStable은 PerceptionEngine을 역참조하므로 순환 import를 피하기 위해 lazy 로딩합니다.
-        from agent.utils.wait_stable import WaitStable
+        from agent.vision.wait_stable import WaitStable
         self._wait_stable = WaitStable(self)
 
         logger.info("PerceptionEngine initialized with SomEngine", screenshot_dir=str(self.screenshot_dir))

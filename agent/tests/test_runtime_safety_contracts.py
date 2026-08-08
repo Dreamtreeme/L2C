@@ -7,7 +7,7 @@ from agent.graph import (
     worker_execution,
     worker_execution_dispatch,
 )
-from agent.graph.action_request import action_event_results
+from agent.runtime.worker_contracts import action_event_results
 from agent.prompts.detail_extraction import (
     build_detail_extraction_system_prompt,
 )
@@ -16,7 +16,7 @@ from agent.runtime.action_permissions import task_permission_reason
 
 
 def _action_request(tool_calls):
-    from agent.graph.action_request import build_action_request
+    from agent.runtime.worker_contracts import build_action_request
 
     return build_action_request("llm", "", tool_calls)
 
@@ -104,15 +104,19 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
         },
         request,
     )
+    class FakeRuntime:
+        def check_reasoning_screen(self, *_args, **_kwargs):
+            return {
+                "checked": False,
+                "stale": False,
+                "must_refresh": True,
+                "reason": "previous_phash_missing",
+            }
+
     monkeypatch.setattr(
         worker_action_guard,
-        "check_current_reasoning_screen",
-        lambda *_args, **_kwargs: {
-            "checked": False,
-            "stale": False,
-            "must_refresh": True,
-            "reason": "previous_phash_missing",
-        },
+        "current_vision_worker_runtime",
+        lambda: FakeRuntime(),
     )
 
     blocked = worker_action_guard.guard_ui_action(
@@ -325,7 +329,7 @@ def test_explicit_sensitive_recipe_step_is_not_promotion_eligible():
 
 
 def test_run_deadline_stops_before_next_external_step():
-    from agent.application.run_context import (
+    from agent.observability.run_context import (
         RunDeadlineExceeded,
         raise_if_cancelled,
         run_context,
@@ -341,7 +345,7 @@ def test_run_deadline_stops_before_next_external_step():
 
 
 def test_model_timeout_is_normalized_to_application_contract():
-    from agent.application.run_context import (
+    from agent.observability.run_context import (
         ModelRequestTimeout,
         invoke_with_metrics,
     )
@@ -359,7 +363,7 @@ def test_model_timeout_is_normalized_to_application_contract():
 
 
 def test_model_role_policy_reads_validated_timeout_settings(monkeypatch):
-    from agent.application.model_policy import model_execution_policy
+    from agent.llm.policy import model_execution_policy
     from agent.config import get_settings
 
     monkeypatch.setenv("COMMANDER_REQUEST_TIMEOUT_SEC", "44")
@@ -437,7 +441,7 @@ def test_web_server_returns_403_before_remote_request_reaches_routes():
 
 def test_chat_deadline_returns_partial_completion():
     from agent.application.chat_service import ChatService
-    from agent.application.run_context import RunDeadlineExceeded
+    from agent.observability.run_context import RunDeadlineExceeded
 
     class DeadlineWorkflow:
         def run(self, *args, **kwargs):

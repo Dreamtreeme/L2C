@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.config import get_settings
 from agent.graph.worker_reasoning import reasoning_node
-from agent.graph.state import GraphState
+from agent.runtime.worker_contracts import WorkerState
 from agent.graph.worker_observation import (
     capture_node,
     ocr_node,
@@ -17,7 +17,7 @@ from agent.graph.worker_observation import (
 from agent.graph.worker_selection import selection_node
 from agent.graph.worker_transition import transition_node
 from agent.graph.worker_execution import execution_node
-from agent.graph.worker_state import (
+from agent.runtime.worker_state import (
     current_observation_matches_capture,
     return_to_job_results_for_url,
 )
@@ -26,11 +26,11 @@ from agent.observability.reflex_paths import (
     reflex_selection_observation,
     reflex_transition_observation,
 )
-from agent.runtime.reflex_runtime import attempt_reflex_replay
+from agent.recipe.replay_runtime import attempt_reflex_replay
 from agent.utils.logger import logger
 
 
-def route_after_start(state: GraphState) -> str:
+def route_after_start(state: WorkerState) -> str:
     """현재 캡처에 속한 관찰만 재사용하고 나머지는 다시 캡처한다."""
 
     if state.get("low_information_screen"):
@@ -40,7 +40,7 @@ def route_after_start(state: GraphState) -> str:
     return "capture"
 
 
-def route_after_selection(state: GraphState) -> str:
+def route_after_selection(state: WorkerState) -> str:
     """결정론적 정책, 선택적 OCR, Reflex, LLM 순서로 다음 경로를 고른다."""
 
     if state.get("pending_action") is not None:
@@ -77,7 +77,7 @@ def route_after_selection(state: GraphState) -> str:
     return "reflex"
 
 
-def route_after_reflex(state: GraphState) -> str:
+def route_after_reflex(state: WorkerState) -> str:
     """Reflex가 요청을 만들었을 때만 실행하고 나머지는 LLM으로 보낸다."""
 
     return (
@@ -87,7 +87,7 @@ def route_after_reflex(state: GraphState) -> str:
     )
 
 
-def route_after_reasoning(state: GraphState) -> str:
+def route_after_reasoning(state: WorkerState) -> str:
     """로딩 화면은 행동 없이 재관찰하고, 그 외 판단 결과만 실행한다."""
 
     if (
@@ -99,7 +99,7 @@ def route_after_reasoning(state: GraphState) -> str:
     return "execution"
 
 
-def route_after_execution(state: GraphState) -> str:
+def route_after_execution(state: WorkerState) -> str:
     """원자 실행 뒤 종료, 후속 정책, 새 관찰 또는 새 판단을 선택한다."""
 
     if state.get("is_finished", False):
@@ -118,9 +118,9 @@ def route_after_execution(state: GraphState) -> str:
     return "reasoning"
 
 
-def _instrument_node(name: str, node: Callable[[GraphState], dict[str, Any]]):
+def _instrument_node(name: str, node: Callable[[WorkerState], dict[str, Any]]):
     @wraps(node)
-    def observed(state: GraphState) -> dict[str, Any]:
+    def observed(state: WorkerState) -> dict[str, Any]:
         with graph_step(name) as observation:
             result = node(state)
             request = (
@@ -162,7 +162,7 @@ def build_graph(*, worker_runtime=None):
     """책임별 작업자 노드를 연결하고 컴파일한다."""
 
     logger.info("Building atomic worker StateGraph")
-    workflow = StateGraph(GraphState)
+    workflow = StateGraph(WorkerState)
     bind = worker_runtime.bind_node if worker_runtime is not None else lambda node: node
 
     nodes = {

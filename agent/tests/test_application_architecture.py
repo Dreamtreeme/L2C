@@ -1,7 +1,59 @@
+import ast
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
+
+
+def _module_imports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module)
+    return imports
+
+
+def test_dependency_direction_has_no_lower_layer_back_imports():
+    agent_dir = Path(__file__).resolve().parents[1]
+    forbidden = {
+        "runtime": ("agent.application", "agent.graph", "agent.recipe"),
+        "recipe": ("agent.application", "agent.graph"),
+        "application": ("agent.graph",),
+        "llm": ("agent.application", "agent.graph"),
+        "observability": ("agent.application", "agent.graph"),
+        "tools": (
+            "agent.application",
+            "agent.graph",
+            "agent.recipe",
+            "agent.runtime",
+        ),
+        "utils": (
+            "agent.application",
+            "agent.graph",
+            "agent.recipe",
+            "agent.runtime",
+            "agent.tools",
+            "agent.vision",
+        ),
+        "vision": (
+            "agent.application",
+            "agent.graph",
+            "agent.recipe",
+            "agent.runtime",
+        ),
+    }
+    violations: list[str] = []
+    for area, prefixes in forbidden.items():
+        for path in (agent_dir / area).glob("*.py"):
+            for imported in _module_imports(path):
+                if imported.startswith(prefixes):
+                    violations.append(f"{path.name}: {imported}")
+
+    assert violations == []
 
 
 def test_citation_validation_normalizes_grouped_ids_before_validation():
@@ -15,8 +67,8 @@ def test_citation_validation_normalizes_grouped_ids_before_validation():
 
 def test_chat_service_returns_run_contract_and_progress_events():
     from agent.application.chat_service import ChatService
-    from agent.application.run_context import emit_run_event
-    from agent.application.run_contracts import RunPhase, RunStatus
+    from agent.observability.run_context import emit_run_event
+    from agent.observability.run_contracts import RunPhase, RunStatus
 
     class FakeWorkflow:
         def run(self, query, **kwargs):
@@ -48,7 +100,7 @@ def test_chat_service_returns_run_contract_and_progress_events():
     assert events[-1].event == "run_completed"
 
 def test_run_registry_tracks_cancellation_and_conversation_history():
-    from agent.application.run_registry import RunRegistry
+    from agent.observability.run_registry import RunRegistry
 
     registry = RunRegistry(limit=10)
     registry.start(
@@ -72,7 +124,7 @@ def test_run_registry_tracks_cancellation_and_conversation_history():
 
 def test_chat_service_stops_before_llm_when_cancel_is_requested():
     from agent.application.chat_service import ChatService
-    from agent.application.run_registry import get_run_registry
+    from agent.observability.run_registry import get_run_registry
 
     class FailingWorkflow:
         def run(self, query, **kwargs):
@@ -94,7 +146,7 @@ def test_chat_service_stops_before_llm_when_cancel_is_requested():
 def test_chat_api_streams_structured_progress_without_character_delay(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from agent.application.run_contracts import RunEvent, RunPhase
+    from agent.observability.run_contracts import RunEvent, RunPhase
     from agent.web_server import app
 
     class FakeChatService:
@@ -131,8 +183,8 @@ def test_chat_api_streams_structured_progress_without_character_delay(monkeypatc
 def test_chat_api_resumes_from_structured_clarification(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from agent.application.run_contracts import RunEvent, RunPhase, RunStatus
-    from agent.application.run_registry import get_run_registry
+    from agent.observability.run_contracts import RunEvent, RunPhase, RunStatus
+    from agent.observability.run_registry import get_run_registry
     from agent.web_server import app
 
     registry = get_run_registry()
@@ -193,7 +245,7 @@ def test_chat_api_resumes_from_structured_clarification(monkeypatch):
 def test_chat_api_uses_recent_conversation_context(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from agent.application.run_registry import get_run_registry
+    from agent.observability.run_registry import get_run_registry
     from agent.web_server import app
 
     registry = get_run_registry()
@@ -239,7 +291,7 @@ def test_chat_api_uses_recent_conversation_context(monkeypatch):
 def test_cancel_run_api_marks_active_run():
     from fastapi.testclient import TestClient
 
-    from agent.application.run_registry import get_run_registry
+    from agent.observability.run_registry import get_run_registry
     from agent.web_server import app
 
     registry = get_run_registry()
@@ -252,7 +304,7 @@ def test_cancel_run_api_marks_active_run():
     assert registry.is_cancel_requested("cancel-api-run") is True
 
 def test_cancelled_run_resume_restarts_from_original_request():
-    from agent.application.run_registry import get_run_registry
+    from agent.observability.run_registry import get_run_registry
     from agent.web_server import _effective_chat_query
 
     registry = get_run_registry()
@@ -316,7 +368,7 @@ def test_collection_service_status_contract(
     from agent.application.collection_service import CollectionService
     from agent.application.collection_submission_service import FinalizedSubmission
     from agent.application.collection_worker_runner import WorkerRunResult
-    from agent.application.run_context import run_context
+    from agent.observability.run_context import run_context
     from shared.schema.collection_intent import CollectionIntent
     from shared.schema.feedback_schema import WorkerSubmission
 
@@ -410,12 +462,11 @@ def test_worker_execution_session_serializes_concurrent_requests():
     assert first_thread.is_alive() is False
     assert second_thread.is_alive() is False
 
-def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
+def test_worker_graph_does_not_start_before_failed_ocr_readiness():
     from agent.application.worker_execution_service import (
         OcrWorkerReadinessError,
         prepare_worker_start_screen,
     )
-    from agent.graph import worker_resources
     from agent.sites import load_site_profile
 
     class FakeSomEngine:
@@ -431,11 +482,22 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness(monkeypatch):
         def open_browser(self, url="", current_url="", site=""):
             return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
 
-    monkeypatch.setattr(worker_resources, "get_action_tools", lambda: FakeActionTools())
+    class FakeRuntime:
+        @contextmanager
+        def activate(self):
+            yield
+
+        def get_action_tools(self):
+            return FakeActionTools()
+
+        def prepare_reasoning_models(self, _tool_schemas):
+            return None
+
     with pytest.raises(OcrWorkerReadinessError):
         prepare_worker_start_screen(
             {"current_url": "", "action_events": []},
             load_site_profile("wanted"),
+            worker_runtime=FakeRuntime(),
         )
 
 def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
@@ -625,7 +687,7 @@ def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch
     assert events == ["browser_closed", "perception_closed", "ocr_closed"]
 
 def test_application_runtime_keeps_vision_lazy_until_collection(monkeypatch, tmp_path):
-    from agent.runtime.application_runtime import ApplicationRuntime
+    from agent.bootstrap import ApplicationRuntime
 
     monkeypatch.setenv("VISION_RECIPE_AUTO_PROMOTE", "0")
     runtime = ApplicationRuntime(tmp_path / "runtime.db")

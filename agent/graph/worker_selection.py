@@ -6,17 +6,17 @@ import time
 from typing import Any
 
 from agent.config import get_settings
-from agent.graph.action_request import (
+from agent.runtime.worker_contracts import (
     ActionRequest,
+    WorkerState,
     attach_action_transition,
     build_action_request,
 )
-from agent.graph.state import GraphState
-from agent.graph.worker_state import (
+from agent.runtime.worker_state import (
     count_mode_from_state,
     target_count_from_state,
 )
-from agent.runtime.duplicate_job_policy import existing_job_url_trace
+from agent.application.duplicate_job_service import existing_job_url_trace
 from agent.runtime.job_card_queue import (
     active_job_card,
     job_card_queue_scope_complete,
@@ -52,7 +52,7 @@ def _low_information_stop() -> dict[str, Any]:
 
 
 def _skip_duplicate_detail(
-    state: GraphState,
+    state: WorkerState,
     *,
     transition_result: dict[str, Any],
     current_url: str,
@@ -106,7 +106,7 @@ def _skip_duplicate_detail(
 
 
 def _queue_return_transition(
-    state: GraphState,
+    state: WorkerState,
     transition_result: dict[str, Any],
     trace: dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -153,7 +153,7 @@ def _queue_return_transition(
 
 
 def _replay_queued_card(
-    state: GraphState,
+    state: WorkerState,
     *,
     request: ActionRequest,
     selected_markers: list[dict[str, Any]],
@@ -197,7 +197,7 @@ def _replay_queued_card(
     return update
 
 
-def selection_node(state: GraphState) -> dict[str, Any]:
+def selection_node(state: WorkerState) -> dict[str, Any]:
     """중복 공고와 목록 복귀 큐를 검사해 원자 행동 하나를 선택한다."""
 
     if state.get("pending_action") is not None:

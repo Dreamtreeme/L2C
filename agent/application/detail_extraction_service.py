@@ -16,7 +16,7 @@ from agent.utils.model_dump import dump_model
 
 def detail_extraction_model_spec() -> str:
     from agent.config import get_settings
-    from agent.application.model_policy import lightweight_model_name
+    from agent.llm.policy import lightweight_model_name
 
     return (
         get_settings().models.detail_final_extraction_model
@@ -27,7 +27,7 @@ def detail_extraction_model_spec() -> str:
 def get_detail_extraction_llm() -> Any:
     """상세 OCR 정제용 Gemini 구조화 모델을 지연 초기화한다."""
 
-    from agent.application.model_clients import get_structured_google_model
+    from agent.llm.clients import get_structured_google_model
     from shared.schema.jd_schema import JobPosting
 
     return get_structured_google_model(
@@ -85,7 +85,7 @@ def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[st
     ]
     started = time.perf_counter()
     llm = get_detail_extraction_llm()
-    from agent.application.run_context import invoke_with_metrics
+    from agent.observability.run_context import invoke_with_metrics
 
     response = invoke_with_metrics(
         llm,

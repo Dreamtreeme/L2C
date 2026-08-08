@@ -58,7 +58,7 @@ def _git_revision() -> tuple[str, bool]:
 
 
 def _runtime_config() -> dict[str, str]:
-    from agent.application.model_policy import (
+    from agent.llm.policy import (
         DEFAULT_COMMANDER_MODEL,
         DEFAULT_LIGHTWEIGHT_MODEL,
         DEFAULT_WORKER_REASONING_THINKING_LEVEL,
@@ -233,8 +233,8 @@ def main() -> int:
                     ensure_ascii=False,
                 )
             )
-            from agent.application.run_context import run_context
-            from agent.application.run_contracts import RunPhase, RunStatus
+            from agent.observability.run_context import run_context
+            from agent.observability.run_contracts import RunPhase, RunStatus
             from agent.observability.langsmith_adapter import publish_langsmith_feedback
             from agent.graph.workflow import build_graph
             from agent.runtime.vision_worker_runtime import VisionWorkerRuntime

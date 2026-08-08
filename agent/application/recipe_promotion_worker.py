@@ -114,8 +114,8 @@ class RecipePromotionWorker:
         review_context = None
         try:
             from agent.recipe.candidate_reviewer import review_and_apply_candidate
-            from agent.application.run_context import run_context
-            from agent.application.run_contracts import RunStatus
+            from agent.observability.run_context import run_context
+            from agent.observability.run_contracts import RunStatus
 
             site = str(candidate.get("site") or "")
             with run_context(

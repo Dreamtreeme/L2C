@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
 from contextvars import copy_context
 from typing import Any, Callable, TypeVar
 
 from langgraph.errors import GraphRecursionError
 
-from agent.application.run_context import emit_run_event, measure_step
-from agent.application.run_contracts import RunPhase
-from agent.graph.action_request import build_action_event
+from agent.observability.run_context import emit_run_event, measure_step
+from agent.observability.run_contracts import RunPhase
+from agent.runtime.worker_contracts import build_action_event
+from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
 from agent.observability.graph_events import forward_graph_event
 from agent.utils.logger import logger
 
@@ -144,7 +144,7 @@ def run_graph_with_last_state(
             config={"recursion_limit": recursion_limit},
             stream_mode=["values", "custom"],
         ):
-            from agent.application.run_context import raise_if_cancelled
+            from agent.observability.run_context import raise_if_cancelled
 
             raise_if_cancelled()
             if (
@@ -180,7 +180,7 @@ def prepare_worker_start_screen(
     initial_state: dict,
     site_profile,
     *,
-    worker_runtime: Any = None,
+    worker_runtime: Any,
 ) -> dict:
     """사이트 홈, OCR 작업자와 판단 모델을 병렬로 준비한다."""
 
@@ -189,21 +189,16 @@ def prepare_worker_start_screen(
         return initial_state
 
     try:
-        from agent.graph.worker_resources import get_action_tools, prepare_reasoning_models
-
-        runtime_context = (
-            worker_runtime.activate()
-            if worker_runtime is not None
-            else nullcontext()
-        )
-        with runtime_context:
-            action_tools = get_action_tools()
+        with worker_runtime.activate():
+            action_tools = worker_runtime.get_action_tools()
             site_slug = str(site_profile.slug or "").strip()
             result = _open_browser_while_ocr_starts(
                 action_tools,
                 site_slug=site_slug,
                 current_url=str(initial_state.get("current_url") or ""),
-                prepare_reasoning_models=prepare_reasoning_models,
+                prepare_reasoning_models=lambda: (
+                    worker_runtime.prepare_reasoning_models(ACTION_TOOL_SCHEMAS)
+                ),
             )
         prepared = dict(initial_state)
         prepared["current_url"] = start_url
@@ -243,16 +238,11 @@ def execute_worker_graph(
     site_profile,
     recursion_limit: int,
     *,
-    worker_runtime: Any = None,
+    worker_runtime: Any,
 ) -> tuple[dict, bool]:
     """그래프 구성, 시작 화면 준비, 실행을 하나의 작업자 경계로 묶는다."""
 
-    if worker_runtime is None:
-        from agent.graph.workflow import build_graph
-
-        app = build_graph()
-    else:
-        app = worker_runtime.get_graph()
+    app = worker_runtime.get_graph()
     emit_run_event(
         "worker_preparing_screen",
         RunPhase.COLLECTION,

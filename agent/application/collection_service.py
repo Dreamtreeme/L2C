@@ -8,8 +8,8 @@ from agent.application.collection_submission_service import (
     FinalizedSubmission,
     finalize_worker_submission,
 )
-from agent.application.run_context import emit_run_event, measure_step
-from agent.application.run_contracts import RunPhase
+from agent.observability.run_context import emit_run_event, measure_step
+from agent.observability.run_contracts import RunPhase
 from agent.recipe.task_category import normalize_task_category
 from agent.utils.logger import logger
 from shared.schema.collection_intent import CollectionIntent, CollectionResult
@@ -189,7 +189,7 @@ class CollectionService:
             )
             return result
         except Exception as exc:
-            from agent.application.run_context import (
+            from agent.observability.run_context import (
                 ModelRequestTimeout,
                 RunCancelled,
                 RunDeadlineExceeded,

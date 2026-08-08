@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from agent.application.job_persistence_service import persist_collected_data_with_report
-from agent.application.run_context import raise_if_cancelled
+from agent.observability.run_context import raise_if_cancelled
 from shared.schema.feedback_schema import WorkerSubmission
 
 if TYPE_CHECKING:

@@ -117,8 +117,8 @@ class VisionWorkerRuntime:
         with self._resource_lock:
             self._require_open()
             if tool_names not in self._ui_models:
-                from agent.application.model_clients import get_google_chat_model
-                from agent.application.model_policy import (
+                from agent.llm.clients import get_google_chat_model
+                from agent.llm.policy import (
                     worker_reasoning_model_name,
                     worker_reasoning_thinking_level,
                 )
@@ -139,6 +139,30 @@ class VisionWorkerRuntime:
         from agent.runtime.job_card_selector import prepare_job_card_selector_model
 
         prepare_job_card_selector_model()
+
+    def check_reasoning_screen(
+        self,
+        state: Mapping[str, Any],
+        *,
+        marker_id: int | None = None,
+    ) -> dict[str, Any]:
+        """저장한 화면과 현재 물리 화면이 같은 행동 대상을 가리키는지 확인한다."""
+
+        if not str((state.get("screen_signature") or {}).get("phash") or ""):
+            return {
+                "checked": False,
+                "stale": False,
+                "must_refresh": True,
+                "reason": "previous_phash_missing",
+            }
+
+        from agent.runtime.action_guard import check_reasoning_screen_stale
+
+        return check_reasoning_screen_stale(
+            state,
+            self.get_perception(),
+            marker_id=marker_id,
+        )
 
     def get_graph(self) -> Any:
         with self._resource_lock:

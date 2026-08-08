@@ -6,12 +6,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.graph.action_request import (
+from agent.runtime.worker_contracts import (
     ActionEvent,
     ActionRequest,
+    WorkerState,
     build_action_event,
 )
-from agent.graph.state import GraphState
 from agent.graph.worker_execution_policy import (
     compact_action_args,
     state_snapshot_for_action,
@@ -27,7 +27,7 @@ from agent.vision.target_snapshot import (
 class WorkerExecutionContext:
     """행동 실행 중 필요한 변경 가능 상태를 한곳에 모은다."""
 
-    state: GraphState
+    state: WorkerState
     action_request: ActionRequest
     prior_events: list[ActionEvent]
     new_actions: list[dict[str, Any]] = field(default_factory=list)
@@ -56,7 +56,7 @@ class WorkerExecutionContext:
     @classmethod
     def from_state(
         cls,
-        state: GraphState,
+        state: WorkerState,
         action_request: ActionRequest,
     ) -> "WorkerExecutionContext":
         """그래프 상태를 행동 실행 전용 문맥으로 변환한다."""
@@ -112,7 +112,7 @@ class WorkerExecutionContext:
             ),
         )
 
-    def state_for_dispatch(self) -> GraphState:
+    def state_for_dispatch(self) -> WorkerState:
         """현재까지 반영된 값으로 상태 행동용 읽기 전용 상태를 만든다."""
 
         return {
@@ -137,7 +137,7 @@ class WorkerExecutionContext:
             "finish_detail_reading",
         }:
             return
-        from agent.graph.worker_state import job_detail_key_from_state
+        from agent.runtime.worker_state import job_detail_key_from_state
         from agent.runtime.detail_runtime import is_job_detail_context
         from agent.runtime.job_field_contract import (
             merge_job_detail_coverage,

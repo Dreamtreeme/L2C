@@ -9,14 +9,13 @@ from typing import Any, Callable
 from agent.application.detail_extraction_service import (
     extract_job_from_job_detail_buffer,
 )
-from agent.graph.state import GraphState
+from agent.runtime.worker_contracts import WorkerState
 from agent.graph.worker_execution_policy import (
     merge_extracted_info,
     should_skip_job_update_without_detail_url,
 )
-from agent.graph.worker_resources import get_action_tools
-from agent.graph.worker_state import job_detail_key_from_state
-from agent.runtime.duplicate_job_policy import mark_existing_job_cards
+from agent.runtime.worker_state import job_detail_key_from_state
+from agent.application.duplicate_job_service import mark_existing_job_cards
 from agent.runtime.job_collection import job_items
 from agent.runtime.job_field_contract import (
     detail_coverage_status,
@@ -28,6 +27,7 @@ from agent.runtime.job_card_queue import (
     active_job_card,
     normalize_job_card_queue,
 )
+from agent.runtime.vision_worker_runtime import current_vision_worker_runtime
 from agent.utils.job_fields import missing_job_fields
 
 
@@ -61,7 +61,7 @@ def dispatch_ui_action(
 ) -> dict[str, Any]:
     """마우스와 키보드를 사용하는 물리 행동 하나를 실행한다."""
 
-    action_tools = get_action_tools()
+    action_tools = current_vision_worker_runtime().get_action_tools()
     if action_name == "click_marker":
         return action_tools.click_marker(get_bbox(args["marker_id"]))
     if action_name == "type_in_marker":
@@ -98,7 +98,7 @@ def dispatch_ui_action(
 def _attach_active_card_identity(
     data: dict[str, Any],
     *,
-    state: GraphState,
+    state: WorkerState,
     current_url: str,
 ) -> dict[str, Any]:
     """상세 화면에서 추출한 공고에 목록 카드 식별 정보를 붙인다."""
@@ -127,7 +127,7 @@ def _update_extracted_info(
     current_jobs: dict[str, Any],
     *,
     current_url: str,
-    state: GraphState,
+    state: WorkerState,
 ) -> StateActionOutcome:
     try:
         new_data = _attach_active_card_identity(
@@ -197,7 +197,7 @@ def _update_extracted_info(
 
 
 def _detail_followup(
-    state: GraphState,
+    state: WorkerState,
     *,
     current_url: str,
     reason: str,
@@ -252,7 +252,7 @@ def _finish_detail_reading(
     current_jobs: dict[str, Any],
     *,
     current_url: str,
-    state: GraphState,
+    state: WorkerState,
 ) -> StateActionOutcome:
     try:
         detail_key = job_detail_key_from_state(state)
@@ -419,7 +419,7 @@ def _set_job_card_queue(
     current_jobs: dict[str, Any],
     *,
     current_url: str,
-    state: GraphState,
+    state: WorkerState,
 ) -> StateActionOutcome:
     queue, memory = normalize_job_card_queue(args, state, current_url)
     queue, existing_cards = mark_existing_job_cards(queue, current_url)
@@ -481,7 +481,7 @@ def dispatch_state_action(
     current_jobs: dict[str, Any],
     *,
     current_url: str = "",
-    state: GraphState | None = None,
+    state: WorkerState | None = None,
 ) -> StateActionOutcome:
     """공고 추출과 카드 큐처럼 그래프 상태를 변경하는 행동을 실행한다."""
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.graph.state import GraphState
-from agent.recipe.replay_actions import (
+from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
@@ -243,12 +243,12 @@ def _missing_required_inputs(recipe: Any, params: dict[str, Any]) -> list[str]:
     return missing
 
 
-def load_reflex_replay_context(state: GraphState) -> ReflexReplayContext:
+def load_reflex_replay_context(state: WorkerState) -> ReflexReplayContext:
     """현재 작업 상태에 맞는 활성 레시피 후보를 조회한다."""
 
-    from agent.recipe.page_context import normalize_page_role
+    from agent.runtime.site_context import normalize_page_role
     from agent.recipe.store import RecipeStore
-    from agent.recipe.text_utils import url_template
+    from agent.utils.text import url_template
 
     markers = list(state.get("current_markers", []) or [])
     params = dict(state.get("recipe_params") or {})
@@ -366,7 +366,7 @@ def _step_trace(
 
 
 def _match_action_screen(
-    state: GraphState,
+    state: WorkerState,
     context: ReflexReplayContext,
     step: dict[str, Any],
     trace: dict[str, Any],
@@ -380,7 +380,7 @@ def _match_action_screen(
         match_step_by_screen_signature,
         screen_context_signature_match,
     )
-    from agent.recipe.text_utils import recipe_url_scope_matches
+    from agent.utils.text import recipe_url_scope_matches
 
     action = step.get("action")
     if not is_replayable_action(step):
@@ -438,7 +438,7 @@ def _match_action_screen(
 
 
 def _bind_candidate(
-    state: GraphState,
+    state: WorkerState,
     context: ReflexReplayContext,
     candidate: ReflexCandidate,
     rejection_log: ReflexRejectionLog,
@@ -515,7 +515,7 @@ def _bind_candidate(
 
 
 def select_reflex_replay(
-    state: GraphState,
+    state: WorkerState,
     context: ReflexReplayContext,
 ) -> tuple[ReflexSelection | None, ReflexRejectionLog]:
     """후보를 순서대로 검증하고 첫 번째 실행 가능한 전이를 반환한다."""

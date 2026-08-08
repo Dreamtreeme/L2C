@@ -5,12 +5,12 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from agent.application.run_context import raise_if_cancelled
-from agent.graph.action_request import (
+from agent.observability.run_context import raise_if_cancelled
+from agent.runtime.worker_contracts import (
     ActionRequest,
+    WorkerState,
     build_action_event,
 )
-from agent.graph.state import GraphState
 from agent.graph.worker_action_effects import (
     activate_clicked_job_card,
     execute_state_action,
@@ -23,12 +23,12 @@ from agent.graph.worker_action_guard import (
 )
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.graph.worker_execution_policy import compact_action_args
-from agent.graph.worker_resources import get_action_tools
 from agent.runtime.worker_actions import (
     STATE_UPDATE_ACTIONS,
     TERMINAL_ACTIONS,
     UI_ACTIONS,
 )
+from agent.runtime.vision_worker_runtime import current_vision_worker_runtime
 from agent.utils.logger import logger
 
 
@@ -163,7 +163,9 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 )
                 screen_changed = False
             elif action_name in TERMINAL_ACTIONS:
-                result = get_action_tools().finish_task(args["result"])
+                result = current_vision_worker_runtime().get_action_tools().finish_task(
+                    args["result"]
+                )
                 raise_for_action_failure(result)
                 context.is_finished = True
                 screen_changed = False
@@ -218,7 +220,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
             break
 
 
-def _validated_action_request(state: GraphState) -> ActionRequest | None:
+def _validated_action_request(state: WorkerState) -> ActionRequest | None:
     raw_request = state.get("pending_action")
     if raw_request is None:
         return None
@@ -240,7 +242,7 @@ def _validated_action_request(state: GraphState) -> ActionRequest | None:
 
 
 def _missing_action_update(
-    state: GraphState,
+    state: WorkerState,
     request: ActionRequest | None,
 ) -> dict[str, Any]:
     logger.warning("No validated action request is available.")
@@ -265,7 +267,7 @@ def _missing_action_update(
     }
 
 
-def execution_node(state: GraphState) -> dict[str, Any]:
+def execution_node(state: WorkerState) -> dict[str, Any]:
     """현재 화면에서 선택된 행동 실행 단위를 검증하고 실행한다."""
 
     raise_if_cancelled()

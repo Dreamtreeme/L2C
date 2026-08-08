@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from agent.graph.action_request import (
+from agent.runtime.worker_contracts import (
     action_event_feedback,
     action_event_recipe_steps,
     action_event_results,

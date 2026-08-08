@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from agent.recipe.text_utils import site_of
+from agent.utils.text import site_of
 from agent.runtime.job_identity import (
     canonical_company_name,
     canonical_position_title,

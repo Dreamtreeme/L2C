@@ -19,7 +19,7 @@ dotenv.load_dotenv(ROOT_DIR / ".env")
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from agent.graph.state_factory import create_worker_state
+from agent.runtime.worker_contracts import create_worker_state
 from agent.graph.workflow import build_graph
 from agent.utils.logger import logger
 from benchmark.quality_eval import evaluate_job_records

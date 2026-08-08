@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from agent.application.model_policy import ModelExecutionRole, model_execution_policy
+from agent.llm.policy import ModelExecutionRole, model_execution_policy
 from agent.config import get_settings
 
 

@@ -8,7 +8,7 @@ from typing import Any, Callable
 from agent.config import get_settings
 from agent.recipe.candidate_promotion import apply_candidate_promotion
 from agent.recipe.promotion_policy import compact_step_evidence_verdicts
-from agent.recipe.replay_actions import (
+from agent.runtime.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
 )
@@ -244,14 +244,14 @@ def build_candidate_review_payload(
 def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from agent.application.model_policy import commander_model_name
+    from agent.llm.policy import commander_model_name
     from agent.prompts.trust_boundary import external_content_contract_en
 
     model_name = (
         get_settings().models.recipe_critic_model
         or commander_model_name()
     )
-    from agent.application.model_clients import get_structured_google_model
+    from agent.llm.clients import get_structured_google_model
 
     llm = get_structured_google_model(
         model_name,
@@ -284,7 +284,7 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         HumanMessage(content=_serialize_candidate_review_payload(payload)),
     ]
-    from agent.application.run_context import invoke_with_metrics
+    from agent.observability.run_context import invoke_with_metrics
 
     return _coerce_review(invoke_with_metrics(llm, messages, "recipe_critic"))
 

@@ -5,9 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from agent.graph.action_request import build_action_request
-from agent.graph.state import GraphState
-from agent.runtime.reflex_replay import (
+from agent.runtime.worker_contracts import WorkerState, build_action_request
+from agent.recipe.replay import (
     ReflexReplayContext,
     ReflexSelection,
     load_reflex_replay_context,
@@ -18,7 +17,7 @@ from agent.utils.model_dump import dump_model
 
 
 def _miss_result(
-    state: GraphState,
+    state: WorkerState,
     reason: str,
     trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -119,7 +118,7 @@ def _hit_result(
     }
 
 
-def attempt_reflex_replay(state: GraphState) -> dict[str, Any]:
+def attempt_reflex_replay(state: WorkerState) -> dict[str, Any]:
     """후보 조회, 검증과 요청 조립을 순서대로 실행한다."""
 
     started = time.perf_counter()

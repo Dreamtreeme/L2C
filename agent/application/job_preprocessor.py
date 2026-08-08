@@ -1,5 +1,5 @@
 """
-비전 에이전트 수집 채용공고 데이터 전처리 유틸리티
+수집한 채용공고를 DB 저장 규격으로 전처리한다.
 - OCR 마커 노이즈 제거
 - 경력 구조화 추출 (experience_min, experience_max, experience_text)
 - 중복 후보 그룹용 content_hash 생성

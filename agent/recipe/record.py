@@ -6,14 +6,14 @@ execution_node의 기록 단계에서 호출되며, 실패해도 실제 실행 �
 from __future__ import annotations
 
 from agent.recipe.matcher import marker_ordinal, marker_region
-from agent.recipe.page_context import normalize_page_role
-from agent.recipe.replay_actions import (
+from agent.runtime.site_context import normalize_page_role
+from agent.runtime.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     RECORDED_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
-from agent.recipe.text_utils import normalize_text, url_template
+from agent.utils.text import normalize_text, url_template
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox, marker_center
 from agent.vision.screen_signature import (

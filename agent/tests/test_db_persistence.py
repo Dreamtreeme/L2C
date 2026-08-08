@@ -10,7 +10,7 @@ import os
 import sqlite3
 from pathlib import Path
 from agent.config import get_settings
-from agent.utils.preprocessor import Preprocessor
+from agent.application.job_preprocessor import Preprocessor
 from shared.db.database import Database
 from shared.schema.jd_schema import JobPosting
 

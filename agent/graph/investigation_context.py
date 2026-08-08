@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from agent.application.model_clients import (
+from agent.llm.clients import (
     get_google_chat_model,
     get_structured_google_model,
 )
-from agent.application.model_policy import commander_model_name
+from agent.llm.policy import commander_model_name
 from shared.schema.investigation_schema import (
     EvidencePlan,
     EvidenceValidation,
@@ -19,7 +19,7 @@ from shared.schema.investigation_schema import (
 )
 
 
-class InvestigationGraphState(TypedDict, total=False):
+class InvestigationWorkerState(TypedDict, total=False):
     investigation: dict[str, Any]
     capability_catalog: list[dict[str, Any]]
     db_report: dict[str, Any]
@@ -171,7 +171,7 @@ def build_request_prompt_context(investigation: InvestigationRequest) -> dict[st
     }
 
 __all__ = [
-    "InvestigationGraphState",
+    "InvestigationWorkerState",
     "InvestigationModels",
     "build_request_prompt_context",
     "capabilities_for_investigation",

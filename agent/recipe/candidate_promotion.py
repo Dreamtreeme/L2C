@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.recipe.page_context import normalize_page_role
+from agent.runtime.site_context import infer_site_page_role, normalize_page_role
 from agent.recipe.path_builder import build_recipe_path
 from agent.recipe.promotion_policy import evaluate_candidate_step_evidence
-from agent.recipe.replay_actions import (
+from agent.runtime.replay_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
 from agent.recipe.task_category import task_category_from_candidate
-from agent.runtime.site_context import infer_site_page_role
 from agent.utils.model_dump import dump_model
 from shared.schema.skill_schema import RecipeSkillMetadata
 

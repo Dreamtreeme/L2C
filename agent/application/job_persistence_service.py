@@ -149,7 +149,7 @@ def _prepare_job(
     from agent.runtime.job_identity import url_with_source_card_key
     from agent.runtime.site_context import looks_like_job_detail_url
     from agent.utils.job_fields import normalize_job_collection_fields
-    from agent.utils.preprocessor import Preprocessor
+    from agent.application.job_preprocessor import Preprocessor
 
     page_exhausted = bool(job.get("_collection_page_exhausted"))
     unavailable_fields = (

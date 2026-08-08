@@ -9,10 +9,9 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.config import get_settings
-from agent.graph.action_request import action_event_results
-from agent.graph.state import GraphState
+from agent.runtime.worker_contracts import WorkerState, action_event_results
 from agent.graph.worker_execution_policy import compact_action_args
-from agent.graph.worker_state import (
+from agent.runtime.worker_state import (
     job_detail_key_from_state,
     return_to_job_results_for_url,
 )
@@ -325,7 +324,7 @@ def _compact_recent_actions_context(
     )
 
 
-def _compact_job_card_queue_context(state: GraphState) -> str:
+def _compact_job_card_queue_context(state: WorkerState) -> str:
     queue = [
         item
         for item in (state.get("job_card_queue", []) or [])
@@ -352,7 +351,7 @@ def _compact_job_card_queue_context(state: GraphState) -> str:
 
 
 def _compact_detail_return_context(
-    state: GraphState,
+    state: WorkerState,
     current_url: str,
 ) -> str:
     pending = return_to_job_results_for_url(state, current_url)
@@ -369,7 +368,7 @@ def _compact_detail_return_context(
 
 
 def _compact_job_results_availability_context(
-    state: GraphState,
+    state: WorkerState,
 ) -> str:
     availability = dict(state.get("job_results_availability", {}) or {})
     if not availability:
@@ -386,7 +385,7 @@ def _compact_job_results_availability_context(
     )
 
 
-def _reasoning_image_base64(state: GraphState) -> str:
+def _reasoning_image_base64(state: WorkerState) -> str:
     marked_image_path = state.get("marked_image")
     if not marked_image_path or not os.path.exists(marked_image_path):
         return ""
@@ -411,7 +410,7 @@ def _reasoning_image_base64(state: GraphState) -> str:
 
 
 def build_reasoning_messages(
-    state: GraphState,
+    state: WorkerState,
     loop_warning: str,
     selector_trace: dict[str, Any] | None = None,
 ) -> list:

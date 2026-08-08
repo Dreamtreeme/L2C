@@ -10,9 +10,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agent.config import get_settings
-from agent.graph.action_request import build_action_request
-from agent.graph.state import GraphState
-from agent.recipe.page_context import normalize_page_role
+from agent.runtime.worker_contracts import WorkerState, build_action_request
+from agent.runtime.site_context import normalize_page_role, site_runtime_guidance
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.job_collection import job_count
 from agent.runtime.job_card_queue import (
@@ -20,7 +19,6 @@ from agent.runtime.job_card_queue import (
     job_card_queue_scope_complete,
     resolved_job_card_count,
 )
-from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.utils.image_utils import image_to_base64_jpeg
 from agent.utils.logger import logger
@@ -62,24 +60,24 @@ class JobCardSelection(BaseModel):
     cards: list[VisibleJobCard] = Field(default_factory=list)
 
 
-def _target_count(state: GraphState) -> int:
+def _target_count(state: WorkerState) -> int:
     try:
         return max(0, int((state.get("recipe_params") or {}).get("target_count") or 0))
     except (TypeError, ValueError):
         return 0
 
 
-def _count_mode(state: GraphState) -> str:
+def _count_mode(state: WorkerState) -> str:
     params = state.get("recipe_params") or {}
     raw = params.get("count_mode") or ""
     return str(getattr(raw, "value", raw)).strip().lower()
 
 
-def _collected_count(state: GraphState) -> int:
+def _collected_count(state: WorkerState) -> int:
     return job_count(state.get("extracted_jd") or {})
 
 
-def should_select_job_cards(state: GraphState) -> bool:
+def should_select_job_cards(state: WorkerState) -> bool:
     """아직 큐가 없는 검색 결과 화면에만 전용 판단을 적용한다."""
 
     target_count = _target_count(state)
@@ -109,7 +107,7 @@ def should_select_job_cards(state: GraphState) -> bool:
 
 
 def _selector_model_name() -> str:
-    from agent.application.model_policy import lightweight_model_name
+    from agent.llm.policy import lightweight_model_name
 
     return (
         get_settings().models.job_card_selector_model
@@ -118,7 +116,7 @@ def _selector_model_name() -> str:
 
 
 def _get_job_card_selector_model() -> Any:
-    from agent.application.model_clients import get_structured_google_model
+    from agent.llm.clients import get_structured_google_model
 
     return get_structured_google_model(
         _selector_model_name(),
@@ -169,7 +167,7 @@ def _compact_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return compact
 
 
-def _selection_messages(state: GraphState, remaining_count: int) -> list[Any]:
+def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
     markers = _compact_markers(list(state.get("current_markers") or []))
     recipe_params = dict(state.get("recipe_params") or {})
     search_query = str(recipe_params.get("query") or recipe_params.get("keyword") or "").strip()
@@ -348,7 +346,7 @@ def _validated_refinement_target(
     return {"action": action, "marker_id": marker_id, "label": label, "text": text}
 
 
-def select_job_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
+def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
     """전용 VLM 결과를 카드 큐 저장과 첫 카드 클릭 요청으로 변환한다."""
 
     if not should_select_job_cards(state):
@@ -365,7 +363,7 @@ def select_job_cards(state: GraphState) -> tuple[Any | None, dict[str, Any]]:
         else len(state.get("current_markers") or [])
     )
     try:
-        from agent.application.run_context import invoke_with_metrics
+        from agent.observability.run_context import invoke_with_metrics
 
         raw = invoke_with_metrics(
             _get_job_card_selector_model(),

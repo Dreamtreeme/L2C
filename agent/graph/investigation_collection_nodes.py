@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from agent.application.run_context import emit_run_event, raise_if_cancelled
-from agent.application.run_contracts import RunPhase
-from agent.graph.investigation_context import InvestigationGraphState
+from agent.observability.run_context import emit_run_event, raise_if_cancelled
+from agent.observability.run_contracts import RunPhase
+from agent.graph.investigation_context import InvestigationWorkerState
 from shared.schema.collection_intent import CollectionResult
 from shared.schema.investigation_schema import (
     InvestigationRequest,
@@ -21,7 +21,7 @@ class InvestigationCollectionNodes:
     ) -> None:
         self.collect_jobs = collect_jobs
 
-    def execute(self, state: InvestigationGraphState) -> dict[str, Any]:
+    def execute(self, state: InvestigationWorkerState) -> dict[str, Any]:
         raise_if_cancelled()
         investigation = InvestigationRequest.model_validate(state["investigation"])
         step = next(
