@@ -1,59 +1,7 @@
-import ast
 import threading
 from contextlib import contextmanager
-from pathlib import Path
 
 import pytest
-
-
-def _module_imports(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.add(node.module)
-    return imports
-
-
-def test_dependency_direction_has_no_lower_layer_back_imports():
-    agent_dir = Path(__file__).resolve().parents[1]
-    forbidden = {
-        "runtime": ("agent.application", "agent.graph", "agent.recipe"),
-        "recipe": ("agent.application", "agent.graph"),
-        "application": ("agent.graph",),
-        "llm": ("agent.application", "agent.graph"),
-        "observability": ("agent.application", "agent.graph"),
-        "tools": (
-            "agent.application",
-            "agent.graph",
-            "agent.recipe",
-            "agent.runtime",
-        ),
-        "utils": (
-            "agent.application",
-            "agent.graph",
-            "agent.recipe",
-            "agent.runtime",
-            "agent.tools",
-            "agent.vision",
-        ),
-        "vision": (
-            "agent.application",
-            "agent.graph",
-            "agent.recipe",
-            "agent.runtime",
-        ),
-    }
-    violations: list[str] = []
-    for area, prefixes in forbidden.items():
-        for path in (agent_dir / area).glob("*.py"):
-            for imported in _module_imports(path):
-                if imported.startswith(prefixes):
-                    violations.append(f"{path.name}: {imported}")
-
-    assert violations == []
 
 
 def test_citation_validation_normalizes_grouped_ids_before_validation():

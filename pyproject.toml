@@ -1,0 +1,85 @@
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["C901", "PLR0912", "PLR0915"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-branches = 12
+max-statements = 50
+
+[tool.importlinter]
+root_package = "agent"
+
+[[tool.importlinter.contracts]]
+name = "핵심 계층은 그래프에서 런타임 방향으로만 의존한다"
+type = "layers"
+layers = [
+    "agent.graph",
+    "agent.application",
+    "agent.recipe",
+    "agent.runtime",
+]
+
+[[tool.importlinter.contracts]]
+name = "작업자 그래프는 애플리케이션 구현에 직접 의존하지 않는다"
+type = "forbidden"
+source_modules = ["agent.graph.*"]
+forbidden_modules = ["agent.application"]
+allow_indirect_imports = true
+ignore_imports = [
+    "agent.graph.investigation_answer_nodes -> agent.application.evidence_service",
+    "agent.graph.investigation_evidence_nodes -> agent.application.evidence_service",
+    "agent.graph.investigation_evidence_nodes -> agent.application.search_taxonomy_service",
+    "agent.graph.investigation_evidence_policy -> agent.application.search_taxonomy_service",
+    "agent.graph.investigation_request_nodes -> agent.application.clarification_service",
+    "agent.graph.investigation_request_nodes -> agent.application.occupation_clarification_service",
+]
+
+[[tool.importlinter.contracts]]
+name = "LLM과 관측 계층은 상위 실행 계층에 의존하지 않는다"
+type = "forbidden"
+source_modules = ["agent.llm", "agent.observability"]
+forbidden_modules = ["agent.application", "agent.graph"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "물리 도구는 실행 정책에 의존하지 않는다"
+type = "forbidden"
+source_modules = ["agent.tools"]
+forbidden_modules = [
+    "agent.application",
+    "agent.graph",
+    "agent.recipe",
+    "agent.runtime",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "공용 유틸리티는 제품 계층에 의존하지 않는다"
+type = "forbidden"
+source_modules = ["agent.utils"]
+forbidden_modules = [
+    "agent.application",
+    "agent.graph",
+    "agent.recipe",
+    "agent.runtime",
+    "agent.tools",
+    "agent.vision",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "비전 기반 기능은 실행 정책에 의존하지 않는다"
+type = "forbidden"
+source_modules = ["agent.vision"]
+forbidden_modules = [
+    "agent.application",
+    "agent.graph",
+    "agent.recipe",
+    "agent.runtime",
+]
+allow_indirect_imports = true
