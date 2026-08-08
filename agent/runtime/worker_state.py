@@ -13,10 +13,11 @@ from agent.runtime.site_context import infer_site_page_role
 def current_observation_matches_capture(state: WorkerState) -> bool:
     """OCR 관찰이 현재 캡처에 속하는지 확인한다."""
 
-    if not state.get("ocr_complete"):
+    observation = state["observation"]
+    if not observation.get("ocr_complete"):
         return False
-    current_capture_id = str(state.get("current_capture_id") or "")
-    ocr_capture_id = str(state.get("ocr_capture_id") or "")
+    current_capture_id = str(observation.get("current_capture_id") or "")
+    ocr_capture_id = str(observation.get("ocr_capture_id") or "")
     if current_capture_id or ocr_capture_id:
         return bool(
             current_capture_id
@@ -31,7 +32,7 @@ def extracted_job_count(extracted_jd: dict[str, Any]) -> int:
 
 
 def target_count_from_state(state: WorkerState) -> int:
-    params = state.get("recipe_params", {}) or {}
+    params = state["request"].get("recipe_params", {}) or {}
     try:
         return max(0, int(params.get("target_count") or 0))
     except (TypeError, ValueError):
@@ -39,7 +40,7 @@ def target_count_from_state(state: WorkerState) -> int:
 
 
 def count_mode_from_state(state: WorkerState) -> str:
-    params = state.get("recipe_params", {}) or {}
+    params = state["request"].get("recipe_params", {}) or {}
     raw = params.get("count_mode") or ""
     return str(getattr(raw, "value", raw)).strip().lower()
 
@@ -63,7 +64,9 @@ def infer_current_page_role(
 def job_detail_key_from_state(state: WorkerState) -> str:
     """같은 URL의 패널형 상세 화면도 공고별로 OCR 버퍼를 분리한다."""
 
-    card = active_job_card(list(state.get("job_card_queue", []) or []))
+    card = active_job_card(
+        list(state["collection"].get("job_card_queue", []) or [])
+    )
     queue_id = str(card.get("queue_id") or "").strip()
     if queue_id:
         return queue_id
@@ -78,10 +81,14 @@ def return_to_job_results_for_url(
 ) -> dict[str, Any]:
     """현재 상세 URL에서 완료 후 목록 복귀가 남아 있는지 반환한다."""
 
-    pending = dict(state.get("return_to_job_results", {}) or {})
+    pending = dict(
+        state["collection"].get("return_to_job_results", {}) or {}
+    )
     pending_url = str(pending.get("url") or "").strip()
     resolved_url = str(
-        current_url if current_url is not None else state.get("current_url") or ""
+        current_url
+        if current_url is not None
+        else state["observation"].get("current_url") or ""
     ).strip()
     if not pending_url or pending_url != resolved_url:
         return {}

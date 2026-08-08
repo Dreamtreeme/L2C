@@ -1,4 +1,5 @@
 from agent.runtime.job_card_queue import replay_job_card_after_return
+from agent.tests.worker_test_support import worker_state
 
 
 def _active_recipe_path(actions: list[dict]) -> dict:
@@ -67,8 +68,9 @@ def _active_recipe_path(actions: list[dict]) -> dict:
 
 
 def test_result_queue_replays_cached_card_after_return():
-    state = {
-        "job_card_queue": [
+    state = worker_state(
+        collection={
+            "job_card_queue": [
             {
                 "queue_id": "card-2",
                 "status": "pending",
@@ -81,15 +83,16 @@ def test_result_queue_replays_cached_card_after_return():
                     "center_ratio": [0.4, 0.425],
                 },
             }
-        ],
-        "job_results_memory": {
-            "screen_signature": {
-                "phash": "0" * 16,
-                "size": [1000, 1000],
-                "anchors": ["두 번째 iOS 개발자"],
+            ],
+            "job_results_memory": {
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
+                    "anchors": ["두 번째 iOS 개발자"],
+                },
             },
-        },
-    }
+        }
+    )
 
     request, markers, trace = replay_job_card_after_return(
         state,

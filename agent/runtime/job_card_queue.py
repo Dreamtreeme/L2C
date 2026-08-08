@@ -52,7 +52,7 @@ def job_card_match_text(value: Any) -> str:
 
 
 def _target_count_from_state(state: WorkerState) -> int:
-    params = state.get("recipe_params", {}) or {}
+    params = state["request"].get("recipe_params", {}) or {}
     try:
         return max(0, int(params.get("target_count") or 0))
     except (TypeError, ValueError):
@@ -63,12 +63,14 @@ def normalize_job_card_queue(args: dict, state: WorkerState, current_url: str) -
     """LLM이 고른 현재 화면의 공고 카드를 좌표비율 기반 큐로 정규화한다."""
 
     cards = job_card_entries_from_args(args)
-    markers = list(state.get("current_markers", []) or [])
-    signature = dict(state.get("screen_signature", {}) or {})
+    observation = state["observation"]
+    collection = state["collection"]
+    markers = list(observation.get("current_markers", []) or [])
+    signature = dict(observation.get("screen_signature", {}) or {})
     size = screen_size_from_signature(signature)
     queue: list[dict] = [
         dict(item)
-        for item in (state.get("job_card_queue", []) or [])
+        for item in (collection.get("job_card_queue", []) or [])
         if isinstance(item, dict) and str(item.get("status") or "") != "pending"
     ]
     existing_labels = {
@@ -77,7 +79,7 @@ def normalize_job_card_queue(args: dict, state: WorkerState, current_url: str) -
     }
     target_count = _target_count_from_state(state)
     resolved_count = max(
-        job_count(state.get("extracted_jd", {}) or {}),
+        job_count(collection.get("extracted_jd", {}) or {}),
         resolved_job_card_count(queue),
     )
     remaining = (
@@ -155,13 +157,13 @@ def normalize_job_card_queue(args: dict, state: WorkerState, current_url: str) -
         )
 
     memory = {
-        "url": current_url or state.get("current_url", "") or "",
+        "url": current_url or observation.get("current_url", "") or "",
         "screen_signature": signature,
-        "screenshot": str(state.get("current_screenshot") or ""),
-        "marked_image": state.get("marked_image", "") or "",
+        "screenshot": str(observation.get("current_screenshot") or ""),
+        "marked_image": observation.get("marked_image", "") or "",
     }
     previous_return_action = dict(
-        (state.get("job_results_memory") or {}).get("return_action") or {}
+        (collection.get("job_results_memory") or {}).get("return_action") or {}
     )
     if previous_return_action:
         memory["return_action"] = previous_return_action
@@ -453,7 +455,7 @@ def replay_job_card_after_return(
         return None, markers, {"reason": "return_transition_missing"}
     queue = [
         dict(item)
-        for item in (state.get("job_card_queue", []) or [])
+        for item in (state["collection"].get("job_card_queue", []) or [])
         if isinstance(item, dict)
     ]
     pending = pending_job_cards(queue)
@@ -468,7 +470,7 @@ def replay_job_card_after_return(
         }
 
     matched, match_trace = job_results_page_matches(
-        dict(state.get("job_results_memory", {}) or {}),
+        dict(state["collection"].get("job_results_memory", {}) or {}),
         current_url,
         screen_signature,
         require_anchors=require_anchors,

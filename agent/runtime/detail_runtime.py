@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from agent.runtime.worker_contracts import WorkerState
 
 from agent.config import get_settings
 from agent.runtime.site_context import is_job_detail_context, page_guidance_for_url
@@ -427,18 +430,20 @@ def update_job_detail_buffer(
 
 
 def compact_job_detail_buffer_context(
-    state: dict,
+    state: "WorkerState",
     current_url: str,
     detail_key: str = "",
 ) -> str:
     if not current_url:
         return ""
-    buffer = dict(state.get("job_detail_buffer", {}) or {})
+    collection = state["collection"]
+    observation = state["observation"]
+    buffer = dict(collection.get("job_detail_buffer", {}) or {})
     if not detail_context_matches(buffer, current_url, detail_key):
         return ""
     if not buffer.get("lines") and not is_job_detail_context(
         current_url,
-        page_role=str(state.get("current_page_role") or ""),
+        page_role=str(observation.get("current_page_role") or ""),
     ):
         return ""
     stats = dict(buffer.get("stats") or {})
@@ -447,7 +452,7 @@ def compact_job_detail_buffer_context(
     first_preview = [line for line in first_preview if line]
     preview = [str(item.get("text") or "").strip() for item in lines[-8:]]
     preview = [line for line in preview if line]
-    followup = dict(state.get("job_detail_followup") or {})
+    followup = dict(collection.get("job_detail_followup") or {})
     followup_active = detail_context_matches(followup, current_url, detail_key)
     from agent.runtime.job_field_contract import (
         detail_coverage_status,
@@ -457,7 +462,7 @@ def compact_job_detail_buffer_context(
 
     required_fields = required_fields_from_state(state)
     coverage = detail_coverage_status(
-        dict(state.get("job_detail_coverage") or {}),
+        dict(collection.get("job_detail_coverage") or {}),
         required_fields,
     )
     evidence_preview = {

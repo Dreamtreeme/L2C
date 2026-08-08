@@ -13,6 +13,7 @@ from shared.schema.agent_contract import (
     JOB_COLLECTION_FIELD_LABELS,
     JobCollectionContract,
 )
+from agent.runtime.worker_contracts import WorkerState
 
 
 def build_job_collection_contract(
@@ -31,17 +32,18 @@ def build_job_collection_contract(
     return contract.model_dump(mode="json")
 
 
-def required_fields_from_state(state: Mapping[str, Any]) -> list[str]:
+def required_fields_from_state(state: WorkerState) -> list[str]:
     """그래프 상태에서 현재 실행의 필수 필드 목록을 읽는다."""
 
-    contract = state.get("job_collection_contract")
+    request = state["request"]
+    contract = request.get("job_collection_contract")
     if isinstance(contract, Mapping):
         fields = normalize_job_collection_fields(
             contract.get("required_fields")
         )
         if fields:
             return list(fields)
-    recipe_params = state.get("recipe_params")
+    recipe_params = request.get("recipe_params")
     intent = (
         recipe_params.get("collection_intent")
         if isinstance(recipe_params, Mapping)
@@ -122,7 +124,7 @@ def merge_job_detail_coverage(
     coverage: Mapping[str, Any] | None,
     observation: Mapping[str, Any] | None,
     *,
-    state: Mapping[str, Any],
+    state: WorkerState,
     current_url: str,
     detail_key: str = "",
 ) -> dict[str, Any]:

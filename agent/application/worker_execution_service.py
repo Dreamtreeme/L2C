@@ -12,6 +12,10 @@ from langgraph.errors import GraphRecursionError
 from agent.observability.run_context import emit_run_event, measure_step
 from agent.observability.run_contracts import RunPhase
 from agent.runtime.worker_contracts import build_action_event
+from agent.runtime.vision_worker_runtime import (
+    VisionWorkerRuntime,
+    WorkerDependencies,
+)
 from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
 from agent.observability.graph_events import forward_graph_event
 from agent.utils.logger import logger
@@ -33,7 +37,7 @@ class WorkerExecutionService:
 
     def __init__(
         self,
-        worker_runtime: Any,
+        worker_runtime: VisionWorkerRuntime,
         worker_runner: Callable[..., WorkerResult],
     ) -> None:
         self.worker_runtime = worker_runtime
@@ -134,6 +138,8 @@ def run_graph_with_last_state(
     app: Any,
     initial_state: dict,
     recursion_limit: int,
+    *,
+    worker_runtime: VisionWorkerRuntime,
 ) -> tuple[dict, bool]:
     """재귀 제한 예외가 발생해도 마지막 부분 상태를 보존한다."""
 
@@ -142,6 +148,7 @@ def run_graph_with_last_state(
         for item in app.stream(
             initial_state,
             config={"recursion_limit": recursion_limit},
+            context=WorkerDependencies(vision=worker_runtime),
             stream_mode=["values", "custom"],
         ):
             from agent.observability.run_context import raise_if_cancelled
@@ -189,21 +196,27 @@ def prepare_worker_start_screen(
         return initial_state
 
     try:
-        with worker_runtime.activate():
-            action_tools = worker_runtime.get_action_tools()
-            site_slug = str(site_profile.slug or "").strip()
-            result = _open_browser_while_ocr_starts(
-                action_tools,
-                site_slug=site_slug,
-                current_url=str(initial_state.get("current_url") or ""),
-                prepare_reasoning_models=lambda: (
-                    worker_runtime.prepare_reasoning_models(ACTION_TOOL_SCHEMAS)
-                ),
-            )
+        action_tools = worker_runtime.get_action_tools()
+        site_slug = str(site_profile.slug or "").strip()
+        result = _open_browser_while_ocr_starts(
+            action_tools,
+            site_slug=site_slug,
+            current_url=str(
+                initial_state["observation"].get("current_url") or ""
+            ),
+            prepare_reasoning_models=lambda: (
+                worker_runtime.prepare_reasoning_models(ACTION_TOOL_SCHEMAS)
+            ),
+        )
         prepared = dict(initial_state)
-        prepared["current_url"] = start_url
-        prepared["current_url_stale"] = True
-        prepared["action_events"] = [
+        prepared["observation"] = {
+            **initial_state["observation"],
+            "current_url": start_url,
+            "current_url_stale": True,
+        }
+        prepared["transition"] = {
+            **initial_state["transition"],
+            "action_events": [
             build_action_event(
                 0,
                 {
@@ -214,7 +227,8 @@ def prepare_worker_start_screen(
                     "screen_change_expected": True,
                 },
             )
-        ]
+            ],
+        }
         logger.info("Worker resources prepared", start_url=start_url)
         return prepared
     except OcrWorkerReadinessError as exc:
@@ -264,6 +278,7 @@ def execute_worker_graph(
             app,
             prepared_state,
             recursion_limit,
+            worker_runtime=worker_runtime,
         )
 
 

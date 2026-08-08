@@ -3,7 +3,7 @@ title: "아키텍처 리팩터링 계획"
 type: plan
 area: architecture
 status: active
-updated: 2026-07-29
+updated: 2026-08-08
 tags:
   - l2c
   - docs/architecture
@@ -11,7 +11,7 @@ tags:
 
 # 아키텍처 리팩터링 계획
 
-기준일: 2026-07-29
+기준일: 2026-08-08
 
 ## 진행 현황
 
@@ -22,6 +22,7 @@ tags:
 | 2. 런타임 소유권 | FastAPI `lifespan`과 `ApplicationRuntime` 통합 | 완료 |
 | 3. 행동 계약 | `AIMessage` 어댑터 제거, `ActionRequest` 통일 | 완료 |
 | 4. 작업자 그래프 분할 | 관찰·전환·선택·원자 실행 경계 분리 | 완료 |
+| 4.5. 앱·그래프 책임과 상태 구역 | 앱 구성 루트, LangGraph Runtime 주입, 책임별 상태 구역 | 완료 |
 | 5. 설정·사이트 프로필 | 타입 설정과 단일 사이트 프로필 계약 | 완료 |
 | 6. 관측 경로 | LangGraph 이벤트, SSE, 로컬 지표, LangSmith 연결 정리 | 완료 |
 | 7. 회귀 검증 | 다중 사이트 자율·반복 E2E와 기존 코드 제거 | 완료 |
@@ -32,12 +33,14 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 
 리팩터링 원칙은 다음과 같다.
 
-1. 실행 상태는 LangGraph 체크포인트가 소유한다.
-2. 채용공고와 레시피 같은 업무 데이터만 애플리케이션 DB가 소유한다.
-3. LLM 출력과 결정론적 정책은 같은 `ActionRequest` 계약을 사용한다.
-4. 한 그래프 노드는 한 번의 재시도 또는 한 번의 외부 부작용 경계만 소유한다.
-5. 설정, 진행 이벤트, 시간, 토큰 사용량은 각각 한 경로에서만 생성한다.
-6. 기존 코드를 보존하기 위한 어댑터는 전환 단계가 끝나면 삭제한다.
+1. `ApplicationRuntime`이 구체 의존성과 프로세스 자원의 생성·종료를 소유한다.
+2. LangGraph는 노드 순서, 분기, 상태 병합과 조사 중단·재개를 소유한다.
+3. 재개할 조사 실행 상태는 LangGraph 체크포인트에 저장한다.
+4. 채용공고와 레시피 같은 업무 데이터는 애플리케이션 DB에 저장한다.
+5. LLM 출력과 결정론적 정책은 같은 `ActionRequest` 계약을 사용한다.
+6. 한 그래프 노드는 한 번의 외부 부작용 또는 한 책임 구역의 상태 전이를 수행한다.
+7. 설정, 진행 이벤트, 시간, 토큰 사용량은 각각 한 경로에서 생성한다.
+8. 전환용 호환 어댑터는 새 계약 적용이 끝나면 삭제한다.
 
 ## 현재 진단
 
@@ -45,8 +48,8 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 |---|---|---|
 | 조사 재개 | 업무 DB와 분리된 LangGraph SQLite 체크포인트 사용 | 사용자 확인이 필요한 조사 그래프만 체크포인트 재개 |
 | 사용자 확인 | `interrupt()` 중단 후 같은 `thread_id`에 `Command(resume=...)` 전달 | 완료 |
-| 작업자 상태 | 직렬화 가능한 평면 `GraphState`를 단일 계약으로 사용 | 책임별 `worker_*` 모듈이 자기 필드만 갱신하며 중첩 호환 상태는 제거 |
-| 행동 계약 | `pending_action: ActionRequest`와 `last_action_result: ActionResult`로 분리 | 완료 |
+| 작업자 상태 | 8개 책임 구역으로 나눈 `WorkerState`와 구역별 reducer 사용 | 노드는 변경한 구역만 `WorkerStateUpdate`로 반환 |
+| 행동 계약 | `decision.pending_action`과 `transition.action_events`로 분리 | 완료 |
 | 노드 책임 | 관찰·전환·수집·선택·추론·실행·기록과 실행 검증·전달·상태 효과를 분리 | 완료 |
 | 런타임 | `ApplicationRuntime`과 `VisionWorkerRuntime`이 자원 수명을 소유 | 완료 |
 | 계획 진행 | 장식용 작업 계획 상태와 도구 제거 | 완료 |
@@ -163,7 +166,7 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - 그래프 상태의 다음 행동을 `ActionRequest | None`으로 고정한다.
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환한다.
 - Reflex, 카드 큐, 상세 페이지 정책도 `ActionRequest`를 직접 반환한다.
-- 실행 결과는 별도 `ActionResult` 계약으로 기록한다.
+- 실행 결과는 `ActionEvent.result`에 기록한다.
 
 삭제·대체:
 
@@ -179,10 +182,10 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 
 적용 결과:
 
-- 작업자 상태에서 실행 전 명령은 `pending_action`, 실행 후 결과는 `last_action_result`로 분리했다.
+- 작업자 상태에서 실행 전 명령은 `decision.pending_action`, 실행 후 결과는 `transition.action_events`로 분리했다.
 - `ActionRequest`는 출처, 설명, 검증된 `ToolCallRequest` 목록을 보유한다. 큐 식별자와 전환 출처 같은 실행 추적 정보는 도구 인자가 아닌 호출 `metadata`에 저장한다.
 - LLM 응답은 `reasoning_node`에서 한 번만 `ActionRequest`로 변환한다. 카드 선택기, 결과 카드 큐, 중복 공고 정책, Reflex도 같은 객체를 직접 만든다.
-- `execution_node`는 요청 출처와 무관하게 하나의 실행 경로를 사용하고 결과를 `ActionResult`로 기록한다.
+- `execution_node`는 요청 출처와 무관하게 하나의 실행 경로를 사용하고 결과·레시피 단계·피드백 근거를 하나의 `ActionEvent`에 기록한다.
 - `ActionRequest.to_ai_message()`, `build_action_message()`, 작업자 상태의 `AIMessage`, `hasattr(..., "tool_calls")` 호환 코드를 삭제했다.
 
 검증 결과:
@@ -190,7 +193,7 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - `agent/runtime`과 작업자 그래프에서 `AIMessage` import가 0개임을 확인했다.
 - LLM, Reflex, 공고 카드 큐 출처가 같은 `execution_node`와 물리 디스패처를 사용하는 테스트를 추가했다.
 - 알 수 없는 도구, 필수 인자 누락, 사이트 허용 목록 밖 도구가 실행 전에 거절되는 테스트를 추가했다.
-- 전체 `agent/tests` 386건을 통과했다.
+- 해당 단계의 전체 `agent/tests`를 통과했다.
 
 ### 4단계. 작업자 그래프와 거대 노드 분할
 
@@ -219,7 +222,7 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 
 상태 정리:
 
-- 관찰, 전환, 수집, 재생, 제어 상태는 하나의 직렬화 가능한 평면 계약으로 유지하되 책임별 모듈만 자기 필드를 갱신한다.
+- 관찰, 전환, 수집, 재생과 제어 상태를 `WorkerState`의 책임 구역으로 묶고 노드는 자기 구역의 부분 갱신만 반환한다.
 - `queue_replay_hit`, `page_policy_hit`, `reflex_hit` 같은 병렬 플래그 대신 `pending_action.source` 하나를 사용한다.
 - `last_action_screen_changed`는 전환 결과로 통합한다.
 - 경로 객체는 체크포인트 직렬화를 위해 문자열로 저장한다.
@@ -238,12 +241,11 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 
 적용 결과:
 
-- `nodes.py`를 삭제하고 `worker_observation`, `worker_transition`, `worker_collection`, `worker_selection`, `worker_reasoning`, `worker_execution`, `worker_recording`으로 소유권을 분리했다.
-- `worker_execution.py`는 실행 진입점만 남기고 상태 조립, 원자 도구 전달, 행동별 후속 처리를 각각 `worker_execution_context`, `worker_execution_dispatch`, `worker_execution_handlers`로 분리했다.
-- `worker_execution_handlers.py`는 검증 → 실행 → 효과 → 기록 순서만 조율한다. 실행 전 안전 규칙은 `worker_action_guard.py`, 카드·상세 완료 후 상태 반영은 `worker_action_effects.py`가 담당한다.
+- `nodes.py`를 삭제하고 관찰, 전환, 선택, 추론과 실행을 `worker_observation`, `worker_transition`, `worker_selection`, `worker_reasoning`, `worker_execution`으로 분리했다.
+- `worker_execution.py`에는 실행 진입과 행동 호출 순서만 남겼다. 상태 조립은 `worker_execution_context`, 원자 도구 전달은 `worker_execution_dispatch`, 실행 전 검증은 `worker_action_guard`, 행동 후 상태 반영은 `worker_action_effects`가 담당한다.
 - UI·상태·종료 행동 분류는 `runtime/worker_actions.py`의 단일 계약을 사용하며 피드백 기록에 있던 중복 행동 집합을 제거했다.
 - `worker_reasoning.py`에는 카드 선택기, 모델 호출과 응답 검증만 남기고 화면·수집·전환 프롬프트 조립은 `worker_reasoning_prompt.py`로 분리했다. 호출되지 않던 동일 대상 재시도 판정 함수도 삭제했다.
-- 중첩 상태와 평면 호환 필드를 함께 갱신하던 시도는 상태 복제와 갱신 누락을 만들기 때문에 제거했다. `create_worker_state()`가 평면 상태의 유일한 생성 지점이다.
+- `create_worker_state()`가 8개 책임 구역을 초기화하고 각 구역 reducer가 부분 갱신을 병합한다. 평면 호환 필드와 구역 상태를 함께 유지하는 경로는 없다.
 - 화면 변경 뒤에는 캡처와 전환 판정을 거쳐 필요한 OCR을 먼저 수행한다. 상세 후속 추론이 새 화면 OCR을 앞지르던 순서 오류도 수정했다.
 - 마커 조회와 타깃의 픽셀·비율 좌표 생성은 `vision/target_snapshot.py`로 통합하고 피드백, 실행 기록, 카드 큐에 있던 중복 구현을 제거했다.
 - 삭제된 거대 노드의 로컬 백업 파일도 제거했다. 현재 서비스가 실행하지 않는 민감 행동의 중단 후 재개는 작업자 그래프 분할 완료 조건에서 제외한다.
@@ -253,7 +255,27 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - 1,395줄이던 `investigation_workflow.py`에는 그래프 연결, 체크포인트 중단·재개, 실행 진입만 남겼다.
 - 조사 상태와 모델 계약은 `investigation_context.py`, 결정론적 근거 판정은 `investigation_evidence_policy.py`가 소유한다.
 - 요청 해석·확인 질문, 근거 검사·계획, 수집 실행, 문서 조회·답변은 각각 `investigation_*_nodes.py`로 분리했다.
-- 각 노드 묶음은 필요한 모델·서비스만 생성자로 받고, 서로를 참조하지 않는다. 최상위 workflow만 노드 묶음을 조립한다.
+- 각 노드 묶음은 필요한 모델·서비스만 생성자로 받고 서로를 참조하지 않는다. `agent/bootstrap.py`의 구성 루트가 노드 묶음을 만들고 workflow에 주입한다.
+
+### 4.5단계. 앱·그래프 책임과 상태 구역 정리
+
+상태: 완료 (2026-08-08)
+
+적용 결과:
+
+- `ApplicationRuntime`과 `build_investigation_workflow()`가 체크포인터, 서비스, 모델 묶음, 조사 노드와 비전 런타임을 조립한다.
+- `InvestigationWorkflow`는 주입된 노드와 체크포인터 `saver`를 연결하고 실행·중단·재개만 담당한다. 체크포인터 종료는 `ApplicationRuntime`이 수행한다.
+- 조사 상태는 `request`, `evidence`, `execution`, `answer`로 나눴다.
+- 작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`로 나눴다.
+- Vision Worker 그래프는 `context_schema=WorkerDependencies`를 선언한다. 실행 서비스가 `VisionWorkerRuntime`을 LangGraph 문맥으로 전달하고 노드는 `Runtime[WorkerDependencies]`에서 읽는다.
+- 현재 런타임을 찾던 전역 변수, `ContextVar`, 노드 바인딩 함수와 활성화 컨텍스트를 제거했다.
+- `WorkerExecutionContext`는 단일 작업 상태를 갱신하고 변경 구역만 반환한다. 실행 전후 상태를 필드별로 복사하던 매핑을 제거했다.
+
+검증 결과:
+
+- 애플리케이션 계층의 의존성 조립, 조사 체크포인트 재개, 작업자 Runtime 문맥 전달과 8개 상태 구역 계약을 단위 테스트로 검증했다.
+- Python 3.13 환경에서 전체 `agent/tests` 278건을 통과했다.
+- 원티드 `iOS 개발자 1건` 경험 기반 탐색 E2E는 24.06초에 품질 게이트를 통과했다. Reflex 경로 2단계가 완료됐고 기존 DB 공고 ID 57을 근거로 종료했으며 브라우저도 정리됐다.
 
 ### 수집 실행과 애플리케이션 책임 분리
 

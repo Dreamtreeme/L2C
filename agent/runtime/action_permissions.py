@@ -61,11 +61,8 @@ def task_permission_reason(
 ) -> str:
     """현재 행동이 작업 계약을 벗어나면 승인 사유를 반환한다."""
 
-    contract = (
-        dict(state.get("action_permission_contract") or {})
-        if isinstance(state.get("action_permission_contract"), dict)
-        else {}
-    )
+    raw_contract = state["safety"].get("action_permission_contract")
+    contract = dict(raw_contract or {}) if isinstance(raw_contract, dict) else {}
     if not contract:
         return ""
 

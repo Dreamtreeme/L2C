@@ -6,10 +6,12 @@ from functools import wraps
 from typing import Any, Callable
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.runtime import Runtime
 
 from agent.config import get_settings
 from agent.graph.worker_reasoning import reasoning_node
 from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.graph.worker_observation import (
     capture_node,
     ocr_node,
@@ -33,7 +35,7 @@ from agent.utils.logger import logger
 def route_after_start(state: WorkerState) -> str:
     """현재 캡처에 속한 관찰만 재사용하고 나머지는 다시 캡처한다."""
 
-    if state.get("low_information_screen"):
+    if state["observation"].get("low_information_screen"):
         return "selection"
     if current_observation_matches_capture(state):
         return "selection"
@@ -43,12 +45,14 @@ def route_after_start(state: WorkerState) -> str:
 def route_after_selection(state: WorkerState) -> str:
     """결정론적 정책, 선택적 OCR, Reflex, LLM 순서로 다음 경로를 고른다."""
 
-    if state.get("pending_action") is not None:
+    if state["decision"].get("pending_action") is not None:
         return "execution"
-    if state.get("low_information_screen"):
+    if state["observation"].get("low_information_screen"):
         return "capture"
 
-    transition_result = dict(state.get("transition_result", {}) or {})
+    transition_result = dict(
+        state["transition"].get("transition_result", {}) or {}
+    )
     if transition_result.get("status") == "pending":
         return "capture"
     if not current_observation_matches_capture(state):
@@ -59,7 +63,7 @@ def route_after_selection(state: WorkerState) -> str:
         )
     if return_to_job_results_for_url(state):
         return "reasoning"
-    if state.get("job_detail_followup"):
+    if state["collection"].get("job_detail_followup"):
         return "reasoning"
     if transition_result.get("status") == "unknown" and (
         str(transition_result.get("source") or "").startswith("reflex")
@@ -82,7 +86,15 @@ def route_after_reflex(state: WorkerState) -> str:
 
     return (
         "execution"
-        if str(getattr(state.get("pending_action"), "source", "") or "") == "reflex"
+        if str(
+            getattr(
+                state["decision"].get("pending_action"),
+                "source",
+                "",
+            )
+            or ""
+        )
+        == "reflex"
         else "reasoning"
     )
 
@@ -91,8 +103,10 @@ def route_after_reasoning(state: WorkerState) -> str:
     """로딩 화면은 행동 없이 재관찰하고, 그 외 판단 결과만 실행한다."""
 
     if (
-        state.get("pending_action") is None
-        and (state.get("job_card_selection_trace") or {}).get("reason")
+        state["decision"].get("pending_action") is None
+        and (
+            state["decision"].get("job_card_selection_trace") or {}
+        ).get("reason")
         == "screen_loading"
     ):
         return "capture"
@@ -102,32 +116,41 @@ def route_after_reasoning(state: WorkerState) -> str:
 def route_after_execution(state: WorkerState) -> str:
     """원자 실행 뒤 종료, 후속 정책, 새 관찰 또는 새 판단을 선택한다."""
 
-    if state.get("is_finished", False):
+    if state["lifecycle"].get("is_finished", False):
         logger.info("Task marked as finished. Ending workflow.")
         return "end"
-    if state.get("pending_human_approval", False):
+    if state["safety"].get("pending_human_approval", False):
         logger.info("Human approval required. Ending worker loop.")
         return "end"
-    if state.get("error_count", 0) >= 3:
+    if state["transition"].get("error_count", 0) >= 3:
         logger.error("Too many errors. Forcing workflow to end.")
         return "end"
-    if state.get("pending_action") is not None:
+    if state["decision"].get("pending_action") is not None:
         return "execution"
-    if state.get("transition_request"):
+    if state["transition"].get("transition_request"):
         return "capture"
     return "reasoning"
 
 
-def _instrument_node(name: str, node: Callable[[WorkerState], dict[str, Any]]):
+def _instrument_node(
+    name: str,
+    node: Callable[
+        [WorkerState, Runtime[WorkerDependencies]],
+        dict[str, Any],
+    ],
+):
     @wraps(node)
-    def observed(state: WorkerState) -> dict[str, Any]:
+    def observed(
+        state: WorkerState,
+        runtime: Runtime[WorkerDependencies],
+    ) -> dict[str, Any]:
         with graph_step(name) as observation:
-            result = node(state)
+            result = node(state, runtime)
             request = (
-                state.get("pending_action")
+                state["decision"].get("pending_action")
                 if name == "execution"
                 else (
-                    result.get("pending_action")
+                    (result.get("decision") or {}).get("pending_action")
                     if isinstance(result, dict)
                     else None
                 )
@@ -144,7 +167,10 @@ def _instrument_node(name: str, node: Callable[[WorkerState], dict[str, Any]]):
                     if getattr(call, "name", "")
                 ]
             if name == "ocr" and isinstance(result, dict):
-                observation["analysis_mode"] = str(result.get("analysis_mode") or "full")
+                observation["analysis_mode"] = str(
+                    (result.get("observation") or {}).get("analysis_mode")
+                    or "full"
+                )
             if name == "reflex" and isinstance(result, dict):
                 observation.update(reflex_selection_observation(result))
             if name == "transition" and isinstance(result, dict):
@@ -158,12 +184,14 @@ def _instrument_node(name: str, node: Callable[[WorkerState], dict[str, Any]]):
     return observed
 
 
-def build_graph(*, worker_runtime=None):
+def build_graph():
     """책임별 작업자 노드를 연결하고 컴파일한다."""
 
     logger.info("Building atomic worker StateGraph")
-    workflow = StateGraph(WorkerState)
-    bind = worker_runtime.bind_node if worker_runtime is not None else lambda node: node
+    workflow = StateGraph(
+        WorkerState,
+        context_schema=WorkerDependencies,
+    )
 
     nodes = {
         "capture": capture_node,
@@ -175,7 +203,7 @@ def build_graph(*, worker_runtime=None):
         "execution": execution_node,
     }
     for name, node in nodes.items():
-        workflow.add_node(name, bind(_instrument_node(name, node)))
+        workflow.add_node(name, _instrument_node(name, node))
 
     workflow.add_conditional_edges(
         START,

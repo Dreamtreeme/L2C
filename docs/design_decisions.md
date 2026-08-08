@@ -3,7 +3,7 @@ title: "기술 및 설계 결정"
 type: decision
 area: architecture
 status: active
-updated: 2026-07-28
+updated: 2026-08-08
 tags:
   - l2c
   - docs/architecture
@@ -65,7 +65,9 @@ Perception, ActionTools, PaddleOCR subprocess, 컴파일된 작업자 그래프�
 
 ## 8. 애플리케이션과 그래프 런타임 분리
 
-`ApplicationRuntime`이 조사 체크포인터, 컴파일된 조사 그래프, `ChatService`, `VisionWorkerRuntime`, Reflex 승격 작업자를 소유합니다. FastAPI `lifespan`, CLI, E2E 실행기가 이 런타임을 명시적으로 열고 닫습니다. 사용자 질의의 지휘 책임은 `ChatService`, 작업자 실행 순서는 `worker_execution_service`, DB 적재는 `job_persistence_service`가 담당합니다.
+`agent/bootstrap.py`의 `ApplicationRuntime`이 조사 체크포인터, 애플리케이션 서비스, 컴파일된 그래프, `VisionWorkerRuntime`과 Reflex 승격 작업자를 조립하고 종료합니다. FastAPI `lifespan`, CLI와 E2E 실행기가 이 런타임의 수명주기를 관리합니다.
+
+Investigation LangGraph는 주입된 요청·근거·수집·답변 노드의 순서와 체크포인트 중단·재개를 담당합니다. Vision Worker LangGraph는 관찰·전환·선택·추론·실행 순서와 상태 병합을 담당합니다. 작업자 노드는 OCR과 물리 도구를 전역에서 찾지 않고 `Runtime[WorkerDependencies]`로 전달받습니다.
 
 전환 검증, 상세 OCR 버퍼, 결과 카드 큐, Reflex 재생은 `agent/runtime/`의 독립 모듈로 분리했습니다. 이 정책들은 DOM selector가 아니라 화면 서명, OCR 마커, 좌표비율만 입력으로 받습니다.
 
@@ -73,7 +75,7 @@ Perception, ActionTools, PaddleOCR subprocess, 컴파일된 작업자 그래프�
 
 LLM은 화면의 의미와 목표 대상을 판단하지만, 선택한 마커가 해당 물리 도구로 실행 가능한지는 실행기가 검증합니다. 예를 들어 `type_in_marker`가 텍스트 없는 작은 아이콘을 가리키면 클릭과 `Ctrl+A`를 보내지 않고 같은 화면에서 다른 마커를 다시 판단하게 합니다.
 
-LLM이 반환한 LangChain 메시지는 `reasoning_node` 밖으로 전달하지 않습니다. 이 경계에서 `ActionRequest`로 한 번 변환하고, Reflex와 공고 카드 큐도 같은 계약을 직접 생성합니다. `execution_node`는 요청 출처를 분기 기준으로 삼지 않고 검증된 호출만 실행하며, 실행 후에는 별도 `ActionResult`를 남깁니다. 따라서 정책 테스트와 실행기는 특정 채팅 메시지 구현에 의존하지 않습니다.
+LLM이 반환한 LangChain 메시지는 `reasoning_node` 밖으로 전달하지 않습니다. 이 경계에서 `ActionRequest`로 한 번 변환하고, Reflex와 공고 카드 큐도 같은 계약을 직접 생성합니다. `execution_node`는 요청 출처와 관계없이 검증된 호출만 실행하며 결과·레시피 단계·피드백 근거를 `transition.action_events`에 기록합니다. 정책 테스트와 실행기는 특정 채팅 메시지 구현에 의존하지 않습니다.
 
 이 검증은 사이트명, 마커 번호, 화면 문구를 사용하지 않습니다. OCR 텍스트 여부, 내부 텍스트 포함 관계, bbox 형태처럼 화면에서 관찰한 물리적 affordance만 사용합니다. 따라서 사이트 의미를 코드로 복제하지 않으면서 닫기 버튼 같은 명백한 도구 계약 위반을 막습니다.
 
@@ -91,7 +93,7 @@ LLM이 반환한 LangChain 메시지는 `reasoning_node` 밖으로 전달하지 
 
 - 애플리케이션 수명: 조사 체크포인터, 컴파일된 그래프, OmniParser YOLO, PaddleOCR worker, Gemini 기본/구조화 클라이언트, 승격 작업자
 - 수집 요청 수명: 전용 Chrome 창, 탭과 사이트 렌더링 상태
-- 단일 작업 수명: LangGraph state, 목표, 현재 마커, 결과 카드 큐, 상세 OCR 버퍼
+- 단일 작업 수명: `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`로 구분한 `WorkerState`
 
 Gemini 클라이언트는 모델명, temperature, 구조화 출력 스키마별로 캐시하지만 실제 API 요청을 미리 보내지는 않습니다. 유료 더미 요청은 서버 측 warm 상태를 보장하지 못하고 비용만 추가하기 때문입니다. 로컬 비전 자원은 `VisionWorkerRuntime`이 첫 수집 요청에서 지연 초기화하여 DB 질의와 UI 서버 기동이 GPU 환경에 묶이지 않게 합니다.
 

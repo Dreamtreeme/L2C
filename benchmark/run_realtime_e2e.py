@@ -238,7 +238,11 @@ def main() -> int:
             from agent.observability.langsmith_adapter import publish_langsmith_feedback
             from agent.graph.workflow import build_graph
             from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
-            from agent.application.collection_service import create_collection_service
+            from agent.application.collection_service import CollectionService
+            from agent.application.collection_worker_runner import run_worker_once
+            from agent.application.worker_execution_service import (
+                WorkerExecutionService,
+            )
             from benchmark.e2e_observability import (
                 build_e2e_observability,
                 build_langsmith_feedback,
@@ -249,7 +253,11 @@ def main() -> int:
 
             Database(get_settings().paths.db_path)
             vision_runtime = VisionWorkerRuntime(graph_factory=build_graph)
-            collection_service = create_collection_service(vision_runtime)
+            worker_service = WorkerExecutionService(
+                vision_runtime,
+                run_worker_once,
+            )
+            collection_service = CollectionService(worker_service.run)
             events = []
             status = "failed"
             result = ""
@@ -298,13 +306,24 @@ def main() -> int:
                     )
                     parsed_during_run = result.model_dump(mode="json")
                     quality = evaluate_collection_summary(parsed_during_run)
-                    status = "completed"
-                    context.emit(
-                        "run_completed",
-                        RunPhase.COMPLETED,
-                        "E2E 수집을 완료했습니다.",
-                        status=RunStatus.COMPLETED,
-                    )
+                    if result.status == "failed":
+                        status = "failed"
+                        error = result.message or result.error_code
+                        context.emit(
+                            "run_failed",
+                            RunPhase.FAILED,
+                            "E2E 수집에 실패했습니다.",
+                            status=RunStatus.FAILED,
+                            data={"error": error[:300]},
+                        )
+                    else:
+                        status = "completed"
+                        context.emit(
+                            "run_completed",
+                            RunPhase.COMPLETED,
+                            "E2E 수집을 완료했습니다.",
+                            status=RunStatus.COMPLETED,
+                        )
                 except Exception as exc:
                     error = str(exc)
                     context.emit(

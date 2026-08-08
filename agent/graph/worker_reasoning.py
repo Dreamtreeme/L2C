@@ -6,6 +6,8 @@ import json
 import time
 from typing import Any
 
+from langgraph.runtime import Runtime
+
 from agent.runtime.worker_contracts import (
     ActionRequest,
     WorkerState,
@@ -20,16 +22,13 @@ from agent.runtime.transition_runtime import (
     detect_two_screen_transition_cycle,
 )
 from agent.utils.logger import logger
+from agent.runtime.vision_worker_runtime import WorkerDependencies
 
 
-def _get_ui_llm_with_tools():
+def _get_ui_llm_with_tools(runtime: Runtime[WorkerDependencies]):
     """작업자 원자 도구를 바인딩한 모델을 재사용한다."""
 
-    from agent.runtime.vision_worker_runtime import (
-        current_vision_worker_runtime,
-    )
-
-    return current_vision_worker_runtime().get_ui_model_with_tools(
+    return runtime.context.vision.get_ui_model_with_tools(
         tuple(ACTION_TOOL_SCHEMAS),
         ACTION_TOOL_SCHEMAS,
     )
@@ -58,7 +57,7 @@ def _loop_warning(
     """최근 행동과 화면 전환 기록에서 반복 경고를 만든다."""
 
     action_history = action_event_results(
-        state.get("action_events", []) or []
+        state["transition"].get("action_events", []) or []
     )
     warning = ""
     error_increment = 0
@@ -77,7 +76,9 @@ def _loop_warning(
         )
 
     transition_cycle = detect_two_screen_transition_cycle(
-        action_event_transitions(state.get("action_events", []) or [])
+        action_event_transitions(
+            state["transition"].get("action_events", []) or []
+        )
     )
     if transition_cycle.get("detected"):
         logger.warning(
@@ -103,7 +104,10 @@ def _loop_warning(
     return warning, error_increment
 
 
-def reasoning_node(state: WorkerState) -> dict[str, Any]:
+def reasoning_node(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+) -> dict[str, Any]:
     """카드 선택기로 먼저 판단하고 필요할 때만 LLM을 호출한다."""
 
     from agent.observability.run_context import (
@@ -125,11 +129,15 @@ def reasoning_node(state: WorkerState) -> dict[str, Any]:
             reasoning_mode="loading_retry",
         )
         return {
-            "pending_action": None,
-            "job_card_selection_trace": selector_trace,
-            "reflex_trace": {
-                "hit": False,
-                "source": "screen_loading",
+            "decision": {
+                "pending_action": None,
+                "job_card_selection_trace": selector_trace,
+            },
+            "replay": {
+                "reflex_trace": {
+                    "hit": False,
+                    "source": "screen_loading",
+                },
             },
         }
 
@@ -141,17 +149,24 @@ def reasoning_node(state: WorkerState) -> dict[str, Any]:
             reasoning_mode="card_selection",
         )
         result = {
-            "pending_action": selector_request,
-            "job_card_selection_trace": selector_trace,
-            "reflex_trace": {
-                "hit": False,
-                "source": "card_selector",
+            "decision": {
+                "pending_action": selector_request,
+                "job_card_selection_trace": selector_trace,
+            },
+            "replay": {
+                "reflex_trace": {
+                    "hit": False,
+                    "source": "card_selector",
+                },
             },
         }
         if error_increment > 0:
-            result["error_count"] = (
-                state.get("error_count", 0) + error_increment
-            )
+            result["transition"] = {
+                "error_count": (
+                    state["transition"].get("error_count", 0)
+                    + error_increment
+                )
+            }
         return result
 
     reasoning_mode = (
@@ -160,7 +175,7 @@ def reasoning_node(state: WorkerState) -> dict[str, Any]:
         else "general"
     )
     response = invoke_with_metrics(
-        _get_ui_llm_with_tools(),
+        _get_ui_llm_with_tools(runtime),
         build_reasoning_messages(
             state,
             loop_warning,
@@ -190,14 +205,21 @@ def reasoning_node(state: WorkerState) -> dict[str, Any]:
     )
 
     result = {
-        "pending_action": pending_action,
-        "job_card_selection_trace": selector_trace,
-        "reflex_trace": {"hit": False, "source": "reasoning"},
+        "decision": {
+            "pending_action": pending_action,
+            "job_card_selection_trace": selector_trace,
+        },
+        "replay": {
+            "reflex_trace": {"hit": False, "source": "reasoning"}
+        },
     }
     if error_increment > 0:
-        result["error_count"] = (
-            state.get("error_count", 0) + error_increment
-        )
+        result["transition"] = {
+            "error_count": (
+                state["transition"].get("error_count", 0)
+                + error_increment
+            )
+        }
     return result
 
 

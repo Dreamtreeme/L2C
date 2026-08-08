@@ -1,9 +1,9 @@
+import inspect
 import time
 
 import pytest
 
 from agent.graph import (
-    worker_action_guard,
     worker_execution,
     worker_execution_dispatch,
     worker_observation,
@@ -21,29 +21,104 @@ from agent.graph.worker_execution_dispatch import (
     StateActionOutcome,
     StateActionUpdate,
 )
+from agent.tests.worker_test_support import (
+    apply_update,
+    node_runtime,
+    worker_state,
+)
 
 
 def _request(source: str, tool_calls: list[dict]):
     return build_action_request(source, "test", tool_calls)
 
 
-def _execution_state(request, **overrides):
-    state = {
-        "goal": "테스트",
-        "pending_action": request,
-        "current_markers": [],
-        "current_url": "https://example.com/jobs",
-        "current_url_stale": False,
-        "current_capture_id": "worker-test:capture:0003",
-        "screen_signature": {},
-        "current_screenshot": "",
-        "action_events": [],
-        "extracted_jd": {},
-        "error_count": 0,
-        "is_finished": False,
-    }
-    state.update(overrides)
-    return state
+class _FakeVisionRuntime:
+    def __init__(self, perception=None):
+        self.perception = perception
+
+    def get_perception(self):
+        return self.perception
+
+    def get_action_tools(self):
+        return object()
+
+    def check_reasoning_screen(self, *_args, **_kwargs):
+        return {
+            "checked": True,
+            "stale": False,
+            "must_refresh": False,
+            "reason": "screen_unchanged",
+        }
+
+
+def _execution_state(
+    request,
+    *,
+    current_markers=None,
+    current_url="https://example.com/jobs",
+    reflex_trace=None,
+    return_to_job_results=None,
+    extracted_jd=None,
+    recipe_params=None,
+):
+    return worker_state(
+        goal="테스트",
+        request={"recipe_params": dict(recipe_params or {})},
+        observation={
+            "current_markers": list(current_markers or []),
+            "current_url": current_url,
+            "current_url_stale": False,
+            "current_capture_id": "worker-test:capture:0003",
+            "screen_signature": {},
+            "current_screenshot": "",
+        },
+        decision={"pending_action": request},
+        replay={"reflex_trace": dict(reflex_trace or {})},
+        collection={
+            "return_to_job_results": dict(return_to_job_results or {}),
+            "extracted_jd": dict(extracted_jd or {}),
+        },
+    )
+
+
+def _run_execution(state):
+    update = worker_execution.execution_node(
+        state,
+        node_runtime(_FakeVisionRuntime()),
+    )
+    return apply_update(state, update)
+
+
+def _observed_state(**observation):
+    return worker_state(
+        observation={
+            "current_capture_id": "capture:0001",
+            "ocr_capture_id": "capture:0001",
+            "current_screenshot": "screen.png",
+            "ocr_complete": True,
+            **observation,
+        }
+    )
+
+
+def test_worker_nodes_keep_langgraph_runtime_parameter_name():
+    from agent.graph.worker_reasoning import reasoning_node
+    from agent.graph.worker_selection import selection_node
+    from agent.graph.worker_transition import transition_node
+    from agent.recipe.replay_runtime import attempt_reflex_replay
+
+    nodes = [
+        worker_observation.capture_node,
+        worker_observation.ocr_node,
+        transition_node,
+        selection_node,
+        attempt_reflex_replay,
+        reasoning_node,
+        worker_execution.execution_node,
+    ]
+
+    for node in nodes:
+        assert list(inspect.signature(node).parameters)[1] == "runtime"
 
 
 def test_action_request_allows_only_supported_reflex_action_group():
@@ -92,7 +167,7 @@ def test_action_request_allows_only_supported_reflex_action_group():
 
 def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     monkeypatch.setenv("REFLEX_ENABLED", "1")
-    observed = {"ocr_complete": True}
+    observed = _observed_state()
     assert route_after_selection(observed) == "reflex"
 
     queue_request = _request(
@@ -101,7 +176,10 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     )
     assert (
         route_after_selection(
-            {**observed, "pending_action": queue_request}
+            worker_state(
+                observation=observed["observation"],
+                decision={"pending_action": queue_request},
+            )
         )
         == "execution"
     )
@@ -111,10 +189,12 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
         [{"name": "press_key", "args": {"key": "enter"}, "id": "reflex"}],
     )
     assert (
-        route_after_reflex({"pending_action": reflex_request})
+        route_after_reflex(
+            worker_state(decision={"pending_action": reflex_request})
+        )
         == "execution"
     )
-    assert route_after_reflex({}) == "reasoning"
+    assert route_after_reflex(worker_state()) == "reasoning"
 
 
 def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
@@ -122,36 +202,33 @@ def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
 
     monkeypatch.setenv("REFLEX_ENABLED", "1")
 
-    result = worker_selection.selection_node(
-        {
+    state = worker_state(
+        observation={
+            "current_capture_id": "capture:0001",
+            "ocr_capture_id": "capture:0001",
+            "current_screenshot": "screen.png",
             "ocr_complete": True,
+        },
+        transition={
             "transition_result": {
                 "status": "ready",
                 "action": "type_in_marker",
             },
+        },
+        replay={
             "active_reflex_recipe": {
                 "recipe_key": "recipe-search-set",
                 "current_transition_index": 1,
                 "transition_count": 2,
             },
-        }
+        },
+    )
+    result = apply_update(
+        state,
+        worker_selection.selection_node(state, node_runtime()),
     )
 
-    assert (
-        route_after_selection(
-            {
-                **result,
-                "ocr_complete": True,
-                "transition_result": {"status": "ready"},
-                "active_reflex_recipe": {
-                    "recipe_key": "recipe-search-set",
-                    "current_transition_index": 1,
-                    "transition_count": 2,
-                },
-            }
-        )
-        == "reflex"
-    )
+    assert route_after_selection(result) == "reflex"
 
 
 def test_worker_observation_contract_rejects_mixed_capture_state():
@@ -166,8 +243,12 @@ def test_worker_observation_contract_rejects_mixed_capture_state():
         "ocr_capture_id": "capture:1",
     }
 
-    assert current_observation_matches_capture(valid) is True
-    assert current_observation_matches_capture(mixed) is False
+    assert current_observation_matches_capture(
+        worker_state(observation=valid)
+    ) is True
+    assert current_observation_matches_capture(
+        worker_state(observation=mixed)
+    ) is False
 
 
 def test_worker_start_does_not_reuse_ocr_from_another_capture():
@@ -182,13 +263,17 @@ def test_worker_start_does_not_reuse_ocr_from_another_capture():
         "current_screenshot": "screen.png",
     }
 
-    assert route_after_start(stale_observation) == "capture"
+    assert route_after_start(
+        worker_state(observation=stale_observation)
+    ) == "capture"
     assert (
         route_after_start(
-            {
-                **stale_observation,
-                "ocr_capture_id": "capture:2",
-            }
+            worker_state(
+                observation={
+                    **stale_observation,
+                    "ocr_capture_id": "capture:2",
+                }
+            )
         )
         == "selection"
     )
@@ -220,53 +305,64 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
             calls.append(("stable_capture", str(after)))
             return after
 
-    monkeypatch.setattr(
-        worker_observation,
-        "_perception_engine",
-        lambda: CvPerception(),
-    )
-
-    result = worker_observation.capture_node(
-        {
+    state = worker_state(
+        observation={
             "current_capture_id": "capture:0001",
             "ocr_capture_id": "capture:0001",
             "ocr_complete": True,
+        },
+        transition={
             "transition_request": {
                 "action": "go_back",
                 "before_screenshot": str(before),
                 "started_at": time.time(),
             },
-        }
+        },
+    )
+    result = apply_update(
+        state,
+        worker_observation.capture_node(
+            state,
+            node_runtime(_FakeVisionRuntime(CvPerception())),
+        ),
     )
 
     assert calls == [
         ("change", str(before)),
         ("stable_capture", str(after)),
     ]
-    assert result["current_screenshot"] == str(after)
-    assert result["ocr_complete"] is False
-    assert result["ocr_capture_id"] == ""
+    assert result["observation"]["current_screenshot"] == str(after)
+    assert result["observation"]["ocr_complete"] is False
+    assert result["observation"]["ocr_capture_id"] == ""
 
 
 def test_screen_changing_action_always_routes_to_capture():
     assert (
         route_after_execution(
-            {"transition_request": {"action": "click_marker"}}
+            worker_state(
+                transition={
+                    "transition_request": {"action": "click_marker"}
+                }
+            )
         )
         == "capture"
     )
-    assert route_after_execution({}) == "reasoning"
+    assert route_after_execution(worker_state()) == "reasoning"
 
 
 def test_loading_card_screen_routes_from_reasoning_to_recapture():
-    state = {
-        "pending_action": None,
-        "job_card_selection_trace": {"reason": "screen_loading"},
-    }
+    state = worker_state(
+        decision={
+            "pending_action": None,
+            "job_card_selection_trace": {"reason": "screen_loading"},
+        }
+    )
 
     assert route_after_reasoning(state) == "capture"
     assert (
-        route_after_reasoning({"pending_action": object()})
+        route_after_reasoning(
+            worker_state(decision={"pending_action": object()})
+        )
         == "execution"
     )
 
@@ -280,33 +376,39 @@ def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
         def capture_usable_screen(self):
             return next(captures)
 
-    monkeypatch.setattr(
-        worker_observation,
-        "_perception_engine",
-        lambda: FakePerception(),
+    state = worker_state(
+        request={"worker_run_id": "worker-test"},
+        observation={
+            "capture_sequence": 0,
+            "current_url": "https://example.com",
+            "current_url_stale": False,
+        },
     )
-    state = {
-        "worker_run_id": "worker-test",
-        "capture_sequence": 0,
-        "current_url": "https://example.com",
-        "current_url_stale": False,
-    }
+    runtime = node_runtime(_FakeVisionRuntime(FakePerception()))
 
-    first = worker_observation.capture_node(state)
-    second = worker_observation.capture_node({**state, **first})
-    next_run_first = worker_observation.capture_node(
-        {
-            **state,
-            "worker_run_id": "worker-test-retry",
-        }
+    first = apply_update(
+        state,
+        worker_observation.capture_node(state, runtime),
+    )
+    second = apply_update(
+        first,
+        worker_observation.capture_node(first, runtime),
+    )
+    next_run_state = worker_state(
+        request={"worker_run_id": "worker-test-retry"},
+        observation=state["observation"],
+    )
+    next_run_first = apply_update(
+        next_run_state,
+        worker_observation.capture_node(next_run_state, runtime),
     )
 
-    assert first["current_capture_id"] == "worker-test:capture:0001"
-    assert first["capture_sequence"] == 1
-    assert second["current_capture_id"] == "worker-test:capture:0002"
-    assert second["capture_sequence"] == 2
+    assert first["observation"]["current_capture_id"] == "worker-test:capture:0001"
+    assert first["observation"]["capture_sequence"] == 1
+    assert second["observation"]["current_capture_id"] == "worker-test:capture:0002"
+    assert second["observation"]["capture_sequence"] == 2
     assert (
-        next_run_first["current_capture_id"]
+        next_run_first["observation"]["current_capture_id"]
         == "worker-test-retry:capture:0001"
     )
 
@@ -319,13 +421,13 @@ def test_worker_state_factory_matches_the_declared_state_contract():
 
     assert set(state).issubset(WorkerState.__annotations__)
     assert "worker_attempt_index" not in state
-    assert state["goal"] == "테스트 목표"
+    assert state["request"]["goal"] == "테스트 목표"
 
 
 def test_execution_records_one_complete_action_event(monkeypatch):
     calls: list[str] = []
 
-    def fake_dispatch(action_name, args, get_bbox, current_url=""):
+    def fake_dispatch(action_name, args, get_bbox, **_kwargs):
         calls.append(action_name)
         get_bbox(args["marker_id"])
         return {"action": action_name, "status": "success", "result": "clicked"}
@@ -335,56 +437,34 @@ def test_execution_records_one_complete_action_event(monkeypatch):
         "dispatch_ui_action",
         fake_dispatch,
     )
-    class FakeRuntime:
-        def check_reasoning_screen(self, *_args, **_kwargs):
-            return {
-                "checked": True,
-                "stale": False,
-                "must_refresh": False,
-                "reason": "screen_unchanged",
-            }
-
-    monkeypatch.setattr(
-        worker_action_guard,
-        "current_vision_worker_runtime",
-        lambda: FakeRuntime(),
-    )
     request = _request(
         "llm",
         [
             {"name": "click_marker", "args": {"marker_id": 1}, "id": "click"},
         ],
     )
-    result = worker_execution.execution_node(
-        {
-            "goal": "테스트",
-            "pending_action": request,
-            "current_markers": [{"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"}],
-            "current_url": "https://example.com/jobs",
-            "current_url_stale": False,
-            "current_capture_id": "worker-test:capture:0003",
-            "screen_signature": {},
-            "current_screenshot": "",
-            "action_events": [],
-            "extracted_jd": {},
-            "error_count": 0,
-            "is_finished": False,
-        }
+    result = _run_execution(
+        _execution_state(
+            request,
+            current_markers=[
+                {"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"}
+            ],
+        )
     )
 
     assert calls == ["click_marker"]
-    action_results = action_event_results(result["action_events"])
+    action_results = action_event_results(result["transition"]["action_events"])
     assert [item["status"] for item in action_results] == ["success"]
-    assert result["transition_request"]["action"] == "click_marker"
+    assert result["transition"]["transition_request"]["action"] == "click_marker"
     assert (
-        result["transition_request"]["from_capture_id"]
+        result["transition"]["transition_request"]["from_capture_id"]
         == "worker-test:capture:0003"
     )
     assert (
         action_results[0]["decision_capture_id"]
         == "worker-test:capture:0003"
     )
-    event = result["action_events"][0]
+    event = result["transition"]["action_events"][0]
     assert event["recipe_step"]["action"] == "click_marker"
     assert (
         event["recipe_step"]["decision_capture_id"]
@@ -401,7 +481,7 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
 ):
     calls: list[str] = []
 
-    def fake_dispatch(action_name, args, get_bbox, current_url=""):
+    def fake_dispatch(action_name, args, get_bbox, **_kwargs):
         calls.append(action_name)
         if args.get("marker_id") is not None:
             get_bbox(args["marker_id"])
@@ -458,7 +538,7 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
         },
     )
 
-    result = worker_execution.execution_node(
+    result = _run_execution(
         _execution_state(
             request,
             current_markers=[
@@ -477,18 +557,18 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
     )
 
     assert calls == ["type_in_marker", "press_key"]
-    assert len(result["action_events"]) == 2
-    assert result["transition_request"]["action"] == "press_key"
-    assert result["transition_request"]["transition_actions"] == [
+    assert len(result["transition"]["action_events"]) == 2
+    assert result["transition"]["transition_request"]["action"] == "press_key"
+    assert result["transition"]["transition_request"]["transition_actions"] == [
         "type_in_marker",
         "press_key",
     ]
     assert (
-        result["transition_request"]["before_page_role"]
+        result["transition"]["transition_request"]["before_page_role"]
         == "search_overlay"
     )
     assert (
-        result["transition_request"]["expected_after_state"][
+        result["transition"]["transition_request"]["expected_after_state"][
             "url_template"
         ]
         == "example.com/jobs"
@@ -513,7 +593,7 @@ def test_detail_completion_guard_blocks_more_screen_exploration(monkeypatch):
             }
         ],
     )
-    result = worker_execution.execution_node(
+    result = _run_execution(
         _execution_state(
             request,
             current_url="https://example.com/jobs/1",
@@ -524,13 +604,15 @@ def test_detail_completion_guard_blocks_more_screen_exploration(monkeypatch):
         )
     )
 
-    action_result = action_event_results(result["action_events"])[0]
+    action_result = action_event_results(
+        result["transition"]["action_events"]
+    )[0]
     assert action_result["status"] == "skipped"
     assert (
         action_result["reason"]
         == "return_to_job_results"
     )
-    assert result["error_count"] == 0
+    assert result["transition"]["error_count"] == 0
 
 
 def test_failed_ui_dispatch_is_recorded_once(monkeypatch):
@@ -552,7 +634,7 @@ def test_failed_ui_dispatch_is_recorded_once(monkeypatch):
             }
         ],
     )
-    result = worker_execution.execution_node(
+    result = _run_execution(
         _execution_state(
             request,
             current_markers=[
@@ -561,11 +643,11 @@ def test_failed_ui_dispatch_is_recorded_once(monkeypatch):
         )
     )
 
-    action_results = action_event_results(result["action_events"])
+    action_results = action_event_results(result["transition"]["action_events"])
     assert len(action_results) == 1
     assert action_results[0]["status"] == "error"
     assert action_results[0]["error"] == "physical input failed"
-    assert result["error_count"] == 1
+    assert result["transition"]["error_count"] == 1
 
 
 def test_returned_ui_error_does_not_create_screen_transition(monkeypatch):
@@ -589,7 +671,7 @@ def test_returned_ui_error_does_not_create_screen_transition(monkeypatch):
         ],
     )
 
-    result = worker_execution.execution_node(
+    result = _run_execution(
         _execution_state(
             request,
             current_markers=[
@@ -598,9 +680,11 @@ def test_returned_ui_error_does_not_create_screen_transition(monkeypatch):
         )
     )
 
-    assert action_event_results(result["action_events"])[0]["status"] == "error"
-    assert result["error_count"] == 1
-    assert not result["transition_request"]
+    assert action_event_results(
+        result["transition"]["action_events"]
+    )[0]["status"] == "error"
+    assert result["transition"]["error_count"] == 1
+    assert not result["transition"]["transition_request"]
 
 
 def test_returned_state_error_is_recorded_as_failure(monkeypatch):
@@ -627,18 +711,20 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
         ],
     )
 
-    result = worker_execution.execution_node(
+    result = _run_execution(
         _execution_state(
             request,
             extracted_jd={"jobs": [{"company_name": "원래 회사"}]},
         )
     )
 
-    action_result = action_event_results(result["action_events"])[0]
+    action_result = action_event_results(
+        result["transition"]["action_events"]
+    )[0]
     assert action_result["status"] == "error"
     assert action_result["error"] == "invalid payload"
-    assert result["error_count"] == 1
-    assert result["extracted_jd"] == {
+    assert result["transition"]["error_count"] == 1
+    assert result["collection"]["extracted_jd"] == {
         "jobs": [{"company_name": "원래 회사"}]
     }
 
@@ -685,13 +771,13 @@ def test_stored_job_card_queue_schedules_first_card(monkeypatch):
             }
         ],
     )
-    result = worker_execution.execution_node(_execution_state(request))
+    result = _run_execution(_execution_state(request))
 
-    follow_up = result["pending_action"]
+    follow_up = result["decision"]["pending_action"]
     assert follow_up.source == "job_card_queue"
     assert follow_up.tool_calls[0].name == "click_marker"
     assert follow_up.tool_calls[0].args["marker_id"] == 4
-    assert result["job_card_queue"] == [queued_card]
+    assert result["collection"]["job_card_queue"] == [queued_card]
 
 
 def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
@@ -740,7 +826,7 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
             }
         ],
     )
-    result = worker_execution.execution_node(
+    result = _run_execution(
         _execution_state(
             request,
             recipe_params={
@@ -750,10 +836,12 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
         )
     )
 
-    assert result["is_finished"] is True
-    assert result["pending_action"] is None
-    assert result["job_card_queue"] == existing_cards
-    assert action_event_results(result["action_events"])[0]["resolved_count"] == 2
+    assert result["lifecycle"]["is_finished"] is True
+    assert result["decision"]["pending_action"] is None
+    assert result["collection"]["job_card_queue"] == existing_cards
+    assert action_event_results(
+        result["transition"]["action_events"]
+    )[0]["resolved_count"] == 2
 
 
 def test_graph_custom_event_is_shared_by_metrics_and_sse():
@@ -799,18 +887,30 @@ def test_worker_graph_forwards_custom_stream_and_preserves_values(monkeypatch):
     forwarded = []
 
     class FakeGraph:
-        def stream(self, state, config=None, stream_mode=None):
+        def stream(self, state, config=None, context=None, stream_mode=None):
             assert stream_mode == ["values", "custom"]
+            assert context.vision is vision_runtime
             yield ("custom", {"event": "graph_step_started", "stage": "capture"})
-            yield ("values", {**state, "is_finished": True})
+            yield (
+                "values",
+                {
+                    **state,
+                    "lifecycle": {
+                        **state["lifecycle"],
+                        "is_finished": True,
+                    },
+                },
+            )
 
     monkeypatch.setattr(worker_execution_service, "forward_graph_event", forwarded.append)
+    vision_runtime = _FakeVisionRuntime()
     state, limited = worker_execution_service.run_graph_with_last_state(
         FakeGraph(),
-        {"is_finished": False},
+        worker_state(),
         60,
+        worker_runtime=vision_runtime,
     )
 
     assert forwarded == [{"event": "graph_step_started", "stage": "capture"}]
-    assert state["is_finished"] is True
+    assert state["lifecycle"]["is_finished"] is True
     assert limited is False

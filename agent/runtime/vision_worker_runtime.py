@@ -4,26 +4,12 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
-from contextvars import ContextVar
-from functools import wraps
+from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
+from agent.runtime.worker_contracts import WorkerState
+
 from agent.utils.logger import logger
-
-
-_CURRENT_VISION_RUNTIME: ContextVar[Any] = ContextVar(
-    "l2c_current_vision_runtime",
-    default=None,
-)
-
-
-def current_vision_worker_runtime() -> "VisionWorkerRuntime":
-    """현재 작업자 노드에 연결된 비전 런타임을 반환한다."""
-
-    runtime = _CURRENT_VISION_RUNTIME.get()
-    if runtime is None:
-        raise RuntimeError("비전 작업자 런타임이 현재 실행 문맥에 연결되지 않았습니다.")
-    return runtime
 
 
 class VisionWorkerRuntime:
@@ -142,13 +128,16 @@ class VisionWorkerRuntime:
 
     def check_reasoning_screen(
         self,
-        state: Mapping[str, Any],
+        state: WorkerState,
         *,
         marker_id: int | None = None,
     ) -> dict[str, Any]:
         """저장한 화면과 현재 물리 화면이 같은 행동 대상을 가리키는지 확인한다."""
 
-        if not str((state.get("screen_signature") or {}).get("phash") or ""):
+        observation = state.get("observation") or {}
+        if not str(
+            (observation.get("screen_signature") or {}).get("phash") or ""
+        ):
             return {
                 "checked": False,
                 "stale": False,
@@ -170,37 +159,16 @@ class VisionWorkerRuntime:
             if self._graph is None:
                 if self._graph_factory is None:
                     raise RuntimeError("작업자 그래프 팩토리가 설정되지 않았습니다.")
-                self._graph = self._graph_factory(worker_runtime=self)
+                self._graph = self._graph_factory()
             return self._graph
-
-    @contextmanager
-    def activate(self) -> Iterator[None]:
-        """현재 스레드의 작업자 노드가 이 런타임 자원을 사용하게 한다."""
-
-        self._require_open()
-        token = _CURRENT_VISION_RUNTIME.set(self)
-        try:
-            yield
-        finally:
-            _CURRENT_VISION_RUNTIME.reset(token)
 
     @contextmanager
     def execution_session(self) -> Iterator[None]:
         """한 로컬 화면에 대한 물리 입력을 요청 단위로 직렬화한다."""
 
         with self._execution_lock:
-            with self.activate():
-                yield
-
-    def bind_node(self, node: Callable[[Any], Any]) -> Callable[[Any], Any]:
-        """컴파일된 그래프 노드에 런타임 문맥을 고정한다."""
-
-        @wraps(node)
-        def bound(state: Any) -> Any:
-            with self.activate():
-                return node(state)
-
-        return bound
+            self._require_open()
+            yield
 
     def close_browser_after_run(self) -> bool:
         """요청 종료에는 브라우저만 닫고 OCR 작업자는 유지한다."""
@@ -256,7 +224,14 @@ class VisionWorkerRuntime:
                 self._closed = True
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerDependencies:
+    """그래프 실행 동안 노드에 주입하는 불변 작업자 의존성."""
+
+    vision: VisionWorkerRuntime
+
+
 __all__ = [
     "VisionWorkerRuntime",
-    "current_vision_worker_runtime",
+    "WorkerDependencies",
 ]

@@ -5,7 +5,14 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from agent.runtime.worker_contracts import WorkerState, attach_action_transition
+from langgraph.runtime import Runtime
+
+from agent.runtime.worker_contracts import (
+    WorkerState,
+    apply_worker_state_update,
+    attach_action_transition,
+)
+from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.transition_runtime import (
     build_transition_observation,
@@ -33,7 +40,8 @@ def _verify_reflex_after_state(
     from agent.utils.text import recipe_url_scope_matches, url_template
 
     expected_url = str(expected.get("url_template") or "")
-    current_url = str(state.get("current_url") or "")
+    observation = state["observation"]
+    current_url = str(observation.get("current_url") or "")
     if (
         expected_url
         and current_url
@@ -46,7 +54,7 @@ def _verify_reflex_after_state(
 
     before_role = normalize_page_role(request.get("before_page_role"))
     expected_role = normalize_page_role(expected.get("page_role"))
-    current_role = normalize_page_role(state.get("current_page_role"))
+    current_role = normalize_page_role(observation.get("current_page_role"))
     if (
         before_role
         and expected_role
@@ -72,9 +80,9 @@ def _verify_reflex_after_state(
                 "target": anchor_target,
                 "roi_signature": anchor_signature,
             },
-            dict(state.get("screen_signature") or {}),
-            list(state.get("current_markers") or []),
-            current_image_path=str(state.get("current_screenshot") or ""),
+            dict(observation.get("screen_signature") or {}),
+            list(observation.get("current_markers") or []),
+            current_image_path=str(observation.get("current_screenshot") or ""),
         )
         if marker_id is None:
             return False, str(
@@ -89,7 +97,7 @@ def _verify_reflex_after_state(
     if context_signature:
         match = screen_context_signature_match(
             context_signature,
-            dict(state.get("screen_signature") or {}),
+            dict(observation.get("screen_signature") or {}),
         )
         matched = bool(match.get("matched"))
         return matched, (
@@ -115,7 +123,9 @@ def _verify_reflex_after_state(
 def _blocked_recipe_keys(state: WorkerState) -> list[str]:
     return [
         str(key)
-        for key in (state.get("reflex_blocked_recipe_keys") or [])
+        for key in (
+            state["replay"].get("reflex_blocked_recipe_keys") or []
+        )
         if str(key)
     ]
 
@@ -126,7 +136,9 @@ def _active_recipe_after_transition(
     source: str,
     status: str,
 ) -> dict[str, Any]:
-    active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
+    active_recipe = dict(
+        state["replay"].get("active_reflex_recipe", {}) or {}
+    )
     if not active_recipe or source != "reflex":
         return active_recipe
     if status != "ready":
@@ -149,7 +161,8 @@ def _reused_observation(
 ) -> dict[str, Any]:
     """변화가 없을 때 직전 캡처의 OCR만 동일 화면에 다시 연결한다."""
 
-    previous = dict(state.get("previous_screen_observation") or {})
+    observation = state["observation"]
+    previous = dict(observation.get("previous_screen_observation") or {})
     if not previous:
         return {}
     if str(request.get("from_capture_id") or "") != str(
@@ -173,15 +186,15 @@ def _reused_observation(
     if not markers:
         return {}
     signature = dict(previous.get("screen_signature") or {})
-    raw_signature = dict(state.get("raw_screen_signature") or {})
+    raw_signature = dict(observation.get("raw_screen_signature") or {})
     for key in ("phash", "size"):
         if raw_signature.get(key):
             signature[key] = raw_signature[key]
     current_observation = {
         **previous,
-        "capture_id": str(state.get("current_capture_id") or ""),
-        "screenshot": str(state.get("current_screenshot") or ""),
-        "current_url": str(state.get("current_url") or previous_url),
+        "capture_id": str(observation.get("current_capture_id") or ""),
+        "screenshot": str(observation.get("current_screenshot") or ""),
+        "current_url": str(observation.get("current_url") or previous_url),
         "markers": markers,
         "screen_signature": signature,
     }
@@ -193,7 +206,7 @@ def _reused_observation(
         "current_page_role": str(previous.get("page_role") or ""),
         "analysis_mode": str(previous.get("analysis_mode") or "full"),
         "ocr_complete": True,
-        "ocr_capture_id": str(state.get("current_capture_id") or ""),
+        "ocr_capture_id": str(observation.get("current_capture_id") or ""),
         "previous_screen_observation": current_observation,
     }
 
@@ -210,6 +223,7 @@ def _transition_record(
     ocr_skipped: bool,
 ) -> dict[str, Any]:
     started_at = float(request.get("started_at") or time.time())
+    observation = state["observation"]
     return build_transition_observation(
         request,
         status=status,
@@ -218,13 +232,13 @@ def _transition_record(
         reason=reason,
         elapsed_sec=max(0.0, time.time() - started_at),
         attempt=attempt,
-        markers=list(state.get("current_markers", []) or []),
-        screenshot=str(state.get("current_screenshot") or ""),
-        marked_image=str(state.get("marked_image") or ""),
-        to_capture_id=str(state.get("current_capture_id") or ""),
-        current_url=str(state.get("current_url") or ""),
-        page_role=str(state.get("current_page_role") or ""),
-        screen_signature=dict(state.get("screen_signature") or {}),
+        markers=list(observation.get("current_markers", []) or []),
+        screenshot=str(observation.get("current_screenshot") or ""),
+        marked_image=str(observation.get("marked_image") or ""),
+        to_capture_id=str(observation.get("current_capture_id") or ""),
+        current_url=str(observation.get("current_url") or ""),
+        page_role=str(observation.get("current_page_role") or ""),
+        screen_signature=dict(observation.get("screen_signature") or {}),
         visual_change_ratio=visual_change_ratio,
         ocr_skipped=ocr_skipped,
     )
@@ -254,22 +268,28 @@ def _result_without_transition(
     state: WorkerState,
     request: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if state.get("low_information_screen"):
+    if state["observation"].get("low_information_screen"):
         return {
-            "transition_result": _transition_result(
-                request,
-                status="pending" if request else "idle",
-                reason="low_information_screen",
-            ),
+            "transition": {
+                "transition_result": _transition_result(
+                    request,
+                    status="pending" if request else "idle",
+                    reason="low_information_screen",
+                ),
+            }
         }
     if not request:
         return {
-            "transition_result": _transition_result(
-                {},
-                status="idle",
-                reason="no_transition_request",
-                needs_ocr=not bool(state.get("ocr_complete")),
-            ),
+            "transition": {
+                "transition_result": _transition_result(
+                    {},
+                    status="idle",
+                    reason="no_transition_request",
+                    needs_ocr=not bool(
+                        state["observation"].get("ocr_complete")
+                    ),
+                ),
+            }
         }
     return None
 
@@ -297,14 +317,16 @@ def _evaluate_before_ocr(
     source = str(request.get("source") or "")
     if visual_changed:
         return {
-            "transition_result": _transition_result(
-                request,
-                status="needs_ocr",
-                reason="ocr_required",
-                visual_change_detected=True,
-                visual_change_ratio=visual_ratio,
-                needs_ocr=True,
-            ),
+            "transition": {
+                "transition_result": _transition_result(
+                    request,
+                    status="needs_ocr",
+                    reason="ocr_required",
+                    visual_change_detected=True,
+                    visual_change_ratio=visual_ratio,
+                    needs_ocr=True,
+                ),
+            }
         }
 
     reason = (
@@ -314,7 +336,10 @@ def _evaluate_before_ocr(
     )
     attempt = 1
     observation_update = _reused_observation(state, request)
-    record_state = {**state, **observation_update}
+    record_state = apply_worker_state_update(
+        state,
+        {"observation": observation_update},
+    )
     record = _transition_record(
         request,
         status="unknown",
@@ -332,28 +357,32 @@ def _evaluate_before_ocr(
         visual_change_ratio=visual_ratio,
     )
     return {
-        "transition_request": {},
-        "transition_result": _transition_result(
-            request,
-            status="unknown",
-            reason=reason,
-            visual_change_ratio=visual_ratio,
-        ),
-        "action_events": attach_action_transition(
-            state.get("action_events", []) or [],
-            record,
-        ),
-        "reflex_blocked_recipe_keys": _blocked_keys_after_decision(
-            state,
-            request,
-            should_block=source == "reflex",
-        ),
-        "active_reflex_recipe": _active_recipe_after_transition(
-            state,
-            source=source,
-            status="unknown",
-        ),
-        **observation_update,
+        "transition": {
+            "transition_request": {},
+            "transition_result": _transition_result(
+                request,
+                status="unknown",
+                reason=reason,
+                visual_change_ratio=visual_ratio,
+            ),
+            "action_events": attach_action_transition(
+                state["transition"].get("action_events", []) or [],
+                record,
+            ),
+        },
+        "replay": {
+            "reflex_blocked_recipe_keys": _blocked_keys_after_decision(
+                state,
+                request,
+                should_block=source == "reflex",
+            ),
+            "active_reflex_recipe": _active_recipe_after_transition(
+                state,
+                source=source,
+                status="unknown",
+            ),
+        },
+        "observation": observation_update,
     }
 
 
@@ -365,14 +394,14 @@ def _evaluate_after_ocr(
     visual_ratio: float | None,
 ) -> dict[str, Any]:
     source = str(request.get("source") or "")
-    current_url = str(state.get("current_url") or "")
+    current_url = str(state["observation"].get("current_url") or "")
     before_url = str(request.get("before_url") or "")
     url_changed = bool(
         before_url
         and current_url
         and before_url != current_url
     )
-    markers = list(state.get("current_markers") or [])
+    markers = list(state["observation"].get("current_markers") or [])
 
     if source == "reflex":
         matched, reason, after_state_match = _verify_reflex_after_state(
@@ -417,44 +446,53 @@ def _evaluate_after_ocr(
         reason=reason,
     )
     return {
-        "transition_request": {},
-        "transition_result": _transition_result(
-            request,
-            status=status,
-            reason=reason,
-            visual_change_detected=visual_changed,
-            visual_change_ratio=visual_ratio,
-        ),
-        "action_events": attach_action_transition(
-            state.get("action_events", []) or [],
-            record,
-        ),
-        "reflex_blocked_recipe_keys": _blocked_keys_after_decision(
-            state,
-            request,
-            should_block=block_recipe,
-        ),
-        "active_reflex_recipe": _active_recipe_after_transition(
-            state,
-            source=source,
-            status=status,
-        ),
+        "transition": {
+            "transition_request": {},
+            "transition_result": _transition_result(
+                request,
+                status=status,
+                reason=reason,
+                visual_change_detected=visual_changed,
+                visual_change_ratio=visual_ratio,
+            ),
+            "action_events": attach_action_transition(
+                state["transition"].get("action_events", []) or [],
+                record,
+            ),
+        },
+        "replay": {
+            "reflex_blocked_recipe_keys": _blocked_keys_after_decision(
+                state,
+                request,
+                should_block=block_recipe,
+            ),
+            "active_reflex_recipe": _active_recipe_after_transition(
+                state,
+                source=source,
+                status=status,
+            ),
+        },
     }
 
 
-def transition_node(state: WorkerState) -> dict[str, Any]:
+def transition_node(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+) -> dict[str, Any]:
     """직전 원자 행동과 현재 캡처를 비교하고 OCR 필요 여부를 결정한다."""
 
-    request = dict(state.get("transition_request", {}) or {})
+    request = dict(
+        state["transition"].get("transition_request", {}) or {}
+    )
     initial_result = _result_without_transition(state, request)
     if initial_result is not None:
         return initial_result
 
     visual_changed, visual_ratio = transition_has_visual_change(
         request,
-        str(state.get("current_screenshot") or ""),
+        str(state["observation"].get("current_screenshot") or ""),
     )
-    if not state.get("ocr_complete"):
+    if not state["observation"].get("ocr_complete"):
         return _evaluate_before_ocr(
             state,
             request,

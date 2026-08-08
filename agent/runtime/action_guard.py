@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import get_settings
+from agent.runtime.worker_contracts import WorkerState
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox
 from agent.vision.screen_signature import (
@@ -17,22 +18,28 @@ from agent.vision.screen_signature import (
 )
 
 
-def _marker_for_id(state: dict[str, Any], marker_id: int | None) -> dict[str, Any] | None:
+def _marker_for_id(
+    state: WorkerState,
+    marker_id: int | None,
+) -> dict[str, Any] | None:
     if marker_id is None:
         return None
-    for marker in state.get("current_markers", []) or []:
+    for marker in state["observation"].get("current_markers", []) or []:
         if isinstance(marker, dict) and marker.get("id") == marker_id:
             return marker
     return None
 
 
 def _target_roi_signature(
-    state: dict[str, Any],
+    state: WorkerState,
     marker_id: int | None,
 ) -> dict[str, Any]:
     marker = _marker_for_id(state, marker_id)
-    image_path = str(state.get("current_screenshot") or "")
-    screen_size = list((state.get("screen_signature") or {}).get("size") or [])
+    observation = state["observation"]
+    image_path = str(observation.get("current_screenshot") or "")
+    screen_size = list(
+        (observation.get("screen_signature") or {}).get("size") or []
+    )
     if marker is None or not image_path or len(screen_size) != 2:
         return {}
     return compute_target_roi_signature(
@@ -43,7 +50,7 @@ def _target_roi_signature(
 
 
 def check_reasoning_screen_stale(
-    state: dict[str, Any],
+    state: WorkerState,
     perception: Any,
     *,
     marker_id: int | None = None,
@@ -54,7 +61,10 @@ def check_reasoning_screen_stale(
     previous_phash = str(target_signature.get("phash") or "")
     mode = "target_roi"
     if not previous_phash:
-        previous_phash = str((state.get("screen_signature") or {}).get("phash") or "")
+        previous_phash = str(
+            (state["observation"].get("screen_signature") or {}).get("phash")
+            or ""
+        )
         mode = "full_screen"
     if not previous_phash:
         return {

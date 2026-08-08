@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from agent.runtime.worker_contracts import (
+    WorkerState,
     action_event_feedback,
     action_event_recipe_steps,
     action_event_results,
@@ -21,7 +22,7 @@ def new_worker_run_id() -> str:
 
 
 def build_worker_submission(
-    final_state: dict[str, Any],
+    final_state: WorkerState,
     *,
     run_status: str = "",
     hit_recursion_limit: bool = False,
@@ -29,19 +30,26 @@ def build_worker_submission(
     run_id: str | None = None,
 ) -> WorkerSubmission:
     """작업자 그래프 실행 결과를 구조화된 제출물(WorkerSubmission)로 만든다."""
-    extracted_jd = final_state.get("extracted_jd", {}) or {}
+    request = final_state["request"]
+    observation = final_state["observation"]
+    transition = final_state["transition"]
+    collection = final_state["collection"]
+    extracted_jd = collection.get("extracted_jd", {}) or {}
     jobs = _job_items(extracted_jd)
-    current_url = final_state.get("current_url", "") or ""
-    recipe_params = final_state.get("recipe_params", {}) if isinstance(final_state.get("recipe_params"), dict) else {}
+    current_url = observation.get("current_url", "") or ""
+    raw_recipe_params = request.get("recipe_params")
+    recipe_params = (
+        raw_recipe_params if isinstance(raw_recipe_params, dict) else {}
+    )
     run_id = run_id or new_worker_run_id()
-    action_events = list(final_state.get("action_events", []) or [])
+    action_events = list(transition.get("action_events", []) or [])
     recorded_steps = action_event_recipe_steps(action_events)
     feedback_episodes = action_event_feedback(action_events)
     transition_records = action_event_transitions(action_events)
     observed_job_ids = sorted(
         {
             int(item["job_id"])
-            for item in (final_state.get("job_card_queue", []) or [])
+            for item in (collection.get("job_card_queue", []) or [])
             if isinstance(item, dict)
             and item.get("status") == "skipped"
             and str(item.get("job_id") or "").isdigit()
@@ -54,13 +62,17 @@ def build_worker_submission(
         "observed_job_count": len(observed_job_ids),
         "current_url": current_url,
         "action_count": len(action_event_results(action_events)),
-        "job_results_availability": dict(final_state.get("job_results_availability", {}) or {}),
+        "job_results_availability": dict(
+            collection.get("job_results_availability", {}) or {}
+        ),
     }
     submission = WorkerSubmission(
         run_id=run_id,
-        goal=final_state.get("goal", "") or "",
+        goal=request.get("goal", "") or "",
         run_status=run_status,
-        is_finished=bool(final_state.get("is_finished", False)),
+        is_finished=bool(
+            final_state["lifecycle"].get("is_finished", False)
+        ),
         hit_recursion_limit=bool(hit_recursion_limit),
         collected_count=len(jobs),
         observed_job_ids=observed_job_ids,

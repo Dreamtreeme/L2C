@@ -8,7 +8,7 @@ from typing import Any
 def reflex_selection_observation(result: dict[str, Any]) -> dict[str, Any]:
     """Reflex 노드 결과에서 경로 선택 또는 중간 실패 정보를 추출한다."""
 
-    trace = dict(result.get("reflex_trace") or {})
+    trace = dict((result.get("replay") or {}).get("reflex_trace") or {})
     recipe_key = str(trace.get("recipe_key") or "")
     if not recipe_key:
         return {}
@@ -45,7 +45,9 @@ def reflex_selection_observation(result: dict[str, Any]) -> dict[str, Any]:
 def reflex_transition_observation(result: dict[str, Any]) -> dict[str, Any]:
     """전환 판정에서 Reflex 경로 단계의 완료 여부를 추출한다."""
 
-    transition = dict(result.get("transition_result") or {})
+    transition = dict(
+        (result.get("transition") or {}).get("transition_result") or {}
+    )
     if str(transition.get("source") or "") != "reflex":
         return {}
     recipe_key = str(transition.get("recipe_key") or "")

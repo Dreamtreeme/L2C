@@ -62,19 +62,27 @@ class JobCardSelection(BaseModel):
 
 def _target_count(state: WorkerState) -> int:
     try:
-        return max(0, int((state.get("recipe_params") or {}).get("target_count") or 0))
+        return max(
+            0,
+            int(
+                (state["request"].get("recipe_params") or {}).get(
+                    "target_count"
+                )
+                or 0
+            ),
+        )
     except (TypeError, ValueError):
         return 0
 
 
 def _count_mode(state: WorkerState) -> str:
-    params = state.get("recipe_params") or {}
+    params = state["request"].get("recipe_params") or {}
     raw = params.get("count_mode") or ""
     return str(getattr(raw, "value", raw)).strip().lower()
 
 
 def _collected_count(state: WorkerState) -> int:
-    return job_count(state.get("extracted_jd") or {})
+    return job_count(state["collection"].get("extracted_jd") or {})
 
 
 def should_select_job_cards(state: WorkerState) -> bool:
@@ -82,7 +90,11 @@ def should_select_job_cards(state: WorkerState) -> bool:
 
     target_count = _target_count(state)
     collected_count = _collected_count(state)
-    queue = [item for item in (state.get("job_card_queue") or []) if isinstance(item, dict)]
+    queue = [
+        item
+        for item in (state["collection"].get("job_card_queue") or [])
+        if isinstance(item, dict)
+    ]
     count_mode = _count_mode(state)
     if job_card_queue_scope_complete(
         queue,
@@ -97,12 +109,15 @@ def should_select_job_cards(state: WorkerState) -> bool:
     )
     return bool(
         not latest_no_effect_transition(state)
-        and normalize_page_role(state.get("current_page_role")) == "search"
+        and normalize_page_role(
+            state["observation"].get("current_page_role")
+        )
+        == "search"
         and (target_count > collected_count or needs_visible_screen)
         and (not queue or queue_exhausted)
         and not active_job_card(queue)
-        and state.get("current_markers")
-        and state.get("marked_image")
+        and state["observation"].get("current_markers")
+        and state["observation"].get("marked_image")
     )
 
 
@@ -168,15 +183,17 @@ def _compact_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
-    markers = _compact_markers(list(state.get("current_markers") or []))
-    recipe_params = dict(state.get("recipe_params") or {})
+    markers = _compact_markers(
+        list(state["observation"].get("current_markers") or [])
+    )
+    recipe_params = dict(state["request"].get("recipe_params") or {})
     search_query = str(recipe_params.get("query") or recipe_params.get("keyword") or "").strip()
     visible_all = _count_mode(state) == "visible_all" and _target_count(state) == 0
     settings = get_settings().vision
     max_dim = settings.reasoning_image_max_dim
     quality = settings.reasoning_image_quality
     image = image_to_base64_jpeg(
-        Path(str(state.get("marked_image") or "")),
+        Path(str(state["observation"].get("marked_image") or "")),
         max_dim=max_dim,
         quality=quality,
         fast=True,
@@ -228,10 +245,10 @@ def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
         "숨겨진 카드나 화면에 없는 정보는 추측하지 마십시오. 검색 결과 목록이 아니거나 확실한 공고 제목을 찾지 못하면 "
         "is_job_results_page를 false로 하고 cards를 비우십시오."
     )
-    current_url = str(state.get("current_url") or "")
+    current_url = str(state["observation"].get("current_url") or "")
     site_guidance = site_runtime_guidance(
         current_url,
-        str(state.get("current_page_role") or "search"),
+        str(state["observation"].get("current_page_role") or "search"),
     )
     if site_guidance:
         instruction += "\n\n" + site_guidance.strip()
@@ -246,7 +263,9 @@ def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
                 "title": str(item.get("title") or ""),
                 "company": str(item.get("company") or ""),
             }
-            for item in (state.get("job_card_queue") or [])
+            for item in (
+                state["collection"].get("job_card_queue") or []
+            )
             if isinstance(item, dict)
         ],
     }
@@ -355,12 +374,14 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
     target_count = _target_count(state)
     resolved_count = max(
         _collected_count(state),
-        resolved_job_card_count(list(state.get("job_card_queue") or [])),
+        resolved_job_card_count(
+            list(state["collection"].get("job_card_queue") or [])
+        ),
     )
     remaining_count = (
         target_count - resolved_count
         if target_count > 0
-        else len(state.get("current_markers") or [])
+        else len(state["observation"].get("current_markers") or [])
     )
     try:
         from agent.observability.run_context import invoke_with_metrics
@@ -405,7 +426,7 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
     if selection.get("needs_refinement"):
         refinement_target = _validated_refinement_target(
             selection,
-            list(state.get("current_markers") or []),
+            list(state["observation"].get("current_markers") or []),
         )
         refinement_reason = str(selection.get("refinement_reason") or "").strip()[:300]
         if refinement_target:
@@ -467,7 +488,7 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
         }
     cards = _validated_cards(
         selection,
-        list(state.get("current_markers") or []),
+        list(state["observation"].get("current_markers") or []),
         remaining_count,
     )
     excluded = {
@@ -475,7 +496,7 @@ def select_job_cards(state: WorkerState) -> tuple[Any | None, dict[str, Any]]:
             str(item.get("title") or "").strip().casefold(),
             str(item.get("company") or "").strip().casefold(),
         )
-        for item in (state.get("job_card_queue") or [])
+        for item in (state["collection"].get("job_card_queue") or [])
         if isinstance(item, dict)
     }
     cards = [

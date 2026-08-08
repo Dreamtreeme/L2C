@@ -250,15 +250,20 @@ def load_reflex_replay_context(state: WorkerState) -> ReflexReplayContext:
     from agent.recipe.store import RecipeStore
     from agent.utils.text import url_template
 
-    markers = list(state.get("current_markers", []) or [])
-    params = dict(state.get("recipe_params") or {})
-    params.setdefault("goal", state.get("goal", ""))
+    observation = state["observation"]
+    request = state["request"]
+    replay = state["replay"]
+    markers = list(observation.get("current_markers", []) or [])
+    params = dict(request.get("recipe_params") or {})
+    params.setdefault("goal", request.get("goal", ""))
     task_category = str(params.get("task_category") or "").strip()
     site = str(params.get("site") or "").strip()
-    current_image_path = str(state.get("current_screenshot") or "")
-    current_page_role = normalize_page_role(state.get("current_page_role", ""))
-    current_url = str(state.get("current_url") or "")
-    active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
+    current_image_path = str(observation.get("current_screenshot") or "")
+    current_page_role = normalize_page_role(
+        observation.get("current_page_role", "")
+    )
+    current_url = str(observation.get("current_url") or "")
+    active_recipe = dict(replay.get("active_reflex_recipe", {}) or {})
     active_recipe_key = str(active_recipe.get("recipe_key") or "")
     recipe_candidates = (
         RecipeStore().get_site_recipes(
@@ -285,7 +290,7 @@ def load_reflex_replay_context(state: WorkerState) -> ReflexReplayContext:
         current_url_template=url_template(current_url),
         blocked_recipe_keys={
             str(key)
-            for key in (state.get("reflex_blocked_recipe_keys") or [])
+            for key in (replay.get("reflex_blocked_recipe_keys") or [])
             if str(key)
         },
         used_recipe_keys=used_idempotent_recipe_keys_on_url(state, current_url),
@@ -382,6 +387,7 @@ def _match_action_screen(
     )
     from agent.utils.text import recipe_url_scope_matches
 
+    observation = state["observation"]
     action = step.get("action")
     if not is_replayable_action(step):
         return None, "not_replayable"
@@ -391,7 +397,7 @@ def _match_action_screen(
     if action_index == 0 and action in CONTEXTUAL_REPLAY_ACTIONS:
         context_match = screen_context_signature_match(
             dict(step.get("screen_context_signature") or {}),
-            dict(state.get("screen_signature") or {}),
+            dict(observation.get("screen_signature") or {}),
         )
         trace["phash"] = context_match
         trace["match_mode"] = context_match.get("mode") or "screen_context_phash"
@@ -405,7 +411,7 @@ def _match_action_screen(
     if action in TARGET_REPLAY_ACTIONS:
         marker_id, phash_result = match_step_by_screen_signature(
             step,
-            dict(state.get("screen_signature", {}) or {}),
+            dict(observation.get("screen_signature", {}) or {}),
             context.markers,
             current_image_path=context.current_image_path,
         )

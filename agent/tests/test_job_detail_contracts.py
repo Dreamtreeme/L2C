@@ -12,6 +12,7 @@ from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
 from agent.graph.worker_execution_policy import merge_extracted_info
 from agent.runtime.job_collection import job_items
 from agent.runtime.job_card_queue import replay_job_card_after_return
+from agent.tests.worker_test_support import worker_state
 
 
 def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
@@ -38,20 +39,20 @@ def test_detail_finish_extracts_once_and_clears_buffer(monkeypatch):
         },
         {},
         current_url="https://www.wanted.co.kr/wd/1",
-        state={
-            "job_collection_contract": {
+        state=worker_state(
+            request={"job_collection_contract": {
                 "required_fields": [
                     "company_name",
                     "position",
                     "url",
                     "requirements",
                 ]
-            },
-            "job_detail_buffer": {
+            }},
+            collection={"job_detail_buffer": {
                 "url": "https://www.wanted.co.kr/wd/1",
                 "lines": [{"text": "자격요건 Swift"}],
-            }
-        },
+            }},
+        ),
     )
 
     assert outcome.result["status"] == "success"
@@ -95,15 +96,15 @@ def test_detail_action_args_compaction_is_idempotent():
 def test_card_queue_identity_does_not_overwrite_detail_ocr_evidence():
     from agent.runtime.job_field_contract import merge_job_detail_coverage
 
-    state = {
-        "job_card_queue": [
+    state = worker_state(
+        collection={"job_card_queue": [
             {
                 "status": "active",
                 "company": "잘못 연결된 회사",
                 "title": "잘못 연결된 직무",
             }
-        ]
-    }
+        ]}
+    )
     current_url = "https://www.wanted.co.kr/wd/365869"
     coverage = merge_job_detail_coverage(
         {},
@@ -162,7 +163,8 @@ def test_detail_extraction_does_not_use_card_identity_as_fallback(
     current_url = "https://www.wanted.co.kr/wd/365869"
     result = (
         detail_extraction_service.extract_job_from_job_detail_buffer(
-            {
+            worker_state(
+                collection={
                 "job_card_queue": [
                     {
                         "status": "active",
@@ -184,7 +186,8 @@ def test_detail_extraction_does_not_use_card_identity_as_fallback(
                         {"text": "[텀블벅] iOS 개발자(1~3년)"},
                     ]
                 },
-            },
+                },
+            ),
             current_url,
         )
     )
@@ -249,8 +252,8 @@ def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
         },
         {},
         current_url="https://www.wanted.co.kr/wd/2",
-        state={
-            "job_collection_contract": {
+        state=worker_state(
+            request={"job_collection_contract": {
                 "required_fields": [
                     "company_name",
                     "position",
@@ -258,12 +261,12 @@ def test_detail_finish_skips_extraction_until_required_evidence_is_complete(
                     "main_tasks",
                     "requirements",
                 ]
-            },
-            "job_detail_buffer": {
+            }},
+            collection={"job_detail_buffer": {
                 "url": "https://www.wanted.co.kr/wd/2",
                 "lines": [{"text": "백엔드 개발자"}],
-            },
-        },
+            }},
+        ),
     )
 
     assert outcome.result["status"] == "skipped"
@@ -319,15 +322,15 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end(
         },
         {},
         current_url="https://www.wanted.co.kr/wd/3",
-        state={
-            "job_collection_contract": {
+        state=worker_state(
+            request={"job_collection_contract": {
                 "required_fields": required_fields,
-            },
-            "job_detail_buffer": {
+            }},
+            collection={"job_detail_buffer": {
                 "url": "https://www.wanted.co.kr/wd/3",
                 "lines": [{"text": "API 개발"}, {"text": "Python"}],
-            },
-        },
+            }},
+        ),
     )
 
     assert outcome.result["status"] == "success"
@@ -381,15 +384,15 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end(
         },
         {},
         current_url="https://www.wanted.co.kr/wd/4",
-        state={
-            "job_collection_contract": {
+        state=worker_state(
+            request={"job_collection_contract": {
                 "required_fields": required_fields,
-            },
-            "job_detail_buffer": {
+            }},
+            collection={"job_detail_buffer": {
                 "url": "https://www.wanted.co.kr/wd/4",
                 "lines": [{"text": "API 개발"}, {"text": "Python"}],
-            },
-        },
+            }},
+        ),
     )
 
     assert outcome.result["status"] == "success"
@@ -426,8 +429,8 @@ def test_detail_finish_retries_missing_extraction_before_page_end(
         },
         {},
         current_url="https://www.wanted.co.kr/wd/5",
-        state={
-            "job_collection_contract": {
+        state=worker_state(
+            request={"job_collection_contract": {
                 "required_fields": [
                     "company_name",
                     "position",
@@ -435,12 +438,12 @@ def test_detail_finish_retries_missing_extraction_before_page_end(
                     "main_tasks",
                     "requirements",
                 ],
-            },
-            "job_detail_buffer": {
+            }},
+            collection={"job_detail_buffer": {
                 "url": "https://www.wanted.co.kr/wd/5",
                 "lines": [{"text": "API 개발"}, {"text": "Python"}],
-            },
-        },
+            }},
+        ),
     )
 
     result = outcome.result

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 from agent.application.collection_submission_service import (
     FinalizedSubmission,
@@ -205,17 +205,7 @@ class CollectionService:
             )
 
 
-def create_collection_service(worker_runtime: Any) -> CollectionService:
-    from agent.application.collection_worker_runner import run_worker_once
-    from agent.application.worker_execution_service import WorkerExecutionService
-
-    return CollectionService(
-        WorkerExecutionService(worker_runtime, run_worker_once).run
-    )
-
-
 __all__ = [
     "CollectionService",
-    "create_collection_service",
     "failed_collection_result",
 ]

@@ -8,23 +8,23 @@ from agent.observability.reflex_paths import (
 def test_reflex_path_observation_tracks_start_and_completion() -> None:
     selected = reflex_selection_observation(
         {
-            "reflex_trace": {
+            "replay": {"reflex_trace": {
                 "hit": True,
                 "recipe_key": "path6#abc",
                 "recipe_transition_index": 0,
                 "recipe_transition_count": 2,
-            }
+            }}
         }
     )
     completed = reflex_transition_observation(
         {
-            "transition_result": {
+            "transition": {"transition_result": {
                 "source": "reflex",
                 "status": "ready",
                 "recipe_key": "path6#abc",
                 "recipe_transition_index": 1,
                 "recipe_transition_count": 2,
-            }
+            }}
         }
     )
 
@@ -35,14 +35,14 @@ def test_reflex_path_observation_tracks_start_and_completion() -> None:
 def test_reflex_path_observation_tracks_mid_path_fallback() -> None:
     failed = reflex_selection_observation(
         {
-            "reflex_trace": {
+            "replay": {"reflex_trace": {
                 "hit": False,
                 "reason": "roi_phash_distance",
                 "path_failed": True,
                 "recipe_key": "path6#abc",
                 "recipe_transition_index": 1,
                 "recipe_transition_count": 3,
-            }
+            }}
         }
     )
 

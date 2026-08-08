@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, cast
 
 from agent.runtime.worker_contracts import (
     ActionEvent,
     ActionRequest,
     WorkerState,
+    WorkerStateUpdate,
+    apply_worker_state_update,
     build_action_event,
 )
+from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 from agent.graph.worker_execution_policy import (
     compact_action_args,
     state_snapshot_for_action,
@@ -23,106 +26,206 @@ from agent.vision.target_snapshot import (
 )
 
 
+WorkerSection = Literal[
+    "request",
+    "observation",
+    "decision",
+    "transition",
+    "replay",
+    "collection",
+    "lifecycle",
+    "safety",
+]
+
+
 @dataclass
 class WorkerExecutionContext:
-    """행동 실행 중 필요한 변경 가능 상태를 한곳에 모은다."""
+    """행동 실행 중 하나의 작업 상태를 갱신하고 변경 섹션을 추적한다."""
 
     state: WorkerState
     action_request: ActionRequest
+    worker_runtime: VisionWorkerRuntime
     prior_events: list[ActionEvent]
     new_actions: list[dict[str, Any]] = field(default_factory=list)
     new_events: list[ActionEvent] = field(default_factory=list)
-    current_jobs: dict[str, Any] = field(default_factory=dict)
-    is_finished: bool = False
-    error_count: int = 0
-    current_url: str = ""
-    current_url_stale: bool = True
-    pending_human_approval: bool = False
-    human_approval_request: dict[str, Any] = field(default_factory=dict)
-    current_markers: list[dict[str, Any]] = field(default_factory=list)
-    ui_context: str = ""
-    marked_image: str = ""
-    job_card_queue: list[dict[str, Any]] = field(default_factory=list)
-    job_results_memory: dict[str, Any] = field(default_factory=dict)
-    job_results_availability: dict[str, Any] = field(default_factory=dict)
-    job_detail_buffer: dict[str, Any] = field(default_factory=dict)
-    job_detail_coverage: dict[str, Any] = field(default_factory=dict)
-    job_detail_followup: dict[str, Any] = field(default_factory=dict)
-    return_to_job_results: dict[str, Any] = field(default_factory=dict)
     screen_changed: bool = False
-    transition_request: dict[str, Any] = field(default_factory=dict)
     next_pending_action: ActionRequest | None = None
+    dirty_sections: set[WorkerSection] = field(default_factory=set)
 
     @classmethod
     def from_state(
         cls,
         state: WorkerState,
         action_request: ActionRequest,
+        worker_runtime: VisionWorkerRuntime,
     ) -> "WorkerExecutionContext":
         """그래프 상태를 행동 실행 전용 문맥으로 변환한다."""
 
+        working_state = apply_worker_state_update(state, {})
         return cls(
-            state=state,
+            state=working_state,
             action_request=action_request,
+            worker_runtime=worker_runtime,
             prior_events=[
                 dict(event)
-                for event in (state.get("action_events", []) or [])
+                for event in (
+                    state["transition"].get("action_events", []) or []
+                )
                 if isinstance(event, dict)
             ],
-            current_jobs=dict(state.get("extracted_jd", {}) or {}),
-            is_finished=bool(state.get("is_finished", False)),
-            error_count=int(state.get("error_count", 0) or 0),
-            current_url=str(state.get("current_url") or ""),
-            current_url_stale=bool(state.get("current_url_stale", True)),
-            pending_human_approval=bool(
-                state.get("pending_human_approval", False)
-            ),
-            human_approval_request=dict(
-                state.get("human_approval_request", {}) or {}
-            ),
-            current_markers=[
-                dict(item)
-                for item in (state.get("current_markers", []) or [])
-                if isinstance(item, dict)
-            ],
-            ui_context=str(state.get("ui_context") or ""),
-            marked_image=str(state.get("marked_image") or ""),
-            job_card_queue=[
-                dict(item)
-                for item in (state.get("job_card_queue", []) or [])
-                if isinstance(item, dict)
-            ],
-            job_results_memory=dict(
-                state.get("job_results_memory", {}) or {}
-            ),
-            job_results_availability=dict(
-                state.get("job_results_availability", {}) or {}
-            ),
-            job_detail_buffer=dict(
-                state.get("job_detail_buffer", {}) or {}
-            ),
-            job_detail_coverage=dict(
-                state.get("job_detail_coverage", {}) or {}
-            ),
-            job_detail_followup=dict(
-                state.get("job_detail_followup", {}) or {}
-            ),
-            return_to_job_results=dict(
-                state.get("return_to_job_results", {}) or {}
-            ),
         )
 
-    def state_for_dispatch(self) -> WorkerState:
-        """현재까지 반영된 값으로 상태 행동용 읽기 전용 상태를 만든다."""
+    def _set(self, section: WorkerSection, key: str, value: Any) -> None:
+        sections = cast(dict[str, dict[str, Any]], self.state)
+        sections[section][key] = value
+        self.dirty_sections.add(section)
 
-        return {
-            **self.state,
-            "extracted_jd": self.current_jobs,
-            "current_url": self.current_url,
-            "job_detail_buffer": self.job_detail_buffer,
-            "job_detail_coverage": self.job_detail_coverage,
-            "job_detail_followup": self.job_detail_followup,
-        }
+    @property
+    def current_jobs(self) -> dict[str, Any]:
+        return dict(self.state["collection"].get("extracted_jd", {}) or {})
+
+    @current_jobs.setter
+    def current_jobs(self, value: dict[str, Any]) -> None:
+        self._set("collection", "extracted_jd", dict(value))
+
+    @property
+    def is_finished(self) -> bool:
+        return bool(self.state["lifecycle"].get("is_finished", False))
+
+    @is_finished.setter
+    def is_finished(self, value: bool) -> None:
+        self._set("lifecycle", "is_finished", bool(value))
+
+    @property
+    def error_count(self) -> int:
+        return int(self.state["transition"].get("error_count", 0) or 0)
+
+    @error_count.setter
+    def error_count(self, value: int) -> None:
+        self._set("transition", "error_count", int(value))
+
+    @property
+    def current_url(self) -> str:
+        return str(self.state["observation"].get("current_url") or "")
+
+    @current_url.setter
+    def current_url(self, value: str) -> None:
+        self._set("observation", "current_url", str(value or ""))
+
+    @property
+    def current_url_stale(self) -> bool:
+        return bool(self.state["observation"].get("current_url_stale", True))
+
+    @current_url_stale.setter
+    def current_url_stale(self, value: bool) -> None:
+        self._set("observation", "current_url_stale", bool(value))
+
+    @property
+    def current_markers(self) -> list[dict[str, Any]]:
+        return list(self.state["observation"].get("current_markers", []) or [])
+
+    @property
+    def ui_context(self) -> str:
+        return str(self.state["observation"].get("ui_context") or "")
+
+    @property
+    def marked_image(self) -> str:
+        return str(self.state["observation"].get("marked_image") or "")
+
+    @property
+    def pending_human_approval(self) -> bool:
+        return bool(self.state["safety"].get("pending_human_approval", False))
+
+    @pending_human_approval.setter
+    def pending_human_approval(self, value: bool) -> None:
+        self._set("safety", "pending_human_approval", bool(value))
+
+    @property
+    def human_approval_request(self) -> dict[str, Any]:
+        return dict(self.state["safety"].get("human_approval_request", {}) or {})
+
+    @human_approval_request.setter
+    def human_approval_request(self, value: dict[str, Any]) -> None:
+        self._set("safety", "human_approval_request", dict(value))
+
+    @property
+    def transition_request(self) -> dict[str, Any]:
+        return dict(self.state["transition"].get("transition_request", {}) or {})
+
+    @transition_request.setter
+    def transition_request(self, value: dict[str, Any]) -> None:
+        self._set("transition", "transition_request", dict(value))
+
+    def _collection_value(self, key: str, default: Any) -> Any:
+        return self.state["collection"].get(key, default)
+
+    def _set_collection(self, key: str, value: Any) -> None:
+        self._set("collection", key, value)
+
+    @property
+    def job_card_queue(self) -> list[dict[str, Any]]:
+        return list(self._collection_value("job_card_queue", []) or [])
+
+    @job_card_queue.setter
+    def job_card_queue(self, value: list[dict[str, Any]]) -> None:
+        self._set_collection("job_card_queue", list(value))
+
+    @property
+    def job_results_memory(self) -> dict[str, Any]:
+        return dict(self._collection_value("job_results_memory", {}) or {})
+
+    @job_results_memory.setter
+    def job_results_memory(self, value: dict[str, Any]) -> None:
+        self._set_collection("job_results_memory", dict(value))
+
+    @property
+    def job_results_availability(self) -> dict[str, Any]:
+        return dict(
+            self._collection_value("job_results_availability", {}) or {}
+        )
+
+    @job_results_availability.setter
+    def job_results_availability(self, value: dict[str, Any]) -> None:
+        self._set_collection("job_results_availability", dict(value))
+
+    @property
+    def job_detail_buffer(self) -> dict[str, Any]:
+        return dict(self._collection_value("job_detail_buffer", {}) or {})
+
+    @job_detail_buffer.setter
+    def job_detail_buffer(self, value: dict[str, Any]) -> None:
+        self._set_collection("job_detail_buffer", dict(value))
+
+    @property
+    def job_detail_coverage(self) -> dict[str, Any]:
+        return dict(self._collection_value("job_detail_coverage", {}) or {})
+
+    @job_detail_coverage.setter
+    def job_detail_coverage(self, value: dict[str, Any]) -> None:
+        self._set_collection("job_detail_coverage", dict(value))
+
+    @property
+    def job_detail_followup(self) -> dict[str, Any]:
+        return dict(self._collection_value("job_detail_followup", {}) or {})
+
+    @job_detail_followup.setter
+    def job_detail_followup(self, value: dict[str, Any]) -> None:
+        self._set_collection("job_detail_followup", dict(value))
+
+    @property
+    def return_to_job_results(self) -> dict[str, Any]:
+        return dict(
+            self._collection_value("return_to_job_results", {}) or {}
+        )
+
+    @return_to_job_results.setter
+    def return_to_job_results(self, value: dict[str, Any]) -> None:
+        self._set_collection("return_to_job_results", dict(value))
+
+    def state_for_dispatch(self) -> WorkerState:
+        """현재까지 반영된 단일 작업 상태를 반환한다."""
+
+        return self.state
 
     def observe_job_detail_fields(
         self,
@@ -145,7 +248,7 @@ class WorkerExecutionContext:
 
         page_role = str(
             args.get("page_role")
-            or self.state.get("current_page_role")
+            or self.state["observation"].get("current_page_role")
             or ""
         )
         if not is_job_detail_context(
@@ -194,7 +297,7 @@ class WorkerExecutionContext:
             "args": compact_action_args(action_name, args),
             "page_role": (
                 args.get("page_role")
-                or self.state.get("current_page_role", "")
+                or self.state["observation"].get("current_page_role", "")
             ),
             "target_role": (
                 args.get("target_role")
@@ -211,7 +314,7 @@ class WorkerExecutionContext:
         if tool_call_id:
             step["tool_call_id"] = tool_call_id
         if self.action_request.source == "reflex":
-            trace = dict(self.state.get("reflex_trace", {}) or {})
+            trace = dict(self.state["replay"].get("reflex_trace", {}) or {})
             call_trace = (
                 (trace.get("tool_calls") or {}).get(tool_call_id)
                 if tool_call_id
@@ -246,7 +349,9 @@ class WorkerExecutionContext:
         recipe_key = ""
         if source == "reflex":
             recipe_key = str(
-                (self.state.get("reflex_trace", {}) or {}).get("recipe_key")
+                (self.state["replay"].get("reflex_trace", {}) or {}).get(
+                    "recipe_key"
+                )
                 or ""
             )
         request_metadata = dict(self.action_request.metadata or {})
@@ -260,7 +365,7 @@ class WorkerExecutionContext:
             "action": action_name,
             "from_capture_id": str(
                 self.action_request.metadata.get("decision_capture_id")
-                or self.state.get("current_capture_id")
+                or self.state["observation"].get("current_capture_id")
                 or ""
             ),
             "source": source,
@@ -285,10 +390,12 @@ class WorkerExecutionContext:
                 tool_call_id,
             ),
             "before_url": self.current_url
-            or self.state.get("current_url", "")
+            or self.state["observation"].get("current_url", "")
             or "",
             "before_screenshot": (
-                str(self.state.get("current_screenshot") or "")
+                str(
+                    self.state["observation"].get("current_screenshot") or ""
+                )
             ),
             "started_at": time.time(),
         }
@@ -333,7 +440,7 @@ class WorkerExecutionContext:
         if target:
             result["target"] = target
         if self.action_request.source == "reflex":
-            trace = dict(self.state.get("reflex_trace", {}) or {})
+            trace = dict(self.state["replay"].get("reflex_trace", {}) or {})
             if trace:
                 result["reflex_recipe_key"] = trace.get("recipe_key", "")
                 call_trace = (
@@ -363,23 +470,24 @@ class WorkerExecutionContext:
         from agent.recipe.feedback import record_action_episode
         from agent.recipe.record import record_ui_step
 
+        observation = self.state["observation"]
         record_state = {
-            "goal": self.state.get("goal", ""),
+            "goal": self.state["request"].get("goal", ""),
             "current_capture_id": str(
                 before_snapshot.get("capture_id") or ""
             ),
             "current_markers": list(
-                self.state.get("current_markers", []) or []
+                observation.get("current_markers", []) or []
             ),
             "current_url": before_snapshot.get("url", ""),
-            "current_page_role": self.state.get("current_page_role", ""),
+            "current_page_role": observation.get("current_page_role", ""),
             "screen_signature": dict(
-                self.state.get("screen_signature", {}) or {}
+                observation.get("screen_signature", {}) or {}
             ),
             "current_screenshot": str(
-                self.state.get("current_screenshot") or ""
+                observation.get("current_screenshot") or ""
             ),
-            "marked_image": self.state.get("marked_image", ""),
+            "marked_image": observation.get("marked_image", ""),
         }
         recipe_steps: list[dict[str, Any]] = []
         if record_ui:
@@ -514,28 +622,21 @@ class WorkerExecutionContext:
             "is_finished": self.is_finished,
         }
 
-    def build_state_update(self) -> dict[str, Any]:
-        return {
-            "pending_action": self.next_pending_action,
-            "action_events": [*self.prior_events, *self.new_events],
-            "extracted_jd": self.current_jobs,
-            "is_finished": self.is_finished,
-            "error_count": self.error_count,
-            "current_url": self.current_url,
-            "current_url_stale": self.current_url_stale,
-            "current_markers": self.current_markers,
-            "ui_context": self.ui_context,
-            "marked_image": self.marked_image,
-            "screen_signature": dict(
-                self.state.get("screen_signature", {}) or {}
-            ),
-            "transition_request": self.transition_request,
-            "transition_result": {
-                **self.transition_request,
+    def build_state_update(self) -> WorkerStateUpdate:
+        self._set("decision", "pending_action", self.next_pending_action)
+        self._set(
+            "transition",
+            "action_events",
+            [*self.prior_events, *self.new_events],
+        )
+        transition_request = self.transition_request
+        self._set(
+            "transition",
+            "transition_result",
+            {
+                **transition_request,
                 "status": (
-                    "waiting_capture"
-                    if self.transition_request
-                    else "idle"
+                    "waiting_capture" if transition_request else "idle"
                 ),
                 "outcome": "",
                 "reason": "",
@@ -543,16 +644,11 @@ class WorkerExecutionContext:
                 "visual_change_ratio": None,
                 "needs_ocr": False,
             },
-            "job_card_queue": self.job_card_queue,
-            "job_results_memory": self.job_results_memory,
-            "job_results_availability": self.job_results_availability,
-            "job_detail_buffer": self.job_detail_buffer,
-            "job_detail_coverage": self.job_detail_coverage,
-            "job_detail_followup": self.job_detail_followup,
-            "return_to_job_results": self.return_to_job_results,
-            "pending_human_approval": self.pending_human_approval,
-            "human_approval_request": self.human_approval_request,
-        }
+        )
+        return cast(WorkerStateUpdate, {
+            section: dict(self.state[section])
+            for section in self.dirty_sections
+        })
 
 
 __all__ = ["WorkerExecutionContext"]

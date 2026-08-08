@@ -468,6 +468,7 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness():
         prepare_worker_start_screen,
     )
     from agent.sites import load_site_profile
+    from agent.runtime.worker_contracts import create_worker_state
 
     class FakeSomEngine:
         def ensure_ocr_worker_ready(self):
@@ -483,10 +484,6 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness():
             return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
 
     class FakeRuntime:
-        @contextmanager
-        def activate(self):
-            yield
-
         def get_action_tools(self):
             return FakeActionTools()
 
@@ -495,7 +492,7 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness():
 
     with pytest.raises(OcrWorkerReadinessError):
         prepare_worker_start_screen(
-            {"current_url": "", "action_events": []},
+            create_worker_state(),
             load_site_profile("wanted"),
             worker_runtime=FakeRuntime(),
         )

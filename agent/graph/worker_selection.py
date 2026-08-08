@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from langgraph.runtime import Runtime
+
 from agent.config import get_settings
 from agent.runtime.worker_contracts import (
     ActionRequest,
@@ -12,6 +14,7 @@ from agent.runtime.worker_contracts import (
     attach_action_transition,
     build_action_request,
 )
+from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.runtime.worker_state import (
     count_mode_from_state,
     target_count_from_state,
@@ -47,7 +50,7 @@ def _low_information_stop() -> dict[str, Any]:
         ],
     )
     return {
-        "pending_action": request,
+        "decision": {"pending_action": request},
     }
 
 
@@ -61,7 +64,7 @@ def _skip_duplicate_detail(
     queue = skip_active_job_card(
         [
             dict(item)
-            for item in state.get("job_card_queue", []) or []
+            for item in state["collection"].get("job_card_queue", []) or []
             if isinstance(item, dict)
         ],
         reason="existing_detail_url",
@@ -92,16 +95,18 @@ def _skip_duplicate_detail(
         ],
     )
     return {
-        "pending_action": request,
-        "transition_request": {},
-        "transition_result": {
-            **transition_result,
-            "status": "ready",
-            "outcome": "existing_job_detail",
-            "reason": "existing_job_detail",
-            "needs_ocr": False,
+        "decision": {"pending_action": request},
+        "transition": {
+            "transition_request": {},
+            "transition_result": {
+                **transition_result,
+                "status": "ready",
+                "outcome": "existing_job_detail",
+                "reason": "existing_job_detail",
+                "needs_ocr": False,
+            },
         },
-        "job_card_queue": queue,
+        "collection": {"job_card_queue": queue},
     }
 
 
@@ -114,7 +119,7 @@ def _queue_return_transition(
     if not return_action:
         return None
     saved_signature = dict(
-        (state.get("job_results_memory", {}) or {}).get(
+        (state["collection"].get("job_results_memory", {}) or {}).get(
             "screen_signature",
             {},
         )
@@ -144,9 +149,13 @@ def _queue_return_transition(
             {"id": index, "text": text}
             for index, text in enumerate(anchors)
         ],
-        screenshot=str(state.get("current_screenshot") or ""),
+        screenshot=str(
+            state["observation"].get("current_screenshot") or ""
+        ),
         marked_image="",
-        to_capture_id=str(state.get("current_capture_id") or ""),
+        to_capture_id=str(
+            state["observation"].get("current_capture_id") or ""
+        ),
         phash_distance=return_match.get("distance"),
         ocr_skipped=True,
     )
@@ -171,40 +180,58 @@ def _replay_queued_card(
         transition_result,
         trace,
     )
-    update = {
-        "pending_action": request,
-        "transition_request": {},
-        "transition_result": {
-            **transition_result,
-            "status": "ready",
-            "outcome": "queue_return_phash_match",
-            "reason": "queue_return_phash_match",
-            "needs_ocr": False,
+    update: dict[str, Any] = {
+        "decision": {"pending_action": request},
+        "transition": {
+            "transition_request": {},
+            "transition_result": {
+                **transition_result,
+                "status": "ready",
+                "outcome": "queue_return_phash_match",
+                "reason": "queue_return_phash_match",
+                "needs_ocr": False,
+            },
         },
-        "current_markers": selected_markers,
-        "screen_signature": {**saved_signature, **signature},
-        "current_page_role": "search",
-        "ocr_capture_id": str(state.get("current_capture_id") or ""),
-        "ocr_complete": True,
-        "job_results_memory": memory,
-        "return_to_job_results": {},
+        "observation": {
+            "current_markers": selected_markers,
+            "screen_signature": {**saved_signature, **signature},
+            "current_page_role": "search",
+            "ocr_capture_id": str(
+                state["observation"].get("current_capture_id") or ""
+            ),
+            "ocr_complete": True,
+        },
+        "collection": {
+            "job_results_memory": memory,
+            "return_to_job_results": {},
+        },
     }
     if transition:
-        update["action_events"] = attach_action_transition(
-            state.get("action_events", []) or [],
+        update["transition"]["action_events"] = attach_action_transition(
+            state["transition"].get("action_events", []) or [],
             transition,
         )
     return update
 
 
-def selection_node(state: WorkerState) -> dict[str, Any]:
+def selection_node(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+) -> dict[str, Any]:
     """중복 공고와 목록 복귀 큐를 검사해 원자 행동 하나를 선택한다."""
 
-    if state.get("pending_action") is not None:
+    decision = state["decision"]
+    observation = state["observation"]
+    transition = state["transition"]
+    replay = state["replay"]
+    collection = state["collection"]
+    if decision.get("pending_action") is not None:
         return {}
 
-    capture_count = int(state.get("low_information_capture_count") or 0)
-    if state.get("low_information_screen"):
+    capture_count = int(
+        observation.get("low_information_capture_count") or 0
+    )
+    if observation.get("low_information_screen"):
         if (
             capture_count
             >= get_settings().vision.low_information_max_capture_cycles
@@ -212,19 +239,19 @@ def selection_node(state: WorkerState) -> dict[str, Any]:
             return _low_information_stop()
         return {}
 
-    if state.get("active_reflex_recipe"):
+    if replay.get("active_reflex_recipe"):
         return {}
 
-    transition_result = dict(state.get("transition_result", {}) or {})
-    current_url = str(state.get("current_url") or "")
+    transition_result = dict(transition.get("transition_result", {}) or {})
+    current_url = str(observation.get("current_url") or "")
     active_card = active_job_card(
-        list(state.get("job_card_queue", []) or [])
+        list(collection.get("job_card_queue", []) or [])
     )
 
     if active_card and looks_like_job_detail_url(current_url):
         duplicate_trace = existing_job_url_trace(
             current_url,
-            dict(state.get("extracted_jd", {}) or {}),
+            dict(collection.get("extracted_jd", {}) or {}),
         )
         if duplicate_trace.get("matched"):
             logger.info(
@@ -240,24 +267,20 @@ def selection_node(state: WorkerState) -> dict[str, Any]:
             )
 
     if transition_result.get("action"):
-        ocr_complete = bool(state.get("ocr_complete"))
-        markers = list(state.get("current_markers") or []) if ocr_complete else []
-        signature_value = (
-            state.get("screen_signature")
+        ocr_complete = bool(observation.get("ocr_complete"))
+        markers = (
+            list(observation.get("current_markers") or [])
             if ocr_complete
-            else state.get("raw_screen_signature")
+            else []
+        )
+        signature_value = (
+            observation.get("screen_signature")
+            if ocr_complete
+            else observation.get("raw_screen_signature")
         )
         signature = dict(signature_value or {})
-        selection_state = {
-            **state,
-            "current_url": current_url,
-            "current_markers": markers,
-            "screen_signature": signature,
-            "job_card_queue": list(state.get("job_card_queue", []) or []),
-            "job_results_memory": dict(state.get("job_results_memory", {}) or {}),
-        }
         request, selected_markers, trace = replay_job_card_after_return(
-            selection_state,
+            state,
             transition_result,
             current_url,
             markers,
@@ -267,7 +290,7 @@ def selection_node(state: WorkerState) -> dict[str, Any]:
         return_action = return_action_from_transition(
             transition_result
         )
-        memory = dict(state.get("job_results_memory", {}) or {})
+        memory = dict(collection.get("job_results_memory", {}) or {})
         saved_signature = dict(memory.get("screen_signature", {}) or {})
         if request is not None:
             logger.info(

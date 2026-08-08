@@ -10,3 +10,63 @@ def reset_typed_settings_cache():
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def investigation_workflow_factory():
+    """앱 조립 경계와 동일하게 조사 그래프와 체크포인터를 함께 소유한다."""
+
+    from agent.application.search_taxonomy_maintenance import (
+        prepare_search_taxonomy,
+    )
+    from agent.bootstrap import build_investigation_workflow
+    from agent.runtime.investigation_checkpoint import (
+        InvestigationCheckpointRuntime,
+    )
+
+    owners = []
+
+    class OwnedWorkflow:
+        def __init__(self, workflow, checkpoint_runtime):
+            self.workflow = workflow
+            self.checkpoint_runtime = checkpoint_runtime
+            self.closed = False
+
+        def run(self, *args, **kwargs):
+            return self.workflow.run(*args, **kwargs)
+
+        def close(self):
+            if not self.closed:
+                self.checkpoint_runtime.close()
+                self.closed = True
+
+    def create(
+        *,
+        db_path,
+        collect_jobs,
+        models=None,
+        capabilities=None,
+        taxonomy_service=None,
+        now=None,
+    ):
+        taxonomy = taxonomy_service or prepare_search_taxonomy(db_path)
+        checkpoint = InvestigationCheckpointRuntime(db_path)
+        owner = OwnedWorkflow(
+            build_investigation_workflow(
+                db_path,
+                checkpoint_runtime=checkpoint,
+                collect_jobs=collect_jobs,
+                taxonomy_service=taxonomy,
+                models=models,
+                capabilities=capabilities,
+                now=now,
+            ),
+            checkpoint,
+        )
+        owners.append(owner)
+        return owner
+
+    yield create
+
+    for owner in owners:
+        owner.close()

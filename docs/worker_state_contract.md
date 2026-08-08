@@ -3,7 +3,7 @@ title: "작업자 상태 계약"
 type: reference
 area: architecture
 status: active
-updated: 2026-07-31
+updated: 2026-08-08
 tags:
   - l2c
   - docs/architecture
@@ -11,33 +11,61 @@ tags:
 
 # 작업자 상태 계약
 
-작업자 그래프는 `GraphState` 하나를 공유한다. 각 필드는 아래 노드가 생성하고
-정해진 노드만 갱신한다. 이름 규칙은 [[naming_conventions]]을 따른다.
+Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`를 공유한다. 상태는 책임별 구역으로 나뉘며 노드는 변경한 구역만 `WorkerStateUpdate`로 반환한다. 각 구역의 LangGraph reducer가 기존 값과 부분 갱신을 병합한다. 이름 규칙은 [[naming_conventions]]을 따른다.
 
-## 주요 상태 소유권
+## 상태 구역
 
-| 상태 | 생성·초기화 | 갱신 | 소비 |
-|---|---|---|---|
-| `current_capture_id`, `current_screenshot` | `create_worker_state()` | `capture_node()` | 전환·OCR·실행·기록 |
-| `ocr_capture_id`, `ocr_complete` | `create_worker_state()` | `capture_node()`, `ocr_node()`, 검증된 관찰 재사용 | 수집·선택·Reflex·추론 |
-| `current_markers`, `screen_signature` | `create_worker_state()` | `ocr_node()`, 검증된 목록 관찰 재사용 | 선택·Reflex·실행 |
-| `pending_action` | `create_worker_state()` | 선택·Reflex·추론 노드 | 실행 노드 |
-| `last_action_result`, `execution_records` | `create_worker_state()` | 실행 노드 | 기록 노드 |
-| `transition_request` | `create_worker_state()` | 실행 노드 | 캡처·전환 노드 |
-| `transition_result`, `transition_records` | `create_worker_state()` | 전환 노드 | 선택·기록·관측 |
-| `active_reflex_recipe` | `create_worker_state()` | Reflex·전환 노드 | 선택·Reflex |
-| `job_card_queue`, `active_job_card` | `create_worker_state()` | 카드 선택·실행 효과 | 선택·수집 |
-| `job_detail_buffer`, `job_detail_coverage` | `create_worker_state()` | 수집·상세 실행 효과 | 상세 정책·제출 |
+| 구역 | 대표 필드 | 주 갱신 주체 |
+|---|---|---|
+| `request` | `goal`, `worker_run_id`, `recipe_params`, `job_collection_contract` | 작업자 실행 진입점 |
+| `observation` | 캡처 ID, 화면 파일, URL, OCR 마커, 화면 서명, 페이지 역할 | `capture_node()`, `ocr_node()` |
+| `decision` | `pending_action`, 카드 선택 trace | 선택·Reflex·추론 노드 |
+| `transition` | 행동 이벤트, 오류 수, 전환 요청과 판정 결과 | 실행·전환 노드 |
+| `replay` | Reflex trace, 활성 경로, 차단 경로 | Reflex·전환 노드 |
+| `collection` | 추출 공고, 카드 큐, 목록 기억, 상세 OCR 버퍼와 판독 범위 | OCR·선택·실행 효과 |
+| `lifecycle` | `is_finished` | 실행 효과와 종료 정책 |
+| `safety` | 행동 권한, 사용자 승인 대기 | 실행 전 안전 검증 |
+
+`request`는 한 작업자 실행의 입력 계약이다. 나머지 구역은 그래프가 현재 캡처를 처리하면서 갱신하는 실행 상태다.
+
+## 노드 갱신 계약
+
+```python
+return {
+    "observation": {
+        "current_capture_id": capture_id,
+        "current_screenshot": image_path,
+        "ocr_complete": False,
+    }
+}
+```
+
+위 반환값은 전체 상태가 아니다. LangGraph가 기존 `observation`에 세 필드를 병합하고 다른 일곱 구역은 유지한다. 노드 내부에서 여러 부분 갱신을 연속 계산할 때는 `apply_worker_state_update()`를 사용한다.
+
+`WorkerExecutionContext`는 행동 요청 하나를 실행하는 동안 단일 `WorkerState` 사본을 갱신한다. 속성 setter는 해당 구역을 변경하고 `dirty_sections`에 기록한다. 실행이 끝나면 변경된 구역만 반환한다. 실행 전용 필드와 그래프 상태 사이에 별도 복사표를 두지 않는다.
+
+## 런타임 의존성
+
+`WorkerState`에는 OCR 객체, 모델 클라이언트, 브라우저 도구와 잠금을 저장하지 않는다. `WorkerExecutionService`가 그래프 실행 시 `WorkerDependencies`를 LangGraph `context`로 전달한다.
+
+```python
+app.stream(
+    initial_state,
+    context=WorkerDependencies(vision=worker_runtime),
+)
+```
+
+캡처, OCR, 추론과 실행 노드는 `Runtime[WorkerDependencies]`를 인자로 받고 `runtime.context.vision`에서 의존성을 사용한다. 이 방식은 실행 상태의 체크포인트 직렬화와 프로세스 자원 수명주기를 분리한다.
 
 ## 불변조건
 
-1. `ocr_complete=true`이면 `ocr_capture_id`와 `current_capture_id`가 같다.
-2. `capture_node()`가 새 캡처를 만들면 기존 OCR·마커·화면 서명을 함께 비운다.
-3. 이전 OCR은 현재 프레임이 행동 전 프레임과 같다고 검증된 경우에만 새 캡처에 연결한다.
-4. `pending_action.metadata.decision_capture_id`는 행동을 선택한 `current_capture_id`다.
-5. Reflex 전이 번호는 `0 <= current_transition_index < transition_count`를 만족한다.
-6. Reflex의 다음 전이는 저장된 도착 상태 검증이 성공한 뒤에만 활성화한다.
-7. 뒤로가기 후 목록 마커는 목록 pHash 검증이 성공한 경우에만 현재 캡처에 연결한다.
+1. `observation.ocr_complete=true`이면 `ocr_capture_id`와 `current_capture_id`가 같다.
+2. `capture_node()`가 새 캡처를 만들면 이전 OCR 마커, 화면 서명과 페이지 역할을 비운다.
+3. `decision.pending_action.metadata.decision_capture_id`는 행동을 선택한 캡처 ID다.
+4. 화면 변경 행동은 `transition.transition_request`를 만들고 다음 캡처가 이를 판정한다.
+5. 전환 판정은 같은 행동 순번의 `transition.action_events`에 연결된다.
+6. 활성 Reflex 전이 번호는 저장된 도착 상태 검증이 성공한 뒤에만 증가한다.
+7. 뒤로가기 후 목록 마커는 목록 화면 검증이 끝난 경우에만 다음 카드 선택에 사용한다.
+8. `request`에는 직렬화 가능한 값만 저장하고 런타임 객체는 LangGraph 문맥으로 전달한다.
 
-`current_observation_errors()`는 캡처·OCR 결합과 활성 Reflex 범위 위반을
-단위 테스트와 디버깅에서 검사한다.
+`current_observation_matches_capture()`가 현재 캡처와 OCR 결합을 검사한다. Reflex 전이 범위와 도착 상태는 `agent/recipe/replay_runtime.py`와 `worker_transition.py`에서 검증한다.

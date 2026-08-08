@@ -19,7 +19,7 @@ from agent.observability.run_context import (
 )
 from agent.observability.run_contracts import RunPhase
 from agent.graph.investigation_context import (
-    InvestigationWorkerState,
+    InvestigationState,
     InvestigationModels,
     normalize_site_slugs,
 )
@@ -48,9 +48,11 @@ class InvestigationRequestNodes:
         self.occupation_clarification = occupation_clarification
         self.now = now
 
-    def understand(self, state: InvestigationWorkerState) -> dict[str, Any]:
+    def understand(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
-        existing = InvestigationRequest.model_validate(state["investigation"])
+        existing = InvestigationRequest.model_validate(
+            state["request"]["investigation"]
+        )
         if existing.objective:
             return {}
         emit_run_event(
@@ -100,19 +102,27 @@ class InvestigationRequestNodes:
                 ),
             }
         )
-        return {"investigation": updated.model_dump(mode="json")}
+        return {
+            "request": {
+                "investigation": updated.model_dump(mode="json")
+            }
+        }
 
     @staticmethod
-    def route_after_understand(state: InvestigationWorkerState) -> str:
-        investigation = InvestigationRequest.model_validate(state["investigation"])
+    def route_after_understand(state: InvestigationState) -> str:
+        investigation = InvestigationRequest.model_validate(
+            state["request"]["investigation"]
+        )
         if investigation.clarification_questions:
             return "clarify"
         if investigation.evidence_policy == EvidencePolicy.MODEL_KNOWLEDGE:
             return "answer"
         return "define_evidence"
 
-    def clarify(self, state: InvestigationWorkerState) -> dict[str, Any]:
-        investigation = InvestigationRequest.model_validate(state["investigation"])
+    def clarify(self, state: InvestigationState) -> dict[str, Any]:
+        investigation = InvestigationRequest.model_validate(
+            state["request"]["investigation"]
+        )
         question = next(iter(investigation.clarification_questions), None)
         if question is None:
             raise ValueError("사용자에게 확인할 질문이 없습니다.")
@@ -156,7 +166,9 @@ class InvestigationRequestNodes:
             }
         )
         return {
-            "investigation": updated.model_dump(mode="json"),
+            "request": {
+                "investigation": updated.model_dump(mode="json")
+            },
         }
 
 

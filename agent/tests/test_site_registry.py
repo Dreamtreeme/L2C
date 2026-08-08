@@ -1,6 +1,3 @@
-from contextlib import nullcontext
-
-
 def test_site_registry_lists_existing_profiles():
     from agent.sites import list_supported_sites
 
@@ -51,6 +48,7 @@ def test_open_browser_uses_requested_site_official_url(monkeypatch):
 def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch):
     from agent.application.worker_execution_service import prepare_worker_start_screen
     from agent.sites import load_site_profile
+    from agent.tests.worker_test_support import worker_state
 
     calls = []
     warmed = []
@@ -74,34 +72,14 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
             }
 
     class FakeRuntime:
-        def activate(self):
-            return nullcontext()
-
         def get_action_tools(self):
             return FakeActionTools()
 
         def prepare_reasoning_models(self, _tool_schemas):
             reasoning_warmed.append(True)
 
-    monkeypatch.setattr(
-        "agent.graph.worker_observation.capture_node",
-        lambda state: {
-            "current_url": "https://www.jobkorea.co.kr",
-            "current_url_stale": False,
-            "current_screenshot": "screen.png",
-            "low_information_screen": False,
-        },
-    )
-    monkeypatch.setattr(
-        "agent.graph.worker_observation.ocr_node",
-        lambda state: {"current_markers": [{"id": 1}]},
-    )
-    monkeypatch.setattr(
-        "agent.graph.worker_transition.transition_node",
-        lambda state: {},
-    )
     result = prepare_worker_start_screen(
-        {"current_url": "", "action_events": []},
+        worker_state(),
         load_site_profile("잡코리아"),
         worker_runtime=FakeRuntime(),
     )
@@ -109,7 +87,7 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
     assert calls == [{"url": "", "current_url": "", "site": "jobkorea"}]
     assert warmed == [True]
     assert reasoning_warmed == [True]
-    assert result["current_url"] == "https://www.jobkorea.co.kr"
+    assert result["observation"]["current_url"] == "https://www.jobkorea.co.kr"
 
 
 def test_site_registry_profile_files_exist():
@@ -240,6 +218,7 @@ def test_rocketpunch_selected_job_query_identifies_side_panel_detail():
 
 def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path):
     from agent.runtime import job_card_selector
+    from agent.tests.worker_test_support import worker_state
 
     image_path = tmp_path / "screen.png"
     image_path.write_bytes(b"not-used")
@@ -250,13 +229,19 @@ def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path)
     )
 
     messages = job_card_selector._selection_messages(
-        {
-            "current_url": "https://www.rocketpunch.com/jobs",
-            "current_page_role": "search",
-            "current_markers": [{"id": 1, "type": "text", "text": "키워드"}],
-            "marked_image": str(image_path),
-            "recipe_params": {"query": "백엔드 개발자", "target_count": 1},
-        },
+        worker_state(
+            request={
+                "recipe_params": {"query": "백엔드 개발자", "target_count": 1},
+            },
+            observation={
+                "current_url": "https://www.rocketpunch.com/jobs",
+                "current_page_role": "search",
+                "current_markers": [
+                    {"id": 1, "type": "text", "text": "키워드"}
+                ],
+                "marked_image": str(image_path),
+            },
+        ),
         1,
     )
 
@@ -346,12 +331,19 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
     captured = {}
 
     def fake_execute(initial_state, _profile, _recursion_limit, **_kwargs):
-        captured["recipe_params"] = dict(initial_state.get("recipe_params") or {})
-        captured["job_collection_contract"] = dict(
-            initial_state.get("job_collection_contract") or {}
+        captured["recipe_params"] = dict(
+            initial_state["request"].get("recipe_params") or {}
         )
-        captured["goal"] = initial_state.get("goal", "")
-        return {**initial_state, "is_finished": True, "extracted_jd": {}}, False
+        captured["job_collection_contract"] = dict(
+            initial_state["request"].get("job_collection_contract") or {}
+        )
+        captured["goal"] = initial_state["request"].get("goal", "")
+        final_state = {
+            **initial_state,
+            "lifecycle": {**initial_state["lifecycle"], "is_finished": True},
+            "collection": {**initial_state["collection"], "extracted_jd": {}},
+        }
+        return final_state, False
 
     monkeypatch.setattr(rt, "execute_worker_graph", fake_execute)
 

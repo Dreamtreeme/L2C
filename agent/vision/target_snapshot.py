@@ -94,17 +94,21 @@ def build_action_target_snapshot(
         or args.get("marker_id") is None
     ):
         return None
+    raw_observation = state.get("observation")
+    observation = (
+        raw_observation if isinstance(raw_observation, Mapping) else {}
+    )
     markers = [
         marker
-        for marker in state.get("current_markers", []) or []
+        for marker in observation.get("current_markers", []) or []
         if isinstance(marker, dict)
     ]
     return build_marker_target_snapshot(
         markers,
         args.get("marker_id"),
         screen_signature=(
-            state.get("screen_signature")
-            if isinstance(state.get("screen_signature"), Mapping)
+            observation.get("screen_signature")
+            if isinstance(observation.get("screen_signature"), Mapping)
             else {}
         ),
         target_label=args.get("target_label") or args.get("semantic_label"),

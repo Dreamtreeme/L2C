@@ -13,6 +13,7 @@ from agent.prompts.detail_extraction import (
 )
 from agent.prompts.investigation import answer_prompt
 from agent.runtime.action_permissions import task_permission_reason
+from agent.tests.worker_test_support import node_runtime, worker_state
 
 
 def _action_request(tool_calls):
@@ -31,16 +32,15 @@ def test_sensitive_action_requires_user_approval_before_physical_input(monkeypat
     )
 
     result = worker_execution.execution_node(
-        {
-            "current_markers": [
+        worker_state(
+            observation={
+                "current_markers": [
                 {"id": 7, "text": "가입 신청", "bbox": [0, 0, 100, 20]},
-            ],
-            "current_url": "https://bank.example/product",
-            "current_url_stale": False,
-            "extracted_jd": {},
-            "is_finished": False,
-            "error_count": 0,
-            "pending_action": _action_request(
+                ],
+                "current_url": "https://bank.example/product",
+                "current_url_stale": False,
+            },
+            decision={"pending_action": _action_request(
                 [
                     {
                         "name": "click_marker",
@@ -53,13 +53,19 @@ def test_sensitive_action_requires_user_approval_before_physical_input(monkeypat
                         "id": "sensitive-click",
                     }
                 ]
-            ),
-        }
+            )},
+        ),
+        node_runtime(),
     )
 
-    assert result["pending_human_approval"] is True
-    assert result["human_approval_request"]["action"] == "click_marker"
-    assert action_event_results(result["action_events"])[0]["status"] == "skipped"
+    assert result["safety"]["pending_human_approval"] is True
+    assert result["safety"]["human_approval_request"]["action"] == "click_marker"
+    assert (
+        action_event_results(result["transition"]["action_events"])[0][
+            "status"
+        ]
+        == "skipped"
+    )
 
 
 def test_screen_guard_capture_failure_requires_fresh_observation(monkeypatch):
@@ -70,7 +76,9 @@ def test_screen_guard_capture_failure_requires_fresh_observation(monkeypatch):
             raise RuntimeError("capture unavailable")
 
     result = action_guard.check_reasoning_screen_stale(
-        {"screen_signature": {"phash": "0" * 16}},
+        worker_state(
+            observation={"screen_signature": {"phash": "0" * 16}}
+        ),
         FailedPerception(),
     )
 
@@ -93,17 +101,6 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
             }
         ]
     )
-    context = WorkerExecutionContext.from_state(
-        {
-            "current_markers": [
-                {"id": 7, "text": "검색", "bbox": [0, 0, 100, 20]}
-            ],
-            "current_url": "https://example.com/jobs",
-            "current_url_stale": False,
-            "action_events": [],
-        },
-        request,
-    )
     class FakeRuntime:
         def check_reasoning_screen(self, *_args, **_kwargs):
             return {
@@ -113,10 +110,18 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
                 "reason": "previous_phash_missing",
             }
 
-    monkeypatch.setattr(
-        worker_action_guard,
-        "current_vision_worker_runtime",
-        lambda: FakeRuntime(),
+    context = WorkerExecutionContext.from_state(
+        worker_state(
+            observation={
+                "current_markers": [
+                {"id": 7, "text": "검색", "bbox": [0, 0, 100, 20]}
+                ],
+                "current_url": "https://example.com/jobs",
+                "current_url_stale": False,
+            },
+        ),
+        request,
+        FakeRuntime(),
     )
 
     blocked = worker_action_guard.guard_ui_action(
@@ -166,12 +171,12 @@ def test_external_content_contract_is_shared_by_extraction_and_answer():
 
 
 def test_task_contract_blocks_external_navigation_and_unknown_input():
-    state = {
-        "action_permission_contract": {
+    state = worker_state(
+        safety={"action_permission_contract": {
             "allowed_domains": ["wanted.co.kr"],
             "allowed_input_values": ["ai 엔지니어"],
-        }
-    }
+        }}
+    )
 
     assert (
         task_permission_reason(
@@ -203,9 +208,9 @@ def test_task_contract_blocks_external_navigation_and_unknown_input():
 
 
 def test_task_contract_requires_model_risk_declaration():
-    state = {
-        "action_permission_contract": {"site": "wanted"}
-    }
+    state = worker_state(
+        safety={"action_permission_contract": {"site": "wanted"}}
+    )
 
     assert (
         task_permission_reason(
@@ -221,9 +226,9 @@ def test_task_contract_requires_model_risk_declaration():
 def test_safe_navigation_requires_model_risk_declaration():
     from agent.graph.worker_execution_policy import sensitive_action_reason
 
-    state = {
-        "action_permission_contract": {"site": "wanted"}
-    }
+    state = worker_state(
+        safety={"action_permission_contract": {"site": "wanted"}}
+    )
 
     assert (
         sensitive_action_reason(
@@ -252,9 +257,9 @@ def test_safe_navigation_requires_model_risk_declaration():
 def test_safe_read_does_not_require_redundant_confirmation_false():
     from agent.graph.worker_execution_policy import sensitive_action_reason
 
-    state = {
-        "action_permission_contract": {"site": "wanted"}
-    }
+    state = worker_state(
+        safety={"action_permission_contract": {"site": "wanted"}}
+    )
 
     assert (
         sensitive_action_reason(
@@ -287,7 +292,9 @@ def test_scroll_request_defaults_to_safe_read():
     assert args["risk_level"] == "safe_read"
     assert (
         task_permission_reason(
-            {"action_permission_contract": {"site": "wanted"}},
+            worker_state(
+                safety={"action_permission_contract": {"site": "wanted"}}
+            ),
             "scroll",
             args,
             source="llm",

@@ -16,7 +16,6 @@ from agent.application.search_taxonomy_service import (
     SearchTaxonomyService,
 )
 from agent.graph.investigation_context import InvestigationModels
-from agent.graph.investigation_workflow import InvestigationWorkflow
 from shared.db.database import Database
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
@@ -695,13 +694,16 @@ def test_onet_reimport_preserves_curated_alias_on_existing_concept(tmp_path):
     assert taxonomy.matching_skill_job_ids([onet_key]) == {job_id}
 
 
-def test_workflow_returns_cardinality_question_before_evidence_planning(tmp_path):
+def test_workflow_returns_cardinality_question_before_evidence_planning(
+    tmp_path,
+    investigation_workflow_factory,
+):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
     taxonomy = _prepared_taxonomy(db_path)
     _insert_and_link(db, taxonomy, "backend", position="백엔드 개발자", job_category="백엔드 개발")
     _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=db_path,
         collect_jobs=_unexpected_collection,
         taxonomy_service=taxonomy,
@@ -728,10 +730,13 @@ def test_workflow_returns_cardinality_question_before_evidence_planning(tmp_path
     ] == [1, 1, 2]
 
 
-def test_workflow_progresses_from_generic_request_to_domain_then_family(tmp_path):
+def test_workflow_progresses_from_generic_request_to_domain_then_family(
+    tmp_path,
+    investigation_workflow_factory,
+):
     db_path = tmp_path / "jobs.db"
     taxonomy = _prepared_taxonomy(db_path)
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=db_path,
         collect_jobs=_unexpected_collection,
         taxonomy_service=taxonomy,
@@ -771,7 +776,10 @@ def test_workflow_progresses_from_generic_request_to_domain_then_family(tmp_path
     }
 
 
-def test_semantic_resolution_uses_selected_domain_and_promotes_confirmed_alias(tmp_path):
+def test_semantic_resolution_uses_selected_domain_and_promotes_confirmed_alias(
+    tmp_path,
+    investigation_workflow_factory,
+):
     db_path = tmp_path / "jobs.db"
     taxonomy = _prepared_taxonomy(db_path)
     taxonomy_model = _RecordingFakeModel(
@@ -781,7 +789,7 @@ def test_semantic_resolution_uses_selected_domain_and_promotes_confirmed_alias(t
             reason="LLM 응용 개발 역할로 해석",
         )
     )
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=db_path,
         collect_jobs=_unexpected_collection,
         taxonomy_service=taxonomy,

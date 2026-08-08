@@ -51,6 +51,7 @@ def execute_ui_action(
         action_name,
         args,
         context.marker_bbox,
+        action_tools=context.worker_runtime.get_action_tools(),
         current_url=context.current_url,
     )
     raise_for_action_failure(result)
@@ -62,7 +63,10 @@ def execute_ui_action(
             else {}
         )
         screen_changed = bool(result_payload.get("opened"))
-        if not screen_changed and not context.state.get("ui_context"):
+        if (
+            not screen_changed
+            and not context.state["observation"].get("ui_context")
+        ):
             screen_changed = True
         context.current_url = result_payload.get("url") or args["url"]
         context.current_url_stale = screen_changed

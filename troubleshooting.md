@@ -1340,3 +1340,30 @@ payload에서 일괄 제거하면서 좌표 없는 행동에 필요한 직전 �
 - `click_marker -> type_in_marker -> press_key`가 하나의 순차 경로로 저장되고,
   추론 단계 뒤의 `go_back`이 독립 레시피로 합성되지 않는지 확인했다.
 - 에이전트 테스트 `247 passed`를 확인했다.
+
+## 29. LangGraph Runtime을 선언했지만 일부 노드에 주입되지 않은 문제
+
+### [증상]
+
+작업자 그래프는 `context_schema=WorkerDependencies`로 컴파일됐고 `capture_node`는 정상 실행됐지만 다음 `transition_node`에서 아래 오류로 중단됐다.
+
+```text
+transition_node() missing 1 required positional argument: 'runtime'
+```
+
+### [원인]
+
+LangGraph가 실행 문맥을 주입할 노드 인자명은 `runtime`이다. 사용하지 않는 인자라는 이유로 `transition_node`, `selection_node`, `attempt_reflex_replay`의 인자명을 `_runtime`으로 바꾸자 일반 함수 인자로 처리됐다. 단위 테스트는 노드를 직접 호출하면서 두 번째 인자를 넘겼기 때문에 실제 그래프 호출 차이를 발견하지 못했다.
+
+### [해결]
+
+- 모든 작업자 노드의 두 번째 인자명을 `runtime`으로 통일했다.
+- 노드 시그니처의 두 번째 인자명이 `runtime`인지 검사하는 계약 테스트를 추가했다.
+- 현재 작업자 런타임을 찾는 전역 변수나 `ContextVar`는 다시 도입하지 않았다.
+
+### [검증]
+
+- 작업자 그래프·애플리케이션 경계 테스트 `43 passed`를 확인했다.
+- 전체 에이전트 테스트 `278 passed`를 확인했다.
+- 원티드 `iOS 개발자 1건` 경험 기반 탐색 E2E는 24.06초에 완료됐다.
+- Reflex 2단계 경로 완료, 품질 게이트 통과, 기존 DB 공고 ID 57 확인과 브라우저 종료를 확인했다.

@@ -3,32 +3,21 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from agent.observability.run_context import emit_run_event
 from agent.observability.run_contracts import RunPhase, RunStatus
-from agent.application.occupation_clarification_service import (
-    OccupationClarificationService,
-)
-from agent.application.search_taxonomy_review_service import (
-    SearchTaxonomyReviewService,
-)
-from agent.application.search_taxonomy_service import SearchTaxonomyService
-from agent.application.tool_capabilities import build_tool_capability_catalog
 from agent.graph.investigation_answer_nodes import InvestigationAnswerNodes
 from agent.graph.investigation_collection_nodes import InvestigationCollectionNodes
 from agent.graph.investigation_context import (
-    InvestigationWorkerState,
-    InvestigationModels,
+    InvestigationState,
+    create_investigation_state,
 )
 from agent.graph.investigation_evidence_nodes import InvestigationEvidenceNodes
 from agent.graph.investigation_request_nodes import InvestigationRequestNodes
-from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     InvestigationRequest,
@@ -36,71 +25,27 @@ from shared.schema.investigation_schema import (
 
 
 class InvestigationWorkflow:
-    """조사 노드와 런타임 자원을 연결하는 최상위 그래프 실행기."""
+    """주입된 조사 노드의 순서, 분기와 중단·재개만 관리한다."""
 
     def __init__(
         self,
         *,
-        db_path: str | Path,
-        collect_jobs: Callable[[Any], Any],
-        checkpoint_runtime: InvestigationCheckpointRuntime | None = None,
-        models: InvestigationModels | None = None,
-        capabilities: list[Any] | None = None,
-        taxonomy_service: SearchTaxonomyService | None = None,
-        taxonomy_review_service: SearchTaxonomyReviewService | None = None,
-        now: Callable[[], datetime] | None = None,
+        checkpointer: Any,
+        request_nodes: InvestigationRequestNodes,
+        evidence_nodes: InvestigationEvidenceNodes,
+        collection_nodes: InvestigationCollectionNodes,
+        answer_nodes: InvestigationAnswerNodes,
+        capabilities: list[Any],
     ) -> None:
-        resolved_db_path = Path(db_path)
-        from shared.db.database import Database
+        self.capabilities = list(capabilities)
+        self.request_nodes = request_nodes
+        self.evidence_nodes = evidence_nodes
+        self.collection_nodes = collection_nodes
+        self.answer_nodes = answer_nodes
+        self.graph = self._build_graph(checkpointer)
 
-        Database(resolved_db_path)
-        self._owns_checkpoint_runtime = checkpoint_runtime is None
-        self.checkpoint_runtime = (
-            checkpoint_runtime
-            or InvestigationCheckpointRuntime(resolved_db_path)
-        )
-        resolved_models = models or InvestigationModels()
-        self.capabilities = capabilities or build_tool_capability_catalog()
-        resolved_taxonomy_service = (
-            taxonomy_service or SearchTaxonomyService(resolved_db_path)
-        )
-        resolved_review_service = (
-            taxonomy_review_service
-            or SearchTaxonomyReviewService(resolved_db_path)
-        )
-        now_provider = now or (lambda: datetime.now().astimezone())
-
-        occupation_clarification = OccupationClarificationService(
-            taxonomy_model=resolved_models.taxonomy,
-            taxonomy_service=resolved_taxonomy_service,
-            taxonomy_review_service=resolved_review_service,
-        )
-        self.request_nodes = InvestigationRequestNodes(
-            models=resolved_models,
-            occupation_clarification=occupation_clarification,
-            now=now_provider,
-        )
-        self.evidence_nodes = InvestigationEvidenceNodes(
-            db_path=resolved_db_path,
-            models=resolved_models,
-            taxonomy_service=resolved_taxonomy_service,
-            now=now_provider,
-        )
-        self.collection_nodes = InvestigationCollectionNodes(collect_jobs)
-        self.answer_nodes = InvestigationAnswerNodes(
-            db_path=resolved_db_path,
-            models=resolved_models,
-        )
-        self.graph = self._build_graph()
-
-    def close(self) -> None:
-        """이 실행기가 만든 체크포인트 연결을 닫는다."""
-
-        if self._owns_checkpoint_runtime:
-            self.checkpoint_runtime.close()
-
-    def _build_graph(self):
-        workflow = StateGraph(InvestigationWorkerState)
+    def _build_graph(self, checkpointer: Any):
+        workflow = StateGraph(InvestigationState)
         workflow.add_node("understand", self.request_nodes.understand)
         workflow.add_node("clarify", self.request_nodes.clarify)
         workflow.add_node("define_evidence", self.evidence_nodes.define_evidence)
@@ -146,7 +91,7 @@ class InvestigationWorkflow:
         workflow.add_edge("execute", "inspect_evidence")
         workflow.add_edge("load_documents", "answer")
         workflow.add_edge("answer", END)
-        return workflow.compile(checkpointer=self.checkpoint_runtime.saver)
+        return workflow.compile(checkpointer=checkpointer)
 
     @staticmethod
     def _thread_config(investigation_id: str) -> dict[str, dict[str, str]]:
@@ -162,8 +107,22 @@ class InvestigationWorkflow:
 
     def _normalize_result(self, result: dict[str, Any]) -> dict[str, Any]:
         clarification = self._pending_clarification(result)
+        request = dict(result.get("request") or {})
+        evidence = dict(result.get("evidence") or {})
+        execution = dict(result.get("execution") or {})
+        answer = dict(result.get("answer") or {})
         normalized = {
-            key: value for key, value in result.items() if key != "__interrupt__"
+            "investigation": request.get("investigation", {}),
+            "db_report": evidence.get("db_report", {}),
+            "documents": evidence.get("documents", []),
+            "valid_ids": evidence.get("valid_ids", []),
+            "collection_results": execution.get("collection_results", []),
+            "run_status": execution.get("run_status", ""),
+            "cannot_proceed_reason": execution.get(
+                "cannot_proceed_reason",
+                "",
+            ),
+            "final_answer": answer.get("final_answer", ""),
         }
         if clarification is None:
             return normalized
@@ -220,12 +179,10 @@ class InvestigationWorkflow:
             conversation_id=conversation_id,
             original_query=str(query or "").strip(),
         )
-        state: InvestigationWorkerState = {
-            "investigation": investigation.model_dump(mode="json"),
-            "capability_catalog": [item.model_dump(mode="json") for item in self.capabilities],
-            "collection_results": [],
-            "valid_ids": [],
-        }
+        state = create_investigation_state(
+            investigation,
+            [item.model_dump(mode="json") for item in self.capabilities],
+        )
         result = self.graph.invoke(
             state,
             config=self._thread_config(investigation.investigation_id),

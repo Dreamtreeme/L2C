@@ -16,7 +16,7 @@ from agent.observability.run_context import (
 )
 from agent.observability.run_contracts import RunPhase, RunStatus
 from agent.graph.investigation_context import (
-    InvestigationWorkerState,
+    InvestigationState,
     InvestigationModels,
     build_request_prompt_context,
     message_text,
@@ -91,20 +91,31 @@ class InvestigationAnswerNodes:
         self.db_path = Path(db_path)
         self.models = models
 
-    def load_documents(self, state: InvestigationWorkerState) -> dict[str, Any]:
-        investigation = InvestigationRequest.model_validate(state["investigation"])
+    def load_documents(self, state: InvestigationState) -> dict[str, Any]:
+        investigation = InvestigationRequest.model_validate(
+            state["request"]["investigation"]
+        )
         ids = sorted(set(investigation.evidence_document_ids))
         if not ids:
-            return {"documents": [], "valid_ids": []}
+            return {"evidence": {"documents": [], "valid_ids": []}}
         documents = load_job_evidence_documents(self.db_path, ids)
         return {
-            "documents": [document.model_dump(mode="json") for document in documents],
-            "valid_ids": [document.id for document in documents],
+            "evidence": {
+                "documents": [
+                    document.model_dump(mode="json")
+                    for document in documents
+                ],
+                "valid_ids": [document.id for document in documents],
+            }
         }
 
-    def answer(self, state: InvestigationWorkerState) -> dict[str, Any]:
+    def answer(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
-        investigation = InvestigationRequest.model_validate(state["investigation"])
+        investigation = InvestigationRequest.model_validate(
+            state["request"]["investigation"]
+        )
+        evidence = state["evidence"]
+        execution = state["execution"]
         emit_run_event("answering_started", RunPhase.ANSWERING, "검증된 근거로 답변을 정리하고 있습니다.")
         response = invoke_with_metrics(
             self.models.answer(),
@@ -115,14 +126,17 @@ class InvestigationAnswerNodes:
                         {
                             "request": build_request_prompt_context(investigation),
                             "db_report": compact_db_report(
-                                state.get("db_report", {})
+                                evidence.get("db_report", {})
                             ),
                             "collection_results": compact_collection_results(
-                                state.get("collection_results", [])
+                                execution.get("collection_results", [])
                             ),
-                            "cannot_proceed_reason": state.get("cannot_proceed_reason", ""),
+                            "cannot_proceed_reason": execution.get(
+                                "cannot_proceed_reason",
+                                "",
+                            ),
                             "documents": build_answer_evidence_documents(
-                                state.get("documents", [])
+                                evidence.get("documents", [])
                             ),
                         },
                         ensure_ascii=False,
@@ -145,9 +159,11 @@ class InvestigationAnswerNodes:
             status=RunStatus.COMPLETED,
         )
         return {
-            "investigation": updated.model_dump(mode="json"),
-            "final_answer": answer,
-            "run_status": RunStatus.COMPLETED.value,
+            "request": {
+                "investigation": updated.model_dump(mode="json")
+            },
+            "answer": {"final_answer": answer},
+            "execution": {"run_status": RunStatus.COMPLETED.value},
         }
 
 

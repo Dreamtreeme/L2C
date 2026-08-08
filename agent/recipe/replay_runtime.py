@@ -5,7 +5,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from langgraph.runtime import Runtime
+
 from agent.runtime.worker_contracts import WorkerState, build_action_request
+from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.recipe.replay import (
     ReflexReplayContext,
     ReflexSelection,
@@ -30,10 +33,14 @@ def _miss_result(
             "reason": reason or reflex_trace.get("reason", ""),
         }
     )
-    active_recipe = dict(state.get("active_reflex_recipe", {}) or {})
+    active_recipe = dict(
+        state["replay"].get("active_reflex_recipe", {}) or {}
+    )
     blocked_keys = [
         str(key)
-        for key in (state.get("reflex_blocked_recipe_keys") or [])
+        for key in (
+            state["replay"].get("reflex_blocked_recipe_keys") or []
+        )
         if str(key)
     ]
     active_recipe_key = str(active_recipe.get("recipe_key") or "")
@@ -53,9 +60,11 @@ def _miss_result(
         if active_recipe_key not in blocked_keys:
             blocked_keys.append(active_recipe_key)
     return {
-        "reflex_trace": reflex_trace,
-        "active_reflex_recipe": {},
-        "reflex_blocked_recipe_keys": blocked_keys,
+        "replay": {
+            "reflex_trace": reflex_trace,
+            "active_reflex_recipe": {},
+            "reflex_blocked_recipe_keys": blocked_keys,
+        },
     }
 
 
@@ -100,25 +109,30 @@ def _hit_result(
         ],
     }
     return {
-        "pending_action": _build_request(selection),
-        "reflex_trace": {
-            "hit": True,
-            "recipe_key": selection.recipe_key,
-            "candidate_count": context.candidate_count,
-            "task_category": context.task_category,
-            "actions": [
-                call["name"]
-                for call in selection.tool_calls
-            ],
-            "tool_calls": selection.tool_call_traces,
-            "recipe_transition_index": selection.transition_index,
-            "recipe_transition_count": transition_count,
+        "decision": {"pending_action": _build_request(selection)},
+        "replay": {
+            "reflex_trace": {
+                "hit": True,
+                "recipe_key": selection.recipe_key,
+                "candidate_count": context.candidate_count,
+                "task_category": context.task_category,
+                "actions": [
+                    call["name"]
+                    for call in selection.tool_calls
+                ],
+                "tool_calls": selection.tool_call_traces,
+                "recipe_transition_index": selection.transition_index,
+                "recipe_transition_count": transition_count,
+            },
+            "active_reflex_recipe": active_recipe_state,
         },
-        "active_reflex_recipe": active_recipe_state,
     }
 
 
-def attempt_reflex_replay(state: WorkerState) -> dict[str, Any]:
+def attempt_reflex_replay(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+) -> dict[str, Any]:
     """후보 조회, 검증과 요청 조립을 순서대로 실행한다."""
 
     started = time.perf_counter()

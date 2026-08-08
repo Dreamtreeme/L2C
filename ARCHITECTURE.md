@@ -32,7 +32,7 @@ flowchart TD
     ANSWER --> U
 ```
 
-FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫습니다. 이 런타임은 조사 체크포인터, 컴파일된 조사·작업자 그래프, `ChatService`, 지연 생성 비전 자원, 자동승격 작업자를 소유합니다. `ChatService`가 사용자 진입점의 유일한 지휘자이며 요청 이해, 확인 질문, 필요 근거 정의, DB 충분성 검사, 수집 계획, 결과 검증, 답변 순서로 진행합니다.
+FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫습니다. `agent/bootstrap.py`는 조사 체크포인터, 애플리케이션 서비스, 모델 묶음, 컴파일된 조사·작업자 그래프, 지연 생성 비전 자원과 자동승격 작업자를 조립합니다. 조사 그래프와 작업자 그래프에는 준비된 노드·서비스·런타임 문맥만 전달되며 자원 생성과 종료 권한은 없습니다. `ChatService`가 사용자 진입점이며 요청 이해, 확인 질문, 필요 근거 정의, DB 충분성 검사, 수집 계획, 결과 검증, 답변 순서로 조사 그래프를 실행합니다.
 
 ## 백엔드 요청 생명주기
 
@@ -51,24 +51,22 @@ Realtime/Vision 경로는 DOM과 Playwright selector를 사용하지 않습니�
 ```mermaid
 flowchart TD
     S[WorkerState 생성] --> START{시작 화면 관찰 여부}
-    START -->|없음| REASON[Reasoning]
-    START -->|있음| SELECT[결정론적 행동 선택]
+    START -->|없음| CAPTURE[화면 캡처]
+    START -->|현재 캡처와 OCR 일치| SELECT[행동 선택]
     CAPTURE[화면 캡처] --> TRANSITION[전환 판정]
-    TRANSITION -->|현재 캡처와 OCR 일치| COLLECT[관찰 및 상세 본문 반영]
-    TRANSITION -->|추가 판정 필요| SELECT
+    TRANSITION --> SELECT
     OCR[SoM 및 OCR] --> TRANSITION
-    COLLECT --> SELECT
     SELECT -->|OCR 필요| OCR
     SELECT -->|카드 큐 또는 상세 정책| EXECUTION[원자 행동 실행]
     SELECT -->|재생 후보| REFLEX[Reflex ROI 검증]
-    SELECT -->|의미 판단 필요| REASON
+    SELECT -->|의미 판단 필요| REASON[Reasoning]
     REFLEX -->|ROI pHash와 마커 비율 일치| EXECUTION
     REFLEX -->|불일치| REASON
     REASON --> EXECUTION
-    EXECUTION --> RECORD[실행 기록]
-    RECORD -->|화면 변경| CAPTURE
-    RECORD -->|같은 화면 연속 행동| REASON
-    RECORD -->|완료 또는 승인 필요| END[종료]
+    EXECUTION -->|화면 변경| CAPTURE
+    EXECUTION -->|같은 화면에서 재판단| REASON
+    EXECUTION -->|후속 결정론적 행동| EXECUTION
+    EXECUTION -->|완료 또는 승인 필요| END[종료]
 ```
 
 - `Perception`: 브라우저 화면을 캡처하고 PaddleOCR·OmniParser 마커와 화면 서명을 만듭니다.
@@ -89,15 +87,16 @@ flowchart TD
 | 수집 조율 | `agent/application/collection_service.py` | 수집 의도 1회 정규화, 작업자 실행, 제출물 검증과 저장 순서 |
 | 수집 작업자 | `agent/application/collection_worker_runner.py` | 확정된 `CollectionIntent`로 단일 비전 작업자 실행과 제출물 생성 |
 | 수집 제출물 | `agent/application/collection_submission_service.py` | 공고 저장, 레시피 후보 등록, 제출물 최종 저장 |
-| 런타임 소유권 | `agent/runtime/application_runtime.py`, `vision_worker_runtime.py` | 체크포인터·그래프·OCR·모델·잠금·승격 작업자의 생성과 종료 |
+| 구성·수명주기 | `agent/bootstrap.py` | 체크포인터·서비스·그래프·비전 런타임·승격 작업자의 생성과 종료 |
+| 비전 런타임 | `agent/runtime/vision_worker_runtime.py` | OCR·Perception·ActionTools·판단 모델·작업자 그래프의 지연 생성과 실행 잠금 |
 | 작업자 실행 | `agent/application/worker_execution_service.py` | 화면 잠금, 시작 화면 준비, 그래프 실행, 브라우저 정리 |
 | 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 공고 정규화·UPSERT, 상세 OCR 최종 구조화 |
 | 비동기 승격 | `agent/application/recipe_promotion_service.py`, `recipe_promotion_worker.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
-| 지휘자 그래프 조립 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
+| 지휘자 그래프 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 주입된 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
 | 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 요청 해석, 근거 판정, 수집 실행, 답변 |
 | 직무 확인 | `agent/application/occupation_clarification_service.py` | 직무 사전 후보 질문 생성과 사용자 승인 별칭 기록 |
-| 작업자 그래프 | `agent/graph/workflow.py`, `state.py`, `state_factory.py` | Vision LangGraph 연결과 WorkerState 계약 |
-| 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 수집, 선택, 추론, 원자 실행, 기록 |
+| 작업자 그래프 | `agent/graph/workflow.py`, `agent/runtime/worker_contracts.py` | Vision LangGraph 연결, 런타임 문맥과 WorkerState 계약 |
+| 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 선택, 추론과 원자 실행 |
 | 행동 실행 세부 | `agent/graph/worker_action_guard.py`, `worker_execution_dispatch.py`, `worker_action_effects.py` | 실행 전 안전 검증, 물리·상태 도구 전달, 실행 후 상태 반영 |
 | 추론 문맥 | `agent/graph/worker_reasoning_prompt.py` | 화면·수집·전환 정보를 모델 메시지로 압축 |
 | 런타임 정책 | `agent/runtime/` | 전환 검증, 상세 버퍼, 카드 큐, Reflex 재생 |
@@ -107,15 +106,25 @@ flowchart TD
 ## 상태와 행동 계약
 
 - 모든 작업자 진입점은 `create_worker_state()`로 독립된 초기 상태를 만듭니다.
-- 작업자 상태는 체크포인트 직렬화가 가능한 하나의 평면 `GraphState`입니다. 중첩 상태와 평면 호환 필드를 동시에 유지하지 않으며 각 `worker_*` 모듈이 자기 책임의 필드만 갱신합니다.
+- `WorkerState`는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety` 구역으로 구성됩니다. 각 구역의 reducer는 노드가 반환한 부분 갱신을 기존 구역에 병합합니다.
+- 상태 구역은 책임 경계입니다. 요청 계약은 실행 중 바뀌지 않고, 화면 관찰은 관찰 노드, 행동 선택은 선택·Reflex·추론 노드, 행동 결과와 전환 요청은 실행 노드가 갱신합니다.
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
-- 실행 전 명령은 `pending_action: ActionRequest`, 실행 후 결과는 `last_action_result: ActionResult`로 분리합니다.
+- 실행 전 명령은 `decision.pending_action: ActionRequest`, 실행 결과는 `transition.action_events`에 순서대로 기록합니다.
 - `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
+- `WorkerExecutionContext`는 실행 중 같은 `WorkerState` 사본을 갱신하고 변경된 구역만 반환합니다. 별도 실행 필드와 그래프 상태 사이의 복사·동기화 표는 없습니다.
 - 실행기는 안전 검증, 도구 전달, 상태 효과를 순서대로 조립하며 행동 종류는 `agent/runtime/worker_actions.py`에서 한 번만 정의합니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
-- 행동이 요구한 전환은 `transition_request`, 현재 검증 결과는 `transition_result`, 확정된 이력은 `transition_records`로 구분합니다.
+- 행동이 요구한 전환은 `transition.transition_request`, 현재 검증 결과는 `transition.transition_result`로 구분합니다. 확정된 전환은 같은 순번의 `transition.action_events`에 연결되고 제출물 생성 시 `transition_records`로 변환됩니다.
 - 결정론적 정책이 검증에 실패하면 행동을 강행하지 않고 reasoning으로 폴백합니다.
+
+## 그래프 의존성 주입
+
+- `ApplicationRuntime`이 구체 서비스와 장기 실행 자원을 생성합니다.
+- `build_investigation_workflow()`는 준비된 수집 함수, 모델 묶음, 검색 사전 서비스와 체크포인터 `saver`를 조사 노드에 주입합니다.
+- `VisionWorkerRuntime`은 컴파일된 작업자 그래프를 캐시합니다. `WorkerExecutionService`가 실행할 때 LangGraph `context`에 `WorkerDependencies(vision=...)`를 전달합니다.
+- 캡처, OCR, 추론과 실행 노드는 `Runtime[WorkerDependencies]`에서 비전 의존성을 받습니다. 전역 변수나 `ContextVar`로 현재 작업자를 조회하지 않습니다.
+- 그래프 클래스는 노드 순서, 조건부 분기, 상태 병합과 중단·재개를 담당합니다. 서비스 생성, 프로세스 종료, DB 연결 종료와 백그라운드 작업자 수명주기는 애플리케이션 계층이 담당합니다.
 
 ## 로컬 작업자 생명주기
 

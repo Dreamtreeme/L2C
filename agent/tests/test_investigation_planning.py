@@ -14,7 +14,6 @@ from agent.graph.investigation_evidence_policy import (
     normalize_collection_steps,
     normalize_evidence_requirements,
 )
-from agent.graph.investigation_workflow import InvestigationWorkflow
 from shared.db.database import Database
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
@@ -386,7 +385,10 @@ def _test_capabilities():
         ),
     ]
 
-def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
+def test_workflow_answers_general_knowledge_without_evidence_or_tools(
+    tmp_path,
+    investigation_workflow_factory,
+):
 
     analysis_model = _FakeModel(
         RequestAnalysis(
@@ -399,7 +401,7 @@ def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
     evidence_model = _FakeModel(EvidencePlan())
     action_model = _FakeModel(InvestigationActionPlan())
     answer_model = _FakeModel("iOS 개발자는 Apple 플랫폼용 앱을 설계하고 개발합니다.")
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=tmp_path / "jobs.db",
         models=InvestigationModels(
             analysis_model=analysis_model,
@@ -422,7 +424,10 @@ def test_workflow_answers_general_knowledge_without_evidence_or_tools(tmp_path):
     assert action_model.calls == 0
     assert answer_model.calls == 1
 
-def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
+def test_workflow_resumes_choice_then_builds_evidence_plan(
+    tmp_path,
+    investigation_workflow_factory,
+):
     from datetime import datetime, timezone
 
 
@@ -476,7 +481,7 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
             ]
         )
     )
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=tmp_path / "jobs.db",
         models=InvestigationModels(
             analysis_model=analysis_model,
@@ -493,7 +498,7 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
     first = workflow.run("최근 AI 개발자 채용 트렌드를 알려줘")
     workflow.close()
 
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=tmp_path / "jobs.db",
         models=InvestigationModels(
             analysis_model=analysis_model,
@@ -539,7 +544,10 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(tmp_path):
     assert evidence_model.calls == 1
     workflow.close()
 
-def test_workflow_executes_only_registered_collection_plan(tmp_path):
+def test_workflow_executes_only_registered_collection_plan(
+    tmp_path,
+    investigation_workflow_factory,
+):
     from langchain_core.messages import AIMessage
 
 
@@ -573,7 +581,7 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
             }
 
     collection_tool = CollectionTool()
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=db_path,
         models=InvestigationModels(
             analysis_model=_FakeModel(
@@ -643,7 +651,10 @@ def test_workflow_executes_only_registered_collection_plan(tmp_path):
     assert result["final_answer"] == "공고를 확인했습니다 [job_id:1]"
     assert result["investigation"]["collection_document_ids"] == [1]
 
-def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_path):
+def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(
+    tmp_path,
+    investigation_workflow_factory,
+):
     from langchain_core.messages import AIMessage
 
 
@@ -682,7 +693,7 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
             ]
         )
     )
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=db_path,
         models=InvestigationModels(
             analysis_model=_FakeModel(
@@ -737,7 +748,10 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(tmp_pa
     assert result["documents"][0]["position"] == "AI 엔지니어"
     assert validation_model.calls == 1
 
-def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_path):
+def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
+    tmp_path,
+    investigation_workflow_factory,
+):
     from langchain_core.messages import AIMessage
 
 
@@ -786,7 +800,7 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(tmp_p
             ]
         )
     )
-    workflow = InvestigationWorkflow(
+    workflow = investigation_workflow_factory(
         db_path=db_path,
         models=InvestigationModels(
             analysis_model=_FakeModel(

@@ -3,7 +3,7 @@ title: "L2C 문서 인덱스"
 type: hub
 area: documentation
 status: active
-updated: 2026-07-24
+updated: 2026-08-08
 tags:
   - l2c
   - docs/documentation
@@ -29,6 +29,7 @@ tags:
 | 문서 | 상태 | 내용 |
 |---|---|---|
 | [기술 및 설계 결정](design_decisions.md) | 현재 | 채택한 구조와 트레이드오프 |
+| [작업자 상태 계약](worker_state_contract.md) | 현재 | 책임별 WorkerState 구역, 갱신 주체와 불변조건 |
 | [L2C 네이밍 규칙](naming_conventions.md) | 현재 | 코드와 레시피 단계의 명명 기준 |
 | [런타임 호환 기준](runtime_compatibility.md) | 현재 | Python, CUDA, PaddleOCR, PyTorch 검증 조합 |
 | [E2E 관측 환경](e2e_observability.md) | 현재 | 실행시간, 토큰, 실패 단계, LangSmith 관측 기준 |

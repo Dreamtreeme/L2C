@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -274,19 +274,21 @@ class TransitionResult(TransitionRequest, total=False):
     needs_ocr: bool
 
 
-class WorkerIdentityState(TypedDict, total=False):
-    """작업 실행과 캡처를 연결하는 식별 상태."""
+class WorkerRequestState(TypedDict, total=False):
+    """한 작업자 실행에서 변하지 않는 목표와 수집 계약."""
 
     worker_run_id: str
-    current_capture_id: str
-    ocr_capture_id: str
-    capture_sequence: int
     goal: str
+    recipe_params: dict[str, Any]
+    job_collection_contract: dict[str, Any]
 
 
 class ObservationState(TypedDict, total=False):
     """한 캡처에서 얻은 화면, OCR과 브라우저 상태."""
 
+    current_capture_id: str
+    ocr_capture_id: str
+    capture_sequence: int
     current_screenshot: str
     capture_quality: dict[str, Any]
     raw_screen_signature: dict[str, Any]
@@ -304,13 +306,18 @@ class ObservationState(TypedDict, total=False):
     screen_signature: dict[str, Any]
 
 
-class ActionExecutionState(TypedDict, total=False):
-    """선택된 행동의 실행과 화면 전환 판정 상태."""
+class DecisionState(TypedDict, total=False):
+    """현재 캡처에서 선택한 다음 행동과 선택 근거."""
+
+    pending_action: ActionRequest | None
+    job_card_selection_trace: dict[str, Any]
+
+
+class TransitionState(TypedDict, total=False):
+    """행동 실행 기록과 다음 화면 전환 판정 상태."""
 
     action_events: list[ActionEvent]
-    pending_action: ActionRequest | None
     error_count: int
-    is_finished: bool
     transition_request: TransitionRequest
     transition_result: TransitionResult
 
@@ -321,17 +328,14 @@ class RecipeReplayState(TypedDict, total=False):
     reflex_trace: dict[str, Any]
     active_reflex_recipe: dict[str, Any]
     reflex_blocked_recipe_keys: list[str]
-    recipe_params: dict[str, Any]
 
 
 class JobCollectionState(TypedDict, total=False):
     """공고 목록 선택, 상세 판독과 결과 누적 상태."""
 
     extracted_jd: dict[str, Any]
-    job_collection_contract: dict[str, Any]
     job_card_queue: list[dict[str, Any]]
     job_results_memory: dict[str, Any]
-    job_card_selection_trace: dict[str, Any]
     job_results_availability: dict[str, Any]
     job_detail_buffer: dict[str, Any]
     job_detail_coverage: dict[str, Any]
@@ -347,87 +351,211 @@ class ActionSafetyState(TypedDict, total=False):
     human_approval_request: dict[str, Any]
 
 
-class WorkerState(
-    WorkerIdentityState,
-    ObservationState,
-    ActionExecutionState,
-    RecipeReplayState,
-    JobCollectionState,
-    ActionSafetyState,
-    total=False,
-):
-    """작업자 노드와 결정 로직이 공유하는 상태 계약."""
+class WorkerLifecycleState(TypedDict, total=False):
+    """작업자 반복 실행의 종료 상태."""
+
+    is_finished: bool
 
 
-def create_worker_state(goal: str = "", **overrides: Any) -> WorkerState:
-    """모든 작업자 진입점에서 동일한 초기 상태를 만든다."""
+def merge_worker_section(
+    current: Mapping[str, Any] | None,
+    update: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """노드가 소유한 섹션의 일부만 반환해도 기존 값을 보존한다."""
+
+    return {**dict(current or {}), **dict(update or {})}
+
+
+class WorkerState(TypedDict):
+    """책임 경계별로 분리한 비전 작업자 중앙 상태."""
+
+    request: Annotated[WorkerRequestState, merge_worker_section]
+    observation: Annotated[ObservationState, merge_worker_section]
+    decision: Annotated[DecisionState, merge_worker_section]
+    transition: Annotated[TransitionState, merge_worker_section]
+    replay: Annotated[RecipeReplayState, merge_worker_section]
+    collection: Annotated[JobCollectionState, merge_worker_section]
+    lifecycle: Annotated[WorkerLifecycleState, merge_worker_section]
+    safety: Annotated[ActionSafetyState, merge_worker_section]
+
+
+class WorkerStateUpdate(TypedDict, total=False):
+    """노드가 변경할 책임 섹션만 담는 상태 패치."""
+
+    request: WorkerRequestState
+    observation: ObservationState
+    decision: DecisionState
+    transition: TransitionState
+    replay: RecipeReplayState
+    collection: JobCollectionState
+    lifecycle: WorkerLifecycleState
+    safety: ActionSafetyState
+
+
+def apply_worker_state_update(
+    state: WorkerState,
+    update: WorkerStateUpdate,
+) -> WorkerState:
+    """노드 내부의 연속 계산에서 LangGraph와 같은 섹션 병합을 적용한다."""
+
+    return WorkerState(
+        request=cast(
+            WorkerRequestState,
+            merge_worker_section(state["request"], update.get("request")),
+        ),
+        observation=cast(
+            ObservationState,
+            merge_worker_section(
+                state["observation"],
+                update.get("observation"),
+            ),
+        ),
+        decision=cast(
+            DecisionState,
+            merge_worker_section(state["decision"], update.get("decision")),
+        ),
+        transition=cast(
+            TransitionState,
+            merge_worker_section(
+                state["transition"],
+                update.get("transition"),
+            ),
+        ),
+        replay=cast(
+            RecipeReplayState,
+            merge_worker_section(state["replay"], update.get("replay")),
+        ),
+        collection=cast(
+            JobCollectionState,
+            merge_worker_section(
+                state["collection"],
+                update.get("collection"),
+            ),
+        ),
+        lifecycle=cast(
+            WorkerLifecycleState,
+            merge_worker_section(
+                state["lifecycle"],
+                update.get("lifecycle"),
+            ),
+        ),
+        safety=cast(
+            ActionSafetyState,
+            merge_worker_section(state["safety"], update.get("safety")),
+        ),
+    )
+
+
+def create_worker_state(
+    goal: str = "",
+    *,
+    request: Mapping[str, Any] | None = None,
+    observation: Mapping[str, Any] | None = None,
+    decision: Mapping[str, Any] | None = None,
+    transition: Mapping[str, Any] | None = None,
+    replay: Mapping[str, Any] | None = None,
+    collection: Mapping[str, Any] | None = None,
+    lifecycle: Mapping[str, Any] | None = None,
+    safety: Mapping[str, Any] | None = None,
+) -> WorkerState:
+    """모든 작업자 진입점에서 동일한 섹션 상태를 만든다."""
 
     state: WorkerState = {
-        "goal": goal,
-        "worker_run_id": "",
-        "current_capture_id": "",
-        "ocr_capture_id": "",
-        "capture_sequence": 0,
-        "current_screenshot": "",
-        "capture_quality": {},
-        "raw_screen_signature": {},
-        "analysis_mode": "",
-        "ocr_complete": False,
-        "ui_context": "",
-        "current_url": "",
-        "current_page_role": "",
-        "current_url_stale": True,
-        "low_information_screen": False,
-        "low_information_capture_count": 0,
-        "current_markers": [],
-        "action_events": [],
-        "marked_image": "",
-        "screen_signature": {},
-        "error_count": 0,
-        "is_finished": False,
-        "extracted_jd": {},
-        "pending_action": None,
-        "reflex_trace": {},
-        "active_reflex_recipe": {},
-        "reflex_blocked_recipe_keys": [],
-        "recipe_params": {},
-        "job_collection_contract": {
-            "required_fields": list(DEFAULT_JOB_COLLECTION_FIELDS),
+        "request": {
+            "goal": goal,
+            "worker_run_id": "",
+            "recipe_params": {},
+            "job_collection_contract": {
+                "required_fields": list(DEFAULT_JOB_COLLECTION_FIELDS),
+            },
         },
-        "transition_request": {},
-        "transition_result": {
-            "status": "idle",
-            "needs_ocr": False,
+        "observation": {
+            "current_capture_id": "",
+            "ocr_capture_id": "",
+            "capture_sequence": 0,
+            "current_screenshot": "",
+            "capture_quality": {},
+            "raw_screen_signature": {},
+            "analysis_mode": "",
+            "ocr_complete": False,
+            "previous_screen_observation": {},
+            "ui_context": "",
+            "current_url": "",
+            "current_page_role": "",
+            "current_url_stale": True,
+            "low_information_screen": False,
+            "low_information_capture_count": 0,
+            "current_markers": [],
+            "marked_image": "",
+            "screen_signature": {},
         },
-        "job_card_queue": [],
-        "job_results_memory": {},
-        "job_card_selection_trace": {},
-        "job_results_availability": {},
-        "job_detail_buffer": {},
-        "job_detail_coverage": {},
-        "job_detail_followup": {},
-        "return_to_job_results": {},
-        "action_permission_contract": {},
-        "pending_human_approval": False,
-        "human_approval_request": {},
+        "decision": {
+            "pending_action": None,
+            "job_card_selection_trace": {},
+        },
+        "transition": {
+            "action_events": [],
+            "error_count": 0,
+            "transition_request": {},
+            "transition_result": {
+                "status": "idle",
+                "needs_ocr": False,
+            },
+        },
+        "replay": {
+            "reflex_trace": {},
+            "active_reflex_recipe": {},
+            "reflex_blocked_recipe_keys": [],
+        },
+        "collection": {
+            "extracted_jd": {},
+            "job_card_queue": [],
+            "job_results_memory": {},
+            "job_results_availability": {},
+            "job_detail_buffer": {},
+            "job_detail_coverage": {},
+            "job_detail_followup": {},
+            "return_to_job_results": {},
+        },
+        "lifecycle": {"is_finished": False},
+        "safety": {
+            "action_permission_contract": {},
+            "pending_human_approval": False,
+            "human_approval_request": {},
+        },
     }
-    state.update(overrides)
-    return state
+    return apply_worker_state_update(
+        state,
+        {
+            "request": cast(WorkerRequestState, dict(request or {})),
+            "observation": cast(ObservationState, dict(observation or {})),
+            "decision": cast(DecisionState, dict(decision or {})),
+            "transition": cast(TransitionState, dict(transition or {})),
+            "replay": cast(RecipeReplayState, dict(replay or {})),
+            "collection": cast(JobCollectionState, dict(collection or {})),
+            "lifecycle": cast(WorkerLifecycleState, dict(lifecycle or {})),
+            "safety": cast(ActionSafetyState, dict(safety or {})),
+        },
+    )
 
 
 __all__ = [
-    "ActionExecutionState",
     "ActionEvent",
     "ActionRequest",
     "ActionSafetyState",
+    "DecisionState",
     "WorkerState",
+    "WorkerStateUpdate",
+    "WorkerLifecycleState",
+    "WorkerRequestState",
     "JobCollectionState",
     "ObservationState",
     "RecipeReplayState",
     "ToolCallRequest",
     "TransitionRequest",
     "TransitionResult",
-    "WorkerIdentityState",
+    "TransitionState",
+    "apply_worker_state_update",
     "action_event_feedback",
     "action_event_recipe_steps",
     "action_event_results",
@@ -437,4 +565,5 @@ __all__ = [
     "build_action_event",
     "build_action_request",
     "create_worker_state",
+    "merge_worker_section",
 ]

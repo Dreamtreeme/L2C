@@ -99,7 +99,7 @@ def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
     """현재 화면에서 효과가 없다고 확인된 가장 최근 물리 행동을 반환한다."""
 
     observations = action_event_transitions(
-        state.get("action_events", []) or []
+        state["transition"].get("action_events", []) or []
     )
     if not observations:
         return {}
@@ -108,7 +108,9 @@ def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
         return {}
     if latest.get("reason") not in {"reflex_no_screen_change", "no_screen_change"}:
         return {}
-    latest_screen = str(state.get("current_screenshot") or "")
+    latest_screen = str(
+        state["observation"].get("current_screenshot") or ""
+    )
     observed_screen = str(latest.get("screenshot") or "")
     if latest_screen and observed_screen and latest_screen != observed_screen:
         return {}
@@ -196,7 +198,9 @@ def used_idempotent_recipe_keys_on_url(state: WorkerState, current_url: str) -> 
         return set()
     out: set[str] = set()
     components = idempotent_control_components()
-    for action in action_event_results(state.get("action_events", []) or []):
+    for action in action_event_results(
+        state["transition"].get("action_events", []) or []
+    ):
         if not isinstance(action, dict) or action.get("status") != "success":
             continue
         recipe_key = str(action.get("reflex_recipe_key") or "")

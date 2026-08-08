@@ -327,7 +327,7 @@ def _compact_recent_actions_context(
 def _compact_job_card_queue_context(state: WorkerState) -> str:
     queue = [
         item
-        for item in (state.get("job_card_queue", []) or [])
+        for item in (state["collection"].get("job_card_queue", []) or [])
         if isinstance(item, dict)
     ]
     if not queue:
@@ -370,7 +370,9 @@ def _compact_detail_return_context(
 def _compact_job_results_availability_context(
     state: WorkerState,
 ) -> str:
-    availability = dict(state.get("job_results_availability", {}) or {})
+    availability = dict(
+        state["collection"].get("job_results_availability", {}) or {}
+    )
     if not availability:
         return "검색 결과 개수 힌트: 없음\n\n"
     return (
@@ -386,7 +388,8 @@ def _compact_job_results_availability_context(
 
 
 def _reasoning_image_base64(state: WorkerState) -> str:
-    marked_image_path = state.get("marked_image")
+    observation = state["observation"]
+    marked_image_path = observation.get("marked_image")
     if not marked_image_path or not os.path.exists(marked_image_path):
         return ""
     try:
@@ -416,17 +419,21 @@ def build_reasoning_messages(
 ) -> list:
     """현재 작업 상태를 텍스트 또는 멀티모달 추론 메시지로 만든다."""
 
+    observation = state["observation"]
+    request = state["request"]
+    transition = state["transition"]
+    collection = state["collection"]
     system_prompt_text = (
-        COMMANDER_SYSTEM_PROMPT.format(goal=state.get("goal", ""))
+        COMMANDER_SYSTEM_PROMPT.format(goal=request.get("goal", ""))
         + _safety_page_role_contract()
     )
-    extracted_jd = state.get("extracted_jd", {})
-    ui_context = state.get("ui_context", "")
-    current_url = state.get("current_url", "")
+    extracted_jd = collection.get("extracted_jd", {})
+    ui_context = observation.get("ui_context", "")
+    current_url = observation.get("current_url", "")
     action_history = action_event_results(
-        state.get("action_events", []) or []
+        transition.get("action_events", []) or []
     )
-    recipe_params = dict(state.get("recipe_params", {}) or {})
+    recipe_params = dict(request.get("recipe_params", {}) or {})
     target_count = int(recipe_params.get("target_count") or 0)
     collected_count = job_count(extracted_jd)
     visited_cards: list[str] = []
@@ -461,7 +468,7 @@ def build_reasoning_messages(
         "- 목표 수를 채웠으면 목록으로 돌아가거나 같은 카드를 다시 열지 말고 finish_task를 호출하십시오.\n\n"
     )
     transition_context = ""
-    transition_result = dict(state.get("transition_result", {}) or {})
+    transition_result = dict(transition.get("transition_result", {}) or {})
     if transition_result.get("status") not in {"", "idle", None}:
         latest_transition = latest_no_effect_transition(state)
         transition_context = (
@@ -499,7 +506,7 @@ def build_reasoning_messages(
     human_prompt_text = (
         f"{_compact_extracted_context(extracted_jd, current_url)}"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
-        f"{site_runtime_guidance(current_url, state.get('current_page_role', ''))}"
+        f"{site_runtime_guidance(current_url, observation.get('current_page_role', ''))}"
         f"{collection_context}"
         f"{_compact_job_results_availability_context(state)}"
         f"{_compact_job_card_queue_context(state)}"

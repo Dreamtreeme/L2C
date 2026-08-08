@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from langgraph.runtime import Runtime
+
 from agent.observability.run_context import raise_if_cancelled
 from agent.runtime.worker_contracts import (
     ActionRequest,
@@ -28,7 +30,7 @@ from agent.runtime.worker_actions import (
     TERMINAL_ACTIONS,
     UI_ACTIONS,
 )
-from agent.runtime.vision_worker_runtime import current_vision_worker_runtime
+from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.utils.logger import logger
 
 
@@ -163,7 +165,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 )
                 screen_changed = False
             elif action_name in TERMINAL_ACTIONS:
-                result = current_vision_worker_runtime().get_action_tools().finish_task(
+                result = context.worker_runtime.get_action_tools().finish_task(
                     args["result"]
                 )
                 raise_for_action_failure(result)
@@ -221,7 +223,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
 
 
 def _validated_action_request(state: WorkerState) -> ActionRequest | None:
-    raw_request = state.get("pending_action")
+    raw_request = state["decision"].get("pending_action")
     if raw_request is None:
         return None
     try:
@@ -235,7 +237,9 @@ def _validated_action_request(state: WorkerState) -> ActionRequest | None:
         return None
 
     metadata = dict(request.metadata or {})
-    capture_id = str(state.get("current_capture_id") or "")
+    capture_id = str(
+        state["observation"].get("current_capture_id") or ""
+    )
     if capture_id:
         metadata.setdefault("decision_capture_id", capture_id)
     return request.model_copy(update={"metadata": metadata})
@@ -255,19 +259,24 @@ def _missing_action_update(
     }
     prior_events = [
         dict(event)
-        for event in (state.get("action_events", []) or [])
+        for event in (state["transition"].get("action_events", []) or [])
         if isinstance(event, dict)
     ]
     return {
-        "pending_action": None,
-        "action_events": [
-            *prior_events,
-            build_action_event(len(prior_events), result),
-        ],
+        "decision": {"pending_action": None},
+        "transition": {
+            "action_events": [
+                *prior_events,
+                build_action_event(len(prior_events), result),
+            ],
+        },
     }
 
 
-def execution_node(state: WorkerState) -> dict[str, Any]:
+def execution_node(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+) -> dict[str, Any]:
     """현재 화면에서 선택된 행동 실행 단위를 검증하고 실행한다."""
 
     raise_if_cancelled()
@@ -281,7 +290,11 @@ def execution_node(state: WorkerState) -> dict[str, Any]:
         source=request.source,
         summary=request.summary,
     )
-    context = WorkerExecutionContext.from_state(state, request)
+    context = WorkerExecutionContext.from_state(
+        state,
+        request,
+        runtime.context.vision,
+    )
     _execute_action_request(context)
     logger.info(
         "Execution node completed",

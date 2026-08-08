@@ -6,8 +6,8 @@ from typing import Any, Callable
 
 from agent.observability.run_context import emit_run_event, raise_if_cancelled
 from agent.observability.run_contracts import RunPhase
-from agent.graph.investigation_context import InvestigationWorkerState
-from shared.schema.collection_intent import CollectionResult
+from agent.graph.investigation_context import InvestigationState
+from shared.schema.collection_intent import CollectionIntent, CollectionResult
 from shared.schema.investigation_schema import (
     InvestigationRequest,
     InvestigationStatus,
@@ -17,13 +17,15 @@ from shared.schema.investigation_schema import (
 class InvestigationCollectionNodes:
     def __init__(
         self,
-        collect_jobs: Callable[[Any], CollectionResult | dict[str, Any]],
+        collect_jobs: Callable[[CollectionIntent], CollectionResult],
     ) -> None:
         self.collect_jobs = collect_jobs
 
-    def execute(self, state: InvestigationWorkerState) -> dict[str, Any]:
+    def execute(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
-        investigation = InvestigationRequest.model_validate(state["investigation"])
+        investigation = InvestigationRequest.model_validate(
+            state["request"]["investigation"]
+        )
         step = next(
             item
             for item in investigation.plan
@@ -47,11 +49,15 @@ class InvestigationCollectionNodes:
             }
         )
         return {
-            "investigation": updated.model_dump(mode="json"),
-            "collection_results": [
-                *state.get("collection_results", []),
-                result.model_dump(mode="json"),
-            ],
+            "request": {
+                "investigation": updated.model_dump(mode="json")
+            },
+            "execution": {
+                "collection_results": [
+                    *state["execution"].get("collection_results", []),
+                    result.model_dump(mode="json"),
+                ],
+            },
         }
 
 

@@ -9,6 +9,11 @@ from agent.graph import (
 from agent.runtime.worker_contracts import action_event_transitions
 from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
 from agent.runtime.job_card_queue import replay_job_card_after_return
+from agent.tests.worker_test_support import (
+    apply_update,
+    node_runtime,
+    worker_state,
+)
 
 
 def test_roi_record_and_replay_uses_target_crop(tmp_path):
@@ -170,7 +175,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     monkeypatch.setattr(
         worker_observation,
         "_perception_engine",
-        lambda: FakePerception(),
+        lambda _runtime: FakePerception(),
     )
     monkeypatch.setattr(
         worker_observation,
@@ -180,24 +185,26 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
 
     from agent.graph.worker_selection import selection_node
 
-    working = {
-        "worker_run_id": "worker-no-effect",
-        "current_capture_id": "worker-no-effect:capture:0004",
-        "capture_sequence": 4,
-        "current_screenshot": str(screenshot),
-        "current_url": "https://example.com/jobs",
-        "current_url_stale": False,
-        "current_markers": [
+    working = worker_state(
+        request={"worker_run_id": "worker-no-effect"},
+        observation={
+            "current_capture_id": "worker-no-effect:capture:0004",
+            "capture_sequence": 4,
+            "current_screenshot": str(screenshot),
+            "current_url": "https://example.com/jobs",
+            "current_url_stale": False,
+            "current_markers": [
             {"id": 1, "bbox": [10, 20, 200, 60], "text": "검색"},
-        ],
-        "ui_context": "검색",
-        "marked_image": str(screenshot),
-        "screen_signature": {"phash": "0" * 16, "size": [800, 600]},
-        "current_page_role": "search",
-        "analysis_mode": "full",
-        "ocr_complete": True,
-        "reflex_blocked_recipe_keys": [],
-        "transition_request": {
+            ],
+            "ui_context": "검색",
+            "marked_image": str(screenshot),
+            "screen_signature": {"phash": "0" * 16, "size": [800, 600]},
+            "current_page_role": "search",
+            "analysis_mode": "full",
+            "ocr_complete": True,
+        },
+        replay={"reflex_blocked_recipe_keys": []},
+        transition={"transition_request": {
             "action": "click_marker",
             "replay_mode": "reasoning",
             "action_seq": 3,
@@ -208,26 +215,26 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
             "before_screenshot": str(screenshot),
             "started_at": time.time(),
             "contract": {},
-        },
-    }
+        }},
+    )
     result = {}
     for node in (
         worker_observation.capture_node,
         worker_transition.transition_node,
         selection_node,
     ):
-        update = node(working)
-        working.update(update)
+        update = node(working, node_runtime())
+        working = apply_update(working, update)
         result.update(update)
 
     assert (
-        result["transition_result"]["reason"]
+        working["transition"]["transition_result"]["reason"]
         == "reflex_no_screen_change"
     )
-    assert result["ocr_complete"] is True
-    assert result["current_markers"][0]["id"] == 1
+    assert working["observation"]["ocr_complete"] is True
+    assert working["observation"]["current_markers"][0]["id"] == 1
     assert (
-        result["previous_screen_observation"]["capture_id"]
+        working["observation"]["previous_screen_observation"]["capture_id"]
         == "worker-no-effect:capture:0005"
     )
 
@@ -237,19 +244,25 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
         lambda _pending, _path: (False, 0.0),
     )
     stale = worker_transition.transition_node(
-        {
-            "current_capture_id": "worker-test:capture:0003",
-            "current_screenshot": str(screenshot),
-            "current_url": "https://example.com/jobs",
-            "raw_screen_signature": {"phash": "0" * 16, "size": [800, 600]},
-            "ocr_complete": False,
-            "current_markers": [],
-            "previous_screen_observation": {
+        worker_state(
+            observation={
+                "current_capture_id": "worker-test:capture:0003",
+                "current_screenshot": str(screenshot),
+                "current_url": "https://example.com/jobs",
+                "raw_screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [800, 600],
+                },
+                "ocr_complete": False,
+                "current_markers": [],
+                "previous_screen_observation": {
                 "capture_id": "worker-test:capture:0001",
                 "screenshot": str(screenshot),
                 "markers": [{"id": 4, "bbox": [10, 20, 30, 40]}],
+                },
             },
-            "transition_request": {
+            transition={
+                "transition_request": {
                 "action_seq": 0,
                 "action": "click_marker",
                 "from_capture_id": "worker-test:capture:0002",
@@ -257,8 +270,8 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                 "before_url": "https://example.com/jobs",
                 "before_screenshot": str(screenshot),
                 "started_at": time.time(),
-            },
-            "action_events": [
+                },
+                "action_events": [
                 {
                     "seq": 0,
                     "result": {
@@ -266,9 +279,16 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                         "status": "success",
                     },
                 }
-            ],
-        }
+                ],
+            },
+        ),
+        node_runtime(),
     )
 
-    assert stale.get("ocr_complete") is None
-    assert action_event_transitions(stale["action_events"])[0]["marker_count"] == 0
+    assert stale.get("observation", {}).get("ocr_complete") is None
+    assert (
+        action_event_transitions(stale["transition"]["action_events"])[0][
+            "marker_count"
+        ]
+        == 0
+    )

@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.prompts.detail_extraction import build_detail_extraction_system_prompt
 from agent.runtime.detail_runtime import detail_buffer_text
+from agent.runtime.worker_contracts import WorkerState
 from agent.utils.logger import logger
 from agent.utils.model_dump import dump_model
 
@@ -38,7 +39,10 @@ def get_detail_extraction_llm() -> Any:
     )
 
 
-def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[str, Any]:
+def extract_job_from_job_detail_buffer(
+    state: WorkerState,
+    current_url: str,
+) -> dict[str, Any]:
     """상태의 OCR 버퍼를 공고 한 건으로 정제한다."""
 
     from agent.runtime.job_field_contract import (
@@ -46,13 +50,14 @@ def extract_job_from_job_detail_buffer(state: dict, current_url: str) -> dict[st
         required_fields_from_state,
     )
 
-    buffer = dict(state.get("job_detail_buffer", {}) or {})
+    collection = state["collection"]
+    buffer = dict(collection.get("job_detail_buffer", {}) or {})
     ocr_text = detail_buffer_text(buffer)
     if not ocr_text.strip():
         return {}
     required_fields = required_fields_from_state(state)
     coverage = detail_coverage_status(
-        dict(state.get("job_detail_coverage", {}) or {}),
+        dict(collection.get("job_detail_coverage", {}) or {}),
         required_fields,
     )
     messages = [

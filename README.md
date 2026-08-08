@@ -150,12 +150,12 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
   브라우저 준비·LangGraph 실행·정리를 하나의 잠금 범위로 실행
     ↓
 [Vision Worker LangGraph]
-  capture → transition → selection
-  ├─ OCR 필요: ocr → transition → collection → selection
+  시작 상태 확인 → capture → transition → selection
+  ├─ OCR 필요: ocr → transition → selection
   ├─ 결정론적 정책: execution
   ├─ Reflex 후보: reflex → execution 또는 reasoning
   └─ 의미 판단 필요: reasoning → execution
-  execution → recording → capture·reasoning·종료
+  execution → capture·reasoning·종료
     ↓
 [SQLite 저장 → ChatService 근거 재검사 → 최종 답변]
 
@@ -165,7 +165,11 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 
 지휘자는 `agent/graph/investigation_workflow.py`의 LangGraph로 실행됩니다. 확인 질문이 남아 있으면 DB와 브라우저 도구를 호출하지 않고 `waiting_input`으로 중단하며, 사용자의 선택은 SQLite 조사 상태에 반영되어 다음 질문 또는 근거 검사 단계부터 재개됩니다. 사이트·날짜·개수·분석 목적은 실행 전에 확정된 행동계획에서만 수집 worker로 전달됩니다.
 
-Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. 사용자 지휘, 작업자 실행, 상세 정제, DB 적재는 `agent/application/` 서비스가 담당합니다.
+`agent/bootstrap.py`가 체크포인터, 애플리케이션 서비스, 모델 묶음과 비전 런타임을 생성하고 그래프 노드에 주입합니다. Investigation LangGraph와 Vision Worker LangGraph는 노드 순서, 분기, 중단·재개와 상태 갱신만 담당합니다. Vision 노드는 전역 런타임 조회 없이 LangGraph `Runtime` 문맥으로 전달된 `VisionWorkerRuntime`을 사용합니다.
+
+작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`의 8개 책임 구역으로 나뉩니다. 노드는 자신이 변경한 구역만 `WorkerStateUpdate`로 반환하고 LangGraph reducer가 해당 구역을 병합합니다. 행동 실행 중에는 `WorkerExecutionContext`가 이 단일 상태를 갱신하므로 실행 전후 필드를 별도로 복사하는 경로가 없습니다.
+
+Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. 사용자 지휘, 작업자 실행, 상세 정제, DB 적재와 자원 수명주기는 `agent/application/` 서비스와 `agent/bootstrap.py`가 담당합니다.
 
 운영 경로는 지연 초기화(lazy initialization)를 적용합니다. DB 질의와 웹 Q&A 서버는 비전 엔진, YOLO 모델, 물리 GUI 제어 도구를 import 시점에 초기화하지 않고, 실시간 수집이 실제로 필요할 때만 비전 파이프라인을 준비합니다. PaddleOCR subprocess는 작업 동안 계속 재사용하고, 요청 timeout이나 worker 오류가 발생할 때만 재시작합니다. OCR 입력 최대 변은 1152로 제한합니다.
 
@@ -316,8 +320,8 @@ L2C/
 │
 ├── agent/              비전 LLM 에이전트
 │   ├── application/      사용자 지휘·작업자 실행·상세 정제·DB 저장 서비스
-│   ├── graph/            LangGraph 연결, 상태, 도구 스키마, 핵심 노드
-│   ├── runtime/          전환·상세 OCR·카드 큐·Reflex 결정론적 런타임
+│   ├── graph/            LangGraph 순서·분기와 조사·작업자 노드
+│   ├── runtime/          상태 계약·비전 의존성·전환·상세 OCR·카드 큐 정책
 │   ├── prompts/          지휘자 프롬프트 (commander)
 │   ├── tools/            화면 인식(Perception)·물리 제어·실시간 수집 도구
 │   ├── sites/            지휘자용 사이트 프로필과 매뉴얼 JSON

@@ -27,7 +27,6 @@ from agent.runtime.job_card_queue import (
     active_job_card,
     normalize_job_card_queue,
 )
-from agent.runtime.vision_worker_runtime import current_vision_worker_runtime
 from agent.utils.job_fields import missing_job_fields
 
 
@@ -57,11 +56,11 @@ def dispatch_ui_action(
     args: dict[str, Any],
     get_bbox: Callable[[int], list[int]],
     *,
+    action_tools: Any,
     current_url: str = "",
 ) -> dict[str, Any]:
     """마우스와 키보드를 사용하는 물리 행동 하나를 실행한다."""
 
-    action_tools = current_vision_worker_runtime().get_action_tools()
     if action_name == "click_marker":
         return action_tools.click_marker(get_bbox(args["marker_id"]))
     if action_name == "type_in_marker":
@@ -104,7 +103,7 @@ def _attach_active_card_identity(
     """상세 화면에서 추출한 공고에 목록 카드 식별 정보를 붙인다."""
 
     active_card = active_job_card(
-        list(state.get("job_card_queue", []) or [])
+        list(state["collection"].get("job_card_queue", []) or [])
     )
     company = str(active_card.get("company") or "").strip()
     title = str(active_card.get("title") or "").strip()
@@ -135,7 +134,9 @@ def _update_extracted_info(
             state=state,
             current_url=current_url,
         )
-        detail_buffer = dict(state.get("job_detail_buffer", {}) or {})
+        detail_buffer = dict(
+            state["collection"].get("job_detail_buffer", {}) or {}
+        )
         detail_buffer_active = bool(
             detail_buffer.get("url") == current_url
             and detail_buffer.get("lines")
@@ -206,7 +207,9 @@ def _detail_followup(
     """같은 상세 화면의 추가 판독 횟수와 누락 필드를 기록한다."""
 
     detail_key = job_detail_key_from_state(state)
-    previous = dict(state.get("job_detail_followup", {}) or {})
+    previous = dict(
+        state["collection"].get("job_detail_followup", {}) or {}
+    )
     same_detail = previous.get("url") == current_url or (
         detail_key
         and previous.get("detail_key") == detail_key
@@ -257,7 +260,9 @@ def _finish_detail_reading(
     try:
         detail_key = job_detail_key_from_state(state)
         coverage = merge_job_detail_coverage(
-            dict(state.get("job_detail_coverage", {}) or {}),
+            dict(
+                state["collection"].get("job_detail_coverage", {}) or {}
+            ),
             args,
             state=state,
             current_url=current_url,
@@ -285,7 +290,8 @@ def _finish_detail_reading(
                 jobs=current_jobs,
                 state_update=StateActionUpdate(
                     job_detail_buffer=dict(
-                        state.get("job_detail_buffer", {}) or {}
+                        state["collection"].get("job_detail_buffer", {})
+                        or {}
                     ),
                     job_detail_coverage=coverage,
                     job_detail_followup=_detail_followup(
@@ -346,7 +352,8 @@ def _finish_detail_reading(
                 jobs=current_jobs,
                 state_update=StateActionUpdate(
                     job_detail_buffer=dict(
-                        state.get("job_detail_buffer", {}) or {}
+                        state["collection"].get("job_detail_buffer", {})
+                        or {}
                     ),
                     job_detail_coverage=coverage,
                     job_detail_followup=_detail_followup(
@@ -423,7 +430,9 @@ def _set_job_card_queue(
 ) -> StateActionOutcome:
     queue, memory = normalize_job_card_queue(args, state, current_url)
     queue, existing_cards = mark_existing_job_cards(queue, current_url)
-    selector_trace = dict(state.get("job_card_selection_trace", {}) or {})
+    selector_trace = dict(
+        state["decision"].get("job_card_selection_trace", {}) or {}
+    )
     availability_source = (
         args
         if args.get("available_job_count") is not None

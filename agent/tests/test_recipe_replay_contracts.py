@@ -8,6 +8,7 @@ from agent.graph import (
 )
 from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
 from agent.runtime.job_card_queue import replay_job_card_after_return
+from agent.tests.worker_test_support import node_runtime, worker_state
 
 
 def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
@@ -90,29 +91,32 @@ def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
 
     monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
     result = reflex_node(
-        {
-            "goal": "AI 엔지니어 공고",
-            "current_url": "https://www.wanted.co.kr",
-            "current_page_role": "home",
-            "screen_signature": {"size": [200, 120]},
-            "current_screenshot": str(screenshot),
-            "current_markers": [
+        worker_state(
+            goal="AI 엔지니어 공고",
+            observation={
+                "current_url": "https://www.wanted.co.kr",
+                "current_page_role": "home",
+                "screen_signature": {"size": [200, 120]},
+                "current_screenshot": str(screenshot),
+                "current_markers": [
                 {"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"},
-            ],
-            "recipe_params": {
+                ],
+            },
+            request={"recipe_params": {
                 "site": "wanted",
                 "task_category": "검색",
                 "query": "AI 엔지니어",
-            },
-        }
+            }},
+        ),
+        node_runtime(),
     )
 
-    call = result["pending_action"].tool_calls[0]
-    assert result["reflex_trace"]["hit"] is True
+    call = result["decision"]["pending_action"].tool_calls[0]
+    assert result["replay"]["reflex_trace"]["hit"] is True
     assert call.name == "type_in_marker"
     assert call.args["marker_id"] == 7
     assert call.args["text"] == "AI 엔지니어"
-    assert len(result["pending_action"].tool_calls) == 1
+    assert len(result["decision"]["pending_action"].tool_calls) == 1
 
 
 def test_reflex_replays_action_group_then_advances_after_verification(
@@ -242,57 +246,68 @@ def test_reflex_replays_action_group_then_advances_after_verification(
         lambda: FakeStore(),
     )
     first = reflex_node(
-        {
-            "goal": "AI 엔지니어 공고",
-            "current_url": "https://www.saramin.co.kr/zf_user/",
-            "current_page_role": "home",
-            "screen_signature": input_context,
-            "current_screenshot": str(input_screen),
-            "current_markers": [
+        worker_state(
+            goal="AI 엔지니어 공고",
+            observation={
+                "current_url": "https://www.saramin.co.kr/zf_user/",
+                "current_page_role": "home",
+                "screen_signature": input_context,
+                "current_screenshot": str(input_screen),
+                "current_markers": [
                 {
                     "id": 7,
                     "bbox": [10, 10, 130, 40],
                     "text": "검색어",
                 },
-            ],
-            "recipe_params": {
+                ],
+            },
+            request={"recipe_params": {
                 "site": "saramin",
                 "task_category": "검색",
                 "query": "AI 엔지니어",
-            },
-        }
+            }},
+        ),
+        node_runtime(),
     )
 
-    assert first["reflex_trace"]["hit"] is True
-    assert first["pending_action"].summary == "cached recipe transition"
+    assert first["replay"]["reflex_trace"]["hit"] is True
+    assert (
+        first["decision"]["pending_action"].summary
+        == "cached recipe transition"
+    )
     assert [
-        call.name for call in first["pending_action"].tool_calls
+        call.name for call in first["decision"]["pending_action"].tool_calls
     ] == ["type_in_marker", "press_key"]
     assert (
-        first["pending_action"].tool_calls[0].args["text"]
+        first["decision"]["pending_action"].tool_calls[0].args["text"]
         == "AI 엔지니어"
     )
     assert (
-        first["active_reflex_recipe"]["current_transition_index"]
+        first["replay"]["active_reflex_recipe"]["current_transition_index"]
         == 0
     )
-    assert first["active_reflex_recipe"]["pending_transition_index"] == 0
+    assert (
+        first["replay"]["active_reflex_recipe"]["pending_transition_index"]
+        == 0
+    )
 
     verified = worker_transition.transition_node(
-        {
-            "ocr_complete": True,
-            "current_url": "https://www.saramin.co.kr/zf_user/",
-            "current_screenshot": str(result_screen),
-            "current_capture_id": "capture:0002",
-            "current_markers": [
+        worker_state(
+            observation={
+                "ocr_complete": True,
+                "current_url": "https://www.saramin.co.kr/zf_user/",
+                "current_screenshot": str(result_screen),
+                "current_capture_id": "capture:0002",
+                "current_markers": [
                 {
                     "id": 8,
                     "bbox": [160, 10, 220, 40],
                     "text": "검색",
                 },
-            ],
-            "screen_signature": result_context,
-            "transition_request": {
+                ],
+                "screen_signature": result_context,
+            },
+            transition={"transition_request": {
                 "action": "press_key",
                 "source": "reflex",
                 "recipe_key": "recipe-search-set",
@@ -302,58 +317,76 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 "recipe_transition_index": 0,
                 "recipe_transition_count": 2,
                 "started_at": time.time(),
+            }},
+            replay={
+                "active_reflex_recipe": first["replay"][
+                    "active_reflex_recipe"
+                ]
             },
-            "active_reflex_recipe": first["active_reflex_recipe"],
-        }
+        ),
+        node_runtime(),
     )
 
-    assert verified["transition_result"]["status"] == "ready"
+    assert verified["transition"]["transition_result"]["status"] == "ready"
     assert (
-        verified["active_reflex_recipe"]["current_transition_index"]
+        verified["replay"]["active_reflex_recipe"][
+            "current_transition_index"
+        ]
         == 1
     )
     assert (
         "pending_transition_index"
-        not in verified["active_reflex_recipe"]
+        not in verified["replay"]["active_reflex_recipe"]
     )
 
     second = reflex_node(
-        {
-            "goal": "AI 엔지니어 공고",
-            "current_url": "https://www.saramin.co.kr/zf_user/",
-            "current_page_role": "search_results",
-            "screen_signature": result_context,
-            "current_screenshot": str(result_screen),
-            "current_markers": [
+        worker_state(
+            goal="AI 엔지니어 공고",
+            observation={
+                "current_url": "https://www.saramin.co.kr/zf_user/",
+                "current_page_role": "search_results",
+                "screen_signature": result_context,
+                "current_screenshot": str(result_screen),
+                "current_markers": [
                 {
                     "id": 8,
                     "bbox": [160, 10, 220, 40],
                     "text": "검색",
                 },
-            ],
-            "recipe_params": {
+                ],
+            },
+            request={"recipe_params": {
                 "site": "saramin",
                 "task_category": "검색",
                 "query": "AI 엔지니어",
+            }},
+            replay={
+                "active_reflex_recipe": verified["replay"][
+                    "active_reflex_recipe"
+                ]
             },
-            "active_reflex_recipe": verified[
-                "active_reflex_recipe"
-            ],
-        }
+        ),
+        node_runtime(),
     )
 
-    assert second["reflex_trace"]["hit"] is True
-    assert len(second["pending_action"].tool_calls) == 1
-    assert second["pending_action"].tool_calls[0].name == "click_marker"
-    assert second["pending_action"].tool_calls[0].args["marker_id"] == 8
+    assert second["replay"]["reflex_trace"]["hit"] is True
+    assert len(second["decision"]["pending_action"].tool_calls) == 1
     assert (
-        second["active_reflex_recipe"]["current_transition_index"]
+        second["decision"]["pending_action"].tool_calls[0].name
+        == "click_marker"
+    )
+    assert (
+        second["decision"]["pending_action"].tool_calls[0].args["marker_id"]
+        == 8
+    )
+    assert (
+        second["replay"]["active_reflex_recipe"]["current_transition_index"]
         == 1
     )
 
 
 def test_active_reflex_recipe_is_cleared_only_after_final_transition():
-    base_state = {
+    observation = {
         "ocr_complete": True,
         "current_url": "https://www.saramin.co.kr/zf_user/search",
         "current_screenshot": "",
@@ -365,7 +398,8 @@ def test_active_reflex_recipe_is_cleared_only_after_final_transition():
             "phash": "a" * 16,
             "size": [1920, 1080],
         },
-        "transition_request": {
+    }
+    transition_request = {
             "action": "click_marker",
             "source": "reflex",
             "recipe_key": "recipe-search-set",
@@ -379,38 +413,41 @@ def test_active_reflex_recipe_is_cleared_only_after_final_transition():
                 },
             },
             "started_at": time.time(),
-        },
     }
 
     intermediate = worker_transition.transition_node(
-        {
-            **base_state,
-            "active_reflex_recipe": {
+        worker_state(
+            observation=observation,
+            transition={"transition_request": transition_request},
+            replay={"active_reflex_recipe": {
                 "recipe_key": "recipe-search-set",
                 "current_transition_index": 1,
                 "pending_transition_index": 1,
                 "transition_count": 3,
-            },
-        }
+            }},
+        ),
+        node_runtime(),
     )
     completed = worker_transition.transition_node(
-        {
-            **base_state,
-            "active_reflex_recipe": {
+        worker_state(
+            observation=observation,
+            transition={"transition_request": transition_request},
+            replay={"active_reflex_recipe": {
                 "recipe_key": "recipe-search-set",
                 "current_transition_index": 2,
                 "pending_transition_index": 2,
                 "transition_count": 3,
-            },
-        }
+            }},
+        ),
+        node_runtime(),
     )
 
-    assert intermediate["transition_result"]["status"] == "ready"
+    assert intermediate["transition"]["transition_result"]["status"] == "ready"
     assert (
-        intermediate["active_reflex_recipe"][
+        intermediate["replay"]["active_reflex_recipe"][
             "current_transition_index"
         ]
         == 2
     )
-    assert completed["transition_result"]["status"] == "ready"
-    assert completed["active_reflex_recipe"] == {}
+    assert completed["transition"]["transition_result"]["status"] == "ready"
+    assert completed["replay"]["active_reflex_recipe"] == {}

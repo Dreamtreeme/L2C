@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any
+from typing import Any, Protocol
 
 from agent.observability.run_context import (
     ModelRequestTimeout,
@@ -38,20 +38,24 @@ def validate_citations(answer: str, valid_ids: list[int]) -> str:
     return re.sub(r"\[job_id:(\d+)\]", replace, normalized)
 
 
+class InvestigationRunner(Protocol):
+    """대화 서비스가 요구하는 조사 실행기의 최소 계약."""
+
+    def run(
+        self,
+        query: str,
+        *,
+        conversation_id: str = "",
+        investigation_id: str = "",
+        clarification_answer: Any = None,
+    ) -> dict[str, Any]: ...
+
+
 class ChatService:
     """로컬 API가 사용하는 사용자 요청 애플리케이션 서비스."""
 
-    def __init__(self, investigation_workflow: Any):
+    def __init__(self, investigation_workflow: "InvestigationRunner"):
         self._investigation_workflow = investigation_workflow
-
-    def close(self) -> None:
-        """서비스가 소유한 조사 체크포인트 연결을 닫는다."""
-
-        workflow = self._investigation_workflow
-        self._investigation_workflow = None
-        close = getattr(workflow, "close", None)
-        if callable(close):
-            close()
 
     @staticmethod
     def _result(
@@ -224,5 +228,6 @@ class ChatService:
 
 __all__ = [
     "ChatService",
+    "InvestigationRunner",
     "validate_citations",
 ]

@@ -81,30 +81,32 @@ def run_worker_once(
     )
     initial_state = create_worker_state(
         goal,
-        worker_run_id=run_id,
+        request={
+            "worker_run_id": run_id,
+            "job_collection_contract": job_collection_contract,
+            "recipe_params": {
+                "query": search_keyword,
+                "keyword": search_keyword,
+                "search_keyword": search_keyword,
+                "target_count": target_count,
+                "site": site_slug,
+                "task_category": task_category,
+                "count_mode": intent_payload.get(
+                    "count_mode",
+                    CollectionCountMode.UNSPECIFIED.value,
+                ),
+                "collection_intent": intent_payload,
+            },
+        },
     )
-    initial_state["job_collection_contract"] = job_collection_contract
-    initial_state["recipe_params"] = {
-        "query": search_keyword,
-        "keyword": search_keyword,
-        "search_keyword": search_keyword,
-        "target_count": target_count,
-        "site": site_slug,
-        "task_category": task_category,
-        "count_mode": intent_payload.get(
-            "count_mode",
-            CollectionCountMode.UNSPECIFIED.value,
-        ),
-        "collection_intent": intent_payload,
-    }
     from agent.runtime.action_permissions import (
         build_public_collection_permission_contract,
     )
 
-    initial_state["action_permission_contract"] = (
+    initial_state["safety"]["action_permission_contract"] = (
         build_public_collection_permission_contract(
             site_profile,
-            initial_state["recipe_params"],
+            initial_state["request"]["recipe_params"],
         )
     )
 
@@ -119,8 +121,8 @@ def run_worker_once(
         recursion_limit,
         worker_runtime=worker_runtime,
     )
-    extracted = final_state.get("extracted_jd", {}) or {}
-    is_finished = bool(final_state.get("is_finished", False))
+    extracted = final_state["collection"].get("extracted_jd", {}) or {}
+    is_finished = bool(final_state["lifecycle"].get("is_finished", False))
     run_status = "stopped"
     if is_finished:
         run_status = "finished"

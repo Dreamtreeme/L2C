@@ -4,14 +4,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agent.graph import worker_reasoning
+from agent.tests.worker_test_support import node_runtime, worker_state
 
 
 def _state(image_path: Path) -> dict:
-    return {
-        "current_page_role": "search",
-        "current_url": "https://example.com/search?q=ios",
-        "marked_image": str(image_path),
-        "current_markers": [
+    return worker_state(
+        observation={
+            "current_page_role": "search",
+            "current_url": "https://example.com/search?q=ios",
+            "marked_image": str(image_path),
+            "current_markers": [
             {
                 "id": 10,
                 "type": "text",
@@ -24,11 +26,12 @@ def _state(image_path: Path) -> dict:
                 "text": "백엔드 개발자",
                 "bbox": [10, 50, 90, 70],
             },
-        ],
-        "recipe_params": {"query": "iOS 개발자", "target_count": 2},
-        "job_card_queue": [],
-        "extracted_jd": {},
-    }
+            ],
+        },
+        request={
+            "recipe_params": {"query": "iOS 개발자", "target_count": 2}
+        },
+    )
 
 
 def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
@@ -78,7 +81,7 @@ def test_selector_rejects_model_label_that_disagrees_with_ocr(tmp_path, monkeypa
     image_path = tmp_path / "marked.jpg"
     Image.new("RGB", (200, 100), "white").save(image_path)
     state = _state(image_path)
-    state["current_markers"].append(
+    state["observation"]["current_markers"].append(
         {
             "id": 54,
             "type": "text",
@@ -131,15 +134,21 @@ def test_loading_result_recaptures_without_general_reasoning(tmp_path, monkeypat
     monkeypatch.setattr(
         worker_reasoning,
         "_get_ui_llm_with_tools",
-        lambda: (_ for _ in ()).throw(
+        lambda _runtime: (_ for _ in ()).throw(
             AssertionError("로딩 화면을 범용 모델에 보내면 안 됩니다.")
         ),
     )
 
-    result = worker_reasoning.reasoning_node(_state(image_path))
+    result = worker_reasoning.reasoning_node(
+        _state(image_path),
+        node_runtime(),
+    )
 
-    assert result["pending_action"] is None
-    assert result["job_card_selection_trace"]["reason"] == "screen_loading"
+    assert result["decision"]["pending_action"] is None
+    assert (
+        result["decision"]["job_card_selection_trace"]["reason"]
+        == "screen_loading"
+    )
 
 
 def test_general_reasoning_converts_model_tool_call(monkeypatch):
@@ -158,7 +167,7 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     monkeypatch.setattr(
         worker_reasoning,
         "_get_ui_llm_with_tools",
-        lambda: object(),
+        lambda _runtime: object(),
     )
     monkeypatch.setattr(
         run_context,
@@ -175,10 +184,13 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
         ),
     )
 
-    result = worker_reasoning.reasoning_node({"action_events": []})
+    result = worker_reasoning.reasoning_node(
+        worker_state(),
+        node_runtime(),
+    )
 
-    assert result["pending_action"].tool_calls[0].name == "scroll"
-    assert result["reflex_trace"]["source"] == "reasoning"
+    assert result["decision"]["pending_action"].tool_calls[0].name == "scroll"
+    assert result["replay"]["reflex_trace"]["source"] == "reasoning"
 
 
 def test_resolved_card_count_only_includes_collected_or_database_confirmed():
