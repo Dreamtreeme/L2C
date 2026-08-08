@@ -29,9 +29,11 @@ def guard_return_to_results(
 ) -> bool:
     """상세 수집이 끝난 뒤 목록 복귀 외의 추가 탐색을 차단한다."""
 
+    state = context.result.state
+    current_url = str(state["observation"].get("current_url") or "")
     return_pending = return_to_job_results_for_url(
-        context.state,
-        context.current_url,
+        state,
+        current_url,
     )
     if not return_pending:
         return False
@@ -64,11 +66,13 @@ def guard_ui_action(
 ) -> bool:
     """현재 캡처와 목표가 유효하며 안전할 때만 UI 행동을 허용한다."""
 
+    state = context.result.state
+    request = context.input.action_request
     sensitive_reason = sensitive_action_reason(
-        context.state,
+        state,
         action_name,
         args,
-        source=context.action_request.source,
+        source=request.source,
     )
     if sensitive_reason:
         context.require_human_approval(
@@ -82,10 +86,10 @@ def guard_ui_action(
 
     if (
         action_name in {"click_marker", "type_in_marker"}
-        and context.action_request.source not in DIRECT_SCREEN_ACTION_SOURCES
+        and request.source not in DIRECT_SCREEN_ACTION_SOURCES
     ):
-        guard_result = context.worker_runtime.check_reasoning_screen(
-            context.state,
+        guard_result = context.input.worker_runtime.check_reasoning_screen(
+            state,
             marker_id=args.get("marker_id"),
         )
         if guard_result.get("must_refresh"):
@@ -113,7 +117,7 @@ def guard_ui_action(
             )
             return True
 
-    no_effect_transition = latest_no_effect_transition(context.state)
+    no_effect_transition = latest_no_effect_transition(state)
     if repeats_no_effect_target(
         no_effect_transition,
         action_name,
@@ -135,7 +139,7 @@ def guard_ui_action(
 
     if action_name == "type_in_marker":
         target_rejection = text_input_target_rejection(
-            context.current_markers,
+            list(state["observation"].get("current_markers", []) or []),
             args.get("marker_id"),
         )
         if target_rejection:

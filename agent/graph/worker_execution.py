@@ -55,7 +55,7 @@ def _record_successful_call(
         tool_call_id=tool_call_id,
         tool_call_metadata=call_metadata,
     )
-    context.new_actions.append(enriched)
+    context.result.new_actions.append(enriched)
     context.append_action_event(
         action_name,
         args,
@@ -90,7 +90,7 @@ def _record_failed_call(
         tool_call_id=tool_call_id,
         tool_call_metadata=call_metadata,
     )
-    context.new_actions.append(enriched)
+    context.result.new_actions.append(enriched)
     context.append_action_event(
         action_name,
         args,
@@ -99,13 +99,18 @@ def _record_failed_call(
         context.after_context(screen_changed=False),
         action_sequence,
     )
-    context.error_count += 1
+    transition = context.result.state["transition"]
+    transition["error_count"] = int(
+        transition.get("error_count", 0) or 0
+    ) + 1
 
 
 def _execute_action_request(context: WorkerExecutionContext) -> None:
     """요청에 포함된 검증된 도구를 선언된 순서대로 실행한다."""
 
-    for tool_call in context.action_request.tool_calls:
+    state = context.result.state
+    request = context.input.action_request
+    for tool_call in request.tool_calls:
         action_name = tool_call.name
         args = dict(tool_call.args)
         call_metadata = dict(tool_call.metadata)
@@ -116,7 +121,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
 
         logger.info(
             "Executing requested tool",
-            source=context.action_request.source,
+            source=request.source,
             action=action_name,
             args=compact_action_args(action_name, args),
         )
@@ -165,11 +170,11 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 )
                 screen_changed = False
             elif action_name in TERMINAL_ACTIONS:
-                result = context.worker_runtime.get_action_tools().finish_task(
+                result = context.input.worker_runtime.get_action_tools().finish_task(
                     args["result"]
                 )
                 raise_for_action_failure(result)
-                context.is_finished = True
+                state["lifecycle"]["is_finished"] = True
                 screen_changed = False
             else:
                 raise ValueError(f"Unknown tool: {action_name}")
@@ -192,10 +197,13 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 reason=result.get("reason", ""),
                 duration_sec=round(time.perf_counter() - step_started, 6),
             )
-            if follow_up is not None and not context.is_finished:
-                context.next_pending_action = follow_up
+            is_finished = bool(
+                state["lifecycle"].get("is_finished", False)
+            )
+            if follow_up is not None and not is_finished:
+                context.result.next_pending_action = follow_up
                 break
-            if context.is_finished:
+            if is_finished:
                 break
         except Exception as exc:
             logger.error(
@@ -212,9 +220,10 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 tool_call_id=tool_call.id,
                 call_metadata=call_metadata,
             )
-            if context.action_request.source == "reflex":
-                context.transition_request = {
-                    **dict(context.transition_request or {}),
+            if request.source == "reflex":
+                transition = state["transition"]
+                transition["transition_request"] = {
+                    **dict(transition.get("transition_request", {}) or {}),
                     "source": "reflex",
                     "execution_failed": True,
                     "failed_action": action_name,

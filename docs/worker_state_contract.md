@@ -42,7 +42,7 @@ return {
 
 위 반환값은 전체 상태가 아니다. LangGraph가 기존 `observation`에 세 필드를 병합하고 다른 일곱 구역은 유지한다. 노드 내부에서 여러 부분 갱신을 연속 계산할 때는 `apply_worker_state_update()`를 사용한다.
 
-`WorkerExecutionContext`는 행동 요청 하나를 실행하는 동안 단일 `WorkerState` 사본을 갱신한다. 속성 setter는 해당 구역을 변경하고 `dirty_sections`에 기록한다. 실행이 끝나면 변경된 구역만 반환한다. 실행 전용 필드와 그래프 상태 사이에 별도 복사표를 두지 않는다.
+`WorkerExecutionContext`는 행동 요청 하나를 실행하는 동안 입력과 결과를 분리한다. `ActionExecutionInput`은 최초 상태, 검증된 행동 요청과 런타임 의존성을 보관한다. `ActionExecutionResult`는 작업 상태 사본, 행동 결과, 이벤트와 후속 행동을 보관한다. 실행 코드는 책임 구역을 직접 갱신하며, 마지막에 최초 상태와 달라진 구역만 반환한다. 실행 필드를 그래프 상태로 다시 복사하는 동기화 표는 없다.
 
 ## 런타임 의존성
 

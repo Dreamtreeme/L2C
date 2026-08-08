@@ -47,12 +47,15 @@ def execute_ui_action(
 ) -> tuple[dict[str, Any], bool]:
     """물리 행동을 실행하고 다음 캡처가 확인할 전환 정보를 만든다."""
 
+    state = context.result.state
+    observation = state["observation"]
+    current_url = str(observation.get("current_url") or "")
     result = worker_execution_dispatch.dispatch_ui_action(
         action_name,
         args,
         context.marker_bbox,
-        action_tools=context.worker_runtime.get_action_tools(),
-        current_url=context.current_url,
+        action_tools=context.input.worker_runtime.get_action_tools(),
+        current_url=current_url,
     )
     raise_for_action_failure(result)
     screen_changed = True
@@ -65,22 +68,27 @@ def execute_ui_action(
         screen_changed = bool(result_payload.get("opened"))
         if (
             not screen_changed
-            and not context.state["observation"].get("ui_context")
+            and not observation.get("ui_context")
         ):
             screen_changed = True
-        context.current_url = result_payload.get("url") or args["url"]
-        context.current_url_stale = screen_changed
+        observation["current_url"] = str(
+            result_payload.get("url") or args["url"]
+        )
+        observation["current_url_stale"] = screen_changed
     else:
-        context.current_url_stale = (
-            context.current_url_stale
+        observation["current_url_stale"] = (
+            bool(observation.get("current_url_stale", True))
             or action_name in URL_STALE_ACTIONS
         )
 
-    context.screen_changed = context.screen_changed or screen_changed
+    context.result.screen_changed = (
+        context.result.screen_changed or screen_changed
+    )
     if screen_changed:
         transition_source = (
-            context.action_request.source
-            if context.action_request.source in DIRECT_SCREEN_ACTION_SOURCES
+            context.input.action_request.source
+            if context.input.action_request.source
+            in DIRECT_SCREEN_ACTION_SOURCES
             else "autonomous"
         )
         transition_source = str(
@@ -104,17 +112,19 @@ def activate_clicked_job_card(
 ) -> None:
     """성공한 큐 카드 클릭을 활성 공고로 표시한다."""
 
+    collection = context.result.state["collection"]
+    job_card_queue = list(collection.get("job_card_queue", []) or [])
     if (
         result.get("status") != "success"
         or action_name != "click_marker"
         or not job_card_click_matches_queue(
-            context.job_card_queue,
+            job_card_queue,
             action_context_args,
         )
     ):
         return
-    context.job_card_queue = activate_job_card(
-        context.job_card_queue,
+    collection["job_card_queue"] = activate_job_card(
+        job_card_queue,
         action_context_args,
     )
 
@@ -157,20 +167,21 @@ def _apply_job_card_queue_result(
     context: WorkerExecutionContext,
     result: dict[str, Any],
 ) -> ActionRequest | None:
-    pending_cards = pending_job_cards(context.job_card_queue)
+    state = context.result.state
+    collection = state["collection"]
+    job_card_queue = list(collection.get("job_card_queue", []) or [])
+    pending_cards = pending_job_cards(job_card_queue)
     first_card_action = _first_pending_job_card_action(pending_cards)
     if first_card_action is not None:
         return first_card_action
 
     if job_card_queue_scope_complete(
-        context.job_card_queue,
-        count_mode=count_mode_from_state(context.state),
-        target_count=target_count_from_state(context.state),
+        job_card_queue,
+        count_mode=count_mode_from_state(state),
+        target_count=target_count_from_state(state),
     ):
-        context.is_finished = True
-        resolved_count = resolved_job_card_count(
-            context.job_card_queue
-        )
+        state["lifecycle"]["is_finished"] = True
+        resolved_count = resolved_job_card_count(job_card_queue)
         result["auto_finished"] = True
         result["resolved_count"] = resolved_count
     return None
@@ -182,30 +193,33 @@ def _apply_state_action_update(
 ) -> None:
     """명시된 필드만 실행 문맥에 반영한다."""
 
+    collection = context.result.state["collection"]
     if update.job_card_queue is not None:
-        context.job_card_queue = list(update.job_card_queue)
+        collection["job_card_queue"] = list(update.job_card_queue)
     if update.job_results_memory is not None:
-        context.job_results_memory = dict(update.job_results_memory)
+        collection["job_results_memory"] = dict(update.job_results_memory)
     if update.job_results_availability is not None:
-        context.job_results_availability = dict(
+        collection["job_results_availability"] = dict(
             update.job_results_availability
         )
     if update.job_detail_buffer is not None:
-        context.job_detail_buffer = dict(update.job_detail_buffer)
+        collection["job_detail_buffer"] = dict(update.job_detail_buffer)
     if update.job_detail_coverage is not None:
-        context.job_detail_coverage = dict(update.job_detail_coverage)
+        collection["job_detail_coverage"] = dict(update.job_detail_coverage)
     if update.job_detail_followup is not None:
-        context.job_detail_followup = dict(update.job_detail_followup)
+        collection["job_detail_followup"] = dict(update.job_detail_followup)
 
 
 def _confirmed_job_results_return_action(
     context: WorkerExecutionContext,
     result: dict[str, Any],
 ) -> ActionRequest | None:
-    no_effect_return = latest_no_effect_transition(context.state)
+    state = context.result.state
+    collection = state["collection"]
+    no_effect_return = latest_no_effect_transition(state)
     failed_return_action = str(no_effect_return.get("action") or "")
     return_action = normalized_return_action(
-        context.job_results_memory.get("return_action")
+        (collection.get("job_results_memory", {}) or {}).get("return_action")
     )
     if (
         not return_action
@@ -240,23 +254,28 @@ def _apply_job_detail_completion(
     result: dict[str, Any],
     action_sequence: int,
 ) -> ActionRequest | None:
-    target_count = target_count_from_state(context.state)
-    collected_count = extracted_job_count(context.current_jobs)
-
-    context.job_card_queue = complete_active_job_card(
-        context.job_card_queue
+    state = context.result.state
+    observation = state["observation"]
+    collection = state["collection"]
+    job_card_queue = list(collection.get("job_card_queue", []) or [])
+    target_count = target_count_from_state(state)
+    collected_count = extracted_job_count(
+        dict(collection.get("extracted_jd", {}) or {})
     )
+
+    job_card_queue = complete_active_job_card(job_card_queue)
+    collection["job_card_queue"] = job_card_queue
     result["detail_policy"] = "required_fields_complete"
-    pending_cards = pending_job_cards(context.job_card_queue)
+    pending_cards = pending_job_cards(job_card_queue)
     resolved_count = max(
         collected_count,
-        resolved_job_card_count(context.job_card_queue),
+        resolved_job_card_count(job_card_queue),
     )
     if pending_cards or (
         target_count > 0 and resolved_count < target_count
     ):
-        context.return_to_job_results = {
-            "url": context.current_url,
+        collection["return_to_job_results"] = {
+            "url": str(observation.get("current_url") or ""),
             "reason": "required_fields_complete",
             "pending_count": len(pending_cards),
             "completed_action_seq": action_sequence,
@@ -264,11 +283,11 @@ def _apply_job_detail_completion(
         return _confirmed_job_results_return_action(context, result)
 
     if (
-        count_mode_from_state(context.state) == "visible_all"
-        and context.job_card_queue
+        count_mode_from_state(state) == "visible_all"
+        and job_card_queue
         and not pending_cards
     ):
-        context.is_finished = True
+        state["lifecycle"]["is_finished"] = True
         result["auto_finished"] = True
         result["count_mode"] = "visible_all"
         result["collected_count"] = collected_count
@@ -279,17 +298,22 @@ def _apply_collection_target_completion(
     context: WorkerExecutionContext,
     result: dict[str, Any],
 ) -> None:
-    target_count = target_count_from_state(context.state)
-    collected_count = extracted_job_count(context.current_jobs)
+    state = context.result.state
+    collection = state["collection"]
+    job_card_queue = list(collection.get("job_card_queue", []) or [])
+    target_count = target_count_from_state(state)
+    collected_count = extracted_job_count(
+        dict(collection.get("extracted_jd", {}) or {})
+    )
     resolved_count = max(
         collected_count,
-        resolved_job_card_count(context.job_card_queue),
+        resolved_job_card_count(job_card_queue),
     )
     if target_count <= 0 or resolved_count < target_count:
         return
 
-    context.return_to_job_results = {}
-    context.is_finished = True
+    collection["return_to_job_results"] = {}
+    state["lifecycle"]["is_finished"] = True
     result["auto_finished"] = True
     result["target_count"] = target_count
     result["collected_count"] = collected_count
@@ -304,15 +328,19 @@ def execute_state_action(
 ) -> tuple[dict[str, Any], ActionRequest | None]:
     """상태 행동을 실행하고 카드·상세 완료 후속 효과를 반영한다."""
 
+    state = context.result.state
+    observation = state["observation"]
+    collection = state["collection"]
+    current_jobs = dict(collection.get("extracted_jd", {}) or {})
     outcome = worker_execution_dispatch.dispatch_state_action(
         action_name,
         args,
-        context.current_jobs,
-        current_url=context.current_url,
-        state=context.state_for_dispatch(),
+        current_jobs,
+        current_url=str(observation.get("current_url") or ""),
+        state=state,
     )
     raise_for_action_failure(outcome.result)
-    context.current_jobs = outcome.jobs
+    collection["extracted_jd"] = dict(outcome.jobs)
     _apply_state_action_update(context, outcome.state_update)
     result = outcome.result
     follow_up: ActionRequest | None = None

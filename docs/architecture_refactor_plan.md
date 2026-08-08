@@ -269,7 +269,7 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - 작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`로 나눴다.
 - Vision Worker 그래프는 `context_schema=WorkerDependencies`를 선언한다. 실행 서비스가 `VisionWorkerRuntime`을 LangGraph 문맥으로 전달하고 노드는 `Runtime[WorkerDependencies]`에서 읽는다.
 - 현재 런타임을 찾던 전역 변수, `ContextVar`, 노드 바인딩 함수와 활성화 컨텍스트를 제거했다.
-- `WorkerExecutionContext`는 단일 작업 상태를 갱신하고 변경 구역만 반환한다. 실행 전후 상태를 필드별로 복사하던 매핑을 제거했다.
+- `WorkerExecutionContext`는 불변 입력과 가변 실행 결과를 분리하고, 최초 상태와 달라진 구역만 반환한다. 실행 전후 상태를 필드별로 복사하던 매핑을 제거했다.
 
 검증 결과:
 

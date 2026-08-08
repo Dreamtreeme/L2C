@@ -133,9 +133,12 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
     )
 
     assert blocked is True
-    assert context.new_actions[0]["status"] == "skipped"
-    assert context.new_actions[0]["reason"] == "screen_validation_unavailable"
-    assert context.new_actions[0]["observation_required"] is True
+    assert context.result.new_actions[0]["status"] == "skipped"
+    assert (
+        context.result.new_actions[0]["reason"]
+        == "screen_validation_unavailable"
+    )
+    assert context.result.new_actions[0]["observation_required"] is True
 
 
 def test_local_api_rejects_untrusted_host_and_cross_origin_request():

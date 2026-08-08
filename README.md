@@ -167,7 +167,7 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 
 `agent/bootstrap.py`가 체크포인터, 애플리케이션 서비스, 모델 묶음과 비전 런타임을 생성하고 그래프 노드에 주입합니다. Investigation LangGraph와 Vision Worker LangGraph는 노드 순서, 분기, 중단·재개와 상태 갱신만 담당합니다. Vision 노드는 전역 런타임 조회 없이 LangGraph `Runtime` 문맥으로 전달된 `VisionWorkerRuntime`을 사용합니다.
 
-작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`의 8개 책임 구역으로 나뉩니다. 노드는 자신이 변경한 구역만 `WorkerStateUpdate`로 반환하고 LangGraph reducer가 해당 구역을 병합합니다. 행동 실행 중에는 `WorkerExecutionContext`가 이 단일 상태를 갱신하므로 실행 전후 필드를 별도로 복사하는 경로가 없습니다.
+작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`의 8개 책임 구역으로 나뉩니다. 노드는 자신이 변경한 구역만 `WorkerStateUpdate`로 반환하고 LangGraph reducer가 해당 구역을 병합합니다. 행동 실행은 불변 입력과 가변 결과를 분리하고, 결과 상태에서 최초 입력과 달라진 구역만 반환합니다.
 
 Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. 사용자 지휘, 작업자 실행, 상세 정제, DB 적재와 자원 수명주기는 `agent/application/` 서비스와 `agent/bootstrap.py`가 담당합니다.
 

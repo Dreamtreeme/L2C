@@ -111,7 +111,7 @@ flowchart TD
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `decision.pending_action: ActionRequest`, 실행 결과는 `transition.action_events`에 순서대로 기록합니다.
 - `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
-- `WorkerExecutionContext`는 실행 중 같은 `WorkerState` 사본을 갱신하고 변경된 구역만 반환합니다. 별도 실행 필드와 그래프 상태 사이의 복사·동기화 표는 없습니다.
+- `WorkerExecutionContext`는 불변 `ActionExecutionInput`과 가변 `ActionExecutionResult`를 구분합니다. 실행 결과는 같은 `WorkerState` 사본을 갱신하고 최초 입력과 달라진 구역만 반환합니다.
 - 실행기는 안전 검증, 도구 전달, 상태 효과를 순서대로 조립하며 행동 종류는 `agent/runtime/worker_actions.py`에서 한 번만 정의합니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
