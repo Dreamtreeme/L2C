@@ -59,15 +59,133 @@ def _target_count_from_state(state: WorkerState) -> int:
         return 0
 
 
-def normalize_job_card_queue(args: dict, state: WorkerState, current_url: str) -> tuple[list[dict], dict]:
+def _queue_limit(
+    state: WorkerState,
+    queue: list[dict],
+    card_count: int,
+) -> int:
+    target_count = _target_count_from_state(state)
+    if target_count <= 0:
+        return card_count
+    collection = state["collection"]
+    resolved_count = max(
+        job_count(collection.get("extracted_jd", {}) or {}),
+        resolved_job_card_count(queue),
+    )
+    return max(0, target_count - resolved_count)
+
+
+def _marker_id(raw: dict[str, Any]) -> int | None:
+    value = raw.get("marker_id", raw.get("id"))
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _card_geometry(
+    raw: dict[str, Any],
+    marker: dict[str, Any],
+    size: list[int],
+) -> tuple[Any, Any]:
+    bbox = marker.get("bbox")
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        bbox = []
+    bbox_ratio = raw.get("bbox_ratio")
+    center_ratio = raw.get("center_ratio")
+    if size and not bbox_ratio:
+        try:
+            return bbox_to_ratio(bbox, size), center_ratio_from_bbox(bbox, size)
+        except Exception:
+            return [], []
+    return bbox_ratio or [], center_ratio or []
+
+
+def _unique_queue_id(raw: dict[str, Any], queue: list[dict]) -> str:
+    fallback = f"card-{len(queue) + 1}"
+    queue_id = str(raw.get("queue_id") or fallback)
+    existing_ids = {str(item.get("queue_id") or "") for item in queue}
+    return fallback if queue_id in existing_ids else queue_id
+
+
+def _normalized_job_card(
+    raw: dict[str, Any],
+    markers: list[dict],
+    size: list[int],
+    queue: list[dict],
+) -> dict[str, Any] | None:
+    marker_id = _marker_id(raw)
+    marker = marker_by_id(markers, marker_id)
+    if marker is None:
+        return None
+    label = job_card_label(raw) or str(marker.get("text") or "").strip()
+    if not label:
+        return None
+    bbox_ratio, center_ratio = _card_geometry(raw, marker, size)
+    company = str(
+        raw.get("company") or raw.get("company_name") or ""
+    ).strip()
+    evidence_texts = (
+        list(raw.get("evidence_texts") or [])
+        if isinstance(raw.get("evidence_texts"), list)
+        else []
+    )
+    if company and company not in evidence_texts:
+        evidence_texts.insert(0, company)
+    evidence_texts = evidence_texts[:6]
+    return {
+        "queue_id": _unique_queue_id(raw, queue),
+        "status": "pending",
+        "title": label,
+        "company": company,
+        "source_marker_id": marker_id,
+        "bbox_ratio": bbox_ratio,
+        "center_ratio": center_ratio,
+        "evidence_texts": evidence_texts,
+        "target": {
+            "text": str(marker.get("text") or label),
+            "semantic_label": label,
+            "bbox_ratio": bbox_ratio,
+            "center_ratio": center_ratio,
+            "evidence_texts": evidence_texts,
+            "marker_type": str(marker.get("type") or ""),
+        },
+    }
+
+
+def _job_results_memory(
+    observation: dict[str, Any],
+    collection: dict[str, Any],
+    current_url: str,
+) -> dict[str, Any]:
+    memory = {
+        "url": current_url or observation.get("current_url", "") or "",
+        "screen_signature": dict(observation.get("screen_signature", {}) or {}),
+        "screenshot": str(observation.get("current_screenshot") or ""),
+        "marked_image": observation.get("marked_image", "") or "",
+    }
+    previous_return_action = dict(
+        (collection.get("job_results_memory") or {}).get("return_action") or {}
+    )
+    if previous_return_action:
+        memory["return_action"] = previous_return_action
+    return memory
+
+
+def normalize_job_card_queue(
+    args: dict,
+    state: WorkerState,
+    current_url: str,
+) -> tuple[list[dict], dict]:
     """LLM이 고른 현재 화면의 공고 카드를 좌표비율 기반 큐로 정규화한다."""
 
     cards = job_card_entries_from_args(args)
     observation = state["observation"]
     collection = state["collection"]
     markers = list(observation.get("current_markers", []) or [])
-    signature = dict(observation.get("screen_signature", {}) or {})
-    size = screen_size_from_signature(signature)
+    size = screen_size_from_signature(
+        dict(observation.get("screen_signature", {}) or {})
+    )
     queue: list[dict] = [
         dict(item)
         for item in (collection.get("job_card_queue", []) or [])
@@ -77,97 +195,19 @@ def normalize_job_card_queue(args: dict, state: WorkerState, current_url: str) -
         (job_card_match_text(item.get("title")), job_card_match_text(item.get("company")))
         for item in queue
     }
-    target_count = _target_count_from_state(state)
-    resolved_count = max(
-        job_count(collection.get("extracted_jd", {}) or {}),
-        resolved_job_card_count(queue),
-    )
-    remaining = (
-        target_count - resolved_count
-        if target_count > 0
-        else len(cards)
-    )
-    limit = max(0, remaining) if target_count > 0 else len(cards)
-
-    for raw in cards[:limit]:
-        if not isinstance(raw, dict):
+    for raw in cards[: _queue_limit(state, queue, len(cards))]:
+        card = _normalized_job_card(raw, markers, size, queue)
+        if card is None:
             continue
-        marker_id = raw.get("marker_id", raw.get("id"))
-        try:
-            marker_id = int(marker_id) if marker_id is not None else None
-        except (TypeError, ValueError):
-            marker_id = None
-        marker = marker_by_id(markers, marker_id)
-        label = job_card_label(raw) or (str(marker.get("text") or "").strip() if marker else "")
-        if marker is None:
-            continue
-        if not label:
-            continue
-        bbox = marker.get("bbox") if marker else raw.get("bbox")
-        if not isinstance(bbox, list) or len(bbox) != 4:
-            bbox = []
-        bbox_ratio = raw.get("bbox_ratio")
-        center_ratio = raw.get("center_ratio")
-        if marker and size and not bbox_ratio:
-            try:
-                bbox_ratio = bbox_to_ratio(bbox, size)
-                center_ratio = center_ratio_from_bbox(bbox, size)
-            except Exception:
-                bbox_ratio = []
-                center_ratio = []
-        if (not bbox_ratio or len(bbox_ratio) != 4) and raw.get("bbox_ratio"):
-            bbox_ratio = raw.get("bbox_ratio")
-        if (not center_ratio or len(center_ratio) != 2) and raw.get("center_ratio"):
-            center_ratio = raw.get("center_ratio")
-        if not bbox_ratio and not marker:
-            continue
-
-        company = str(raw.get("company") or raw.get("company_name") or "").strip()
-        identity = (job_card_match_text(label), job_card_match_text(company))
+        identity = (
+            job_card_match_text(card["title"]),
+            job_card_match_text(card["company"]),
+        )
         if identity in existing_labels or (identity[0], "") in existing_labels:
             continue
         existing_labels.add(identity)
-
-        queue_id = str(raw.get("queue_id") or f"card-{len(queue) + 1}")
-        existing_queue_ids = {str(item.get("queue_id") or "") for item in queue}
-        if queue_id in existing_queue_ids:
-            queue_id = f"card-{len(queue) + 1}"
-        evidence_texts = raw.get("evidence_texts") if isinstance(raw.get("evidence_texts"), list) else []
-        if company and company not in evidence_texts:
-            evidence_texts = [company, *evidence_texts]
-        queue.append(
-            {
-                "queue_id": queue_id,
-                "status": "pending",
-                "title": label,
-                "company": company,
-                "source_marker_id": marker_id,
-                "bbox_ratio": bbox_ratio or [],
-                "center_ratio": center_ratio or [],
-                "evidence_texts": evidence_texts[:6],
-                "target": {
-                    "text": str(marker.get("text") or label) if marker else label,
-                    "semantic_label": label,
-                    "bbox_ratio": bbox_ratio or [],
-                    "center_ratio": center_ratio or [],
-                    "evidence_texts": evidence_texts[:6],
-                    "marker_type": str(marker.get("type") or ""),
-                },
-            }
-        )
-
-    memory = {
-        "url": current_url or observation.get("current_url", "") or "",
-        "screen_signature": signature,
-        "screenshot": str(observation.get("current_screenshot") or ""),
-        "marked_image": observation.get("marked_image", "") or "",
-    }
-    previous_return_action = dict(
-        (collection.get("job_results_memory") or {}).get("return_action") or {}
-    )
-    if previous_return_action:
-        memory["return_action"] = previous_return_action
-    return queue, memory
+        queue.append(card)
+    return queue, _job_results_memory(observation, collection, current_url)
 
 
 def pending_job_cards(queue: list[dict]) -> list[dict]:

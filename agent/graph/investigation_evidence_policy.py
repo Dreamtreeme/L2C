@@ -236,6 +236,93 @@ def needs_semantic_evidence_validation(report: dict[str, Any]) -> bool:
         if isinstance(item, dict)
     )
 
+
+def _valid_candidate_ids(
+    values: list[int],
+    candidates: dict[int, dict[str, Any]],
+) -> list[int]:
+    return list(
+        dict.fromkeys(
+            int(document_id)
+            for document_id in values
+            if int(document_id) in candidates
+        )
+    )
+
+
+def _validated_requirement_report(
+    item: dict[str, Any],
+    requirement: Any,
+    decision: Any,
+    investigation: InvestigationRequest,
+) -> dict[str, Any]:
+    """요구사항 하나의 모델 판정을 후보 집합에 한정해 다시 계산한다."""
+
+    candidates = {
+        int(candidate["document_id"]): candidate
+        for candidate in item.get("candidates", [])
+    }
+    candidate_ids = (
+        decision.matching_document_ids if decision is not None else []
+    )
+    if not item.get("semantic_review_required"):
+        candidate_ids = list(candidates)
+    matching_ids = _valid_candidate_ids(candidate_ids, candidates)
+    selected_ids = matching_ids
+    if (
+        len(investigation.evidence_requirements) == 1
+        and investigation.constraints.count_mode == "explicit"
+    ):
+        selected_ids = matching_ids[: investigation.constraints.target_count]
+    selected = [candidates[document_id] for document_id in selected_ids]
+
+    missing: list[str] = []
+    if len(selected) < requirement.minimum_count:
+        missing.append(
+            "의미 조건을 만족하는 표본 "
+            f"{requirement.minimum_count - len(selected)}건 부족"
+        )
+    field_coverage = {
+        field: sum(
+            1
+            for candidate in selected
+            if candidate.get("field_presence", {}).get(field)
+        )
+        for field in requirement.required_fields
+    }
+    missing.extend(
+        f"{field} 근거 부족"
+        for field in requirement.required_fields
+        if field_coverage.get(field, 0) < requirement.minimum_count
+    )
+    posted_dates = sorted(
+        str(candidate.get("posted_at") or "")[:10]
+        for candidate in selected
+        if str(candidate.get("posted_at") or "").strip()
+    )
+    if (
+        requirement.posted_from or requirement.posted_to
+    ) and len(posted_dates) < requirement.minimum_count:
+        missing.append("검증된 게시일 근거 부족")
+    return {
+        **item,
+        "matching_count": len(selected),
+        "verified_posted_at_count": len(posted_dates),
+        "oldest_posted_at": posted_dates[0] if posted_dates else "",
+        "newest_posted_at": posted_dates[-1] if posted_dates else "",
+        "field_coverage": field_coverage,
+        "document_ids": selected_ids,
+        "site_counts": dict(
+            Counter(
+                str(candidate.get("source_platform") or "unknown")
+                for candidate in selected
+            )
+        ),
+        "candidates": selected,
+        "sufficient": not missing,
+        "missing": list(dict.fromkeys(missing)),
+    }
+
 def apply_evidence_validation(
     report: dict[str, Any],
     investigation: InvestigationRequest,
@@ -257,84 +344,18 @@ def apply_evidence_validation(
         requirement = requirements.get(str(item.get("requirement_id") or ""))
         if requirement is None:
             continue
-        candidates = {
-            int(candidate["document_id"]): candidate
-            for candidate in item.get("candidates", [])
-        }
         decision = decisions.get(requirement.requirement_id)
-
-        def valid_ids(values: list[int]) -> list[int]:
-            return list(
-                dict.fromkeys(
-                    int(document_id)
-                    for document_id in values
-                    if int(document_id) in candidates
-                )
-            )
-
-        if item.get("semantic_review_required"):
-            matching_ids = valid_ids(
-                decision.matching_document_ids if decision is not None else []
-            )
-        else:
-            matching_ids = valid_ids(
-                [candidate["document_id"] for candidate in item.get("candidates", [])]
-            )
-        selected_ids = matching_ids
-        if (
-            len(investigation.evidence_requirements) == 1
-            and investigation.constraints.count_mode == "explicit"
-        ):
-            selected_ids = matching_ids[: investigation.constraints.target_count]
-        selected = [candidates[document_id] for document_id in selected_ids]
-        for document_id in selected_ids:
+        validated_report = _validated_requirement_report(
+            item,
+            requirement,
+            decision,
+            investigation,
+        )
+        for document_id in validated_report["document_ids"]:
             if document_id not in seen_document_ids:
                 seen_document_ids.add(document_id)
                 all_document_ids.append(document_id)
-        missing: list[str] = []
-        if len(selected) < requirement.minimum_count:
-            missing.append(f"의미 조건을 만족하는 표본 {requirement.minimum_count - len(selected)}건 부족")
-        field_coverage = {
-            field: sum(
-                1
-                for candidate in selected
-                if candidate.get("field_presence", {}).get(field)
-            )
-            for field in requirement.required_fields
-        }
-        for field in requirement.required_fields:
-            if field_coverage.get(field, 0) < requirement.minimum_count:
-                missing.append(f"{field} 근거 부족")
-        posted_dates = sorted(
-            str(candidate.get("posted_at") or "")[:10]
-            for candidate in selected
-            if str(candidate.get("posted_at") or "").strip()
-        )
-        verified_dates = len(posted_dates)
-        if (
-            requirement.posted_from or requirement.posted_to
-        ) and verified_dates < requirement.minimum_count:
-            missing.append("검증된 게시일 근거 부족")
-        reports.append(
-            {
-                **item,
-                "matching_count": len(selected),
-                "verified_posted_at_count": verified_dates,
-                "oldest_posted_at": posted_dates[0] if posted_dates else "",
-                "newest_posted_at": posted_dates[-1] if posted_dates else "",
-                "field_coverage": field_coverage,
-                "document_ids": selected_ids,
-                "site_counts": dict(
-                    Counter(
-                        str(candidate.get("source_platform") or "unknown")
-                        for candidate in selected
-                    )
-                ),
-                "candidates": selected,
-                "sufficient": not missing,
-                "missing": list(dict.fromkeys(missing)),
-            }
-        )
+        reports.append(validated_report)
     missing_evidence = [
         f"{item['description']}: {reason}"
         for item in reports

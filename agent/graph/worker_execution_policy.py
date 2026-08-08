@@ -74,56 +74,81 @@ def _merge_value(old: Any, new: Any) -> Any:
     return new
 
 
+def _validate_job_payload(new_data: dict[str, Any]) -> None:
+    if (
+        any(key in new_data for key in JOB_IDENTITY_KEYS)
+        and JOB_LIST_KEY not in new_data
+    ):
+        raise ValueError("공고 데이터는 jobs 목록 안에 있어야 합니다.")
+    if JOB_LIST_KEY in new_data and not isinstance(new_data[JOB_LIST_KEY], list):
+        raise ValueError("jobs 값은 공고 딕셔너리 목록이어야 합니다.")
+
+
+def _matching_job_index(
+    existing_jobs: list[Any],
+    identity: tuple[str, str, str],
+) -> int | None:
+    for index, existing in enumerate(existing_jobs):
+        if not isinstance(existing, dict):
+            continue
+        existing_identity = _job_identity(existing)
+        if existing_identity == identity and any(identity):
+            return index
+        if identity[0] and identity[0] in existing_identity:
+            return index
+        if identity[1:] == existing_identity[1:] and all(identity[1:]):
+            return index
+    return None
+
+
+def _merge_job_list(
+    merged: dict[str, Any],
+    incoming_jobs: list[Any],
+    *,
+    current_url: str,
+    summary: dict[str, Any],
+) -> None:
+    existing_jobs = job_list_value(merged)
+    if not isinstance(existing_jobs, list):
+        existing_jobs = []
+    for incoming in incoming_jobs:
+        if not isinstance(incoming, dict):
+            continue
+        job = dict(incoming)
+        if looks_like_job_detail_url(current_url) and not job.get("url"):
+            job["url"] = current_url
+        summary["incoming_jobs"] += 1
+        summary["fields"].extend(job)
+        match_index = _matching_job_index(existing_jobs, _job_identity(job))
+        if match_index is None:
+            existing_jobs.append(job)
+        else:
+            existing_jobs[match_index] = _merge_value(
+                existing_jobs[match_index],
+                job,
+            )
+    merged[JOB_LIST_KEY] = existing_jobs
+    summary["total_jobs"] = len(existing_jobs)
+
+
 def merge_extracted_info(
     current_jd: dict[str, Any],
     new_data: dict[str, Any],
     current_url: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if any(key in new_data for key in JOB_IDENTITY_KEYS) and JOB_LIST_KEY not in new_data:
-        raise ValueError("공고 데이터는 jobs 목록 안에 있어야 합니다.")
-    if JOB_LIST_KEY in new_data and not isinstance(new_data[JOB_LIST_KEY], list):
-        raise ValueError("jobs 값은 공고 딕셔너리 목록이어야 합니다.")
+    _validate_job_payload(new_data)
 
     merged = dict(current_jd)
     summary: dict[str, Any] = {"incoming_jobs": 0, "total_jobs": 0, "fields": []}
     incoming_jobs = job_items(new_data)
 
     if incoming_jobs or JOB_LIST_KEY in new_data:
-        existing_jobs = job_list_value(merged)
-        if not isinstance(existing_jobs, list):
-            existing_jobs = []
-        for incoming in incoming_jobs:
-            if not isinstance(incoming, dict):
-                continue
-            job = dict(incoming)
-            if looks_like_job_detail_url(current_url) and not job.get("url"):
-                job["url"] = current_url
-
-            summary["incoming_jobs"] += 1
-            summary["fields"].extend(job.keys())
-            identity = _job_identity(job)
-            match_index = None
-            for index, existing in enumerate(existing_jobs):
-                if not isinstance(existing, dict):
-                    continue
-                existing_identity = _job_identity(existing)
-                if existing_identity == identity and any(identity):
-                    match_index = index
-                    break
-                if identity[0] and identity[0] in existing_identity:
-                    match_index = index
-                    break
-                if identity[1:] == existing_identity[1:] and all(identity[1:]):
-                    match_index = index
-                    break
-
-            if match_index is None:
-                existing_jobs.append(job)
-            else:
-                existing_jobs[match_index] = _merge_value(existing_jobs[match_index], job)
-
-        merged[JOB_LIST_KEY] = existing_jobs
-        summary["total_jobs"] = len(existing_jobs)
+        _merge_job_list(
+            merged,
+            incoming_jobs,
+            current_url=current_url,
+            summary=summary,
+        )
 
     for key, value in new_data.items():
         if key == JOB_LIST_KEY:

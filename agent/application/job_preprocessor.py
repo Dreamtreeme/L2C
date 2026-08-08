@@ -72,6 +72,47 @@ class Preprocessor:
         return "Unknown"
 
     @classmethod
+    def _experience_text(
+        cls,
+        position: str | None,
+        requirements: list[str] | None,
+    ) -> str:
+        if position:
+            match = re.search(r"\(([^)]+)\)", position)
+            if match:
+                inner_text = match.group(1).strip()
+                if any(term in inner_text for term in ("년", "신입", "경력")):
+                    return inner_text
+        return next(
+            (
+                requirement.strip()
+                for requirement in requirements or []
+                if "경력" in requirement and len(requirement) < 50
+            ),
+            "",
+        )
+
+    @staticmethod
+    def _experience_range(exp_text: str) -> tuple[int | None, int | None]:
+        range_match = re.search(
+            r"(\d+)\s*년?\s*(?:이상)?\s*[~\-]\s*(\d+)\s*년?\s*(?:이하)?",
+            exp_text,
+        )
+        if range_match:
+            return int(range_match.group(1)), int(range_match.group(2))
+
+        above_match = re.search(r"(\d+)년\s*(이상|차|년차)?", exp_text)
+        if above_match and "이하" not in exp_text and "미만" not in exp_text:
+            return int(above_match.group(1)), None
+
+        below_match = re.search(r"(\d+)년\s*(이하|미만)", exp_text)
+        if below_match:
+            return 0, int(below_match.group(1))
+        if "신입" in exp_text:
+            return 0, 0
+        return None, None
+
+    @classmethod
     def parse_experience(
         cls,
         position: str | None,
@@ -79,56 +120,12 @@ class Preprocessor:
     ) -> tuple[int | None, int | None, str]:
         """명시된 경력 조건만 구조화하고 미확인 값은 비워 둔다."""
 
-        exp_text = ""
-        exp_min: int | None = None
-        exp_max: int | None = None
-
-        # 1. 직무명 내 괄호 형식 파싱 (예: "iOS 개발자 (3년 이상)")
-        if position:
-            match = re.search(r"\(([^)]+)\)", position)
-            if match:
-                inner_text = match.group(1).strip()
-                if "년" in inner_text or "신입" in inner_text or "경력" in inner_text:
-                    exp_text = inner_text
-
-        # 2. 자격요건에서 전체 경력임이 명시된 표현만 수집
-        if not exp_text and requirements:
-            for req in requirements:
-                if "경력" in req:
-                    if len(req) < 50:
-                        exp_text = req.strip()
-                        break
-
-        # 3. 경력 텍스트를 구조화 수치(min/max)로 파싱
+        exp_text = cls._experience_text(position, requirements)
         cleaned_exp = cls.clean_text(exp_text)
         full_text = f"{position or ''} {' '.join(requirements or [])}"
         if not cleaned_exp and "경력 무관" in full_text:
             return 0, None, "경력 무관"
-        
-        # 패턴 A: "3~7년", "3년~7년", "3년 이상 ~ 7년 이하"
-        range_match = re.search(
-            r"(\d+)\s*년?\s*(?:이상)?\s*[~\-]\s*(\d+)\s*년?\s*(?:이하)?",
-            cleaned_exp,
-        )
-        if range_match:
-            exp_min = int(range_match.group(1))
-            exp_max = int(range_match.group(2))
-        else:
-            # 패턴 B: "3년 이상", "3년차 이상"
-            above_match = re.search(r"(\d+)년\s*(이상|차|년차)?", cleaned_exp)
-            if above_match and "이하" not in cleaned_exp and "미만" not in cleaned_exp:
-                exp_min = int(above_match.group(1))
-                exp_max = None
-            else:
-                # 패턴 C: "3년 이하", "3년 미만"
-                below_match = re.search(r"(\d+)년\s*(이하|미만)", cleaned_exp)
-                if below_match:
-                    exp_min = 0
-                    exp_max = int(below_match.group(1))
-                elif "신입" in cleaned_exp:
-                    exp_min = 0
-                    exp_max = 0
-
+        exp_min, exp_max = cls._experience_range(cleaned_exp)
         return exp_min, exp_max, exp_text
 
     @staticmethod

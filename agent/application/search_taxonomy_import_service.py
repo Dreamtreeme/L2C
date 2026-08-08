@@ -356,149 +356,211 @@ def import_onet_archive(db_path: str | Path, archive_path: str | Path) -> dict[s
     return counts
 
 
+def _reset_seed_source(connection: sqlite3.Connection, source_key: str) -> None:
+    connection.execute(
+        "UPDATE search_aliases SET active = 0 WHERE source_key = ?",
+        (source_key,),
+    )
+    connection.execute(
+        "UPDATE search_concepts SET status = 'deprecated' WHERE source_key = ?",
+        (source_key,),
+    )
+    connection.execute(
+        "DELETE FROM search_concept_relations WHERE source_key = ?",
+        (source_key,),
+    )
+    connection.execute(
+        """
+        DELETE FROM search_external_mappings
+        WHERE concept_id IN (
+            SELECT id FROM search_concepts WHERE source_key = ?
+        )
+        """,
+        (source_key,),
+    )
+
+
+def _import_seed_concepts(
+    connection: sqlite3.Connection,
+    concepts: list[dict[str, Any]],
+    source_key: str,
+    counts: dict[str, int],
+) -> dict[str, int]:
+    concept_ids: dict[str, int] = {}
+    for item in concepts:
+        concept_key = str(item["concept_key"])
+        concept_id = _upsert_concept(
+            connection,
+            concept_key=concept_key,
+            concept_type=str(item["concept_type"]),
+            preferred_label_ko=str(item.get("preferred_label_ko") or ""),
+            preferred_label_en=str(item.get("preferred_label_en") or ""),
+            definition=str(item.get("definition") or ""),
+            source_key=source_key,
+        )
+        concept_ids[concept_key] = concept_id
+        for language, label in (
+            ("ko", item.get("preferred_label_ko")),
+            ("en", item.get("preferred_label_en")),
+        ):
+            if label:
+                _upsert_alias(
+                    connection,
+                    concept_id=concept_id,
+                    alias=str(label),
+                    language=language,
+                    alias_type="preferred",
+                    source_key=source_key,
+                )
+        for alias in item.get("aliases") or []:
+            alias_text = str(alias)
+            _upsert_alias(
+                connection,
+                concept_id=concept_id,
+                alias=alias_text,
+                language=(
+                    "ko"
+                    if any("가" <= char <= "힣" for char in alias_text)
+                    else "en"
+                ),
+                source_key=source_key,
+            )
+            counts["aliases"] += 1
+        counts["concepts"] += 1
+    return concept_ids
+
+
+def _import_seed_mappings(
+    connection: sqlite3.Connection,
+    concepts: list[dict[str, Any]],
+    concept_ids: dict[str, int],
+    source_key: str,
+    counts: dict[str, int],
+) -> None:
+    for item in concepts:
+        source_id = concept_ids[str(item["concept_key"])]
+        broader_key = str(item.get("broader") or "")
+        if broader_key:
+            _upsert_relation(
+                connection,
+                source_concept_id=source_id,
+                target_concept_id=concept_ids[broader_key],
+                relation_type="broader",
+                source_key=source_key,
+            )
+            counts["relations"] += 1
+        for mapping in item.get("external_mappings") or []:
+            mapping_source = str(mapping["source_key"])
+            source_row = connection.execute(
+                "SELECT version FROM taxonomy_sources WHERE source_key = ?",
+                (mapping_source,),
+            ).fetchone()
+            if source_row is None:
+                continue
+            external_id = str(mapping["external_id"])
+            _upsert_external_mapping(
+                connection,
+                concept_id=source_id,
+                source_key=mapping_source,
+                external_id=external_id,
+                source_version=str(source_row["version"]),
+                external_url=(
+                    f"https://www.onetonline.org/link/summary/{external_id}"
+                ),
+            )
+            counts["external_mappings"] += 1
+
+
+def _link_seed_occupation_groups(
+    connection: sqlite3.Connection,
+    concepts: list[dict[str, Any]],
+    concept_ids: dict[str, int],
+    source_key: str,
+    counts: dict[str, int],
+) -> None:
+    onet_occupations = connection.execute(
+        """
+        SELECT concepts.id, mappings.external_id
+        FROM search_concepts AS concepts
+        JOIN search_external_mappings AS mappings
+          ON mappings.concept_id = concepts.id
+         AND mappings.source_key = ?
+        WHERE concepts.source_key = ?
+          AND concepts.concept_type = 'occupation'
+          AND concepts.status = 'active'
+        """,
+        (ONET_SOURCE_KEY, ONET_SOURCE_KEY),
+    ).fetchall()
+    for item in concepts:
+        major_groups = {
+            str(value).strip()
+            for value in item.get("soc_major_groups") or []
+            if str(value).strip()
+        }
+        if not major_groups:
+            continue
+        parent_id = concept_ids[str(item["concept_key"])]
+        for occupation in onet_occupations:
+            external_id = str(occupation["external_id"])
+            if external_id[:2] not in major_groups:
+                continue
+            _upsert_relation(
+                connection,
+                source_concept_id=int(occupation["id"]),
+                target_concept_id=parent_id,
+                relation_type="broader",
+                source_key=source_key,
+                metadata={"soc_major_group": external_id[:2]},
+            )
+            counts["relations"] += 1
+
+
 def import_local_seed(db_path: str | Path, seed_path: str | Path) -> dict[str, int]:
     """검토된 한국어 직무 계층과 최신 기술 별칭을 적재한다."""
 
     payload = json.loads(Path(seed_path).read_text(encoding="utf-8"))
     source = dict(payload["source"])
+    source_key = str(source["source_key"])
     concepts = list(payload.get("concepts") or [])
+    counts = {
+        "concepts": 0,
+        "aliases": 0,
+        "relations": 0,
+        "external_mappings": 0,
+    }
     connection = _connect(db_path)
-    concept_ids: dict[str, int] = {}
-    counts = {"concepts": 0, "aliases": 0, "relations": 0, "external_mappings": 0}
     try:
         with connection:
             _upsert_source(
                 connection,
-                source_key=str(source["source_key"]),
+                source_key=source_key,
                 name=str(source["name"]),
                 version=str(source["version"]),
                 source_url=str(source["source_url"]),
                 license_name=str(source.get("license") or ""),
                 metadata={"seed": Path(seed_path).name},
             )
-            source_key = str(source["source_key"])
-            connection.execute(
-                "UPDATE search_aliases SET active = 0 WHERE source_key = ?",
-                (source_key,),
+            _reset_seed_source(connection, source_key)
+            concept_ids = _import_seed_concepts(
+                connection,
+                concepts,
+                source_key,
+                counts,
             )
-            connection.execute(
-                "UPDATE search_concepts SET status = 'deprecated' WHERE source_key = ?",
-                (source_key,),
+            _import_seed_mappings(
+                connection,
+                concepts,
+                concept_ids,
+                source_key,
+                counts,
             )
-            connection.execute(
-                "DELETE FROM search_concept_relations WHERE source_key = ?",
-                (source_key,),
+            _link_seed_occupation_groups(
+                connection,
+                concepts,
+                concept_ids,
+                source_key,
+                counts,
             )
-            connection.execute(
-                """
-                DELETE FROM search_external_mappings
-                WHERE concept_id IN (
-                    SELECT id FROM search_concepts WHERE source_key = ?
-                )
-                """,
-                (source_key,),
-            )
-            for item in concepts:
-                concept_id = _upsert_concept(
-                    connection,
-                    concept_key=str(item["concept_key"]),
-                    concept_type=str(item["concept_type"]),
-                    preferred_label_ko=str(item.get("preferred_label_ko") or ""),
-                    preferred_label_en=str(item.get("preferred_label_en") or ""),
-                    definition=str(item.get("definition") or ""),
-                    source_key=str(source["source_key"]),
-                )
-                concept_ids[str(item["concept_key"])] = concept_id
-                for language, label in (
-                    ("ko", item.get("preferred_label_ko")),
-                    ("en", item.get("preferred_label_en")),
-                ):
-                    if label:
-                        _upsert_alias(
-                            connection,
-                            concept_id=concept_id,
-                            alias=str(label),
-                            language=language,
-                            alias_type="preferred",
-                            source_key=str(source["source_key"]),
-                        )
-                for alias in item.get("aliases") or []:
-                    _upsert_alias(
-                        connection,
-                        concept_id=concept_id,
-                        alias=str(alias),
-                        language="ko" if any("가" <= char <= "힣" for char in str(alias)) else "en",
-                        source_key=str(source["source_key"]),
-                    )
-                    counts["aliases"] += 1
-                counts["concepts"] += 1
-
-            for item in concepts:
-                source_id = concept_ids[str(item["concept_key"])]
-                broader_key = str(item.get("broader") or "")
-                if broader_key:
-                    _upsert_relation(
-                        connection,
-                        source_concept_id=source_id,
-                        target_concept_id=concept_ids[broader_key],
-                        relation_type="broader",
-                        source_key=str(source["source_key"]),
-                    )
-                    counts["relations"] += 1
-                for mapping in item.get("external_mappings") or []:
-                    mapping_source = str(mapping["source_key"])
-                    source_row = connection.execute(
-                        "SELECT version FROM taxonomy_sources WHERE source_key = ?",
-                        (mapping_source,),
-                    ).fetchone()
-                    if source_row is None:
-                        continue
-                    external_id = str(mapping["external_id"])
-                    _upsert_external_mapping(
-                        connection,
-                        concept_id=source_id,
-                        source_key=mapping_source,
-                        external_id=external_id,
-                        source_version=str(source_row["version"]),
-                        external_url=f"https://www.onetonline.org/link/summary/{external_id}",
-                    )
-                    counts["external_mappings"] += 1
-
-            onet_occupations = connection.execute(
-                """
-                SELECT concepts.id, mappings.external_id
-                FROM search_concepts AS concepts
-                JOIN search_external_mappings AS mappings
-                  ON mappings.concept_id = concepts.id
-                 AND mappings.source_key = ?
-                WHERE concepts.source_key = ?
-                  AND concepts.concept_type = 'occupation'
-                  AND concepts.status = 'active'
-                """,
-                (ONET_SOURCE_KEY, ONET_SOURCE_KEY),
-            ).fetchall()
-            for item in concepts:
-                major_groups = {
-                    str(value).strip()
-                    for value in item.get("soc_major_groups") or []
-                    if str(value).strip()
-                }
-                if not major_groups:
-                    continue
-                parent_id = concept_ids[str(item["concept_key"])]
-                for occupation in onet_occupations:
-                    external_id = str(occupation["external_id"])
-                    if external_id[:2] not in major_groups:
-                        continue
-                    _upsert_relation(
-                        connection,
-                        source_concept_id=int(occupation["id"]),
-                        target_concept_id=parent_id,
-                        relation_type="broader",
-                        source_key=source_key,
-                        metadata={"soc_major_group": external_id[:2]},
-                    )
-                    counts["relations"] += 1
     finally:
         connection.close()
     return counts

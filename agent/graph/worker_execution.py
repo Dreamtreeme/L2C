@@ -116,6 +116,70 @@ def _observe_job_detail_fields(
         or observation.get("current_page_role")
         or ""
     )
+
+
+def _execute_tool_call(
+    context: WorkerExecutionContext,
+    *,
+    action_name: str,
+    args: dict[str, Any],
+    call_metadata: dict[str, Any],
+    tool_call_id: str,
+    action_sequence: int,
+    before_snapshot: dict[str, Any],
+    step_started: float,
+) -> tuple[dict[str, Any], bool, ActionRequest | None] | None:
+    """가드가 허용한 도구 하나를 유형에 맞는 실행기로 전달한다."""
+
+    state = context.result.state
+    if guard_return_to_results(
+        context,
+        action_name,
+        args,
+        before_snapshot,
+        step_started,
+    ):
+        return None
+    if action_name in UI_ACTIONS:
+        if guard_ui_action(
+            context,
+            action_name,
+            args,
+            before_snapshot,
+            step_started,
+        ):
+            return None
+        result, screen_changed = execute_ui_action(
+            context,
+            action_name,
+            args,
+            call_metadata,
+            tool_call_id,
+            action_sequence,
+        )
+        activate_clicked_job_card(
+            context,
+            result,
+            action_name,
+            {**args, **call_metadata},
+        )
+        return result, screen_changed, None
+    if action_name in STATE_UPDATE_ACTIONS:
+        result, follow_up = execute_state_action(
+            context,
+            action_name,
+            args,
+            action_sequence,
+        )
+        return result, False, follow_up
+    if action_name in TERMINAL_ACTIONS:
+        result = context.input.worker_runtime.get_action_tools().finish_task(
+            args["result"]
+        )
+        raise_for_action_failure(result)
+        state["lifecycle"]["is_finished"] = True
+        return result, False, None
+    raise ValueError(f"Unknown tool: {action_name}")
     if not is_job_detail_context(current_url, page_role=page_role):
         return
     collection = state["collection"]
@@ -137,7 +201,6 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
         action_name = tool_call.name
         args = dict(tool_call.args)
         call_metadata = dict(tool_call.metadata)
-        action_context_args = {**args, **call_metadata}
         if action_name == "finish_detail_reading":
             args.setdefault("page_role", "job_detail")
         _observe_job_detail_fields(context, action_name, args)
@@ -151,56 +214,20 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
         step_started = time.perf_counter()
         before_snapshot = context.before_snapshot()
         action_sequence = context.next_action_sequence()
-        follow_up: ActionRequest | None = None
         try:
-            if guard_return_to_results(
+            outcome = _execute_tool_call(
                 context,
-                action_name,
-                args,
-                before_snapshot,
-                step_started,
-            ):
+                action_name=action_name,
+                args=args,
+                call_metadata=call_metadata,
+                tool_call_id=tool_call.id,
+                action_sequence=action_sequence,
+                before_snapshot=before_snapshot,
+                step_started=step_started,
+            )
+            if outcome is None:
                 break
-            if action_name in UI_ACTIONS:
-                if guard_ui_action(
-                    context,
-                    action_name,
-                    args,
-                    before_snapshot,
-                    step_started,
-                ):
-                    break
-                result, screen_changed = execute_ui_action(
-                    context,
-                    action_name,
-                    args,
-                    call_metadata,
-                    tool_call.id,
-                    action_sequence,
-                )
-                activate_clicked_job_card(
-                    context,
-                    result,
-                    action_name,
-                    action_context_args,
-                )
-            elif action_name in STATE_UPDATE_ACTIONS:
-                result, follow_up = execute_state_action(
-                    context,
-                    action_name,
-                    args,
-                    action_sequence,
-                )
-                screen_changed = False
-            elif action_name in TERMINAL_ACTIONS:
-                result = context.input.worker_runtime.get_action_tools().finish_task(
-                    args["result"]
-                )
-                raise_for_action_failure(result)
-                state["lifecycle"]["is_finished"] = True
-                screen_changed = False
-            else:
-                raise ValueError(f"Unknown tool: {action_name}")
+            result, screen_changed, follow_up = outcome
 
             _record_successful_call(
                 context,

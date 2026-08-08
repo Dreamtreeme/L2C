@@ -62,6 +62,78 @@ def join_line_marker_text(markers: list[dict]) -> str:
     return re.sub(r"\s+", " ", joined).strip()
 
 
+def _group_markers_by_y(
+    markers: list[dict],
+    tolerance: int,
+) -> list[list[dict]]:
+    lines: list[dict[str, Any]] = []
+    ordered_markers = sorted(
+        markers,
+        key=lambda item: (
+            (marker_bbox(item)[1] + marker_bbox(item)[3]) / 2,
+            marker_bbox(item)[0],
+        ),
+    )
+    for marker in ordered_markers:
+        bbox = marker_bbox(marker)
+        center_y = (bbox[1] + bbox[3]) / 2
+        matched = next(
+            (
+                line
+                for line in lines
+                if abs(center_y - line["center_y"]) <= tolerance
+            ),
+            None,
+        )
+        if matched is None:
+            lines.append({"center_y": center_y, "markers": [marker]})
+            continue
+        matched["markers"].append(marker)
+        count = len(matched["markers"])
+        matched["center_y"] = (
+            (matched["center_y"] * (count - 1)) + center_y
+        ) / count
+    return [line["markers"] for line in lines]
+
+
+def _split_inline_segments(
+    markers: list[dict],
+    max_inline_gap: int,
+) -> list[list[dict]]:
+    segments: list[list[dict]] = []
+    current_segment: list[dict] = []
+    previous_right: int | None = None
+    for marker in sorted(markers, key=lambda item: marker_bbox(item)[0]):
+        bbox = marker_bbox(marker)
+        if (
+            current_segment
+            and previous_right is not None
+            and bbox[0] - previous_right > max_inline_gap
+        ):
+            segments.append(current_segment)
+            current_segment = []
+        current_segment.append(marker)
+        previous_right = max(previous_right or bbox[2], bbox[2])
+    if current_segment:
+        segments.append(current_segment)
+    return segments
+
+
+def _compacted_marker_line(segment: list[dict]) -> dict[str, Any] | None:
+    text = join_line_marker_text(segment)
+    if not text:
+        return None
+    return {
+        "text": text,
+        "ids": [
+            marker.get("id")
+            for marker in segment
+            if marker.get("id") is not None
+        ],
+        "bbox": line_bbox(segment),
+    }
+
+
 def group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
     """가까운 y축의 OCR 마커를 읽기 순서의 문장 줄로 묶는다."""
 
@@ -75,52 +147,13 @@ def group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
     heights = sorted(max(1, marker_bbox(marker)[3] - marker_bbox(marker)[1]) for marker in text_markers)
     median_height = heights[len(heights) // 2] if heights else 16
     tolerance = max(8, min(24, int(median_height * 0.7)))
-    lines: list[dict] = []
-    ordered_markers = sorted(
-        text_markers,
-        key=lambda item: (
-            (marker_bbox(item)[1] + marker_bbox(item)[3]) / 2,
-            marker_bbox(item)[0],
-        ),
-    )
-    for marker in ordered_markers:
-        bbox = marker_bbox(marker)
-        center_y = (bbox[1] + bbox[3]) / 2
-        matched = None
-        for line in lines:
-            if abs(center_y - line["center_y"]) <= tolerance:
-                matched = line
-                break
-        if matched is None:
-            lines.append({"center_y": center_y, "markers": [marker]})
-        else:
-            matched["markers"].append(marker)
-            count = len(matched["markers"])
-            matched["center_y"] = ((matched["center_y"] * (count - 1)) + center_y) / count
-
     compacted: list[dict] = []
-    for line in lines:
-        ordered = sorted(line["markers"], key=lambda marker: marker_bbox(marker)[0])
-        segments: list[list[dict]] = []
-        current_segment: list[dict] = []
-        previous_right: int | None = None
-        max_inline_gap = max(160, int(median_height * 8))
-        for marker in ordered:
-            bbox = marker_bbox(marker)
-            if current_segment and previous_right is not None and bbox[0] - previous_right > max_inline_gap:
-                segments.append(current_segment)
-                current_segment = [marker]
-            else:
-                current_segment.append(marker)
-            previous_right = max(previous_right or bbox[2], bbox[2])
-        if current_segment:
-            segments.append(current_segment)
-
-        for segment in segments:
-            ids = [marker.get("id") for marker in segment if marker.get("id") is not None]
-            text = join_line_marker_text(segment)
-            if text:
-                compacted.append({"text": text, "ids": ids, "bbox": line_bbox(segment)})
+    max_inline_gap = max(160, int(median_height * 8))
+    for line_markers in _group_markers_by_y(text_markers, tolerance):
+        for segment in _split_inline_segments(line_markers, max_inline_gap):
+            line = _compacted_marker_line(segment)
+            if line:
+                compacted.append(line)
     return sorted(compacted, key=lambda item: (item["bbox"][1], item["bbox"][0]))
 
 
@@ -319,6 +352,93 @@ def new_job_detail_buffer(current_url: str, detail_key: str = "") -> dict[str, A
     }
 
 
+def _detail_screen_path(image_path: Any) -> tuple[str, str]:
+    try:
+        from pathlib import Path
+
+        return (
+            Path(image_path).name if image_path else "",
+            str(Path(image_path).resolve()) if image_path else "",
+        )
+    except Exception:
+        screen_name = str(image_path or "")
+        return screen_name, screen_name
+
+
+def _append_detail_buffer_lines(
+    buffer: dict[str, Any],
+    markers: list[dict],
+    *,
+    screen_name: str,
+    max_lines: int,
+    max_line_chars: int,
+) -> tuple[list[dict], list[str], int, int]:
+    lines = [
+        dict(item)
+        for item in (buffer.get("lines") or [])
+        if isinstance(item, dict)
+    ]
+    seen_keys = [
+        str(item) for item in (buffer.get("seen_keys") or []) if str(item)
+    ]
+    seen = set(seen_keys)
+    added = 0
+    duplicate = 0
+    for line in detail_lines_for_buffer(markers):
+        text = str(line.get("text") or "").strip()
+        if len(text) < 2:
+            continue
+        if len(text) > max_line_chars:
+            text = text[: max_line_chars - 1].rstrip() + "…"
+        key = detail_buffer_line_key(text)
+        if not key:
+            continue
+        if key in seen:
+            duplicate += 1
+            continue
+        seen.add(key)
+        seen_keys.append(key)
+        lines.append(
+            {
+                "text": text,
+                "bbox": line.get("bbox") or [0, 0, 0, 0],
+                "first_screen": screen_name,
+            }
+        )
+        added += 1
+        if len(lines) >= max_lines:
+            break
+    return lines, seen_keys, added, duplicate
+
+
+def _append_detail_screen_evidence(
+    buffer: dict[str, Any],
+    screen_path: str,
+    *,
+    added: int,
+    duplicate: int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]
+    if screen_path and (not screens or screens[-1] != screen_path):
+        screens.append(screen_path)
+    screen_evidence = [
+        dict(item)
+        for item in (buffer.get("screen_evidence") or [])
+        if isinstance(item, dict)
+    ]
+    if screen_path and (
+        not screen_evidence or screen_evidence[-1].get("path") != screen_path
+    ):
+        screen_evidence.append(
+            {
+                "path": screen_path,
+                "added_lines": added,
+                "duplicate_lines": duplicate,
+            }
+        )
+    return screens, screen_evidence
+
+
 def update_job_detail_buffer(
     existing: dict[str, Any] | None,
     markers: list[dict],
@@ -345,63 +465,20 @@ def update_job_detail_buffer(
     buffer = dict(existing or {})
     if not detail_context_matches(buffer, current_url, detail_key):
         buffer = new_job_detail_buffer(current_url, detail_key)
-    lines = [dict(item) for item in (buffer.get("lines") or []) if isinstance(item, dict)]
-    seen_keys = [str(item) for item in (buffer.get("seen_keys") or []) if str(item)]
-    seen = set(seen_keys)
-    added = 0
-    duplicate = 0
-    try:
-        from pathlib import Path
-
-        screen_name = Path(image_path).name if image_path else ""
-        screen_path = str(Path(image_path).resolve()) if image_path else ""
-    except Exception:
-        screen_name = str(image_path or "")
-        screen_path = screen_name
-
-    for line in detail_lines_for_buffer(markers):
-        text = str(line.get("text") or "").strip()
-        if len(text) < 2:
-            continue
-        if len(text) > max_line_chars:
-            text = text[: max_line_chars - 1].rstrip() + "…"
-        key = detail_buffer_line_key(text)
-        if not key:
-            continue
-        if key in seen:
-            duplicate += 1
-            continue
-        seen.add(key)
-        seen_keys.append(key)
-        lines.append(
-            {
-                "text": text,
-                "bbox": line.get("bbox") or [0, 0, 0, 0],
-                "first_screen": screen_name,
-            }
-        )
-        added += 1
-        if len(lines) >= max_lines:
-            break
-
-    screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]
-    if screen_path and (not screens or screens[-1] != screen_path):
-        screens.append(screen_path)
-    screen_evidence = [
-        dict(item)
-        for item in (buffer.get("screen_evidence") or [])
-        if isinstance(item, dict)
-    ]
-    if screen_path and (
-        not screen_evidence or screen_evidence[-1].get("path") != screen_path
-    ):
-        screen_evidence.append(
-            {
-                "path": screen_path,
-                "added_lines": added,
-                "duplicate_lines": duplicate,
-            }
-        )
+    screen_name, screen_path = _detail_screen_path(image_path)
+    lines, seen_keys, added, duplicate = _append_detail_buffer_lines(
+        buffer,
+        markers,
+        screen_name=screen_name,
+        max_lines=max_lines,
+        max_line_chars=max_line_chars,
+    )
+    screens, screen_evidence = _append_detail_screen_evidence(
+        buffer,
+        screen_path,
+        added=added,
+        duplicate=duplicate,
+    )
     stats = dict(buffer.get("stats") or {})
     stats["screen_count"] = int(stats.get("screen_count") or 0) + 1
     stats["added_lines_last_screen"] = added
