@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections import Counter
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -13,6 +14,26 @@ from shared.schema.investigation_schema import EvidenceRequirement, Investigatio
 
 if TYPE_CHECKING:
     from agent.application.search_taxonomy_service import SearchTaxonomyService
+
+
+@dataclass(frozen=True)
+class EvidenceRows:
+    """DB 전체 건수와 검색 가능한 구조화 공고."""
+
+    total_db_rows: int
+    indexed_rows: list[sqlite3.Row]
+
+
+@dataclass(frozen=True)
+class RequirementEvidence:
+    """요구사항 하나에 대응하는 후보 공고와 분류 해석 결과."""
+
+    requirement: EvidenceRequirement
+    matched_rows: list[sqlite3.Row]
+    occupation_domain_keys: list[str]
+    occupation_keys: list[str]
+    skill_keys: list[str]
+    semantic_review_required: bool
 
 
 def _parse_date(value: Any) -> date | None:
@@ -79,6 +100,189 @@ def _rows_for_requirement(
     return matched
 
 
+def _load_evidence_rows(db_path: str | Path) -> EvidenceRows:
+    """검색 인덱싱이 끝난 공고만 증거 판정 대상으로 읽는다."""
+
+    conn = sqlite3.connect(Path(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        columns = ", ".join(("id", "source_platform", *EVIDENCE_FIELDS))
+        total_db_rows = int(
+            conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        )
+        rows = conn.execute(
+            f"SELECT {columns} FROM jobs "
+            "WHERE taxonomy_index_status = 'indexed'"
+        ).fetchall()
+    finally:
+        conn.close()
+    return EvidenceRows(total_db_rows=total_db_rows, indexed_rows=list(rows))
+
+
+def _document_scope_ids(
+    document_scope_ids: list[int] | set[int] | None,
+) -> set[int] | None:
+    if document_scope_ids is None:
+        return None
+    return {
+        int(document_id)
+        for document_id in document_scope_ids
+        if int(document_id) > 0
+    }
+
+
+def _match_requirement_evidence(
+    rows: list[sqlite3.Row],
+    requirement: EvidenceRequirement,
+    constraints: InvestigationConstraints,
+    *,
+    taxonomy: SearchTaxonomyService,
+    taxonomy_constraints: InvestigationConstraints,
+    document_scope: set[int] | None,
+    force_semantic_review: bool,
+) -> RequirementEvidence:
+    """분류 사전과 명시 조건을 적용해 요구사항 후보를 고른다."""
+
+    candidate_sets: list[set[int]] = []
+    occupation_keys = list(
+        requirement.occupation_concept_keys
+        or constraints.occupation_concept_keys
+    )
+    occupation_domain_keys = list(
+        requirement.occupation_domain_concept_keys
+        or constraints.occupation_domain_concept_keys
+    )
+    occupation_filter_keys = (
+        occupation_keys
+        or requirement.occupation_domain_concept_keys
+        or constraints.occupation_domain_concept_keys
+    )
+    if occupation_filter_keys:
+        candidate_sets.append(
+            taxonomy.matching_occupation_job_ids(
+                occupation_filter_keys,
+                taxonomy_constraints,
+            )
+        )
+    skill_keys = list(
+        requirement.skill_concept_keys or constraints.skill_concept_keys
+    )
+    if skill_keys:
+        candidate_sets.append(
+            taxonomy.matching_skill_job_ids(
+                skill_keys,
+                taxonomy_constraints,
+                match_mode=requirement.skill_match_mode,
+                requirement_type=requirement.skill_requirement_type,
+            )
+        )
+    allowed_job_ids = set.intersection(*candidate_sets) if candidate_sets else None
+    if document_scope is not None:
+        allowed_job_ids = (
+            set(document_scope)
+            if allowed_job_ids is None
+            else allowed_job_ids & document_scope
+        )
+    matched_rows = _rows_for_requirement(
+        rows,
+        requirement,
+        constraints,
+        allowed_job_ids,
+    )
+    semantic_review_required = bool(
+        force_semantic_review
+        or (requirement.occupation_query and not occupation_keys)
+        or (
+            requirement.occupation_domain_query
+            and not occupation_domain_keys
+        )
+        or (requirement.skill_queries and not skill_keys)
+        or constraints.location
+        or constraints.experience
+        or constraints.employment_type
+    )
+    return RequirementEvidence(
+        requirement=requirement,
+        matched_rows=matched_rows,
+        occupation_domain_keys=occupation_domain_keys,
+        occupation_keys=occupation_keys,
+        skill_keys=skill_keys,
+        semantic_review_required=semantic_review_required,
+    )
+
+
+def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
+    """후보 공고의 표본 수, 날짜와 필드 충족률을 보고서로 만든다."""
+
+    requirement = evidence.requirement
+    matched = evidence.matched_rows
+    field_coverage = {
+        field: sum(1 for row in matched if str(row[field] or "").strip())
+        for field in requirement.required_fields
+        if field in EVIDENCE_FIELDS
+    }
+    posted_dates = [
+        parsed
+        for parsed in (_parse_date(row["posted_at"]) for row in matched)
+        if parsed is not None
+    ]
+    missing: list[str] = []
+    if len(matched) < requirement.minimum_count:
+        missing.append(f"표본 {requirement.minimum_count - len(matched)}건 부족")
+    for field in requirement.required_fields:
+        if field_coverage.get(field, 0) < requirement.minimum_count:
+            missing.append(f"{field} 근거 부족")
+    if (
+        requirement.posted_from or requirement.posted_to
+    ) and len(posted_dates) < requirement.minimum_count:
+        missing.append("검증된 게시일 근거 부족")
+
+    return {
+        "requirement_id": requirement.requirement_id,
+        "description": requirement.description,
+        "occupation_domain_query": requirement.occupation_domain_query,
+        "occupation_domain_concept_keys": evidence.occupation_domain_keys,
+        "occupation_query": requirement.occupation_query,
+        "occupation_concept_keys": evidence.occupation_keys,
+        "skill_queries": list(requirement.skill_queries),
+        "skill_concept_keys": evidence.skill_keys,
+        "semantic_review_required": evidence.semantic_review_required,
+        "matching_count": len(matched),
+        "verified_posted_at_count": len(posted_dates),
+        "oldest_posted_at": min(posted_dates).isoformat() if posted_dates else "",
+        "newest_posted_at": max(posted_dates).isoformat() if posted_dates else "",
+        "field_coverage": field_coverage,
+        "site_counts": dict(
+            Counter(str(row["source_platform"] or "unknown") for row in matched)
+        ),
+        "document_ids": [int(row["id"]) for row in matched],
+        "candidates": [
+            {
+                "document_id": int(row["id"]),
+                "company_name": str(row["company_name"] or ""),
+                "position": str(row["position"] or ""),
+                "job_category": str(row["job_category"] or ""),
+                "experience": str(row["experience_text"] or ""),
+                "employment_type": str(row["employment_type"] or ""),
+                "location": str(row["location"] or ""),
+                "posted_at": str(row["posted_at"] or ""),
+                "source_platform": str(row["source_platform"] or ""),
+                "tech_stack": str(row["tech_stack"] or ""),
+                "requirements": str(row["requirements"] or ""),
+                "preferred": str(row["preferred"] or ""),
+                "field_presence": {
+                    field: bool(str(row[field] or "").strip())
+                    for field in requirement.required_fields
+                    if field in EVIDENCE_FIELDS
+                },
+            }
+            for row in matched
+        ],
+        "sufficient": not missing,
+        "missing": missing,
+    }
+
+
 def inspect_job_evidence(
     db_path: str | Path,
     requirements: list[EvidenceRequirement],
@@ -93,162 +297,34 @@ def inspect_job_evidence(
     from agent.application.search_taxonomy_service import SearchTaxonomyService
 
     taxonomy = taxonomy_service or SearchTaxonomyService(db_path)
-    conn = sqlite3.connect(Path(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        columns = ", ".join(("id", "source_platform", *EVIDENCE_FIELDS))
-        total_db_rows = int(
-            conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-        )
-        rows = conn.execute(
-            f"SELECT {columns} FROM jobs "
-            "WHERE taxonomy_index_status = 'indexed'"
-        ).fetchall()
-    finally:
-        conn.close()
-
-    reports: list[dict[str, Any]] = []
-    all_document_ids: set[int] = set()
-    document_scope = (
-        None
-        if document_scope_ids is None
-        else {
-            int(document_id)
-            for document_id in document_scope_ids
-            if int(document_id) > 0
-        }
-    )
+    evidence_rows = _load_evidence_rows(db_path)
+    document_scope = _document_scope_ids(document_scope_ids)
     taxonomy_constraints = constraints.model_copy(
         update={"location": "", "experience": "", "employment_type": ""}
     )
-    for requirement in requirements:
-        candidate_sets: list[set[int]] = []
-        resolved_occupation_keys = (
-            requirement.occupation_concept_keys
-            or constraints.occupation_concept_keys
-        )
-        domain_keys = (
-            requirement.occupation_domain_concept_keys
-            or constraints.occupation_domain_concept_keys
-        )
-        occupation_filter_keys = (
-            resolved_occupation_keys
-            or requirement.occupation_domain_concept_keys
-            or constraints.occupation_domain_concept_keys
-        )
-        if occupation_filter_keys:
-            candidate_sets.append(
-                taxonomy.matching_occupation_job_ids(
-                    occupation_filter_keys,
-                    taxonomy_constraints,
-                )
+    reports = [
+        _requirement_report(
+            _match_requirement_evidence(
+                evidence_rows.indexed_rows,
+                requirement,
+                constraints,
+                taxonomy=taxonomy,
+                taxonomy_constraints=taxonomy_constraints,
+                document_scope=document_scope,
+                force_semantic_review=force_semantic_review,
             )
-        skill_keys = requirement.skill_concept_keys or constraints.skill_concept_keys
-        if skill_keys:
-            candidate_sets.append(
-                taxonomy.matching_skill_job_ids(
-                    skill_keys,
-                    taxonomy_constraints,
-                    match_mode=requirement.skill_match_mode,
-                    requirement_type=requirement.skill_requirement_type,
-                )
-            )
-        allowed_job_ids = (
-            set.intersection(*candidate_sets)
-            if candidate_sets
-            else None
         )
-        if document_scope is not None:
-            allowed_job_ids = (
-                set(document_scope)
-                if allowed_job_ids is None
-                else allowed_job_ids & document_scope
-            )
-        matched = _rows_for_requirement(
-            rows,
-            requirement,
-            constraints,
-            allowed_job_ids,
-        )
-        all_document_ids.update(int(row["id"]) for row in matched)
-        field_coverage = {
-            field: sum(1 for row in matched if str(row[field] or "").strip())
-            for field in requirement.required_fields
-            if field in EVIDENCE_FIELDS
-        }
-        posted_dates = [
-            parsed
-            for parsed in (_parse_date(row["posted_at"]) for row in matched)
-            if parsed is not None
-        ]
-        missing: list[str] = []
-        if len(matched) < requirement.minimum_count:
-            missing.append(
-                f"표본 {requirement.minimum_count - len(matched)}건 부족"
-            )
-        for field in requirement.required_fields:
-            if field_coverage.get(field, 0) < requirement.minimum_count:
-                missing.append(f"{field} 근거 부족")
-        if (requirement.posted_from or requirement.posted_to) and len(posted_dates) < requirement.minimum_count:
-            missing.append("검증된 게시일 근거 부족")
-        reports.append(
-            {
-                "requirement_id": requirement.requirement_id,
-                "description": requirement.description,
-                "occupation_domain_query": requirement.occupation_domain_query,
-                "occupation_domain_concept_keys": list(domain_keys),
-                "occupation_query": requirement.occupation_query,
-                "occupation_concept_keys": list(resolved_occupation_keys),
-                "skill_queries": list(requirement.skill_queries),
-                "skill_concept_keys": list(skill_keys),
-                "semantic_review_required": bool(
-                    force_semantic_review
-                    or (requirement.occupation_query and not resolved_occupation_keys)
-                    or (
-                        requirement.occupation_domain_query
-                        and not domain_keys
-                    )
-                    or (requirement.skill_queries and not skill_keys)
-                    or constraints.location
-                    or constraints.experience
-                    or constraints.employment_type
-                ),
-                "matching_count": len(matched),
-                "verified_posted_at_count": len(posted_dates),
-                "oldest_posted_at": min(posted_dates).isoformat() if posted_dates else "",
-                "newest_posted_at": max(posted_dates).isoformat() if posted_dates else "",
-                "field_coverage": field_coverage,
-                "site_counts": dict(Counter(str(row["source_platform"] or "unknown") for row in matched)),
-                "document_ids": [int(row["id"]) for row in matched],
-                "candidates": [
-                    {
-                        "document_id": int(row["id"]),
-                        "company_name": str(row["company_name"] or ""),
-                        "position": str(row["position"] or ""),
-                        "job_category": str(row["job_category"] or ""),
-                        "experience": str(row["experience_text"] or ""),
-                        "employment_type": str(row["employment_type"] or ""),
-                        "location": str(row["location"] or ""),
-                        "posted_at": str(row["posted_at"] or ""),
-                        "source_platform": str(row["source_platform"] or ""),
-                        "tech_stack": str(row["tech_stack"] or ""),
-                        "requirements": str(row["requirements"] or ""),
-                        "preferred": str(row["preferred"] or ""),
-                        "field_presence": {
-                            field: bool(str(row[field] or "").strip())
-                            for field in requirement.required_fields
-                            if field in EVIDENCE_FIELDS
-                        },
-                    }
-                    for row in matched
-                ],
-                "sufficient": not missing,
-                "missing": missing,
-            }
-        )
+        for requirement in requirements
+    ]
+    all_document_ids = {
+        int(document_id)
+        for report in reports
+        for document_id in report["document_ids"]
+    }
+
     return {
-        "total_db_rows": total_db_rows,
-        "search_ready_db_rows": len(rows),
+        "total_db_rows": evidence_rows.total_db_rows,
+        "search_ready_db_rows": len(evidence_rows.indexed_rows),
         "document_scope_ids": (
             sorted(document_scope)
             if document_scope is not None

@@ -8,6 +8,7 @@ from datetime import date, timedelta
 
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
+    ClarificationOption,
     ClarificationQuestion,
     InvestigationConstraints,
     InvestigationPurpose,
@@ -77,7 +78,7 @@ def _selected_value(
 def _selected_option(
     question: ClarificationQuestion,
     answer: ClarificationAnswer,
-):
+) -> ClarificationOption | None:
     return next(
         (
             option
@@ -86,6 +87,194 @@ def _selected_option(
             or (answer.value.strip() and option.value == answer.value.strip())
         ),
         None,
+    )
+
+
+def _apply_period_answer(
+    constraints: InvestigationConstraints,
+    investigation: InvestigationRequest,
+    question: ClarificationQuestion,
+    selected_value: str,
+    today: date,
+) -> bool:
+    """최근·비교 기간 답변을 날짜 범위로 확정한다."""
+
+    if question.field == "comparison_period":
+        current_start, current_end, comparison_start, comparison_end = (
+            _resolve_comparison_period(selected_value)
+        )
+        constraints.posted_from = current_start.isoformat()
+        constraints.posted_to = current_end.isoformat()
+        constraints.comparison_posted_from = comparison_start.isoformat()
+        constraints.comparison_posted_to = comparison_end.isoformat()
+        return True
+
+    is_period_answer = question.field == "recent_period" or (
+        question.field in {"posted_from", "posted_to"}
+        and _is_period_value(selected_value)
+    )
+    if not is_period_answer:
+        return False
+
+    period_start, period_end = _resolve_period(selected_value, today)
+    constraints.posted_from = period_start.isoformat()
+    constraints.posted_to = period_end.isoformat()
+    if investigation.purpose != InvestigationPurpose.TREND:
+        return True
+
+    comparison_end = period_start - timedelta(days=1)
+    months_match = re.fullmatch(r"P(\d+)M", selected_value.upper())
+    comparison_start = (
+        _subtract_months(period_start, int(months_match.group(1)))
+        if months_match
+        else comparison_end - (period_end - period_start)
+    )
+    constraints.comparison_posted_from = comparison_start.isoformat()
+    constraints.comparison_posted_to = comparison_end.isoformat()
+    return True
+
+
+def _apply_collection_scope_answer(
+    constraints: InvestigationConstraints,
+    question: ClarificationQuestion,
+    selected_value: str,
+) -> bool:
+    """수집 사이트와 목표 건수를 실행 가능한 값으로 바꾼다."""
+
+    if question.field == "site_scope":
+        constraints.sites = (
+            [] if selected_value == "all_enabled" else [selected_value]
+        )
+        return True
+    if question.field != "target_count":
+        return False
+    if selected_value == "visible_all":
+        constraints.count_mode = "visible_all"
+        constraints.target_count = 0
+    else:
+        constraints.count_mode = "explicit"
+        constraints.target_count = int(selected_value)
+    return True
+
+
+def _apply_occupation_answer(
+    constraints: InvestigationConstraints,
+    question: ClarificationQuestion,
+    answer: ClarificationAnswer,
+    selected_value: str,
+) -> bool:
+    """직무 도메인·직무 선택을 정규화된 검색 조건으로 반영한다."""
+
+    option = _selected_option(question, answer)
+    custom_value = bool(answer.custom_value.strip())
+    if question.field == "occupation_domain_concept_keys":
+        if custom_value:
+            constraints.occupation_domain_query = ""
+            constraints.occupation_domain_concept_keys = []
+            constraints.occupation_query = selected_value
+            constraints.collection_search_term = selected_value
+            constraints.occupation_concept_keys = []
+            constraints.occupation_scope_required = False
+            constraints.occupation_scope_mode = "unspecified"
+            constraints.occupation_resolution = "unresolved"
+        else:
+            constraints.occupation_domain_concept_keys = [selected_value]
+            if option is not None and option.collection_search_term:
+                constraints.occupation_domain_query = option.collection_search_term
+        return True
+
+    if question.field != "occupation_concept_keys":
+        return False
+    if custom_value:
+        constraints.occupation_query = selected_value
+        constraints.collection_search_term = selected_value
+        constraints.occupation_concept_keys = []
+        constraints.occupation_scope_mode = "unspecified"
+        constraints.occupation_resolution = "unresolved"
+        return True
+
+    constraints.occupation_concept_keys = [selected_value]
+    selected_all = answer.selected_option_id == "all-descendants"
+    constraints.occupation_scope_mode = "all" if selected_all else "selected"
+    constraints.occupation_resolution = (
+        "reviewed_alias"
+        if question.facet_type == "semantic_occupation"
+        else "user_selected"
+    )
+    if (
+        question.facet_type != "semantic_occupation"
+        and not selected_all
+        and option is not None
+        and option.collection_search_term
+    ):
+        constraints.collection_search_term = option.collection_search_term
+        constraints.occupation_query = option.collection_search_term
+    return True
+
+
+def _apply_direct_constraint_answer(
+    constraints: InvestigationConstraints,
+    field: str,
+    selected_value: str,
+) -> None:
+    """별도 변환이 필요 없는 질문 필드를 조사 조건에 반영한다."""
+
+    list_fields = {
+        "skill_queries",
+        "analysis_dimensions",
+        "sites",
+    }
+    scalar_fields = {
+        "posted_from",
+        "posted_to",
+        "location",
+        "experience",
+        "employment_type",
+    }
+    if field == "occupation_query":
+        constraints.occupation_query = selected_value
+        constraints.collection_search_term = selected_value
+        constraints.occupation_concept_keys = []
+        constraints.occupation_scope_required = False
+        constraints.occupation_scope_mode = "unspecified"
+        constraints.occupation_resolution = "unresolved"
+    elif field in list_fields:
+        setattr(constraints, field, [selected_value])
+        if field == "skill_queries":
+            constraints.skill_concept_keys = []
+    elif field in scalar_fields:
+        setattr(constraints, field, selected_value)
+
+
+def _apply_constraint_answer(
+    constraints: InvestigationConstraints,
+    investigation: InvestigationRequest,
+    question: ClarificationQuestion,
+    answer: ClarificationAnswer,
+    selected_value: str,
+    today: date,
+) -> None:
+    if _apply_period_answer(
+        constraints,
+        investigation,
+        question,
+        selected_value,
+        today,
+    ):
+        return
+    if _apply_collection_scope_answer(constraints, question, selected_value):
+        return
+    if _apply_occupation_answer(
+        constraints,
+        question,
+        answer,
+        selected_value,
+    ):
+        return
+    _apply_direct_constraint_answer(
+        constraints,
+        question.field,
+        selected_value,
     )
 
 
@@ -118,106 +307,14 @@ def apply_clarification_answer(
     answers.append(resolved_answer)
 
     constraints = investigation.constraints.model_copy(deep=True)
-    if question.field == "recent_period" or (
-        question.field in {"posted_from", "posted_to"}
-        and _is_period_value(selected_value)
-    ):
-        period_start, period_end = _resolve_period(selected_value, today or date.today())
-        constraints.posted_from = period_start.isoformat()
-        constraints.posted_to = period_end.isoformat()
-        if investigation.purpose == InvestigationPurpose.TREND:
-            comparison_end = period_start - timedelta(days=1)
-            months_match = re.fullmatch(r"P(\d+)M", selected_value.upper())
-            if months_match:
-                comparison_start = _subtract_months(
-                    period_start,
-                    int(months_match.group(1)),
-                )
-            else:
-                comparison_start = comparison_end - (period_end - period_start)
-            constraints.comparison_posted_from = comparison_start.isoformat()
-            constraints.comparison_posted_to = comparison_end.isoformat()
-    elif question.field == "comparison_period":
-        current_start, current_end, comparison_start, comparison_end = (
-            _resolve_comparison_period(selected_value)
-        )
-        constraints.posted_from = current_start.isoformat()
-        constraints.posted_to = current_end.isoformat()
-        constraints.comparison_posted_from = comparison_start.isoformat()
-        constraints.comparison_posted_to = comparison_end.isoformat()
-    elif question.field == "site_scope":
-        constraints.sites = [] if selected_value == "all_enabled" else [selected_value]
-    elif question.field == "target_count":
-        if selected_value == "visible_all":
-            constraints.count_mode = "visible_all"
-            constraints.target_count = 0
-        else:
-            constraints.count_mode = "explicit"
-            constraints.target_count = int(selected_value)
-    elif question.field == "occupation_domain_concept_keys":
-        option = _selected_option(question, answer)
-        if answer.custom_value.strip():
-            constraints.occupation_domain_query = ""
-            constraints.occupation_domain_concept_keys = []
-            constraints.occupation_query = selected_value
-            constraints.collection_search_term = selected_value
-            constraints.occupation_concept_keys = []
-            constraints.occupation_scope_required = False
-            constraints.occupation_scope_mode = "unspecified"
-            constraints.occupation_resolution = "unresolved"
-        else:
-            constraints.occupation_domain_concept_keys = [selected_value]
-            if option is not None and option.collection_search_term:
-                constraints.occupation_domain_query = option.collection_search_term
-    elif question.field == "occupation_concept_keys":
-        option = _selected_option(question, answer)
-        if answer.custom_value.strip():
-            constraints.occupation_query = selected_value
-            constraints.collection_search_term = selected_value
-            constraints.occupation_concept_keys = []
-            constraints.occupation_scope_mode = "unspecified"
-            constraints.occupation_resolution = "unresolved"
-        else:
-            constraints.occupation_concept_keys = [selected_value]
-            selected_all = answer.selected_option_id == "all-descendants"
-            constraints.occupation_scope_mode = "all" if selected_all else "selected"
-            constraints.occupation_resolution = (
-                "reviewed_alias"
-                if question.facet_type == "semantic_occupation"
-                else "user_selected"
-            )
-            if (
-                question.facet_type != "semantic_occupation"
-                and not selected_all
-                and option is not None
-                and option.collection_search_term
-            ):
-                constraints.collection_search_term = option.collection_search_term
-                constraints.occupation_query = option.collection_search_term
-    elif question.field == "occupation_query":
-        constraints.occupation_query = selected_value
-        constraints.collection_search_term = selected_value
-        constraints.occupation_concept_keys = []
-        constraints.occupation_scope_required = False
-        constraints.occupation_scope_mode = "unspecified"
-        constraints.occupation_resolution = "unresolved"
-    elif question.field == "skill_queries":
-        constraints.skill_queries = [selected_value]
-        constraints.skill_concept_keys = []
-    elif question.field == "analysis_dimensions":
-        constraints.analysis_dimensions = [selected_value]
-    elif question.field == "sites":
-        constraints.sites = [selected_value]
-    elif question.field == "posted_from":
-        constraints.posted_from = selected_value
-    elif question.field == "posted_to":
-        constraints.posted_to = selected_value
-    elif question.field == "location":
-        constraints.location = selected_value
-    elif question.field == "experience":
-        constraints.experience = selected_value
-    elif question.field == "employment_type":
-        constraints.employment_type = selected_value
+    _apply_constraint_answer(
+        constraints,
+        investigation,
+        question,
+        answer,
+        selected_value,
+        today or date.today(),
+    )
 
     constraints = InvestigationConstraints.model_validate(
         constraints.model_dump(mode="python")
