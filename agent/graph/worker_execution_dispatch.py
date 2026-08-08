@@ -51,6 +51,15 @@ class StateActionOutcome:
     state_update: StateActionUpdate = field(default_factory=StateActionUpdate)
 
 
+@dataclass(frozen=True)
+class DetailReadingAssessment:
+    """상세 화면 근거가 최종 정제를 실행할 만큼 모였는지 판정한 결과."""
+
+    coverage: dict[str, Any]
+    coverage_status: dict[str, Any]
+    required_fields: list[str]
+
+
 def dispatch_ui_action(
     action_name: str,
     args: dict[str, Any],
@@ -250,6 +259,209 @@ def _classify_extraction_missing_fields(
     return unavailable_fields, [], missing_fields
 
 
+def _assess_detail_reading(
+    args: dict[str, Any],
+    state: WorkerState,
+    current_url: str,
+) -> DetailReadingAssessment:
+    detail_key = job_detail_key_from_state(state)
+    coverage = merge_job_detail_coverage(
+        dict(state["collection"].get("job_detail_coverage", {}) or {}),
+        args,
+        state=state,
+        current_url=current_url,
+        detail_key=detail_key,
+    )
+    required_fields = required_fields_from_state(state)
+    return DetailReadingAssessment(
+        coverage=coverage,
+        coverage_status=detail_coverage_status(coverage, required_fields),
+        required_fields=required_fields,
+    )
+
+
+def _detail_retry_update(
+    state: WorkerState,
+    assessment: DetailReadingAssessment,
+    *,
+    current_url: str,
+    reason: str,
+    missing_fields: list[str],
+) -> StateActionUpdate:
+    return StateActionUpdate(
+        job_detail_buffer=dict(
+            state["collection"].get("job_detail_buffer", {}) or {}
+        ),
+        job_detail_coverage=assessment.coverage,
+        job_detail_followup=_detail_followup(
+            state,
+            current_url=current_url,
+            reason=reason,
+            missing_fields=missing_fields,
+        ),
+    )
+
+
+def _incomplete_detail_evidence_outcome(
+    current_jobs: dict[str, Any],
+    state: WorkerState,
+    assessment: DetailReadingAssessment,
+    current_url: str,
+) -> StateActionOutcome:
+    missing = list(assessment.coverage_status["missing_fields"])
+    return StateActionOutcome(
+        result={
+            "action": "finish_detail_reading",
+            "status": "skipped",
+            "result": (
+                "Detail reading is not complete because required field "
+                f"evidence is missing: {', '.join(missing)}"
+            ),
+            "reason": "required_field_evidence_incomplete",
+            "required_fields": assessment.required_fields,
+            "field_coverage": assessment.coverage_status,
+        },
+        jobs=current_jobs,
+        state_update=_detail_retry_update(
+            state,
+            assessment,
+            current_url=current_url,
+            reason="required_field_evidence_incomplete",
+            missing_fields=missing,
+        ),
+    )
+
+
+def _extract_detail_job(
+    state: WorkerState,
+    assessment: DetailReadingAssessment,
+    current_url: str,
+) -> dict[str, Any]:
+    extraction_state = {
+        **state,
+        "job_detail_coverage": assessment.coverage,
+    }
+    return extract_job_from_job_detail_buffer(
+        extraction_state,
+        current_url,
+    )
+
+
+def _empty_detail_outcome(
+    current_jobs: dict[str, Any],
+) -> StateActionOutcome:
+    return StateActionOutcome(
+        result={
+            "action": "finish_detail_reading",
+            "status": "skipped",
+            "result": "No accumulated detail OCR text to extract.",
+            "reason": "empty_job_detail_buffer",
+        },
+        jobs=current_jobs,
+        state_update=StateActionUpdate(
+            job_detail_buffer={},
+            job_detail_coverage={},
+        ),
+    )
+
+
+def _incomplete_detail_extraction_outcome(
+    current_jobs: dict[str, Any],
+    state: WorkerState,
+    assessment: DetailReadingAssessment,
+    current_url: str,
+    missing_fields: list[str],
+) -> StateActionOutcome:
+    return StateActionOutcome(
+        result={
+            "action": "finish_detail_reading",
+            "status": "skipped",
+            "result": (
+                "Final detail extraction did not produce all fields that had "
+                f"visible evidence: {', '.join(missing_fields)}"
+            ),
+            "reason": "required_field_extraction_incomplete",
+            "required_fields": assessment.required_fields,
+            "missing_fields": missing_fields,
+            "field_coverage": assessment.coverage_status,
+        },
+        jobs=current_jobs,
+        state_update=_detail_retry_update(
+            state,
+            assessment,
+            current_url=current_url,
+            reason="required_field_extraction_incomplete",
+            missing_fields=missing_fields,
+        ),
+    )
+
+
+def _prepare_completed_detail_job(
+    extracted_job: dict[str, Any],
+    state: WorkerState,
+    assessment: DetailReadingAssessment,
+    *,
+    current_url: str,
+    unavailable_fields: list[str],
+    extraction_missing_fields: list[str],
+) -> dict[str, Any]:
+    completed_job = dict(extracted_job)
+    if extraction_missing_fields:
+        completed_job["_collection_extraction_missing_fields"] = list(
+            extraction_missing_fields
+        )
+    completed_job["_collection_required_fields"] = assessment.required_fields
+    completed_job["_collection_unavailable_fields"] = unavailable_fields
+    completed_job["_collection_page_exhausted"] = bool(
+        assessment.coverage_status["page_exhausted"]
+    )
+    completed_job["_collection_field_evidence"] = dict(
+        assessment.coverage_status["field_evidence"]
+    )
+    wrapped_job = _attach_active_card_identity(
+        {"jobs": [completed_job]},
+        state=state,
+        current_url=current_url,
+    )
+    return dict(wrapped_job["jobs"][0])
+
+
+def _merge_completed_detail(
+    current_jobs: dict[str, Any],
+    extracted_job: dict[str, Any],
+    *,
+    current_url: str,
+    extraction_missing_fields: list[str],
+) -> StateActionOutcome:
+    merged_jobs, summary = merge_extracted_info(
+        current_jobs,
+        {"jobs": [extracted_job]},
+        current_url=current_url,
+    )
+    return StateActionOutcome(
+        result={
+            "action": "finish_detail_reading",
+            "status": "success",
+            "result": (
+                "Detail OCR buffer extracted and merged "
+                f"(incoming_jobs={summary['incoming_jobs']}, "
+                f"total_jobs={summary['total_jobs']}, "
+                f"fields={summary['fields']})"
+            ),
+            "incoming_jobs": summary["incoming_jobs"],
+            "total_jobs": summary["total_jobs"],
+            "fields": summary["fields"],
+            "extraction_missing_fields": extraction_missing_fields,
+        },
+        jobs=merged_jobs,
+        state_update=StateActionUpdate(
+            job_detail_buffer={},
+            job_detail_coverage={},
+            job_detail_followup={},
+        ),
+    )
+
+
 def _finish_detail_reading(
     args: dict[str, Any],
     current_jobs: dict[str, Any],
@@ -258,157 +470,52 @@ def _finish_detail_reading(
     state: WorkerState,
 ) -> StateActionOutcome:
     try:
-        detail_key = job_detail_key_from_state(state)
-        coverage = merge_job_detail_coverage(
-            dict(
-                state["collection"].get("job_detail_coverage", {}) or {}
-            ),
-            args,
-            state=state,
-            current_url=current_url,
-            detail_key=detail_key,
-        )
-        required_fields = required_fields_from_state(state)
-        coverage_status = detail_coverage_status(
-            coverage,
-            required_fields,
-        )
-        if coverage_status["missing_fields"]:
-            missing = list(coverage_status["missing_fields"])
-            return StateActionOutcome(
-                result={
-                    "action": "finish_detail_reading",
-                    "status": "skipped",
-                    "result": (
-                        "Detail reading is not complete because required field "
-                        f"evidence is missing: {', '.join(missing)}"
-                    ),
-                    "reason": "required_field_evidence_incomplete",
-                    "required_fields": required_fields,
-                    "field_coverage": coverage_status,
-                },
-                jobs=current_jobs,
-                state_update=StateActionUpdate(
-                    job_detail_buffer=dict(
-                        state["collection"].get("job_detail_buffer", {})
-                        or {}
-                    ),
-                    job_detail_coverage=coverage,
-                    job_detail_followup=_detail_followup(
-                        state,
-                        current_url=current_url,
-                        reason="required_field_evidence_incomplete",
-                        missing_fields=missing,
-                    ),
-                ),
+        assessment = _assess_detail_reading(args, state, current_url)
+        if assessment.coverage_status["missing_fields"]:
+            return _incomplete_detail_evidence_outcome(
+                current_jobs,
+                state,
+                assessment,
+                current_url,
             )
 
-        extraction_state = {
-            **state,
-            "job_detail_coverage": coverage,
-        }
-        extracted_job = extract_job_from_job_detail_buffer(
-            extraction_state,
+        extracted_job = _extract_detail_job(
+            state,
+            assessment,
             current_url,
         )
         if not extracted_job:
-            return StateActionOutcome(
-                result={
-                    "action": "finish_detail_reading",
-                    "status": "skipped",
-                    "result": "No accumulated detail OCR text to extract.",
-                    "reason": "empty_job_detail_buffer",
-                },
-                jobs=current_jobs,
-                state_update=StateActionUpdate(
-                    job_detail_buffer={},
-                    job_detail_coverage={},
-                ),
+            return _empty_detail_outcome(current_jobs)
+
+        unavailable_fields, missing_fields, extraction_missing_fields = (
+            _classify_extraction_missing_fields(
+                extracted_job,
+                assessment.required_fields,
+                assessment.coverage_status,
+            )
+        )
+        if missing_fields:
+            return _incomplete_detail_extraction_outcome(
+                current_jobs,
+                state,
+                assessment,
+                current_url,
+                missing_fields,
             )
 
-        (
-            unavailable_fields,
-            missing,
-            extraction_missing_fields,
-        ) = _classify_extraction_missing_fields(
+        completed_job = _prepare_completed_detail_job(
             extracted_job,
-            required_fields,
-            coverage_status,
-        )
-        if missing:
-            return StateActionOutcome(
-                result={
-                    "action": "finish_detail_reading",
-                    "status": "skipped",
-                    "result": (
-                        "Final detail extraction did not produce all fields that had "
-                        f"visible evidence: {', '.join(missing)}"
-                    ),
-                    "reason": "required_field_extraction_incomplete",
-                    "required_fields": required_fields,
-                    "missing_fields": missing,
-                    "field_coverage": coverage_status,
-                },
-                jobs=current_jobs,
-                state_update=StateActionUpdate(
-                    job_detail_buffer=dict(
-                        state["collection"].get("job_detail_buffer", {})
-                        or {}
-                    ),
-                    job_detail_coverage=coverage,
-                    job_detail_followup=_detail_followup(
-                        state,
-                        current_url=current_url,
-                        reason="required_field_extraction_incomplete",
-                        missing_fields=missing,
-                    ),
-                ),
-            )
-
-        if extraction_missing_fields:
-            extracted_job["_collection_extraction_missing_fields"] = list(
-                extraction_missing_fields
-            )
-        extracted_job["_collection_required_fields"] = required_fields
-        extracted_job["_collection_unavailable_fields"] = unavailable_fields
-        extracted_job["_collection_page_exhausted"] = bool(
-            coverage_status["page_exhausted"]
-        )
-        extracted_job["_collection_field_evidence"] = dict(
-            coverage_status["field_evidence"]
-        )
-        wrapped_job = _attach_active_card_identity(
-            {"jobs": [extracted_job]},
-            state=state,
+            state,
+            assessment,
             current_url=current_url,
+            unavailable_fields=unavailable_fields,
+            extraction_missing_fields=extraction_missing_fields,
         )
-        extracted_job = wrapped_job["jobs"][0]
-        merged_jobs, summary = merge_extracted_info(
+        return _merge_completed_detail(
             current_jobs,
-            {"jobs": [extracted_job]},
+            completed_job,
             current_url=current_url,
-        )
-        return StateActionOutcome(
-            result={
-                "action": "finish_detail_reading",
-                "status": "success",
-                "result": (
-                    "Detail OCR buffer extracted and merged "
-                    f"(incoming_jobs={summary['incoming_jobs']}, "
-                    f"total_jobs={summary['total_jobs']}, "
-                    f"fields={summary['fields']})"
-                ),
-                "incoming_jobs": summary["incoming_jobs"],
-                "total_jobs": summary["total_jobs"],
-                "fields": summary["fields"],
-                "extraction_missing_fields": extraction_missing_fields,
-            },
-            jobs=merged_jobs,
-            state_update=StateActionUpdate(
-                job_detail_buffer={},
-                job_detail_coverage={},
-                job_detail_followup={},
-            ),
+            extraction_missing_fields=extraction_missing_fields,
         )
     except Exception as exc:
         return StateActionOutcome(
