@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image
 
 from agent.utils.text import normalize_text
@@ -17,19 +18,11 @@ from agent.vision.marker_geometry import (
     roi_rect_around_bbox,
 )
 
-
 CAPTURE_CONTEXT_VERSION = "browser-capture-v1"
-
-
-def image_dimensions(image_path: str | Path) -> tuple[int, int]:
-    with Image.open(image_path) as img:
-        return img.size
 
 
 @lru_cache(maxsize=4)
 def _dct_basis(size: int):
-    import numpy as np
-
     basis = np.empty((size, size), dtype=np.float32)
     factor = math.pi / (2 * size)
     for k in range(size):
@@ -49,8 +42,6 @@ def perceptual_hash(image_path: str | Path) -> str:
 def perceptual_hash_image(img: Image.Image) -> str:
     """PIL 이미지 객체에서 64비트 pHash를 계산한다."""
 
-    import numpy as np
-
     size = 32
     img = img.convert("L").resize((size, size), Image.Resampling.LANCZOS)
     pixels = np.asarray(img, dtype=np.float32)
@@ -67,7 +58,7 @@ def hamming_distance(left: str, right: str) -> int | None:
         return None
     try:
         return (int(str(left), 16) ^ int(str(right), 16)).bit_count()
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -90,7 +81,11 @@ def anchor_texts(markers: list[dict[str, Any]], limit: int = 36) -> list[str]:
 
     ordered = sorted(
         [marker for marker in markers or [] if isinstance(marker, dict)],
-        key=lambda marker: (marker_bbox(marker)[1], marker_bbox(marker)[0], marker.get("id", 0)),
+        key=lambda marker: (
+            marker_bbox(marker)[1],
+            marker_bbox(marker)[0],
+            marker.get("id", 0),
+        ),
     )
     out: list[str] = []
     seen: set[str] = set()
@@ -106,7 +101,9 @@ def anchor_texts(markers: list[dict[str, Any]], limit: int = 36) -> list[str]:
     return out
 
 
-def build_capture_context(size: list[int] | tuple[int, int], content_top: int = 0) -> dict[str, Any]:
+def build_capture_context(
+    size: list[int] | tuple[int, int], content_top: int = 0
+) -> dict[str, Any]:
     """레시피 좌표가 만들어진 브라우저 캡처 환경을 기록한다."""
 
     try:
@@ -151,7 +148,7 @@ def compute_roi_signature(
             if context:
                 signature["capture_context"] = context
             return signature
-    except Exception:
+    except (OSError, ValueError):
         return {}
 
 
@@ -202,29 +199,37 @@ def compute_target_roi_signature(
                 size,
                 capture_context=capture_context,
             )
-    except Exception:
+    except (OSError, ValueError):
         return {}
 
 
-def compute_screen_signature(image_path: str | Path, markers: list[dict[str, Any]]) -> dict[str, Any]:
+def compute_screen_phash_signature(
+    image_path: str | Path,
+) -> dict[str, Any]:
+    """OCR 없이 화면 크기와 pHash만 계산한다."""
+
+    with Image.open(image_path) as image:
+        return {
+            "algorithm": "phash-dct64-v1",
+            "phash": perceptual_hash_image(image),
+            "size": list(image.size),
+        }
+
+
+def compute_screen_signature(
+    image_path: str | Path, markers: list[dict[str, Any]]
+) -> dict[str, Any]:
     """스크린샷 pHash와 OCR 앵커를 결합한 화면 서명을 만든다."""
 
-    size: tuple[int, int] | None = None
-    phash = ""
-    try:
-        size = image_dimensions(image_path)
-        phash = perceptual_hash(image_path)
-    except Exception:
-        size = None
+    signature = compute_screen_phash_signature(image_path)
     marker_count = len(markers or [])
-    signature = {
-        "algorithm": "phash-dct64-v1",
-        "phash": phash,
-        "size": list(size or [0, 0]),
-        "marker_count": marker_count,
-        "marker_count_bucket": marker_count_bucket(marker_count),
-        "anchors": anchor_texts(markers),
-    }
+    signature.update(
+        {
+            "marker_count": marker_count,
+            "marker_count_bucket": marker_count_bucket(marker_count),
+            "anchors": anchor_texts(markers),
+        }
+    )
     return signature
 
 

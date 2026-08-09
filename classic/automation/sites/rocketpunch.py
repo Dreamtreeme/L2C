@@ -72,7 +72,7 @@ class RocketpunchAdapter(SiteAdapter):
                     # "페이타랩 - Windows Developer 채용" -> "페이타랩 - Windows Developer"
                     base_str = re.sub(r"\s*채용\s*공고\s*$", "", segments[0]).strip()
                     base_str = re.sub(r"\s*채용\s*$", "", base_str).strip()
-                    
+
                     if " - " in base_str:
                         comp, pos = base_str.split(" - ", 1)
                         if not dom_data["company_name"]:
@@ -84,9 +84,13 @@ class RocketpunchAdapter(SiteAdapter):
                             dom_data["position"] = base_str
 
                 # 혹시 "직무명 | 회사명 | 로켓펀치" 형식일 경우 대비
-                if len(segments) >= 2 and segments[1] and segments[1] != "로켓펀치":
-                    if not dom_data["company_name"]:
-                        dom_data["company_name"] = segments[1]
+                if (
+                    len(segments) >= 2
+                    and segments[1]
+                    and segments[1] != "로켓펀치"
+                    and not dom_data["company_name"]
+                ):
+                    dom_data["company_name"] = segments[1]
         except Exception as e:
             logger.debug(f"[rocketpunch] page.title() 파싱 실패: {e}")
 
@@ -140,12 +144,9 @@ class RocketpunchAdapter(SiteAdapter):
             count = ps.count()
             texts: list[str] = []
             for i in range(min(count, 3)):
-                try:
-                    t = ps.nth(i).inner_text(timeout=1500).strip()
-                    if t:
-                        texts.append(t)
-                except Exception:
-                    pass
+                t = ps.nth(i).inner_text(timeout=1500).strip()
+                if t:
+                    texts.append(t)
 
             if len(texts) >= 1:
                 dom_data["company_name"] = texts[0]

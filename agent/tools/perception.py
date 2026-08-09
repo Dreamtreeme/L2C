@@ -1,22 +1,24 @@
 import ctypes
+import ctypes.wintypes as wintypes
 import datetime
 import hashlib
 import math
 import os
+import platform
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import mss
 import mss.tools
+import pyautogui
 import pygetwindow as gw
+import pyperclip
 from PIL import Image, ImageFilter, ImageStat
 
 from agent.config import get_settings
-from agent.utils.logger import logger
-
-
 from agent.tools.som_engine import SomEngine
+from agent.utils.logger import logger
 
 
 class PerceptionEngine:
@@ -42,20 +44,31 @@ class PerceptionEngine:
 
         # WaitStable은 PerceptionEngine을 역참조하므로 순환 import를 피하기 위해 lazy 로딩합니다.
         from agent.vision.wait_stable import WaitStable
+
         self._wait_stable = WaitStable(self)
 
-        logger.info("PerceptionEngine initialized with SomEngine", screenshot_dir=str(self.screenshot_dir))
+        logger.info(
+            "PerceptionEngine initialized with SomEngine",
+            screenshot_dir=str(self.screenshot_dir),
+        )
 
     def close(self) -> None:
         """OCR 하위 프로세스와 화면 캡처 핸들을 명시적으로 정리한다."""
 
-        close_som = getattr(self.som_engine, "close", None)
-        if callable(close_som):
-            close_som()
-        close_capture = getattr(self.sct, "close", None)
-        if callable(close_capture):
-            close_capture()
+        self.som_engine.close()
+        self.sct.close()
         self.clear_browser_window()
+
+    @property
+    def browser_window_id(self) -> int | None:
+        return self._browser_window_id
+
+    @property
+    def ocr_worker_pid(self) -> int | None:
+        return self.som_engine.ocr_worker_pid
+
+    def ensure_ocr_worker_ready(self) -> None:
+        self.som_engine.ensure_ocr_worker_ready()
 
     @staticmethod
     def _window_id(window) -> int | None:
@@ -158,7 +171,6 @@ class PerceptionEngine:
         if not window_id:
             return None
         try:
-            from ctypes import wintypes
 
             class MonitorInfo(ctypes.Structure):
                 _fields_ = [
@@ -191,13 +203,22 @@ class PerceptionEngine:
         preferred_id = self._browser_window_id
         if preferred_id:
             for win in windows:
-                if self._window_id(win) == preferred_id and self._looks_like_browser_window(win):
+                if self._window_id(
+                    win
+                ) == preferred_id and self._looks_like_browser_window(win):
                     return win
-            logger.info("Preferred browser window disappeared; clearing binding", window_id=preferred_id)
+            logger.info(
+                "Preferred browser window disappeared; clearing binding",
+                window_id=preferred_id,
+            )
             self.clear_browser_window()
 
         active = gw.getActiveWindow()
-        if active and self._is_visible_window(active) and self._looks_like_browser_window(active):
+        if (
+            active
+            and self._is_visible_window(active)
+            and self._looks_like_browser_window(active)
+        ):
             self.bind_browser_window(active)
             return active
 
@@ -249,9 +270,9 @@ class PerceptionEngine:
         if not filename:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"screen_{timestamp}.png"
-            
+
         output_path = self.screenshot_dir / filename
-        
+
         try:
             if region:
                 # 브라우저만 캡처
@@ -259,7 +280,12 @@ class PerceptionEngine:
                 self.scale_x = sct_img.width / region["width"]
                 self.scale_y = sct_img.height / region["height"]
                 self.last_region = region
-                logger.debug("Captured browser window only", region=region, scale_x=self.scale_x, scale_y=self.scale_y)
+                logger.debug(
+                    "Captured browser window only",
+                    region=region,
+                    scale_x=self.scale_x,
+                    scale_y=self.scale_y,
+                )
             else:
                 # 브라우저를 못 찾으면 모니터 1번 (주 모니터) 전체 캡처
                 monitor = self.sct.monitors[1]
@@ -270,23 +296,24 @@ class PerceptionEngine:
                     "top": monitor["top"],
                     "left": monitor["left"],
                     "width": monitor["width"],
-                    "height": monitor["height"]
+                    "height": monitor["height"],
                 }
-                logger.debug("Browser not found, captured full monitor", monitor=monitor)
-                
+                logger.debug(
+                    "Browser not found, captured full monitor", monitor=monitor
+                )
+
             # Convert to PIL Image and preserve text edges by default.
-            from PIL import Image
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             if output_path.suffix.lower() in (".jpg", ".jpeg"):
                 img.save(str(output_path), "JPEG", quality=80)
             else:
                 img.save(str(output_path))
-            
+
             logger.info(
-                "Screen captured successfully", 
-                width=sct_img.width, 
-                height=sct_img.height, 
-                output_path=str(output_path)
+                "Screen captured successfully",
+                width=sct_img.width,
+                height=sct_img.height,
+                output_path=str(output_path),
             )
             return output_path
         except Exception as e:
@@ -319,7 +346,9 @@ class PerceptionEngine:
                         content_top = self._detect_browser_content_top(source_rgb)
                 image = source_rgb.convert("L")
                 bottom = max(content_top + 1, image.height - bottom_ignore)
-                content = image.crop((0, min(content_top, image.height - 1), image.width, bottom))
+                content = image.crop(
+                    (0, min(content_top, image.height - 1), image.width, bottom)
+                )
                 if sample_width > 0 and content.width > sample_width:
                     ratio = sample_width / content.width
                     content = content.resize(
@@ -330,14 +359,20 @@ class PerceptionEngine:
                 edge_image = content.filter(ImageFilter.FIND_EDGES)
                 if edge_image.width > 2 and edge_image.height > 2:
                     # FIND_EDGES가 단색 이미지 외곽에 만드는 인공 경계는 품질 계산에서 제외한다.
-                    edge_image = edge_image.crop((1, 1, edge_image.width - 1, edge_image.height - 1))
+                    edge_image = edge_image.crop(
+                        (1, 1, edge_image.width - 1, edge_image.height - 1)
+                    )
                 edge_mean = ImageStat.Stat(edge_image).mean[0]
                 histogram = content.histogram()
                 pixel_count = max(1, sum(histogram))
                 dominant_ratio = max(histogram) / pixel_count
                 stddev = stats.stddev[0]
-        except Exception as exc:
-            logger.debug("Screen quality check skipped", error=str(exc), image_path=str(image_path))
+        except (OSError, ValueError) as exc:
+            logger.debug(
+                "Screen quality check skipped",
+                error=str(exc),
+                image_path=str(image_path),
+            )
             return {"low_information": False, "reason": "quality_check_error"}
 
         settings = get_settings().vision
@@ -351,7 +386,9 @@ class PerceptionEngine:
         )
         return {
             "low_information": low_information,
-            "reason": "low_information_page" if low_information else "page_content_present",
+            "reason": "low_information_page"
+            if low_information
+            else "page_content_present",
             "stddev": round(stddev, 3),
             "edge_mean": round(edge_mean, 3),
             "dominant_ratio": round(dominant_ratio, 4),
@@ -369,7 +406,9 @@ class PerceptionEngine:
         ready_timeout = settings.page_ready_timeout_sec
         if max_attempts is None:
             polling_interval = max(0.05, retry_interval)
-            max_attempts = max(1, math.ceil(max(0.0, ready_timeout) / polling_interval) + 1)
+            max_attempts = max(
+                1, math.ceil(max(0.0, ready_timeout) / polling_interval) + 1
+            )
             deadline = time.monotonic() + max(0.0, ready_timeout)
         else:
             max_attempts = max(1, int(max_attempts))
@@ -381,36 +420,31 @@ class PerceptionEngine:
             if initial_wait_sec is None:
                 last_path = self.capture_screen(filename=filename)
             else:
-                last_path = self.capture_screen(filename=filename, initial_wait_sec=initial_wait_sec)
+                last_path = self.capture_screen(
+                    filename=filename, initial_wait_sec=initial_wait_sec
+                )
             quality = self.screen_quality(last_path)
-            wait_stable = getattr(self, "_wait_stable", None)
-            stability = dict(
-                getattr(wait_stable, "last_wait_result", {}) or {}
-            )
+            stability = dict(self._wait_stable.last_wait_result or {})
             if stability:
                 quality.update(
                     {
                         "stable": bool(stability.get("stable")),
-                        "stability_reason": str(
-                            stability.get("reason") or ""
-                        ),
-                        "stability_probe_count": int(
-                            stability.get("probe_count") or 0
-                        ),
+                        "stability_reason": str(stability.get("reason") or ""),
+                        "stability_probe_count": int(stability.get("probe_count") or 0),
                         "stability_confirmations": int(
                             stability.get("stable_frames") or 0
                         ),
-                        "stability_diff_percent": stability.get(
-                            "diff_percent"
-                        ),
+                        "stability_diff_percent": stability.get("diff_percent"),
                     }
                 )
             self.last_capture_quality = dict(quality)
-            logger.info("Screen quality checked", attempt=attempt, max_attempts=max_attempts, **quality)
-            if (
-                not quality.get("low_information")
-                and quality.get("stable", True)
-            ):
+            logger.info(
+                "Screen quality checked",
+                attempt=attempt,
+                max_attempts=max_attempts,
+                **quality,
+            )
+            if not quality.get("low_information") and quality.get("stable", True):
                 return last_path
             if deadline is not None and time.monotonic() >= deadline:
                 break
@@ -426,10 +460,6 @@ class PerceptionEngine:
         """활성 브라우저의 주소창 URL을 클립보드 경유로 읽습니다."""
         url = ""
         try:
-            import platform
-            import pyautogui
-            import pyperclip
-
             old_pause = pyautogui.PAUSE
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
             settings = get_settings().vision
@@ -449,7 +479,7 @@ class PerceptionEngine:
                     max_attempts=copy_attempts,
                 )
             finally:
-                self.release_address_bar_focus(pyautogui, key_pause=key_pause)
+                self.release_address_bar_focus(key_pause=key_pause)
                 pyautogui.PAUSE = old_pause
             if url.startswith(("http://", "https://")):
                 self._last_url = url
@@ -500,28 +530,22 @@ class PerceptionEngine:
             )
         return ""
 
-    def release_address_bar_focus(self, pyautogui_module=None, key_pause: float = 0.02) -> None:
+    def release_address_bar_focus(self, key_pause: float = 0.02) -> None:
         """주소창 URL 복사 후 남는 브라우저 툴바 포커스를 페이지 쪽으로 되돌립니다."""
+        old_pause = pyautogui.PAUSE
+        pyautogui.PAUSE = min(old_pause, key_pause)
         try:
-            if pyautogui_module is None:
-                import pyautogui as pyautogui_module
-
-            old_pause = pyautogui_module.PAUSE
-            pyautogui_module.PAUSE = min(old_pause, key_pause)
-            try:
-                pyautogui_module.press("esc")
-                pyautogui_module.press("esc")
-            finally:
-                pyautogui_module.PAUSE = old_pause
-        except Exception as e:
-            logger.debug("Failed to release browser address bar focus", error=str(e))
+            pyautogui.press("esc")
+            pyautogui.press("esc")
+        finally:
+            pyautogui.PAUSE = old_pause
 
     def _image_signature(self, image_path: Path) -> str:
         try:
             with Image.open(image_path) as img:
                 thumb = img.convert("L").resize((32, 32), Image.Resampling.BILINEAR)
                 return hashlib.sha1(thumb.tobytes()).hexdigest()
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.debug("Failed to build image signature", error=str(e))
             return ""
 
@@ -562,7 +586,7 @@ class PerceptionEngine:
                 else:
                     cropped.save(cropped_path)
                 return cropped_path, crop_top
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.debug("Failed to crop browser chrome for SoM", error=str(e))
             return image_path, 0
 
@@ -581,7 +605,9 @@ class PerceptionEngine:
         sample_width = settings.som_crop_sample_width
         sample = image.convert("RGB")
         if sample.width > sample_width:
-            sample = sample.resize((sample_width, sample.height), Image.Resampling.BILINEAR)
+            sample = sample.resize(
+                (sample_width, sample.height), Image.Resampling.BILINEAR
+            )
 
         row_means = [
             ImageStat.Stat(sample.crop((0, y, sample.width, y + 1))).mean
@@ -590,7 +616,10 @@ class PerceptionEngine:
         best_y = 0
         best_delta = 0.0
         for y in range(max(1, min_y), max_y + 1):
-            delta = sum(abs(row_means[y][channel] - row_means[y - 1][channel]) for channel in range(3))
+            delta = sum(
+                abs(row_means[y][channel] - row_means[y - 1][channel])
+                for channel in range(3)
+            )
             if delta > best_delta:
                 best_delta = delta
                 best_y = y
@@ -613,13 +642,17 @@ class PerceptionEngine:
         """OmniParser와 PaddleOCR 결과를 물리 좌표가 있는 SoM 마커로 변환한다."""
 
         if not image_path.exists():
-            logger.error("Image file not found for UI analysis", image_path=str(image_path))
+            logger.error(
+                "Image file not found for UI analysis", image_path=str(image_path)
+            )
             raise FileNotFoundError(f"Image not found: {image_path}")
 
         cache_key = self._image_signature(image_path)
         if cache_key and cache_key in self._analysis_cache:
             cached = self._analysis_cache[cache_key]
-            logger.info("UI analysis cache hit", markers_count=len(cached.get("markers", [])))
+            logger.info(
+                "UI analysis cache hit", markers_count=len(cached.get("markers", []))
+            )
             return {
                 "markers": [dict(marker) for marker in cached.get("markers", [])],
                 "marked_image": cached.get("marked_image", ""),
@@ -640,15 +673,15 @@ class PerceptionEngine:
                     bbox[1] += crop_top
                     bbox[3] += crop_top
                 logger.info("Applied browser chrome crop for SoM", crop_top=crop_top)
-        except Exception as som_err:
-            logger.error("Local SoM processing failed", error=str(som_err))
-            return {"markers": [], "marked_image": ""}
         finally:
             if som_image_path != image_path:
                 try:
                     som_image_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug(
+                        "Failed to remove temporary SoM image",
+                        error=str(exc),
+                    )
 
         markers = []
         for marker_id, bbox in marker_bboxes.items():

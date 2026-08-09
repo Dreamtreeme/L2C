@@ -1,4 +1,4 @@
-"""자율탐색이 제안한 Reflex 단계를 제거만 하는 Critic 게이트."""
+"""자율탐색 후보를 Critic으로 검토하고 승격 결과를 저장한다."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from typing import Any, Callable
 from agent.config import get_settings
 from agent.recipe.candidate_promotion import apply_candidate_promotion
 from agent.recipe.promotion_policy import compact_step_evidence_verdicts
-from agent.runtime.replay_actions import (
+from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
 )
 from agent.recipe.task_category import task_category_from_candidate
-from agent.utils.model_dump import dump_model
+from agent.utils.model_conversion import dump_model
 from shared.schema.feedback_schema import RecipeCandidateReview
 
 

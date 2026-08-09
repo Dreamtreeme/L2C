@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from shared.schema.agent_contract import EvidenceField
+from shared.schema.jd_schema import JobField
 from shared.schema.collection_intent import CollectionIntent
 
 
@@ -36,11 +36,23 @@ class InvestigationStatus(str, Enum):
     AWAITING_CLARIFICATION = "awaiting_clarification"
     CHECKING_EVIDENCE = "checking_evidence"
     PLANNING = "planning"
-    EXECUTING = "executing"
+    COLLECTING = "collecting"
+    PERSISTING = "persisting"
     VALIDATING = "validating"
     ANSWERING = "answering"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class ConversationTurn(BaseModel):
+    """조사 요청 해석에 참고할 이전 사용자·답변 한 쌍."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = ""
+    user_query: str = ""
+    assistant_answer: str = ""
+    run_status: str = ""
 
 
 class ClarificationOption(BaseModel):
@@ -197,9 +209,9 @@ class InvestigationConstraints(BaseModel):
     location: str = ""
     experience: str = ""
     employment_type: str = ""
-    analysis_dimensions: list[
-        Annotated[str, Field(min_length=1, max_length=80)]
-    ] = Field(default_factory=list, max_length=12)
+    analysis_dimensions: list[Annotated[str, Field(min_length=1, max_length=80)]] = (
+        Field(default_factory=list, max_length=12)
+    )
 
     @model_validator(mode="after")
     def normalize_occupation_scope_requirement(self) -> "InvestigationConstraints":
@@ -220,7 +232,9 @@ class InvestigationConstraints(BaseModel):
         if self.count_mode == "explicit" and self.target_count == 0:
             raise ValueError("명시적 수집 개수에는 1 이상의 target_count가 필요합니다.")
         if self.count_mode != "explicit" and self.target_count > 0:
-            raise ValueError("target_count는 count_mode=explicit일 때만 사용할 수 있습니다.")
+            raise ValueError(
+                "target_count는 count_mode=explicit일 때만 사용할 수 있습니다."
+            )
         return self
 
 
@@ -263,7 +277,7 @@ class EvidenceRequirement(BaseModel):
     )
     posted_from: str = ""
     posted_to: str = ""
-    required_fields: list[EvidenceField] = Field(default_factory=list)
+    required_fields: list[JobField] = Field(default_factory=list)
     minimum_count: int = Field(default=1, ge=0, le=1000)
     required_sites: list[str] = Field(default_factory=list)
     reason: str = ""
@@ -302,7 +316,9 @@ class InvestigationRequest(BaseModel):
     purpose: InvestigationPurpose = InvestigationPurpose.LOOKUP
     evidence_policy: EvidencePolicy = EvidencePolicy.DATABASE_FIRST
     status: InvestigationStatus = InvestigationStatus.UNDERSTANDING
-    constraints: InvestigationConstraints = Field(default_factory=InvestigationConstraints)
+    constraints: InvestigationConstraints = Field(
+        default_factory=InvestigationConstraints
+    )
     assumptions: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
     clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
@@ -323,7 +339,9 @@ class RequestAnalysis(BaseModel):
     deliverable: str = Field(min_length=1)
     purpose: InvestigationPurpose = InvestigationPurpose.LOOKUP
     evidence_policy: EvidencePolicy = EvidencePolicy.DATABASE_FIRST
-    constraints: InvestigationConstraints = Field(default_factory=InvestigationConstraints)
+    constraints: InvestigationConstraints = Field(
+        default_factory=InvestigationConstraints
+    )
     assumptions: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
 
@@ -373,6 +391,7 @@ __all__ = [
     "ClarificationField",
     "ClarificationOption",
     "ClarificationQuestion",
+    "ConversationTurn",
     "EvidencePolicy",
     "EvidenceRequirement",
     "InvestigationConstraints",

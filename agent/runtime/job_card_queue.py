@@ -14,6 +14,7 @@ from agent.runtime.target_matching import anchor_overlap, match_target_by_ratio
 from agent.utils.text import normalize_text
 from agent.runtime.job_collection import job_count
 from agent.runtime.site_context import looks_like_job_detail_url
+from agent.runtime.worker_state import target_count_from_state
 from agent.vision.marker_geometry import (
     bbox_from_ratio,
     bbox_to_ratio,
@@ -25,25 +26,13 @@ from agent.vision.target_snapshot import marker_by_id
 
 
 def job_card_label(card: dict) -> str:
-    for key in ("title", "target_label", "position", "text", "label"):
-        value = card.get(key)
-        if value not in (None, "", [], {}):
-            return str(value).strip()
-    return ""
+    return str(card.get("title") or "").strip()
 
 
 def job_card_entries_from_args(args: dict) -> list[dict]:
     """도구 입력을 카드 후보 목록으로 통일한다."""
 
-    cards = args.get("cards")
-    if isinstance(cards, list):
-        entries: list[dict] = []
-        for raw in cards:
-            if isinstance(raw, dict):
-                entries.append(dict(raw))
-        if entries:
-            return entries
-    return []
+    return [dict(card) for card in args.get("cards") or []]
 
 
 def job_card_match_text(value: Any) -> str:
@@ -51,61 +40,32 @@ def job_card_match_text(value: Any) -> str:
     return text.casefold().replace(" ", "")
 
 
-def _target_count_from_state(state: WorkerState) -> int:
-    params = state["request"].get("recipe_params", {}) or {}
-    try:
-        return max(0, int(params.get("target_count") or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
 def _queue_limit(
     state: WorkerState,
     queue: list[dict],
     card_count: int,
 ) -> int:
-    target_count = _target_count_from_state(state)
+    target_count = target_count_from_state(state)
     if target_count <= 0:
         return card_count
     collection = state["collection"]
     resolved_count = max(
-        job_count(collection.get("extracted_jd", {}) or {}),
+        job_count(collection.get("collected_jobs", [])),
         resolved_job_card_count(queue),
     )
     return max(0, target_count - resolved_count)
 
 
-def _marker_id(raw: dict[str, Any]) -> int | None:
-    value = raw.get("marker_id", raw.get("id"))
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
 def _card_geometry(
-    raw: dict[str, Any],
     marker: dict[str, Any],
     size: list[int],
 ) -> tuple[Any, Any]:
     bbox = marker.get("bbox")
     if not isinstance(bbox, list) or len(bbox) != 4:
         bbox = []
-    bbox_ratio = raw.get("bbox_ratio")
-    center_ratio = raw.get("center_ratio")
-    if size and not bbox_ratio:
-        try:
-            return bbox_to_ratio(bbox, size), center_ratio_from_bbox(bbox, size)
-        except Exception:
-            return [], []
-    return bbox_ratio or [], center_ratio or []
-
-
-def _unique_queue_id(raw: dict[str, Any], queue: list[dict]) -> str:
-    fallback = f"card-{len(queue) + 1}"
-    queue_id = str(raw.get("queue_id") or fallback)
-    existing_ids = {str(item.get("queue_id") or "") for item in queue}
-    return fallback if queue_id in existing_ids else queue_id
+    if not size:
+        return [], []
+    return bbox_to_ratio(bbox, size), center_ratio_from_bbox(bbox, size)
 
 
 def _normalized_job_card(
@@ -114,27 +74,18 @@ def _normalized_job_card(
     size: list[int],
     queue: list[dict],
 ) -> dict[str, Any] | None:
-    marker_id = _marker_id(raw)
+    marker_id = int(raw["marker_id"])
     marker = marker_by_id(markers, marker_id)
     if marker is None:
         return None
-    label = job_card_label(raw) or str(marker.get("text") or "").strip()
+    label = job_card_label(raw)
     if not label:
         return None
-    bbox_ratio, center_ratio = _card_geometry(raw, marker, size)
-    company = str(
-        raw.get("company") or raw.get("company_name") or ""
-    ).strip()
-    evidence_texts = (
-        list(raw.get("evidence_texts") or [])
-        if isinstance(raw.get("evidence_texts"), list)
-        else []
-    )
-    if company and company not in evidence_texts:
-        evidence_texts.insert(0, company)
-    evidence_texts = evidence_texts[:6]
+    bbox_ratio, center_ratio = _card_geometry(marker, size)
+    company = str(raw.get("company") or "").strip()
+    evidence_texts = [company] if company else []
     return {
-        "queue_id": _unique_queue_id(raw, queue),
+        "queue_id": f"card-{len(queue) + 1}",
         "status": "pending",
         "title": label,
         "company": company,
@@ -192,7 +143,10 @@ def normalize_job_card_queue(
         if isinstance(item, dict) and str(item.get("status") or "") != "pending"
     ]
     existing_labels = {
-        (job_card_match_text(item.get("title")), job_card_match_text(item.get("company")))
+        (
+            job_card_match_text(item.get("title")),
+            job_card_match_text(item.get("company")),
+        )
         for item in queue
     }
     for raw in cards[: _queue_limit(state, queue, len(cards))]:
@@ -278,6 +232,18 @@ def active_job_card(queue: list[dict]) -> dict:
     )
 
 
+def job_detail_key_from_state(state: WorkerState) -> str:
+    """활성 카드 기준으로 상세 OCR 버퍼의 식별자를 만든다."""
+
+    card = active_job_card(list(state["collection"].get("job_card_queue", []) or []))
+    queue_id = str(card.get("queue_id") or "").strip()
+    if queue_id:
+        return queue_id
+    company = str(card.get("company") or "").strip()
+    title = str(card.get("title") or "").strip()
+    return "|".join(part for part in (company, title) if part)
+
+
 def activate_job_card(queue: list[dict], args: dict) -> list[dict]:
     updated = []
     activated = False
@@ -301,7 +267,10 @@ def job_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
         return True
     component = str(args.get("target_component") or "")
     role = str(args.get("target_role") or "")
-    if component in {"job_card", "job_card_title"} or role in {"job_card", "job_card_title"}:
+    if component in {"job_card", "job_card_title"} or role in {
+        "job_card",
+        "job_card_title",
+    }:
         return True
     label = str(args.get("target_label") or "").strip()
     return bool(label) and any(
@@ -447,7 +416,9 @@ def return_action_from_transition(
     )
 
 
-def job_card_marker_for_item(item: dict, markers: list[dict], signature: dict) -> tuple[int | None, list[dict], dict]:
+def job_card_marker_for_item(
+    item: dict, markers: list[dict], signature: dict
+) -> tuple[int | None, list[dict], dict]:
     target = dict(item.get("target") or {})
     target.setdefault("text", item.get("title", ""))
     target.setdefault("semantic_label", item.get("title", ""))
@@ -462,22 +433,36 @@ def job_card_marker_for_item(item: dict, markers: list[dict], signature: dict) -
     if marker_id is not None:
         return marker_id, markers, {"reason": "current_marker_ratio_match"}
 
-    bbox = bbox_from_ratio(item.get("bbox_ratio") or [], screen_size_from_signature(signature))
+    bbox = bbox_from_ratio(
+        item.get("bbox_ratio") or [], screen_size_from_signature(signature)
+    )
     if bbox == [0, 0, 0, 0]:
         return None, markers, {"reason": "cached_bbox_missing"}
-    next_id = max(
-        [int(marker.get("id") or 0) for marker in markers or [] if isinstance(marker, dict)] + [-1]
-    ) + 1
+    next_id = (
+        max(
+            [
+                int(marker.get("id") or 0)
+                for marker in markers or []
+                if isinstance(marker, dict)
+            ]
+            + [-1]
+        )
+        + 1
+    )
     synthetic = {
         "id": next_id,
         "bbox": bbox,
         "text": item.get("title") or "queued job card",
         "type": "queue_cached_card",
     }
-    return next_id, [*markers, synthetic], {
-        "reason": "synthetic_marker_from_cached_bbox",
-        "bbox": bbox,
-    }
+    return (
+        next_id,
+        [*markers, synthetic],
+        {
+            "reason": "synthetic_marker_from_cached_bbox",
+            "bbox": bbox,
+        },
+    )
 
 
 def replay_job_card_after_return(
@@ -503,11 +488,15 @@ def replay_job_card_after_return(
         return None, markers, {"reason": "queue_empty"}
     active_card = active_job_card(queue)
     if active_card:
-        return None, markers, {
-            "reason": "active_card_not_completed",
-            "queue_id": active_card.get("queue_id", ""),
-            "title": active_card.get("title", ""),
-        }
+        return (
+            None,
+            markers,
+            {
+                "reason": "active_card_not_completed",
+                "queue_id": active_card.get("queue_id", ""),
+                "title": active_card.get("title", ""),
+            },
+        )
 
     matched, match_trace = job_results_page_matches(
         dict(state["collection"].get("job_results_memory", {}) or {}),
@@ -519,7 +508,9 @@ def replay_job_card_after_return(
         return None, markers, match_trace
 
     item = pending[0]
-    marker_id, next_markers, marker_trace = job_card_marker_for_item(item, markers, screen_signature)
+    marker_id, next_markers, marker_trace = job_card_marker_for_item(
+        item, markers, screen_signature
+    )
     if marker_id is None:
         trace = dict(match_trace)
         trace.update(marker_trace)
@@ -539,19 +530,25 @@ def replay_job_card_after_return(
         [
             {
                 "name": "click_marker",
-                "args": {key: value for key, value in args.items() if key != "queue_id"},
+                "args": {
+                    key: value for key, value in args.items() if key != "queue_id"
+                },
                 "id": f"job_card_queue_{item.get('queue_id', 'next')}",
                 "metadata": {"queue_id": item.get("queue_id", "")},
             }
         ],
     )
-    return request, next_markers, {
-        "hit": True,
-        "queue_id": item.get("queue_id", ""),
-        "title": item.get("title", ""),
-        "return_match": match_trace,
-        "marker": marker_trace,
-    }
+    return (
+        request,
+        next_markers,
+        {
+            "hit": True,
+            "queue_id": item.get("queue_id", ""),
+            "title": item.get("title", ""),
+            "return_match": match_trace,
+            "marker": marker_trace,
+        },
+    )
 
 
 __all__ = [
@@ -563,6 +560,7 @@ __all__ = [
     "normalized_return_action",
     "pending_job_cards",
     "job_card_queue_scope_complete",
+    "job_detail_key_from_state",
     "job_card_label",
     "job_card_marker_for_item",
     "job_card_match_text",

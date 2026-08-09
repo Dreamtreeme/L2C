@@ -250,7 +250,7 @@ def selection_node(
     if active_card and looks_like_job_detail_url(current_url):
         duplicate_trace = runtime.context.data.find_existing_job_url(
             current_url,
-            dict(collection.get("extracted_jd", {}) or {}),
+            list(collection.get("collected_jobs", [])),
         )
         if duplicate_trace.get("matched"):
             logger.info(

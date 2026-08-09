@@ -12,26 +12,13 @@ from agent.runtime.worker_contracts import (
     action_event_results,
     action_event_transitions,
 )
-from agent.utils.text import normalize_text, url_template
 from agent.utils.logger import logger
-from agent.vision.screen_signature import compact_screen_context_signature
-
-
-def raw_screen_phash_signature(image_path: str | os.PathLike) -> dict[str, Any]:
-    """OCR 없이 원본 스크린샷의 pHash와 크기만 계산한다."""
-
-    try:
-        from agent.vision.screen_signature import image_dimensions, perceptual_hash
-
-        size = image_dimensions(image_path)
-        return {
-            "algorithm": "phash-dct64-v1",
-            "phash": perceptual_hash(image_path),
-            "size": list(size),
-        }
-    except Exception as exc:
-        logger.debug("raw screen phash skipped", error=str(exc))
-        return {"algorithm": "phash-dct64-v1", "phash": "", "size": [0, 0]}
+from agent.utils.text import normalize_text, url_template
+from agent.vision.screen_signature import (
+    compact_screen_context_signature,
+    compute_screen_phash_signature,
+    hamming_distance,
+)
 
 
 def detect_two_screen_transition_cycle(
@@ -47,27 +34,24 @@ def detect_two_screen_transition_cycle(
     if len(recent) < 4:
         return {"detected": False}
 
-    signatures = [
-        raw_screen_phash_signature(str(item.get("screenshot") or ""))
-        for item in recent
-    ]
+    try:
+        signatures = [
+            compute_screen_phash_signature(str(item.get("screenshot") or ""))
+            for item in recent
+        ]
+    except (OSError, ValueError) as exc:
+        logger.debug("transition cycle pHash check skipped", error=str(exc))
+        return {"detected": False}
     hashes = [str(item.get("phash") or "") for item in signatures]
     sizes = [tuple(item.get("size") or []) for item in signatures]
     if not all(hashes) or len(set(sizes)) != 1:
         return {"detected": False}
 
-    try:
-        from agent.vision.screen_signature import hamming_distance
-
-        same_a = hamming_distance(hashes[0], hashes[2])
-        same_b = hamming_distance(hashes[1], hashes[3])
-        adjacent = [
-            hamming_distance(hashes[index], hashes[index + 1])
-            for index in range(3)
-        ]
-    except Exception as exc:
-        logger.debug("transition cycle pHash check skipped", error=str(exc))
-        return {"detected": False}
+    same_a = hamming_distance(hashes[0], hashes[2])
+    same_b = hamming_distance(hashes[1], hashes[3])
+    adjacent = [
+        hamming_distance(hashes[index], hashes[index + 1]) for index in range(3)
+    ]
 
     max_distance = get_settings().reflex.transition_cycle_phash_max_distance
     detected = bool(
@@ -75,7 +59,9 @@ def detect_two_screen_transition_cycle(
         and same_b is not None
         and same_a <= max_distance
         and same_b <= max_distance
-        and all(distance is not None and distance > max_distance for distance in adjacent)
+        and all(
+            distance is not None and distance > max_distance for distance in adjacent
+        )
     )
     if not detected:
         return {"detected": False}
@@ -83,7 +69,9 @@ def detect_two_screen_transition_cycle(
     action_cycle: list[str] = []
     for observation in recent[:2]:
         action = str(observation.get("action") or "")
-        step = observation.get("step") if isinstance(observation.get("step"), dict) else {}
+        step = (
+            observation.get("step") if isinstance(observation.get("step"), dict) else {}
+        )
         args = step.get("args") if isinstance(step.get("args"), dict) else {}
         detail = str(args.get("key") or args.get("target_component") or "")
         action_cycle.append(f"{action}:{detail}" if detail else action)
@@ -108,9 +96,7 @@ def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
         return {}
     if latest.get("reason") not in {"reflex_no_screen_change", "no_screen_change"}:
         return {}
-    latest_screen = str(
-        state["observation"].get("current_screenshot") or ""
-    )
+    latest_screen = str(state["observation"].get("current_screenshot") or "")
     observed_screen = str(latest.get("screenshot") or "")
     if latest_screen and observed_screen and latest_screen != observed_screen:
         return {}
@@ -123,9 +109,7 @@ def transition_visual_change_ratio(
 ) -> float | None:
     """행동 전후 스크린샷의 눈에 띄는 픽셀 변화 비율을 계산한다."""
 
-    before_image_path = str(
-        transition_request.get("before_screenshot") or ""
-    )
+    before_image_path = str(transition_request.get("before_screenshot") or "")
     if not before_image_path or not current_image_path:
         return None
     try:
@@ -140,7 +124,7 @@ def transition_visual_change_ratio(
             load_gray_frame(current_image_path),
             intensity_threshold=intensity_threshold,
         )
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         logger.debug("transition visual change check skipped", error=str(exc))
         return None
 
@@ -183,15 +167,21 @@ def idempotent_page_scope(url: str) -> tuple[str, str, tuple[tuple[str, str], ..
             )
         )
         return ((parsed.netloc or "").casefold(), parsed.path or "/", query_items)
-    except Exception:
+    except ValueError:
         return ("", url, ())
 
 
 def same_idempotent_page_scope(left_url: str, right_url: str) -> bool:
-    return bool(left_url and right_url and idempotent_page_scope(left_url) == idempotent_page_scope(right_url))
+    return bool(
+        left_url
+        and right_url
+        and idempotent_page_scope(left_url) == idempotent_page_scope(right_url)
+    )
 
 
-def used_idempotent_recipe_keys_on_url(state: WorkerState, current_url: str) -> set[str]:
+def used_idempotent_recipe_keys_on_url(
+    state: WorkerState, current_url: str
+) -> set[str]:
     """같은 페이지 범위에서 이미 실행한 고정 UI recipe key를 찾는다."""
 
     if not current_url:
@@ -211,7 +201,9 @@ def used_idempotent_recipe_keys_on_url(state: WorkerState, current_url: str) -> 
             continue
         args = action.get("args") if isinstance(action.get("args"), dict) else {}
         target = action.get("target") if isinstance(action.get("target"), dict) else {}
-        component = str(args.get("target_component") or target.get("component") or "").casefold()
+        component = str(
+            args.get("target_component") or target.get("component") or ""
+        ).casefold()
         if component in components:
             out.add(recipe_key)
     return out
@@ -227,11 +219,7 @@ def transition_marker_texts(markers: list[dict[str, Any]]) -> list[str]:
             continue
         value = normalize_text(marker.get("text"))
         key = value.casefold().replace(" ", "")
-        if (
-            len(key) < 2
-            or key in seen
-            or value.startswith("상호작용 가능한 요소")
-        ):
+        if len(key) < 2 or key in seen or value.startswith("상호작용 가능한 요소"):
             continue
         seen.add(key)
         texts.append(value)
@@ -264,35 +252,23 @@ def build_transition_observation(
         "capture_id": str(to_capture_id or ""),
         "url_template": url_template(str(current_url or "")),
         "page_role": str(page_role or ""),
-        "screen_context_signature": compact_screen_context_signature(
-            screen_signature
-        ),
+        "screen_context_signature": compact_screen_context_signature(screen_signature),
     }
     return {
         "action_seq": transition_request.get("action_seq"),
         "action": transition_request.get("action", ""),
-        "from_capture_id": str(
-            transition_request.get("from_capture_id") or ""
-        ),
+        "from_capture_id": str(transition_request.get("from_capture_id") or ""),
         "to_capture_id": str(to_capture_id or ""),
         "step": dict(transition_request.get("step", {}) or {}),
-        "expected_after": dict(
-            transition_request.get("step") or {}
-        ).get("expected_after", ""),
+        "expected_after": dict(transition_request.get("step") or {}).get(
+            "expected_after", ""
+        ),
         "source": source,
         "recipe_key": transition_request.get("recipe_key", ""),
-        "recipe_transition_index": transition_request.get(
-            "recipe_transition_index"
-        ),
-        "recipe_transition_count": transition_request.get(
-            "recipe_transition_count"
-        ),
-        "transition_actions": list(
-            transition_request.get("transition_actions") or []
-        ),
-        "after_state_match": dict(
-            transition_request.get("after_state_match") or {}
-        ),
+        "recipe_transition_index": transition_request.get("recipe_transition_index"),
+        "recipe_transition_count": transition_request.get("recipe_transition_count"),
+        "transition_actions": list(transition_request.get("transition_actions") or []),
+        "after_state_match": dict(transition_request.get("after_state_match") or {}),
         "attempt": attempt,
         "elapsed_sec": round(elapsed_sec, 3),
         "status": status,
@@ -318,7 +294,6 @@ __all__ = [
     "idempotent_page_scope",
     "idempotent_page_scope_ignored_query_keys",
     "latest_no_effect_transition",
-    "raw_screen_phash_signature",
     "same_idempotent_page_scope",
     "transition_has_visual_change",
     "transition_marker_texts",

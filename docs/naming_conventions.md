@@ -109,7 +109,7 @@ tags:
 | `*_runtime.py` | 그래프 실행 중 사용하는 재생/큐/버퍼 런타임 로직 |
 | `*_snapshot.py` | state/action에서 관찰 스냅샷 생성 |
 | `*_matcher.py` | 결정론적 매칭 |
-| `*_reviewer.py` | LLM/Critic 검토 |
+| `*_review_service.py` | 애플리케이션 계층의 LLM/Critic 검토 유스케이스 |
 | `*_promotion.py` | candidate를 active recipe로 승격 |
 | `*_prompt.py` | 프롬프트 문자열 조립 |
 | `*_report.py` | 사용자/중간 보고서 생성 |
@@ -149,9 +149,11 @@ tags:
 | 모듈 | 책임 |
 |---|---|
 | `collection_request_builder.py` | 수집 의도, 사이트 프로필과 작업자 목표 생성 |
-| `collection_service.py` | 작업자·검토·저장 순서와 재시도 조율 |
-| `collection_worker_runner.py` | 단일 비전 작업자 실행과 실행 결과 구성 |
-| `collection_submission_service.py` | 제출물 검토, 저장과 레시피 후보 등록 |
+| `collection_worker_runner.py` | 단일 비전 작업자 실행과 `CollectionBatch` 구성 |
+| `collection_persistence.py` | 제출물 검토, 저장과 레시피 후보 등록 |
+| `conversation_context_service.py` | 저장된 실행에서 구조화된 대화 문맥 조회 |
+
+작업 순서는 서비스 이름으로 감추지 않는다. 조사 그래프의 `collect`와 `persist` 노드가 각각 실행과 저장 시점을 소유한다.
 
 ## 피해야 할 이름
 
@@ -194,10 +196,10 @@ def test_candidate_promotion_skips_non_target_action():
 
 1. [완료] `target_snapshot` 생성 로직을 `agent/vision/target_snapshot.py`로 공통화한다.
 2. [완료] `nodes.py`를 책임별 `worker_*` 모듈로 분리하고 원본 파일을 삭제한다.
-3. [완료] `candidate_reviewer.py`에서 promotion 로직을 `candidate_promotion.py`로 분리한다.
+3. [완료] `application/recipe_candidate_review_service.py`에서 결정론적 promotion 로직을 `recipe/candidate_promotion.py`로 분리한다.
 4. [완료] `RecipeStore` 조회를 `recipe_key + site + task_category + URL 범위 + 단계별 화면 서명` 기준으로 정리한다.
 5. [완료] `investigation_workflow.py`를 조립부와 요청·근거·수집·답변 노드로 분리한다.
-6. [완료] 모델 변환과 좌표 계산을 `utils/model_dump.py`, `vision/marker_geometry.py`, `vision/target_snapshot.py`로 통합한다.
+6. [완료] 모델 변환과 좌표 계산을 `utils/model_conversion.py`, `vision/marker_geometry.py`, `vision/target_snapshot.py`로 통합한다.
 7. [완료] 수집 요청, 작업자 실행과 제출물 처리를 애플리케이션 서비스로 분리한다.
 
 입력 검증용 bbox, OCR 줄 병합 bbox, pHash 레거시 비율 복원처럼 의미가 다른 함수는 이름이 비슷하다는 이유만으로 합치지 않는다.

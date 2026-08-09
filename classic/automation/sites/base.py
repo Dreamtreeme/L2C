@@ -48,5 +48,5 @@ def get_inner_text_safe(locator) -> str | None:
         if locator.is_visible():
             return locator.inner_text().strip()
     except Exception:
-        pass
+        return None
     return None

@@ -8,6 +8,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
+from agent.observability.run_context import invoke_with_metrics, raise_if_cancelled
 from agent.runtime.worker_contracts import (
     ActionRequest,
     WorkerState,
@@ -76,9 +77,7 @@ def _loop_warning(
         )
 
     transition_cycle = detect_two_screen_transition_cycle(
-        action_event_transitions(
-            state["transition"].get("action_events", []) or []
-        )
+        action_event_transitions(state["transition"].get("action_events", []) or [])
     )
     if transition_cycle.get("detected"):
         logger.warning(
@@ -97,9 +96,7 @@ def _loop_warning(
         )
 
     if _is_repeating(action_history, 4):
-        logger.error(
-            "Persistent loop detected. Increasing error count to terminate."
-        )
+        logger.error("Persistent loop detected. Increasing error count to terminate.")
         error_increment = 1
     return warning, error_increment
 
@@ -109,11 +106,6 @@ def reasoning_node(
     runtime: Runtime[WorkerDependencies],
 ) -> dict[str, Any]:
     """카드 선택기로 먼저 판단하고 필요할 때만 LLM을 호출한다."""
-
-    from agent.observability.run_context import (
-        invoke_with_metrics,
-        raise_if_cancelled,
-    )
 
     raise_if_cancelled()
     started = time.perf_counter()
@@ -163,16 +155,13 @@ def reasoning_node(
         if error_increment > 0:
             result["transition"] = {
                 "error_count": (
-                    state["transition"].get("error_count", 0)
-                    + error_increment
+                    state["transition"].get("error_count", 0) + error_increment
                 )
             }
         return result
 
     reasoning_mode = (
-        "general_after_card_selector"
-        if selector_trace.get("attempted")
-        else "general"
+        "general_after_card_selector" if selector_trace.get("attempted") else "general"
     )
     response = invoke_with_metrics(
         _get_ui_llm_with_tools(runtime),
@@ -209,16 +198,11 @@ def reasoning_node(
             "pending_action": pending_action,
             "job_card_selection_trace": selector_trace,
         },
-        "replay": {
-            "reflex_trace": {"hit": False, "source": "reasoning"}
-        },
+        "replay": {"reflex_trace": {"hit": False, "source": "reasoning"}},
     }
     if error_increment > 0:
         result["transition"] = {
-            "error_count": (
-                state["transition"].get("error_count", 0)
-                + error_increment
-            )
+            "error_count": (state["transition"].get("error_count", 0) + error_increment)
         }
     return result
 

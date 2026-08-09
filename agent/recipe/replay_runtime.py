@@ -16,7 +16,7 @@ from agent.recipe.replay import (
     select_reflex_replay,
 )
 from agent.utils.logger import logger
-from agent.utils.model_dump import dump_model
+from agent.utils.model_conversion import dump_model
 
 
 def _miss_result(
@@ -30,7 +30,7 @@ def _miss_result(
     reflex_trace.update(
         {
             "hit": False,
-            "reason": reason or reflex_trace.get("reason", ""),
+            "reason": reason,
         }
     )
     active_recipe = dict(
@@ -137,62 +137,53 @@ def attempt_reflex_replay(
 
     started = time.perf_counter()
     logger.info("Executing Reflex Node")
-    try:
-        context = load_reflex_replay_context(state)
-        if not context.recipe_candidates:
-            logger.info(
-                "Reflex miss: no recipe",
-                site=context.site,
-                task_category=context.task_category,
-            )
-            return _miss_result(
-                state,
-                "no_recipe",
-                {
-                    "candidate_count": 0,
-                    "site": context.site,
-                    "task_category": context.task_category,
-                },
-            )
-
-        selection, rejection_log = select_reflex_replay(state, context)
-        if selection is None:
-            trace = rejection_log.trace_payload(context.candidate_count)
-            logger.info(
-                "Reflex miss: no candidate passed marker matching",
-                candidates=context.candidate_count,
-                last_reason=rejection_log.last_reason,
-                reject_reasons=rejection_log.reason_counts,
-                candidate_rejections=rejection_log.candidates[:12],
-            )
-            return _miss_result(state, "no_candidate_passed", trace)
-
-        elapsed = time.perf_counter() - started
+    context = load_reflex_replay_context(
+        state,
+        runtime.context.data.load_site_recipes,
+    )
+    if not context.recipe_candidates:
         logger.info(
-            "Reflex hit",
-            recipe_key=selection.recipe_key[:24],
-            actions=[call["name"] for call in selection.tool_calls],
-            recipe_transition=(
-                f"{selection.transition_index + 1}/"
-                f"{len(selection.recipe.transitions)}"
-                if len(selection.recipe.transitions) > 1
-                else ""
-            ),
-            when_to_use=getattr(
-                getattr(selection.recipe, "skill_metadata", None),
-                "when_to_use",
-                "",
-            )[:80],
-            duration=f"{elapsed:.3f}s",
+            "Reflex miss: no recipe",
+            site=context.site,
+            task_category=context.task_category,
         )
-        return _hit_result(context, selection)
-    except Exception as exc:
-        logger.debug("reflex node skipped", error=str(exc))
         return _miss_result(
             state,
-            "exception",
-            {"error": str(exc)},
+            "no_recipe",
+            {
+                "candidate_count": 0,
+                "site": context.site,
+                "task_category": context.task_category,
+            },
         )
+
+    selection, rejection_log = select_reflex_replay(state, context)
+    if selection is None:
+        trace = rejection_log.trace_payload(context.candidate_count)
+        logger.info(
+            "Reflex miss: no candidate passed marker matching",
+            candidates=context.candidate_count,
+            last_reason=rejection_log.last_reason,
+            reject_reasons=rejection_log.reason_counts,
+            candidate_rejections=rejection_log.candidates[:12],
+        )
+        return _miss_result(state, "no_candidate_passed", trace)
+
+    elapsed = time.perf_counter() - started
+    logger.info(
+        "Reflex hit",
+        recipe_key=selection.recipe_key[:24],
+        actions=[call["name"] for call in selection.tool_calls],
+        recipe_transition=(
+            f"{selection.transition_index + 1}/"
+            f"{len(selection.recipe.transitions)}"
+            if len(selection.recipe.transitions) > 1
+            else ""
+        ),
+        when_to_use=selection.recipe.skill_metadata.when_to_use[:80],
+        duration=f"{elapsed:.3f}s",
+    )
+    return _hit_result(context, selection)
 
 
 __all__ = ["attempt_reflex_replay"]

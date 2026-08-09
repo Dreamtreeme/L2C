@@ -309,7 +309,7 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from agent.recipe import candidate_reviewer
+    from agent.application import recipe_candidate_review_service
     from agent.recipe.candidate_store import RecipeCandidateStore
     from agent.recipe.submission_store import SubmissionStore
 
@@ -387,7 +387,11 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
             "promotion": promotion,
         }
 
-    monkeypatch.setattr(candidate_reviewer, "review_and_apply_candidate", review)
+    monkeypatch.setattr(
+        recipe_candidate_review_service,
+        "review_and_apply_candidate",
+        review,
+    )
 
     result = _promote_autonomous_candidate(
         {"result": {"submission_id": candidate_id}},

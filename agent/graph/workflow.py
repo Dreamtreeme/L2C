@@ -50,17 +50,11 @@ def route_after_selection(state: WorkerState) -> str:
     if state["observation"].get("low_information_screen"):
         return "capture"
 
-    transition_result = dict(
-        state["transition"].get("transition_result", {}) or {}
-    )
+    transition_result = dict(state["transition"].get("transition_result", {}) or {})
     if transition_result.get("status") == "pending":
         return "capture"
     if not current_observation_matches_capture(state):
-        return (
-            "ocr"
-            if transition_result.get("needs_ocr")
-            else "reasoning"
-        )
+        return "ocr" if transition_result.get("needs_ocr") else "reasoning"
     if return_to_job_results_for_url(state):
         return "reasoning"
     if state["collection"].get("job_detail_followup"):
@@ -84,17 +78,10 @@ def route_after_selection(state: WorkerState) -> str:
 def route_after_reflex(state: WorkerState) -> str:
     """Reflex가 요청을 만들었을 때만 실행하고 나머지는 LLM으로 보낸다."""
 
+    request = state["decision"].get("pending_action")
     return (
         "execution"
-        if str(
-            getattr(
-                state["decision"].get("pending_action"),
-                "source",
-                "",
-            )
-            or ""
-        )
-        == "reflex"
+        if request is not None and request.source == "reflex"
         else "reasoning"
     )
 
@@ -104,9 +91,7 @@ def route_after_reasoning(state: WorkerState) -> str:
 
     if (
         state["decision"].get("pending_action") is None
-        and (
-            state["decision"].get("job_card_selection_trace") or {}
-        ).get("reason")
+        and (state["decision"].get("job_card_selection_trace") or {}).get("reason")
         == "screen_loading"
     ):
         return "capture"
@@ -155,21 +140,18 @@ def _instrument_node(
                     else None
                 )
             )
-            action_source = str(getattr(request, "source", "") or "")
+            action_source = str(request.source if request is not None else "")
             observation.update(
                 action_source=action_source,
                 success=True,
             )
             if name == "execution" and request is not None:
                 observation["action_names"] = [
-                    str(call.name)
-                    for call in getattr(request, "tool_calls", [])
-                    if getattr(call, "name", "")
+                    str(call.name) for call in request.tool_calls if call.name
                 ]
             if name == "ocr" and isinstance(result, dict):
                 observation["analysis_mode"] = str(
-                    (result.get("observation") or {}).get("analysis_mode")
-                    or "full"
+                    (result.get("observation") or {}).get("analysis_mode") or "full"
                 )
             if name == "reflex" and isinstance(result, dict):
                 observation.update(reflex_selection_observation(result))

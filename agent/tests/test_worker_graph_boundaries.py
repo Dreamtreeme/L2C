@@ -26,6 +26,7 @@ from agent.tests.worker_test_support import (
     node_runtime,
     worker_state,
 )
+from shared.schema.jd_schema import CollectedJob, JobPosting
 
 
 def _request(source: str, tool_calls: list[dict]):
@@ -58,7 +59,7 @@ def _execution_state(
     current_url="https://example.com/jobs",
     reflex_trace=None,
     return_to_job_results=None,
-    extracted_jd=None,
+    collected_jobs=None,
     recipe_params=None,
 ):
     return worker_state(
@@ -76,7 +77,7 @@ def _execution_state(
         replay={"reflex_trace": dict(reflex_trace or {})},
         collection={
             "return_to_job_results": dict(return_to_job_results or {}),
-            "extracted_jd": dict(extracted_jd or {}),
+            "collected_jobs": list(collected_jobs or []),
         },
     )
 
@@ -165,6 +166,66 @@ def test_action_request_allows_only_supported_reflex_action_group():
     ]
 
 
+@pytest.mark.parametrize(
+    "action_name",
+    ["update_extracted_info", "close_browser"],
+)
+def test_action_request_rejects_removed_worker_tools(action_name):
+    with pytest.raises(ValueError, match="허용되지 않은 작업자 도구"):
+        _request(
+            "llm",
+            [{"name": action_name, "args": {}, "id": "removed"}],
+        )
+
+
+def test_job_card_queue_accepts_only_canonical_card_fields():
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "set_job_card_queue",
+                "args": {
+                    "cards": [
+                        {
+                            "marker_id": 7,
+                            "title": "AI 엔지니어",
+                            "company": "예시회사",
+                        }
+                    ]
+                },
+                "id": "queue",
+            }
+        ],
+    )
+
+    assert request.tool_calls[0].args["cards"] == [
+        {
+            "marker_id": 7,
+            "title": "AI 엔지니어",
+            "company": "예시회사",
+        }
+    ]
+    with pytest.raises(ValueError, match="target_label"):
+        _request(
+            "llm",
+            [
+                {
+                    "name": "set_job_card_queue",
+                    "args": {
+                        "cards": [
+                            {
+                                "marker_id": 7,
+                                "title": "AI 엔지니어",
+                                "target_label": "AI 엔지니어",
+                            }
+                        ]
+                    },
+                    "id": "legacy-queue",
+                }
+            ],
+        )
+
+
 def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     monkeypatch.setenv("REFLEX_ENABLED", "1")
     observed = _observed_state()
@@ -189,9 +250,7 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
         [{"name": "press_key", "args": {"key": "enter"}, "id": "reflex"}],
     )
     assert (
-        route_after_reflex(
-            worker_state(decision={"pending_action": reflex_request})
-        )
+        route_after_reflex(worker_state(decision={"pending_action": reflex_request}))
         == "execution"
     )
     assert route_after_reflex(worker_state()) == "reasoning"
@@ -243,12 +302,14 @@ def test_worker_observation_contract_rejects_mixed_capture_state():
         "ocr_capture_id": "capture:1",
     }
 
-    assert current_observation_matches_capture(
-        worker_state(observation=valid)
-    ) is True
-    assert current_observation_matches_capture(
-        worker_state(observation=mixed)
-    ) is False
+    assert current_observation_matches_capture(worker_state(observation=valid)) is True
+    assert current_observation_matches_capture(worker_state(observation=mixed)) is False
+    assert (
+        current_observation_matches_capture(
+            worker_state(observation={"ocr_complete": True})
+        )
+        is False
+    )
 
 
 def test_worker_start_does_not_reuse_ocr_from_another_capture():
@@ -263,9 +324,7 @@ def test_worker_start_does_not_reuse_ocr_from_another_capture():
         "current_screenshot": "screen.png",
     }
 
-    assert route_after_start(
-        worker_state(observation=stale_observation)
-    ) == "capture"
+    assert route_after_start(worker_state(observation=stale_observation)) == "capture"
     assert (
         route_after_start(
             worker_state(
@@ -305,6 +364,9 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
             calls.append(("stable_capture", str(after)))
             return after
 
+        def get_current_url(self):
+            return ""
+
     state = worker_state(
         observation={
             "current_capture_id": "capture:0001",
@@ -339,11 +401,7 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
 def test_screen_changing_action_always_routes_to_capture():
     assert (
         route_after_execution(
-            worker_state(
-                transition={
-                    "transition_request": {"action": "click_marker"}
-                }
-            )
+            worker_state(transition={"transition_request": {"action": "click_marker"}})
         )
         == "capture"
     )
@@ -360,9 +418,7 @@ def test_loading_card_screen_routes_from_reasoning_to_recapture():
 
     assert route_after_reasoning(state) == "capture"
     assert (
-        route_after_reasoning(
-            worker_state(decision={"pending_action": object()})
-        )
+        route_after_reasoning(worker_state(decision={"pending_action": object()}))
         == "execution"
     )
 
@@ -446,9 +502,7 @@ def test_execution_records_one_complete_action_event(monkeypatch):
     result = _run_execution(
         _execution_state(
             request,
-            current_markers=[
-                {"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"}
-            ],
+            current_markers=[{"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"}],
         )
     )
 
@@ -460,20 +514,50 @@ def test_execution_records_one_complete_action_event(monkeypatch):
         result["transition"]["transition_request"]["from_capture_id"]
         == "worker-test:capture:0003"
     )
-    assert (
-        action_results[0]["decision_capture_id"]
-        == "worker-test:capture:0003"
-    )
+    assert action_results[0]["decision_capture_id"] == "worker-test:capture:0003"
     event = result["transition"]["action_events"][0]
     assert event["recipe_step"]["action"] == "click_marker"
-    assert (
-        event["recipe_step"]["decision_capture_id"]
-        == "worker-test:capture:0003"
-    )
+    assert event["recipe_step"]["decision_capture_id"] == "worker-test:capture:0003"
     assert (
         event["feedback_episode"]["observation"]["before"]["capture_id"]
         == "worker-test:capture:0003"
     )
+
+
+def test_execution_accumulates_detail_field_evidence(monkeypatch):
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        lambda *_args, **_kwargs: {
+            "action": "scroll",
+            "status": "success",
+        },
+    )
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "scroll",
+                "args": {
+                    "direction": "down",
+                    "page_role": "job_detail",
+                    "observed_fields": {"requirements": "Python"},
+                },
+                "id": "scroll",
+            }
+        ],
+    )
+
+    result = _run_execution(
+        _execution_state(
+            request,
+            current_url="https://example.com/jobs/1",
+        )
+    )
+
+    coverage = result["collection"]["job_detail_coverage"]
+    assert coverage["field_evidence"]["requirements"] == "Python"
+    assert coverage["field_evidence"]["url"] == ("https://example.com/jobs/1")
 
 
 def test_reflex_transition_executes_input_and_enter_without_recapture(
@@ -604,14 +688,9 @@ def test_detail_completion_guard_blocks_more_screen_exploration(monkeypatch):
         )
     )
 
-    action_result = action_event_results(
-        result["transition"]["action_events"]
-    )[0]
+    action_result = action_event_results(result["transition"]["action_events"])[0]
     assert action_result["status"] == "skipped"
-    assert (
-        action_result["reason"]
-        == "return_to_job_results"
-    )
+    assert action_result["reason"] == "return_to_job_results"
     assert result["transition"]["error_count"] == 0
 
 
@@ -680,9 +759,10 @@ def test_returned_ui_error_does_not_create_screen_transition(monkeypatch):
         )
     )
 
-    assert action_event_results(
-        result["transition"]["action_events"]
-    )[0]["status"] == "error"
+    assert (
+        action_event_results(result["transition"]["action_events"])[0]["status"]
+        == "error"
+    )
     assert result["transition"]["error_count"] == 1
     assert not result["transition"]["transition_request"]
 
@@ -693,19 +773,19 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
         "dispatch_state_action",
         lambda *args, **kwargs: StateActionOutcome(
             result={
-                "action": "update_extracted_info",
+                "action": "set_job_card_queue",
                 "status": "error",
                 "result": "invalid payload",
             },
-            jobs={"jobs": [{"company_name": "기존 회사"}]},
+            collected_jobs=[],
         ),
     )
     request = _request(
         "llm",
         [
             {
-                "name": "update_extracted_info",
-                "args": {"data_json": "{}"},
+                "name": "set_job_card_queue",
+                "args": {"cards": []},
                 "id": "update",
             }
         ],
@@ -714,19 +794,25 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
     result = _run_execution(
         _execution_state(
             request,
-            extracted_jd={"jobs": [{"company_name": "원래 회사"}]},
+            collected_jobs=[
+                CollectedJob(
+                    posting=JobPosting(
+                        company_name="원래 회사",
+                        position="개발자",
+                        url="https://example.com/jobs/original",
+                    )
+                )
+            ],
         )
     )
 
-    action_result = action_event_results(
-        result["transition"]["action_events"]
-    )[0]
+    action_result = action_event_results(result["transition"]["action_events"])[0]
     assert action_result["status"] == "error"
     assert action_result["error"] == "invalid payload"
     assert result["transition"]["error_count"] == 1
-    assert result["collection"]["extracted_jd"] == {
-        "jobs": [{"company_name": "원래 회사"}]
-    }
+    assert result["collection"]["collected_jobs"][0].posting.company_name == (
+        "원래 회사"
+    )
 
 
 def test_stored_job_card_queue_schedules_first_card(monkeypatch):
@@ -744,7 +830,7 @@ def test_stored_job_card_queue_schedules_first_card(monkeypatch):
                 "status": "success",
                 "result": "stored",
             },
-            jobs={},
+            collected_jobs=[],
             state_update=StateActionUpdate(
                 job_card_queue=[queued_card],
                 job_results_memory={"url": "https://example.com/jobs"},
@@ -803,7 +889,7 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
                 "status": "success",
                 "result": "stored",
             },
-            jobs={},
+            collected_jobs=[],
             state_update=StateActionUpdate(
                 job_card_queue=existing_cards,
                 job_results_memory={"url": "https://example.com/jobs"},
@@ -839,9 +925,10 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
     assert result["lifecycle"]["is_finished"] is True
     assert result["decision"]["pending_action"] is None
     assert result["collection"]["job_card_queue"] == existing_cards
-    assert action_event_results(
-        result["transition"]["action_events"]
-    )[0]["resolved_count"] == 2
+    assert (
+        action_event_results(result["transition"]["action_events"])[0]["resolved_count"]
+        == 2
+    )
 
 
 def test_graph_custom_event_is_shared_by_metrics_and_sse():
@@ -849,7 +936,10 @@ def test_graph_custom_event_is_shared_by_metrics_and_sse():
     from agent.observability.graph_events import forward_graph_event
 
     events = []
-    with run_context(run_id="graph-event-test", event_sink=events.append) as (context, _created):
+    with run_context(run_id="graph-event-test", event_sink=events.append) as (
+        context,
+        _created,
+    ):
         forward_graph_event(
             {
                 "event": "graph_step_started",
@@ -869,7 +959,10 @@ def test_graph_custom_event_is_shared_by_metrics_and_sse():
         snapshot = context.snapshot()
 
     graph_events = [event for event in events if event.event.startswith("graph_step_")]
-    assert [event.event for event in graph_events] == ["graph_step_started", "graph_step_finished"]
+    assert [event.event for event in graph_events] == [
+        "graph_step_started",
+        "graph_step_finished",
+    ]
     assert {event.run_id for event in graph_events} == {"graph-event-test"}
     assert snapshot["steps"] == [
         {
@@ -902,7 +995,9 @@ def test_worker_graph_forwards_custom_stream_and_preserves_values(monkeypatch):
                 },
             )
 
-    monkeypatch.setattr(worker_execution_service, "forward_graph_event", forwarded.append)
+    monkeypatch.setattr(
+        worker_execution_service, "forward_graph_event", forwarded.append
+    )
     vision_runtime = _FakeVisionRuntime()
     state, limited = worker_execution_service.run_graph_with_last_state(
         FakeGraph(),

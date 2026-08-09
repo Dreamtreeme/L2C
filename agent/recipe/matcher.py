@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agent.config import get_settings
 from agent.runtime.site_context import normalize_page_role
-from agent.runtime.replay_actions import (
+from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )

@@ -22,8 +22,6 @@ class WorknetAdapter(SiteAdapter):
         return "work.go.kr" in url or "work24.go.kr" in url
 
     def extract(self, page) -> dict:
-        import time
-
         dom_data: dict = {
             "company_name": None,
             "position": None,

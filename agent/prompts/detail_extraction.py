@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from agent.prompts.trust_boundary import external_content_contract_ko
+
 
 def build_detail_extraction_system_prompt(base_instruction: str) -> str:
     """실행 경로와 벤치마크가 공유하는 상세 OCR 정제 지침을 만든다."""
-    from agent.prompts.trust_boundary import external_content_contract_ko
-
     return (
         f"{base_instruction.strip()}\n"
         f"{external_content_contract_ko()}\n"

@@ -5,15 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.runtime.worker_contracts import WorkerState
-from agent.runtime.replay_actions import (
+from agent.recipe.matcher import is_replayable_action
+from agent.recipe.phash_replay import (
+    match_step_by_screen_signature,
+    screen_context_signature_match,
+)
+from agent.runtime.action_validation import text_input_target_rejection
+from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
-from agent.runtime.action_validation import text_input_target_rejection
+from agent.runtime.site_context import normalize_page_role
 from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
-from agent.utils.model_dump import dump_model
-
+from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_data_services import SiteRecipeLoader
+from agent.utils.model_conversion import dump_model
+from agent.utils.text import recipe_url_scope_matches, url_template
+from shared.schema.recipe_schema import RecipeTransition, SiteRecipe
 
 _REJECT_REASON_PRIORITY = {
     "capture_size_mismatch": 100,
@@ -96,7 +104,7 @@ class ReflexReplayContext:
     used_recipe_keys: set[str]
     active_recipe: dict[str, Any]
     active_recipe_key: str
-    recipe_candidates: list[tuple[str, Any]]
+    recipe_candidates: list[tuple[str, SiteRecipe]]
 
     @property
     def candidate_count(self) -> int:
@@ -106,16 +114,16 @@ class ReflexReplayContext:
 @dataclass(frozen=True)
 class ReflexCandidate:
     recipe_key: str
-    recipe: Any
-    transition: Any
+    recipe: SiteRecipe
+    transition: RecipeTransition
     transition_index: int
 
 
 @dataclass(frozen=True)
 class ReflexSelection:
     recipe_key: str
-    recipe: Any
-    transition: Any
+    recipe: SiteRecipe
+    transition: RecipeTransition
     transition_index: int
     tool_calls: list[dict[str, Any]]
     tool_call_traces: dict[str, dict[str, Any]]
@@ -143,60 +151,71 @@ def _trace_args(step: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def build_reflex_action_args(
+def _click_action_args(
+    step: dict[str, Any],
+    marker_id: int | None,
+    trace_args: dict[str, str],
+) -> dict[str, Any] | None:
+    if marker_id is None:
+        return None
+    args: dict[str, Any] = {
+        "marker_id": marker_id,
+        **trace_args,
+        "needs_user_confirmation": bool(step.get("needs_user_confirmation")),
+    }
+    if step.get("risk_level"):
+        args["risk_level"] = step.get("risk_level")
+    return args
+
+
+def _parameter_slot_name(step: dict[str, Any], param: dict[str, Any]) -> str:
+    slot_name = str(param.get("slot_name") or param.get("slot") or "")
+    if slot_name:
+        return slot_name
+    slot_refs = step.get("slot_refs") or []
+    return str(slot_refs[0]) if slot_refs else ""
+
+
+def _type_action_args(
     step: dict[str, Any],
     marker_id: int | None,
     params: dict[str, Any],
+    trace_args: dict[str, str],
 ) -> dict[str, Any] | None:
-    """저장된 행동을 검증된 물리 도구 인자로 바꾼다."""
-
-    action = step.get("action")
-    param = dict(step.get("param") or {})
-    value = step.get("value")
-    trace_args = _trace_args(step)
-
-    if action == "click_marker":
-        if marker_id is None:
-            return None
-        return {
-            "marker_id": marker_id,
-            **trace_args,
-            **(
-                {"risk_level": step.get("risk_level")}
-                if step.get("risk_level")
-                else {}
-            ),
-            "needs_user_confirmation": bool(
-                step.get("needs_user_confirmation")
-            ),
-        }
-    if action == "type_in_marker":
-        if marker_id is None:
-            return None
-        slot_name = param.get("slot_name") or param.get("slot") or ""
-        if not slot_name:
-            slot_refs = step.get("slot_refs") or []
-            slot_name = slot_refs[0] if slot_refs else ""
-        if step.get("replay_mode") == "parameterized" and not slot_name:
-            return None
-        text = params.get(slot_name) if slot_name else None
-        if slot_name and step.get("replay_mode") == "parameterized" and not text:
-            return None
-        text = text or param.get("text") or value
-        if not text:
-            return None
-        args = {"marker_id": marker_id, "text": text, **trace_args}
-        if slot_name:
-            args["slot_name"] = slot_name
-        if step.get("risk_level"):
-            args["risk_level"] = step.get("risk_level")
-        args["needs_user_confirmation"] = bool(
-            step.get("needs_user_confirmation")
-        )
-        return args
-    if action not in CONTEXTUAL_REPLAY_ACTIONS:
+    if marker_id is None:
         return None
+    param = dict(step.get("param") or {})
+    slot_name = _parameter_slot_name(step, param)
+    parameterized = step.get("replay_mode") == "parameterized"
+    if parameterized and not slot_name:
+        return None
+    bound_text = params.get(slot_name) if slot_name else None
+    if parameterized and slot_name and not bound_text:
+        return None
+    text = bound_text or param.get("text") or step.get("value")
+    if not text:
+        return None
+    args: dict[str, Any] = {
+        "marker_id": marker_id,
+        "text": text,
+        **trace_args,
+    }
+    if slot_name:
+        args["slot_name"] = slot_name
+    if step.get("risk_level"):
+        args["risk_level"] = step.get("risk_level")
+    args["needs_user_confirmation"] = bool(
+        step.get("needs_user_confirmation")
+    )
+    return args
 
+
+def _contextual_action_args(
+    step: dict[str, Any],
+    trace_args: dict[str, str],
+) -> dict[str, Any] | None:
+    action = str(step.get("action") or "")
+    param = dict(step.get("param") or {})
     allowed_param_keys = {
         "press_key": {"key"},
         "go_back": set(),
@@ -219,36 +238,48 @@ def build_reflex_action_args(
             if key in {"reason", "page_role", "expected_after"}
         }
     )
-    args.update(
-        {
-            "risk_level": step.get("risk_level") or "safe_navigation",
-            "needs_user_confirmation": bool(
-                step.get("needs_user_confirmation")
-            ),
-        }
+    args["risk_level"] = step.get("risk_level") or "safe_navigation"
+    args["needs_user_confirmation"] = bool(
+        step.get("needs_user_confirmation")
     )
     return args
 
 
-def _missing_required_inputs(recipe: Any, params: dict[str, Any]) -> list[str]:
-    metadata = getattr(recipe, "skill_metadata", None)
-    inputs = getattr(metadata, "inputs", []) if metadata is not None else []
+def build_reflex_action_args(
+    step: dict[str, Any],
+    marker_id: int | None,
+    params: dict[str, Any],
+) -> dict[str, Any] | None:
+    """저장된 행동을 검증된 물리 도구 인자로 바꾼다."""
+
+    action = step.get("action")
+    trace_args = _trace_args(step)
+    if action == "click_marker":
+        return _click_action_args(step, marker_id, trace_args)
+    if action == "type_in_marker":
+        return _type_action_args(step, marker_id, params, trace_args)
+    if action not in CONTEXTUAL_REPLAY_ACTIONS:
+        return None
+    return _contextual_action_args(step, trace_args)
+
+
+def _missing_required_inputs(
+    recipe: SiteRecipe,
+    params: dict[str, Any],
+) -> list[str]:
     missing: list[str] = []
-    for item in inputs or []:
-        name = getattr(item, "name", "")
-        required = bool(getattr(item, "required", False))
-        value = params.get(name)
-        if required and name and (value is None or value == ""):
-            missing.append(name)
+    for item in recipe.skill_metadata.inputs:
+        value = params.get(item.name)
+        if item.required and item.name and (value is None or value == ""):
+            missing.append(item.name)
     return missing
 
 
-def load_reflex_replay_context(state: WorkerState) -> ReflexReplayContext:
+def load_reflex_replay_context(
+    state: WorkerState,
+    load_site_recipes: SiteRecipeLoader,
+) -> ReflexReplayContext:
     """현재 작업 상태에 맞는 활성 레시피 후보를 조회한다."""
-
-    from agent.runtime.site_context import normalize_page_role
-    from agent.recipe.store import RecipeStore
-    from agent.utils.text import url_template
 
     observation = state["observation"]
     request = state["request"]
@@ -266,7 +297,7 @@ def load_reflex_replay_context(state: WorkerState) -> ReflexReplayContext:
     active_recipe = dict(replay.get("active_reflex_recipe", {}) or {})
     active_recipe_key = str(active_recipe.get("recipe_key") or "")
     recipe_candidates = (
-        RecipeStore().get_site_recipes(
+        load_site_recipes(
             site,
             task_category=task_category or None,
         )
@@ -370,6 +401,58 @@ def _step_trace(
     }
 
 
+def _match_contextual_action_screen(
+    observation: dict[str, Any],
+    context: ReflexReplayContext,
+    step: dict[str, Any],
+    trace: dict[str, Any],
+    action_index: int,
+) -> str:
+    action = step.get("action")
+    if action_index != 0 or action not in CONTEXTUAL_REPLAY_ACTIONS:
+        return ""
+    context_match = screen_context_signature_match(
+        dict(step.get("screen_context_signature") or {}),
+        dict(observation.get("screen_signature") or {}),
+    )
+    trace["phash"] = context_match
+    trace["match_mode"] = context_match.get("mode") or "screen_context_phash"
+    if not context_match.get("matched"):
+        return str(context_match.get("reason") or "screen_context_mismatch")
+    if not context.active_recipe_key:
+        return "recipe_must_start_with_roi"
+    return ""
+
+
+def _match_target_action_screen(
+    observation: dict[str, Any],
+    context: ReflexReplayContext,
+    step: dict[str, Any],
+    trace: dict[str, Any],
+) -> tuple[int | None, str]:
+    marker_id, phash_result = match_step_by_screen_signature(
+        step,
+        dict(observation.get("screen_signature", {}) or {}),
+        context.markers,
+        current_image_path=context.current_image_path,
+    )
+    trace["phash"] = phash_result
+    trace["match_mode"] = phash_result.get("mode") or "roi_phash"
+    if marker_id is None:
+        return None, str(phash_result.get("reason") or "phash_check_failed")
+    if step.get("action") == "type_in_marker":
+        target_rejection = text_input_target_rejection(
+            context.markers,
+            marker_id,
+        )
+        if target_rejection:
+            return None, str(
+                target_rejection.get("reason") or "invalid_text_input_target"
+            )
+    trace["marker_id"] = marker_id
+    return marker_id, ""
+
+
 def _match_action_screen(
     state: WorkerState,
     context: ReflexReplayContext,
@@ -380,13 +463,6 @@ def _match_action_screen(
 ) -> tuple[int | None, str]:
     """저장된 행동의 화면 문맥과 현재 마커 대상을 검증한다."""
 
-    from agent.recipe.matcher import is_replayable_action
-    from agent.recipe.phash_replay import (
-        match_step_by_screen_signature,
-        screen_context_signature_match,
-    )
-    from agent.utils.text import recipe_url_scope_matches
-
     observation = state["observation"]
     action = step.get("action")
     if not is_replayable_action(step):
@@ -394,45 +470,22 @@ def _match_action_screen(
     if not recipe_url_scope_matches(step.get("url_template", ""), context.current_url):
         return None, "url_scope_mismatch"
 
-    if action_index == 0 and action in CONTEXTUAL_REPLAY_ACTIONS:
-        context_match = screen_context_signature_match(
-            dict(step.get("screen_context_signature") or {}),
-            dict(observation.get("screen_signature") or {}),
-        )
-        trace["phash"] = context_match
-        trace["match_mode"] = context_match.get("mode") or "screen_context_phash"
-        if not context_match.get("matched"):
-            return None, str(
-                context_match.get("reason") or "screen_context_mismatch"
-            )
-        if not context.active_recipe_key:
-            return None, "recipe_must_start_with_roi"
-
+    contextual_rejection = _match_contextual_action_screen(
+        observation,
+        context,
+        step,
+        trace,
+        action_index,
+    )
+    if contextual_rejection:
+        return None, contextual_rejection
     if action in TARGET_REPLAY_ACTIONS:
-        marker_id, phash_result = match_step_by_screen_signature(
+        return _match_target_action_screen(
+            observation,
+            context,
             step,
-            dict(observation.get("screen_signature", {}) or {}),
-            context.markers,
-            current_image_path=context.current_image_path,
+            trace,
         )
-        trace["phash"] = phash_result
-        trace["match_mode"] = phash_result.get("mode") or "roi_phash"
-        if marker_id is None:
-            return None, str(
-                phash_result.get("reason") or "phash_check_failed"
-            )
-        if action == "type_in_marker":
-            target_rejection = text_input_target_rejection(
-                context.markers,
-                marker_id,
-            )
-            if target_rejection:
-                return None, str(
-                    target_rejection.get("reason")
-                    or "invalid_text_input_target"
-                )
-        trace["marker_id"] = marker_id
-        return marker_id, ""
 
     if trace["match_mode"] == "none":
         trace["match_mode"] = (

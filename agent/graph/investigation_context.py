@@ -5,26 +5,33 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Any, TypedDict
 
+from agent.config import get_settings
 from agent.llm.clients import (
     get_google_chat_model,
     get_structured_google_model,
 )
 from agent.llm.policy import commander_model_name
+from agent.sites import list_supported_sites
 from shared.schema.investigation_schema import (
     EvidencePlan,
     EvidenceValidation,
+    ConversationTurn,
     InvestigationActionPlan,
     InvestigationConstraints,
     InvestigationRequest,
     RequestAnalysis,
     TaxonomyResolution,
 )
+from shared.schema.collection_intent import CollectionResult
+from shared.schema.collection_run import CollectionBatch
 
 
 class InvestigationRequestState(TypedDict, total=False):
-    investigation: dict[str, Any]
+    investigation: InvestigationRequest
     capability_catalog: list[dict[str, Any]]
     clarification: dict[str, Any]
+    conversation_history: list[ConversationTurn]
+    resume_run_id: str
 
 
 class InvestigationEvidenceState(TypedDict, total=False):
@@ -34,7 +41,10 @@ class InvestigationEvidenceState(TypedDict, total=False):
 
 
 class InvestigationExecutionState(TypedDict, total=False):
-    collection_results: list[dict[str, Any]]
+    active_step_id: str
+    pending_collection: CollectionBatch | None
+    collection_error: str
+    collection_results: list[CollectionResult]
     run_status: str
     cannot_proceed_reason: str
 
@@ -72,14 +82,18 @@ class InvestigationState(TypedDict):
 def create_investigation_state(
     investigation: InvestigationRequest,
     capabilities: list[dict[str, Any]],
+    *,
+    resume_run_id: str = "",
 ) -> InvestigationState:
     """새 조사 실행에 필요한 네 책임 섹션을 초기화한다."""
 
     return {
         "request": {
-            "investigation": investigation.model_dump(mode="json"),
+            "investigation": investigation,
             "capability_catalog": list(capabilities),
             "clarification": {},
+            "conversation_history": [],
+            "resume_run_id": resume_run_id,
         },
         "evidence": {
             "db_report": {},
@@ -87,6 +101,9 @@ def create_investigation_state(
             "valid_ids": [],
         },
         "execution": {
+            "active_step_id": "",
+            "pending_collection": None,
+            "collection_error": "",
             "collection_results": [],
             "run_status": "",
             "cannot_proceed_reason": "",
@@ -117,8 +134,6 @@ class InvestigationModels:
 
     @staticmethod
     def _max_output_tokens() -> int | None:
-        from agent.config import get_settings
-
         value = get_settings().models.commander_max_output_tokens
         return value if value > 0 else None
 
@@ -176,8 +191,6 @@ def normalize_site_slugs(
 
     if not constraints.sites:
         return constraints
-    from agent.sites import list_supported_sites
-
     aliases: dict[str, str] = {}
     for profile in list_supported_sites(enabled_only=False):
         values = [profile.slug, profile.display_name, *profile.domains]
@@ -193,9 +206,7 @@ def normalize_site_slugs(
         for value in constraints.sites
         if str(value).strip()
     ]
-    return constraints.model_copy(
-        update={"sites": list(dict.fromkeys(normalized))}
-    )
+    return constraints.model_copy(update={"sites": list(dict.fromkeys(normalized))})
 
 
 def capabilities_for_investigation(
@@ -234,13 +245,13 @@ def build_request_prompt_context(
         "constraints": investigation.constraints.model_dump(mode="json"),
         "assumptions": list(investigation.assumptions),
         "evidence_requirements": [
-            item.model_dump(mode="json")
-            for item in investigation.evidence_requirements
+            item.model_dump(mode="json") for item in investigation.evidence_requirements
         ],
         "missing_evidence": list(investigation.missing_evidence),
         "evidence_document_ids": list(investigation.evidence_document_ids),
         "collection_document_ids": list(investigation.collection_document_ids),
     }
+
 
 __all__ = [
     "InvestigationState",

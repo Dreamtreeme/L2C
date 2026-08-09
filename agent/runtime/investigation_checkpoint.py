@@ -9,6 +9,17 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 
+CHECKPOINT_MODEL_ALLOWLIST = [
+    ("shared.schema.investigation_schema", "InvestigationRequest"),
+    ("shared.schema.investigation_schema", "InvestigationPurpose"),
+    ("shared.schema.investigation_schema", "EvidencePolicy"),
+    ("shared.schema.investigation_schema", "InvestigationStatus"),
+    ("shared.schema.collection_intent", "CollectionCountMode"),
+    ("shared.schema.collection_intent", "CollectionPurpose"),
+    ("shared.schema.jd_schema", "JobField"),
+]
+
+
 def build_investigation_checkpoint_path(db_path: str | Path) -> Path:
     """업무 DB와 분리된 조사 체크포인트 경로를 만든다."""
 
@@ -39,7 +50,9 @@ class InvestigationCheckpointRuntime:
         self._connection.execute("PRAGMA busy_timeout = 5000")
         self.saver = SqliteSaver(
             self._connection,
-            serde=JsonPlusSerializer(allowed_msgpack_modules=[]),
+            serde=JsonPlusSerializer(
+                allowed_msgpack_modules=CHECKPOINT_MODEL_ALLOWLIST
+            ),
         )
         self.saver.setup()
 

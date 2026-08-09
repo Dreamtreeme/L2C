@@ -1,11 +1,9 @@
-"""비전 작업자 제출물을 만들고 관찰 가능한 실행 사실을 검증한다."""
+"""비전 작업자 실행 상태를 저장 가능한 제출물로 조립한다."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
-
 from agent.runtime.worker_contracts import (
     WorkerState,
     action_event_feedback,
@@ -13,7 +11,7 @@ from agent.runtime.worker_contracts import (
     action_event_results,
     action_event_transitions,
 )
-from agent.runtime.job_collection import job_items as _job_items
+from agent.runtime.job_collection import job_count
 from shared.schema.feedback_schema import WorkerSubmission
 
 
@@ -34,8 +32,7 @@ def build_worker_submission(
     observation = final_state["observation"]
     transition = final_state["transition"]
     collection = final_state["collection"]
-    extracted_jd = collection.get("extracted_jd", {}) or {}
-    jobs = _job_items(extracted_jd)
+    collected_jobs = list(collection.get("collected_jobs", []))
     current_url = observation.get("current_url", "") or ""
     raw_recipe_params = request.get("recipe_params")
     recipe_params = (
@@ -57,8 +54,8 @@ def build_worker_submission(
         }
     )
     extracted_summary = {
-        "has_data": bool(jobs),
-        "job_count": len(jobs),
+        "has_data": bool(collected_jobs),
+        "job_count": job_count(collected_jobs),
         "observed_job_count": len(observed_job_ids),
         "current_url": current_url,
         "action_count": len(action_event_results(action_events)),
@@ -74,7 +71,7 @@ def build_worker_submission(
             final_state["lifecycle"].get("is_finished", False)
         ),
         hit_recursion_limit=bool(hit_recursion_limit),
-        collected_count=len(jobs),
+        collected_count=job_count(collected_jobs),
         observed_job_ids=observed_job_ids,
         persisted_count=int(persisted_count or 0),
         recorded_steps=recorded_steps,

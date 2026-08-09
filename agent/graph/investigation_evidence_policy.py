@@ -6,7 +6,7 @@ import json
 from collections import Counter
 from typing import Any
 
-from agent.application.search_taxonomy_service import SearchTaxonomyService
+from agent.graph.investigation_ports import TaxonomyRequirementPort
 from shared.schema.collection_intent import CollectionIntent
 from shared.schema.investigation_schema import (
     EvidencePlan,
@@ -204,7 +204,7 @@ def normalize_collection_steps(
 def normalize_evidence_requirements(
     plan: EvidencePlan,
     investigation: InvestigationRequest,
-    taxonomy_service: SearchTaxonomyService,
+    taxonomy_service: TaxonomyRequirementPort,
 ) -> list:
     """근거 필드를 DB 계약에 맞추고 화면 전체 수집의 표본 수를 정규화한다."""
 

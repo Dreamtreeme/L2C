@@ -1,6 +1,8 @@
 import pytest
 
-from agent.recipe.candidate_reviewer import review_and_apply_candidate
+from agent.application.recipe_candidate_review_service import (
+    review_and_apply_candidate,
+)
 from agent.recipe.candidate_store import RecipeCandidateStore
 from agent.recipe.promotion_policy import evaluate_candidate_step_evidence
 from agent.recipe.store import RecipeStore
@@ -149,6 +151,19 @@ def test_candidate_promotion_keeps_only_safe_roi_target(tmp_path):
     assert recipes[0]["transitions"][0]["actions"][0]["action"] == "click_marker"
 
 
+def test_candidate_without_recorded_after_state_is_not_promoted(tmp_path):
+    submission = _candidate_submission()
+    submission["transition_records"][0].pop("after_state")
+
+    result = _promote(
+        tmp_path / "missing-after-state.db",
+        submission,
+        [{"seq": 0, "keep": True}],
+    )
+
+    assert result["promotion"]["promoted_action_count"] == 0
+
+
 def test_critic_cannot_rewrite_autonomous_recipe_fields(tmp_path):
     db_path = tmp_path / "critic-authority.db"
     candidate_id = _store_candidate(db_path, _candidate_submission())
@@ -188,9 +203,7 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
         [
             {
                 "seq": 1,
-                "before_state": _state(
-                    "capture:0002", "search_overlay", "2" * 16
-                ),
+                "before_state": _state("capture:0002", "search_overlay", "2" * 16),
                 "page_role": "search_overlay",
                 "action": "type_in_marker",
                 "replay_mode": "parameterized",
@@ -205,9 +218,7 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
             },
             {
                 "seq": 2,
-                "before_state": _state(
-                    "capture:0003", "search_overlay", "3" * 16
-                ),
+                "before_state": _state("capture:0003", "search_overlay", "3" * 16),
                 "page_role": "search_overlay",
                 "action": "press_key",
                 "replay_mode": "fixed",
@@ -242,9 +253,10 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
         for transition in recipe["transitions"]
         for action in transition["actions"]
     ] == ["click_marker", "type_in_marker", "press_key"]
-    assert [
-        action["action"] for action in recipe["transitions"][1]["actions"]
-    ] == ["type_in_marker", "press_key"]
+    assert [action["action"] for action in recipe["transitions"][1]["actions"]] == [
+        "type_in_marker",
+        "press_key",
+    ]
 
 
 @pytest.mark.parametrize(

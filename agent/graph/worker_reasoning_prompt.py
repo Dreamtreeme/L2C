@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -11,20 +12,25 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from agent.config import get_settings
 from agent.runtime.worker_contracts import WorkerState, action_event_results
 from agent.graph.worker_execution_policy import compact_action_args
+from agent.prompts.trust_boundary import external_content_contract_en
 from agent.runtime.worker_state import (
-    job_detail_key_from_state,
     return_to_job_results_for_url,
 )
 from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT
 from agent.runtime.action_validation import IMPLAUSIBLE_TEXT_INPUT_TARGET
 from agent.runtime.detail_runtime import compact_job_detail_buffer_context
-from agent.runtime.job_card_queue import pending_job_cards
-from agent.runtime.job_collection import job_count, job_items
+from agent.runtime.job_card_queue import (
+    job_detail_key_from_state,
+    pending_job_cards,
+)
+from agent.runtime.job_collection import job_count, job_postings
 from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.utils.job_fields import job_field_value
+from agent.utils.image_utils import image_to_base64_jpeg
 from agent.utils.logger import logger
 from shared.schema.agent_contract import JOB_COLLECTION_FIELD_LABELS
+from shared.schema.jd_schema import CollectedJob, JobPosting
 
 
 def _is_open_browser_noop(action: dict[str, Any]) -> bool:
@@ -113,8 +119,6 @@ def _build_forbidden_action_context(
 
 
 def _safety_page_role_contract() -> str:
-    from agent.prompts.trust_boundary import external_content_contract_en
-
     return (
         "\n\n"
         + external_content_contract_en()
@@ -127,7 +131,7 @@ def _safety_page_role_contract() -> str:
         "- A marker whose OCR text is only a generic icon label has no known semantic identity. Infer it only from a clearly visible symbol; otherwise choose a nearby labeled text marker or another visible navigation path instead of inventing what its ID means.\n"
         "- Unknown or newly released tasks should be researched and narrowed before execution. Do not try random branches first.\n"
         "- On detail pages, report fields visibly confirmed on the current screen in observed_fields whenever you scroll, click a reveal control, or finish. The state keeps this evidence across screens without another extraction call.\n"
-        "- If detail OCR buffering is active, do not call update_extracted_info for intermediate extraction. Call finish_detail_reading only after every field in the current required-field contract is confirmed. A field that the posting does not provide may be listed in unavailable_fields only after page_exhausted=true.\n"
+        "- Call finish_detail_reading only after every field in the current required-field contract is confirmed. A field that the posting does not provide may be listed in unavailable_fields only after page_exhausted=true.\n"
         "- A title and company without actual duties or qualifications may be an intermediary page. Follow a visible original-source or content-reveal control before finishing; never guess a destination URL.\n"
         "- If finish_detail_reading was rejected with required_field_evidence_incomplete, use the returned missing_fields to choose one visible reveal, navigation, or scroll action instead of repeating finish.\n"
     )
@@ -176,18 +180,18 @@ _JOB_SUMMARY_FIELDS: tuple[str, ...] = (
 )
 
 
-def _job_display_label(job: dict[str, Any]) -> str:
+def _job_display_label(job: JobPosting) -> str:
     company = job_field_value(job, "company_name")
     position = job_field_value(job, "position")
     if company and position:
         return _clip_prompt_text(f"{company} - {position}", 120)
     return _clip_prompt_text(
-        position or company or job.get("url") or "",
+        position or company or job.url or "",
         120,
     )
 
 
-def _job_summary_for_prompt(job: dict[str, Any]) -> dict[str, Any]:
+def _job_summary_for_prompt(job: JobPosting) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     present_fields: list[str] = []
     missing_fields: list[str] = []
@@ -216,22 +220,22 @@ def _job_summary_for_prompt(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def _current_job_for_prompt(
-    jobs: list[dict[str, Any]],
+    jobs: list[JobPosting],
     current_url: str,
-) -> dict[str, Any] | None:
+) -> JobPosting | None:
     current_url = str(current_url or "").strip()
     if current_url:
         for job in reversed(jobs):
-            if str(job.get("url") or "").strip() == current_url:
+            if str(job.url or "").strip() == current_url:
                 return job
     return jobs[-1] if jobs else None
 
 
-def _compact_extracted_context(
-    extracted_jd: Any,
+def _compact_collected_context(
+    collected_jobs: list[CollectedJob],
     current_url: str,
 ) -> str:
-    jobs = job_items(extracted_jd)
+    jobs = job_postings(collected_jobs)
     if not jobs:
         return "수집 데이터 요약:\n- 수집된 공고 없음\n\n"
 
@@ -283,14 +287,11 @@ def _compact_recent_action(action: dict[str, Any]) -> dict[str, Any]:
         "url",
         "page_role",
     )
-    if action_name == "update_extracted_info":
-        shown_args = compact_args
-    else:
-        shown_args = {
-            key: compact_args.get(key)
-            for key in keep_keys
-            if compact_args.get(key) not in (None, "", [], {})
-        }
+    shown_args = {
+        key: compact_args.get(key)
+        for key in keep_keys
+        if compact_args.get(key) not in (None, "", [], {})
+    }
     item: dict[str, Any] = {
         "action": action_name,
         "status": action.get("status", ""),
@@ -392,24 +393,13 @@ def _reasoning_image_base64(state: WorkerState) -> str:
     marked_image_path = observation.get("marked_image")
     if not marked_image_path or not os.path.exists(marked_image_path):
         return ""
-    try:
-        from pathlib import Path
-
-        from agent.utils.image_utils import image_to_base64_jpeg
-
-        settings = get_settings().vision
-        return image_to_base64_jpeg(
-            Path(marked_image_path),
-            max_dim=settings.reasoning_image_max_dim,
-            quality=settings.reasoning_image_quality,
-            fast=True,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to read/resize marked_image for reasoning node",
-            error=str(exc),
-        )
-        return ""
+    settings = get_settings().vision
+    return image_to_base64_jpeg(
+        Path(marked_image_path),
+        max_dim=settings.reasoning_image_max_dim,
+        quality=settings.reasoning_image_quality,
+        fast=True,
+    )
 
 
 def build_reasoning_messages(
@@ -427,7 +417,7 @@ def build_reasoning_messages(
         COMMANDER_SYSTEM_PROMPT.format(goal=request.get("goal", ""))
         + _safety_page_role_contract()
     )
-    extracted_jd = collection.get("extracted_jd", {})
+    collected_jobs = list(collection.get("collected_jobs", []))
     ui_context = observation.get("ui_context", "")
     current_url = observation.get("current_url", "")
     action_history = action_event_results(
@@ -435,7 +425,7 @@ def build_reasoning_messages(
     )
     recipe_params = dict(request.get("recipe_params", {}) or {})
     target_count = int(recipe_params.get("target_count") or 0)
-    collected_count = job_count(extracted_jd)
+    collected_count = job_count(collected_jobs)
     visited_cards: list[str] = []
     for action in action_history:
         if not isinstance(action, dict) or action.get("status") != "success":
@@ -504,7 +494,7 @@ def build_reasoning_messages(
         forbidden_action_context += "\n\n"
 
     human_prompt_text = (
-        f"{_compact_extracted_context(extracted_jd, current_url)}"
+        f"{_compact_collected_context(collected_jobs, current_url)}"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"{site_runtime_guidance(current_url, observation.get('current_page_role', ''))}"
         f"{collection_context}"
@@ -517,9 +507,8 @@ def build_reasoning_messages(
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
         f"{_compact_recent_actions_context(action_history)}"
-        "다음 행동을 결정하세요. 상세 페이지에서 OCR 버퍼가 활성화되어 있으면 중간 정보 추출 대신 "
-        "finish_detail_reading으로 읽기 종료를 알리고, 그 외 화면에서 새로운 정보가 식별되었다면 "
-        "update_extracted_info를 먼저 부르십시오."
+        "다음 행동을 결정하세요. 상세 페이지의 필수 필드 근거가 모두 모이면 "
+        "finish_detail_reading으로 읽기 종료를 알리십시오."
     )
 
     base64_image = _reasoning_image_base64(state)

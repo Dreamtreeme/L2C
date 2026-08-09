@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
-from agent.application.clarification_service import apply_clarification_answer
-from agent.application.occupation_clarification_service import (
-    OccupationClarificationService,
-)
 from agent.observability.run_context import (
     emit_run_event,
     invoke_with_metrics,
@@ -23,12 +20,16 @@ from agent.graph.investigation_context import (
     InvestigationModels,
     normalize_site_slugs,
 )
+from agent.graph.investigation_ports import (
+    ClarificationAnswerPort,
+    ConversationContextPort,
+    OccupationClarificationPort,
+)
 from agent.prompts.investigation import request_analysis_prompt
-from agent.utils.model_payload import parse_model_payload
+from agent.utils.model_conversion import parse_model_payload
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     EvidencePolicy,
-    InvestigationRequest,
     InvestigationStatus,
     RequestAnalysis,
 )
@@ -41,18 +42,30 @@ class InvestigationRequestNodes:
         self,
         *,
         models: InvestigationModels,
-        occupation_clarification: OccupationClarificationService,
+        occupation_clarification: OccupationClarificationPort,
+        apply_clarification: ClarificationAnswerPort,
+        load_conversation_context: ConversationContextPort,
         now: Callable[[], datetime],
     ) -> None:
         self.models = models
         self.occupation_clarification = occupation_clarification
+        self.apply_clarification = apply_clarification
+        self.load_conversation_context = load_conversation_context
         self.now = now
+
+    def load_context(self, state: InvestigationState) -> dict[str, Any]:
+        """현재 대화와 재개 요청의 문맥을 그래프 상태에 적재한다."""
+
+        investigation = state["request"]["investigation"]
+        history = self.load_conversation_context(
+            investigation.conversation_id,
+            state["request"].get("resume_run_id", ""),
+        )
+        return {"request": {"conversation_history": history}}
 
     def understand(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
-        existing = InvestigationRequest.model_validate(
-            state["request"]["investigation"]
-        )
+        existing = state["request"]["investigation"]
         if existing.objective:
             return {}
         emit_run_event(
@@ -65,7 +78,20 @@ class InvestigationRequestNodes:
                 self.models.analysis(),
                 [
                     SystemMessage(content=request_analysis_prompt(self.now())),
-                    HumanMessage(content=existing.original_query),
+                    HumanMessage(
+                        content=json.dumps(
+                            {
+                                "current_request": existing.original_query,
+                                "recent_conversation": [
+                                    turn.model_dump(mode="json")
+                                    for turn in state["request"].get(
+                                        "conversation_history", []
+                                    )
+                                ],
+                            },
+                            ensure_ascii=False,
+                        )
+                    ),
                 ],
                 "investigation_request_analysis",
             ),
@@ -102,17 +128,11 @@ class InvestigationRequestNodes:
                 ),
             }
         )
-        return {
-            "request": {
-                "investigation": updated.model_dump(mode="json")
-            }
-        }
+        return {"request": {"investigation": updated}}
 
     @staticmethod
     def route_after_understand(state: InvestigationState) -> str:
-        investigation = InvestigationRequest.model_validate(
-            state["request"]["investigation"]
-        )
+        investigation = state["request"]["investigation"]
         if investigation.clarification_questions:
             return "clarify"
         if investigation.evidence_policy == EvidencePolicy.MODEL_KNOWLEDGE:
@@ -120,9 +140,7 @@ class InvestigationRequestNodes:
         return "define_evidence"
 
     def clarify(self, state: InvestigationState) -> dict[str, Any]:
-        investigation = InvestigationRequest.model_validate(
-            state["request"]["investigation"]
-        )
+        investigation = state["request"]["investigation"]
         question = next(iter(investigation.clarification_questions), None)
         if question is None:
             raise ValueError("사용자에게 확인할 질문이 없습니다.")
@@ -136,7 +154,7 @@ class InvestigationRequestNodes:
         }
         answer = ClarificationAnswer.model_validate(interrupt(payload))
         self.occupation_clarification.accept_answer(investigation, answer)
-        updated = apply_clarification_answer(
+        updated = self.apply_clarification(
             investigation,
             answer,
             today=self.now().date(),
@@ -166,9 +184,7 @@ class InvestigationRequestNodes:
             }
         )
         return {
-            "request": {
-                "investigation": updated.model_dump(mode="json")
-            },
+            "request": {"investigation": updated},
         }
 
 

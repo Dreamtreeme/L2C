@@ -1,14 +1,10 @@
 import time
 
 from agent.graph import (
-    worker_execution_dispatch,
     worker_observation,
-    worker_selection,
     worker_transition,
 )
 from agent.runtime.worker_contracts import action_event_transitions
-from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
-from agent.runtime.job_card_queue import replay_job_card_after_return
 from agent.tests.worker_test_support import (
     apply_update,
     node_runtime,
@@ -166,22 +162,24 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     Image.new("RGB", (800, 600), "white").save(screenshot)
 
     class FakePerception:
-        def capture_screen(self):
+        last_capture_quality = {}
+
+        def wait_for_transition_change(self, _reference_image_path):
+            return False
+
+        def capture_usable_screen(self):
             return screenshot
+
+        def get_current_url(self):
+            return "https://example.com/jobs"
 
         def analyze_ui(self, _path):
             raise AssertionError("같은 화면에서는 OCR을 다시 실행하면 안 됩니다.")
 
-    monkeypatch.setattr(
-        worker_observation,
-        "_perception_engine",
-        lambda _runtime: FakePerception(),
-    )
-    monkeypatch.setattr(
-        worker_observation,
-        "raw_screen_phash_signature",
-        lambda _path: {"phash": "0" * 16, "size": [800, 600]},
-    )
+    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+
+    raw_signature = worker_observation.compute_screen_phash_signature(screenshot)
+    runtime = node_runtime(VisionWorkerRuntime(perception_factory=FakePerception))
 
     from agent.graph.worker_selection import selection_node
 
@@ -194,28 +192,30 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
             "current_url": "https://example.com/jobs",
             "current_url_stale": False,
             "current_markers": [
-            {"id": 1, "bbox": [10, 20, 200, 60], "text": "검색"},
+                {"id": 1, "bbox": [10, 20, 200, 60], "text": "검색"},
             ],
             "ui_context": "검색",
             "marked_image": str(screenshot),
-            "screen_signature": {"phash": "0" * 16, "size": [800, 600]},
+            "screen_signature": raw_signature,
             "current_page_role": "search",
             "analysis_mode": "full",
             "ocr_complete": True,
         },
         replay={"reflex_blocked_recipe_keys": []},
-        transition={"transition_request": {
-            "action": "click_marker",
-            "replay_mode": "reasoning",
-            "action_seq": 3,
-            "from_capture_id": "worker-no-effect:capture:0004",
-            "source": "reflex",
-            "recipe_key": "roi#search",
-            "before_url": "https://example.com/jobs",
-            "before_screenshot": str(screenshot),
-            "started_at": time.time(),
-            "contract": {},
-        }},
+        transition={
+            "transition_request": {
+                "action": "click_marker",
+                "replay_mode": "reasoning",
+                "action_seq": 3,
+                "from_capture_id": "worker-no-effect:capture:0004",
+                "source": "reflex",
+                "recipe_key": "roi#search",
+                "before_url": "https://example.com/jobs",
+                "before_screenshot": str(screenshot),
+                "started_at": time.time(),
+                "contract": {},
+            }
+        },
     )
     result = {}
     for node in (
@@ -223,7 +223,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
         worker_transition.transition_node,
         selection_node,
     ):
-        update = node(working, node_runtime())
+        update = node(working, runtime)
         working = apply_update(working, update)
         result.update(update)
 
@@ -256,29 +256,29 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                 "ocr_complete": False,
                 "current_markers": [],
                 "previous_screen_observation": {
-                "capture_id": "worker-test:capture:0001",
-                "screenshot": str(screenshot),
-                "markers": [{"id": 4, "bbox": [10, 20, 30, 40]}],
+                    "capture_id": "worker-test:capture:0001",
+                    "screenshot": str(screenshot),
+                    "markers": [{"id": 4, "bbox": [10, 20, 30, 40]}],
                 },
             },
             transition={
                 "transition_request": {
-                "action_seq": 0,
-                "action": "click_marker",
-                "from_capture_id": "worker-test:capture:0002",
-                "source": "autonomous",
-                "before_url": "https://example.com/jobs",
-                "before_screenshot": str(screenshot),
-                "started_at": time.time(),
+                    "action_seq": 0,
+                    "action": "click_marker",
+                    "from_capture_id": "worker-test:capture:0002",
+                    "source": "autonomous",
+                    "before_url": "https://example.com/jobs",
+                    "before_screenshot": str(screenshot),
+                    "started_at": time.time(),
                 },
                 "action_events": [
-                {
-                    "seq": 0,
-                    "result": {
-                        "action": "click_marker",
-                        "status": "success",
-                    },
-                }
+                    {
+                        "seq": 0,
+                        "result": {
+                            "action": "click_marker",
+                            "status": "success",
+                        },
+                    }
                 ],
             },
         ),

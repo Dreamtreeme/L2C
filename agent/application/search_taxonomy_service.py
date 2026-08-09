@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
 from agent.application.job_taxonomy_linker import JobTaxonomyLinker
 from agent.application.search_taxonomy_import_service import normalize_term
-from agent.application.search_taxonomy_constants import (
-    CORE_SOURCE_KEY,
-    CURATED_SOURCE_KEY,
-)
 from agent.application.search_taxonomy_question_builder import (
     TaxonomyQuestionBuilder,
 )
 from agent.application.search_taxonomy_utils import (
+    CORE_SOURCE_KEY,
+    CURATED_SOURCE_KEY,
     contains_taxonomy_alias,
     taxonomy_timestamp,
 )

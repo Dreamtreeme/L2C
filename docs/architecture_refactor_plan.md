@@ -274,22 +274,23 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 검증 결과:
 
 - 애플리케이션 계층의 의존성 조립, 조사 체크포인트 재개, 작업자 Runtime 문맥 전달과 8개 상태 구역 계약을 단위 테스트로 검증했다.
-- Python 3.13 환경에서 전체 `agent/tests` 278건을 통과했다.
+- Python 3.13 환경에서 현재 전체 `agent/tests` 276건을 통과했다.
 - 원티드 `iOS 개발자 1건` 경험 기반 탐색 E2E는 24.06초에 품질 게이트를 통과했다. Reflex 경로 2단계가 완료됐고 기존 DB 공고 ID 57을 근거로 종료했으며 브라우저도 정리됐다.
 
 ### 수집 실행과 애플리케이션 책임 분리
 
-- `InvestigationCollectionNodes`가 `CollectionService.collect`를 직접 호출한다.
+- `InvestigationCollectionNodes.collect`가 작업자를 실행해 `CollectionBatch`를 조사 상태에 기록한다.
+- `InvestigationCollectionNodes.persist`가 그 배치를 저장하고 `CollectionResult`를 만든 뒤 DB 근거 재검사로 넘긴다.
 - 검색 의도·사이트 프로필·작업자 목표 생성은 `collection_request_builder.py`가 담당한다.
 - 화면 준비부터 단일 Worker 실행, 제출물 생성과 재귀 한도 보고는 `collection_worker_runner.py`가 담당한다.
-- Critic 검토, 승인 데이터 저장, 완결된 실행의 레시피 후보 등록은 `collection_submission_service.py`가 담당한다.
+- Critic 검토, 승인 데이터 저장, 완결된 실행의 레시피 후보 등록은 `collection_persistence.py`가 담당한다.
 - 구조화 인자를 다시 조립하던 미사용 LangChain 도구 래퍼는 삭제했다.
 
 ### 레시피 검토와 승격 책임 분리
 
-- `candidate_reviewer.py`는 Critic 입력 구성, LLM 호출, 응답 계약 검사와 후보 상태 갱신만 담당한다.
+- `application/recipe_candidate_review_service.py`는 Critic 입력 구성, LLM 호출, 응답 계약 검사와 후보 상태 갱신을 담당한다.
 - `candidate_promotion.py`는 승인된 단계 주석, ROI 단계와 문맥 후속 전략 생성, 활성 레시피 DB 반영을 담당한다.
-- 기록·검토·승격 모듈에서 중복 정의하던 행동 종류는 `replay_actions.py`의 단일 계약을 사용한다.
+- 기록·검토·승격 모듈에서 중복 정의하던 행동 종류는 `worker_actions.py`의 단일 계약을 사용한다.
 - 저장된 Critic 판정을 재적용하는 벤치마크도 검토기가 아니라 승격 모듈을 직접 호출한다.
 
 ### 5단계. 설정과 사이트 프로필을 타입 계약으로 통합

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Iterable, Protocol
 
-from agent.application.search_taxonomy_constants import OCCUPATION_DOMAIN_ROOT_KEY
+from agent.application.search_taxonomy_utils import OCCUPATION_DOMAIN_ROOT_KEY
 from shared.schema.investigation_schema import (
     ClarificationOption,
     ClarificationQuestion,

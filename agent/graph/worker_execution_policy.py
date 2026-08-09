@@ -2,165 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
+from agent.runtime.action_permissions import task_permission_reason
 from agent.runtime.worker_contracts import WorkerState
-from agent.runtime.job_collection import (
-    JOB_IDENTITY_KEYS,
-    JOB_LIST_KEY,
-    job_items,
-    job_list_value,
-)
 from agent.runtime.job_card_queue import (
     job_card_label,
     job_card_entries_from_args,
 )
-from agent.runtime.site_context import (
-    looks_like_job_detail_url,
-    site_profile_for_url,
-)
-
-
-def _has_job_url(job: dict[str, Any]) -> bool:
-    return bool(str(job.get("url") or "").strip())
-
-
-def should_skip_job_update_without_detail_url(
-    new_data: dict[str, Any],
-    current_url: str,
-) -> bool:
-    if not site_profile_for_url(current_url) or looks_like_job_detail_url(current_url):
-        return False
-
-    incoming_jobs = job_items(new_data)
-    if not incoming_jobs:
-        return False
-    return any(
-        isinstance(job, dict) and not _has_job_url(job) for job in incoming_jobs
-    )
-
-
-def _job_identity(job: dict[str, Any]) -> tuple[str, str, str]:
-    url = str(job.get("url") or "").strip()
-    company = str(job.get("company_name") or "").strip()
-    position = str(job.get("position") or "").strip()
-    return url, company, position
-
-
-def _merge_value(old: Any, new: Any) -> Any:
-    if new in (None, "", [], {}):
-        return old
-    if isinstance(old, list) or isinstance(new, list):
-        old_items = old if isinstance(old, list) else ([old] if old not in (None, "") else [])
-        new_items = new if isinstance(new, list) else [new]
-        merged = []
-        seen = set()
-        for item in old_items + new_items:
-            key = (
-                json.dumps(item, ensure_ascii=False, sort_keys=True)
-                if isinstance(item, (dict, list))
-                else str(item)
-            )
-            if key and key not in seen:
-                seen.add(key)
-                merged.append(item)
-        return merged
-    if isinstance(old, dict) and isinstance(new, dict):
-        merged = dict(old)
-        for key, value in new.items():
-            merged[key] = _merge_value(merged.get(key), value)
-        return merged
-    return new
-
-
-def _validate_job_payload(new_data: dict[str, Any]) -> None:
-    if (
-        any(key in new_data for key in JOB_IDENTITY_KEYS)
-        and JOB_LIST_KEY not in new_data
-    ):
-        raise ValueError("공고 데이터는 jobs 목록 안에 있어야 합니다.")
-    if JOB_LIST_KEY in new_data and not isinstance(new_data[JOB_LIST_KEY], list):
-        raise ValueError("jobs 값은 공고 딕셔너리 목록이어야 합니다.")
-
-
-def _matching_job_index(
-    existing_jobs: list[Any],
-    identity: tuple[str, str, str],
-) -> int | None:
-    for index, existing in enumerate(existing_jobs):
-        if not isinstance(existing, dict):
-            continue
-        existing_identity = _job_identity(existing)
-        if existing_identity == identity and any(identity):
-            return index
-        if identity[0] and identity[0] in existing_identity:
-            return index
-        if identity[1:] == existing_identity[1:] and all(identity[1:]):
-            return index
-    return None
-
-
-def _merge_job_list(
-    merged: dict[str, Any],
-    incoming_jobs: list[Any],
-    *,
-    current_url: str,
-    summary: dict[str, Any],
-) -> None:
-    existing_jobs = job_list_value(merged)
-    if not isinstance(existing_jobs, list):
-        existing_jobs = []
-    for incoming in incoming_jobs:
-        if not isinstance(incoming, dict):
-            continue
-        job = dict(incoming)
-        if looks_like_job_detail_url(current_url) and not job.get("url"):
-            job["url"] = current_url
-        summary["incoming_jobs"] += 1
-        summary["fields"].extend(job)
-        match_index = _matching_job_index(existing_jobs, _job_identity(job))
-        if match_index is None:
-            existing_jobs.append(job)
-        else:
-            existing_jobs[match_index] = _merge_value(
-                existing_jobs[match_index],
-                job,
-            )
-    merged[JOB_LIST_KEY] = existing_jobs
-    summary["total_jobs"] = len(existing_jobs)
-
-
-def merge_extracted_info(
-    current_jd: dict[str, Any],
-    new_data: dict[str, Any],
-    current_url: str = "",
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    _validate_job_payload(new_data)
-
-    merged = dict(current_jd)
-    summary: dict[str, Any] = {"incoming_jobs": 0, "total_jobs": 0, "fields": []}
-    incoming_jobs = job_items(new_data)
-
-    if incoming_jobs or JOB_LIST_KEY in new_data:
-        _merge_job_list(
-            merged,
-            incoming_jobs,
-            current_url=current_url,
-            summary=summary,
-        )
-
-    for key, value in new_data.items():
-        if key == JOB_LIST_KEY:
-            continue
-        summary["fields"].append(key)
-        merged[key] = _merge_value(merged.get(key), value)
-
-    summary["fields"] = sorted({str(field) for field in summary["fields"]})
-    existing_jobs = job_list_value(merged)
-    if not summary["total_jobs"] and isinstance(existing_jobs, list):
-        summary["total_jobs"] = len(existing_jobs)
-    return merged, summary
 
 
 def sensitive_action_reason(
@@ -170,8 +19,6 @@ def sensitive_action_reason(
     *,
     source: str = "",
 ) -> str:
-    from agent.runtime.action_permissions import task_permission_reason
-
     permission_reason = task_permission_reason(
         state,
         action_name,
@@ -181,7 +28,6 @@ def sensitive_action_reason(
     if permission_reason:
         return permission_reason
     if action_name in {
-        "close_browser",
         "close_current_tab",
         "switch_tab",
         "go_back",
@@ -203,31 +49,19 @@ def _clip_text(value: Any, max_chars: int) -> str:
 def _compact_observed_fields(value: Any) -> list[str]:
     """원본 사전과 이미 압축된 필드 목록을 같은 형태로 정규화한다."""
 
-    if isinstance(value, dict):
-        fields = value
-    elif isinstance(value, (list, tuple, set)):
+    if isinstance(value, (dict, list, tuple, set)):
         fields = value
     else:
         return []
-    return sorted(
-        {
-            str(field).strip()
-            for field in fields
-            if str(field).strip()
-        }
-    )
+    return sorted({str(field).strip() for field in fields if str(field).strip()})
 
 
 def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
     if action_name == "finish_detail_reading":
         return {
             "page_role": args.get("page_role", "job_detail"),
-            "observed_fields": _compact_observed_fields(
-                args.get("observed_fields")
-            ),
-            "unavailable_fields": list(
-                args.get("unavailable_fields") or []
-            ),
+            "observed_fields": _compact_observed_fields(args.get("observed_fields")),
+            "unavailable_fields": list(args.get("unavailable_fields") or []),
             "page_exhausted": bool(args.get("page_exhausted")),
             "reason": _clip_text(args.get("reason", ""), 120),
         }
@@ -238,36 +72,17 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
             "cards": len(cards),
             "titles": [title for title in titles if title][:5],
         }
-    if action_name != "update_extracted_info":
-        compact = {
-            key: value
-            for key, value in args.items()
-            if not str(key).startswith("_")
-        }
-        if isinstance(
-            compact.get("observed_fields"),
-            (dict, list, tuple, set),
-        ):
-            compact["observed_fields"] = _compact_observed_fields(
-                compact["observed_fields"]
-            )
-        return compact
-    try:
-        data = json.loads(args.get("data_json", "{}"))
-    except Exception:
-        return {"data_json": "<invalid json>"}
-    jobs = job_items(data)
-    fields = []
-    if isinstance(jobs, list):
-        for job in jobs:
-            if isinstance(job, dict):
-                fields.extend(job.keys())
-    fields.extend(key for key in data.keys() if key != JOB_LIST_KEY)
-    return {
-        "incoming_jobs": len(jobs) if isinstance(jobs, list) else 0,
-        "fields": sorted({str(field) for field in fields}),
-        "payload_chars": len(args.get("data_json", "")),
+    compact = {
+        key: value for key, value in args.items() if not str(key).startswith("_")
     }
+    if isinstance(
+        compact.get("observed_fields"),
+        (dict, list, tuple, set),
+    ):
+        compact["observed_fields"] = _compact_observed_fields(
+            compact["observed_fields"]
+        )
+    return compact
 
 
 def state_snapshot_for_action(state: WorkerState, current_url: str) -> dict[str, Any]:
@@ -277,9 +92,7 @@ def state_snapshot_for_action(state: WorkerState, current_url: str) -> dict[str,
         "url": current_url or observation.get("current_url", "") or "",
         "screenshot": str(observation.get("current_screenshot") or ""),
         "marked_image": observation.get("marked_image", "") or "",
-        "screen_signature": dict(
-            observation.get("screen_signature", {}) or {}
-        ),
+        "screen_signature": dict(observation.get("screen_signature", {}) or {}),
     }
 
 
@@ -301,19 +114,19 @@ def repeats_no_effect_target(
     if action_name == "press_key":
         return str(previous_args.get("key") or "") == str(args.get("key") or "")
     if action_name == "switch_tab":
-        return str(previous_args.get("direction") or "") == str(args.get("direction") or "")
+        return str(previous_args.get("direction") or "") == str(
+            args.get("direction") or ""
+        )
     if action_name == "open_browser":
-        previous_target = previous_args.get("url") or previous_args.get("site")
-        current_target = args.get("url") or args.get("site")
+        previous_target = previous_args.get("url")
+        current_target = args.get("url")
         return bool(previous_target and previous_target == current_target)
-    return action_name in {"go_back", "close_current_tab", "close_browser"}
+    return action_name in {"go_back", "close_current_tab"}
 
 
 __all__ = [
     "compact_action_args",
-    "merge_extracted_info",
     "repeats_no_effect_target",
     "sensitive_action_reason",
-    "should_skip_job_update_without_detail_url",
     "state_snapshot_for_action",
 ]

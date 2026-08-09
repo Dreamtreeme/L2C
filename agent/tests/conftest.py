@@ -43,11 +43,14 @@ def investigation_workflow_factory():
     def create(
         *,
         db_path,
-        collect_jobs,
+        run_collection,
+        persist_collection,
         models=None,
         capabilities=None,
         taxonomy_service=None,
         now=None,
+        conversation_context_loader=None,
+        run_lookup=None,
     ):
         taxonomy = taxonomy_service or prepare_search_taxonomy(db_path)
         checkpoint = InvestigationCheckpointRuntime(db_path)
@@ -55,11 +58,14 @@ def investigation_workflow_factory():
             build_investigation_workflow(
                 db_path,
                 checkpoint_runtime=checkpoint,
-                collect_jobs=collect_jobs,
+                run_collection=run_collection,
+                persist_collection=persist_collection,
                 taxonomy_service=taxonomy,
                 models=models,
                 capabilities=capabilities,
                 now=now,
+                conversation_context_loader=conversation_context_loader,
+                run_lookup=run_lookup,
             ),
             checkpoint,
         )

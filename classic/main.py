@@ -128,17 +128,31 @@ def cmd_extract(args: argparse.Namespace) -> int:
             dom_raw = capture_and_extract_dom(url=args.url)
 
         with _phase(f"[2/2] LLM 텍스트 정제 ({args.model or '기본 경량 모델'})"):
+            from agent.application.job_normalization_service import (
+                complete_extracted_job,
+            )
             from classic.extractor.llm_engine import LLMEngine
+            from shared.schema.jd_schema import JobPosting
 
             # DOM에서 가져온 텍스트 전문을 LLM에 전달
             full_text = dom_raw.get("full_text", "")
-            data = LLMEngine(args.model).extract_from_text(full_text)
+            extracted = LLMEngine(args.model).extract_from_text(full_text)
             
             # 메타데이터 보완 (LLM이 놓쳤을 경우 대비)
-            if not data.get("company_name"):
-                data["company_name"] = dom_raw.get("company_name")
-            if not data.get("position"):
-                data["position"] = dom_raw.get("position")
+            posting = JobPosting.model_validate(extracted)
+            posting = posting.model_copy(
+                update={
+                    "company_name": posting.company_name
+                    or dom_raw.get("company_name"),
+                    "position": posting.position or dom_raw.get("position"),
+                }
+            )
+            posting = complete_extracted_job(
+                posting,
+                current_url=args.url,
+                raw_ocr_text=full_text,
+            )
+            data = posting.model_dump(mode="json")
             
         logger.info(f"데이터 정제 완료: {data.get('company_name')} - {data.get('position')}")
 
@@ -150,7 +164,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
         )
         logger.info(f"JSON 백업 → {json_path}")
 
-        job_id = db.upsert(url=args.url, data=data)
+        job_id = db.upsert(posting)
 
         elapsed = time.time() - t0
         logger.info(f"✅ 완료 (db.id={job_id}, 총 {elapsed:.1f}s)")

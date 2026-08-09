@@ -65,9 +65,9 @@ Perception, ActionTools, PaddleOCR subprocess, 컴파일된 작업자 그래프�
 
 ## 8. 애플리케이션과 그래프 런타임 분리
 
-`agent/bootstrap.py`의 `ApplicationRuntime`이 조사 체크포인터, 애플리케이션 서비스, 컴파일된 그래프, `VisionWorkerRuntime`과 Reflex 승격 작업자를 조립하고 종료합니다. FastAPI `lifespan`, CLI와 E2E 실행기가 이 런타임의 수명주기를 관리합니다.
+`agent/bootstrap.py`의 `ApplicationRuntime`이 조사 체크포인터, 애플리케이션 서비스, 컴파일된 그래프, `VisionWorkerRuntime`과 Reflex 승격 작업자를 조립하고 종료합니다. FastAPI `lifespan`, CLI와 E2E 실행기는 이 런타임의 수명주기만 관리합니다.
 
-Investigation LangGraph는 주입된 요청·근거·수집·답변 노드의 순서와 체크포인트 중단·재개를 담당합니다. Vision Worker LangGraph는 관찰·전환·선택·추론·실행 순서와 상태 병합을 담당합니다. 작업자 노드는 OCR과 물리 도구를 전역에서 찾지 않고 `Runtime[WorkerDependencies]`로 전달받습니다.
+Investigation LangGraph는 대화 문맥 조회, 요청 해석, DB 근거 검사, 수집, 저장, DB 재검사, 답변과 체크포인트 중단·재개를 담당합니다. `collect`는 `CollectionBatch`를 상태에 남기고 `persist`는 저장 결과를 확정하므로, 작업자 실패와 저장 실패가 서로 다른 단계로 관측됩니다. 조사 노드는 `agent/graph/investigation_ports.py`에 선언된 계약만 호출하고, DB 경로와 `agent.application` 구현은 `agent/bootstrap.py`에서 결합합니다. Vision Worker LangGraph는 관찰·전환·선택·추론·실행 순서와 상태 병합을 담당합니다. 작업자 노드는 OCR과 물리 도구를 전역에서 찾지 않고 `Runtime[WorkerDependencies]`로 전달받습니다.
 
 전환 검증, 상세 OCR 버퍼, 결과 카드 큐, Reflex 재생은 `agent/runtime/`의 독립 모듈로 분리했습니다. 이 정책들은 DOM selector가 아니라 화면 서명, OCR 마커, 좌표비율만 입력으로 받습니다.
 

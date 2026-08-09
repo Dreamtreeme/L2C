@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from agent.prompts.trust_boundary import external_content_contract_ko
 from agent.sites import list_supported_sites
-from shared.schema.agent_contract import EVIDENCE_FIELDS
+from shared.schema.agent_contract import ANSWER_EVIDENCE_FIELDS
 
 
 def request_analysis_prompt(now: datetime) -> str:
@@ -19,6 +20,9 @@ def request_analysis_prompt(now: datetime) -> str:
 - 답변에 외부 근거가 필요한지와 필요한 근거 확보 방식
 - 이미 확정된 조건과 결과를 크게 바꾸는 모호한 조건
 - 사용자에게 확인해야 할 조건
+
+입력은 current_request와 recent_conversation을 가진 JSON입니다.
+현재 요청의 생략된 대상만 최근 대화에서 보완하고, 이전 조건을 현재 요청보다 우선하지 마십시오.
 
 다음 원칙을 지키십시오.
 - 조사를 실행하는 데 필요한 세부 조건은 문맥과 현재 날짜를 바탕으로 합리적으로 정하고 assumptions에 근거를 남기십시오.
@@ -82,7 +86,7 @@ def request_analysis_prompt(now: datetime) -> str:
 
 
 def evidence_plan_prompt(now: datetime) -> str:
-    supported_fields = ", ".join(EVIDENCE_FIELDS)
+    supported_fields = ", ".join(ANSWER_EVIDENCE_FIELDS)
     return f"""당신은 확정된 채용 조사 요청을 답변 가능한 근거 요구사항으로 분해합니다.
 현재 날짜는 {now.date().isoformat()}입니다.
 
@@ -135,8 +139,6 @@ def action_plan_prompt() -> str:
 
 
 def evidence_validation_prompt() -> str:
-    from agent.prompts.trust_boundary import external_content_contract_ko
-
     return external_content_contract_ko() + """
 당신은 DB 공고 후보가 조사에서 정의한 근거 집단에 실제로 속하는지 판정합니다.
 - 이 단계에는 사전으로 확정할 수 없었던 직무·기술 또는 비정형 조건만 들어옵니다.
@@ -154,8 +156,6 @@ def evidence_validation_prompt() -> str:
 
 
 def answer_prompt() -> str:
-    from agent.prompts.trust_boundary import external_content_contract_ko
-
     return external_content_contract_ko() + """
 당신은 질문의 근거 정책에 따라 보편 지식 또는 검증된 자료로 답변합니다.
 질문의 evidence_policy를 먼저 확인하십시오.

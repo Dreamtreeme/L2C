@@ -111,7 +111,7 @@ def build_action_target_snapshot(
             if isinstance(observation.get("screen_signature"), Mapping)
             else {}
         ),
-        target_label=args.get("target_label") or args.get("semantic_label"),
+        target_label=args.get("target_label"),
     )
 
 

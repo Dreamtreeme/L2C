@@ -29,12 +29,8 @@ def _transition_step(
             args.get("page_role")
             or state["observation"].get("current_page_role", "")
         ),
-        "target_role": (
-            args.get("target_role") or args.get("target_role_candidate") or ""
-        ),
-        "component": (
-            args.get("target_component") or args.get("component_candidate") or ""
-        ),
+        "target_role": args.get("target_role") or "",
+        "component": args.get("target_component") or "",
         "expected_after": args.get("expected_after") or "",
     }
     if tool_call_id:

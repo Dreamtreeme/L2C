@@ -1,17 +1,17 @@
 import time
 
 from agent.graph import (
-    worker_execution_dispatch,
-    worker_observation,
-    worker_selection,
     worker_transition,
 )
 from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
-from agent.runtime.job_card_queue import replay_job_card_after_return
-from agent.tests.worker_test_support import node_runtime, worker_state
+from agent.tests.worker_test_support import (
+    node_runtime,
+    worker_data_services,
+    worker_state,
+)
 
 
-def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
+def test_reflex_replays_one_parameterized_roi_step(tmp_path):
     from PIL import Image, ImageDraw
 
     from agent.vision.screen_signature import compute_target_roi_signature
@@ -32,64 +32,62 @@ def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
         [200, 120],
     )
 
-    class FakeStore:
-        def get_site_recipes(self, site, task_category=None):
-            assert site == "wanted"
-            return [
-                (
-                    "recipe-search",
-                    SiteRecipe(
-                        site="wanted",
-                        goal="검색",
-                        start_state=RecipeCheckpoint(
-                            url_template="wanted.co.kr/",
-                            page_role="home",
-                        ),
-                        transitions=[
-                            RecipeTransition(
-                                seq=0,
-                                before=RecipeCheckpoint(
-                                    url_template="wanted.co.kr/",
-                                    page_role="home",
-                                ),
-                                actions=[
-                                    RecipeAction(
-                                        source_seq=0,
-                                        action="type_in_marker",
-                                        replay_mode="parameterized",
-                                        roi_signature=roi_signature,
-                                        target={
-                                            "text": "검색",
-                                            "bbox_ratio": [0.05, 0.0833, 0.35, 0.3333],
-                                            "center_ratio": [0.2, 0.2083],
-                                        },
-                                        param={"slot_name": "query"},
-                                        slot_refs=["query"],
-                                    )
-                                ],
-                                after=RecipeCheckpoint(
-                                    url_template="wanted.co.kr/search",
-                                    page_role="search_results",
-                                    screen_context_signature={
-                                        "phash": "f" * 16,
-                                        "size": [200, 120],
-                                    },
-                                ),
-                            )
-                        ],
-                        completion_state=RecipeCheckpoint(
-                            url_template="wanted.co.kr/search",
-                            page_role="search_results",
-                            screen_context_signature={
-                                "phash": "f" * 16,
-                                "size": [200, 120],
-                            },
-                        ),
+    def load_site_recipes(site, *, task_category=None):
+        assert site == "wanted"
+        return [
+            (
+                "recipe-search",
+                SiteRecipe(
+                    site="wanted",
+                    goal="검색",
+                    start_state=RecipeCheckpoint(
+                        url_template="wanted.co.kr/",
+                        page_role="home",
                     ),
-                )
-            ]
+                    transitions=[
+                        RecipeTransition(
+                            seq=0,
+                            before=RecipeCheckpoint(
+                                url_template="wanted.co.kr/",
+                                page_role="home",
+                            ),
+                            actions=[
+                                RecipeAction(
+                                    source_seq=0,
+                                    action="type_in_marker",
+                                    replay_mode="parameterized",
+                                    roi_signature=roi_signature,
+                                    target={
+                                        "text": "검색",
+                                        "bbox_ratio": [0.05, 0.0833, 0.35, 0.3333],
+                                        "center_ratio": [0.2, 0.2083],
+                                    },
+                                    param={"slot_name": "query"},
+                                    slot_refs=["query"],
+                                )
+                            ],
+                            after=RecipeCheckpoint(
+                                url_template="wanted.co.kr/search",
+                                page_role="search_results",
+                                screen_context_signature={
+                                    "phash": "f" * 16,
+                                    "size": [200, 120],
+                                },
+                            ),
+                        )
+                    ],
+                    completion_state=RecipeCheckpoint(
+                        url_template="wanted.co.kr/search",
+                        page_role="search_results",
+                        screen_context_signature={
+                            "phash": "f" * 16,
+                            "size": [200, 120],
+                        },
+                    ),
+                ),
+            )
+        ]
 
-    monkeypatch.setattr("agent.recipe.store.RecipeStore", lambda: FakeStore())
     result = reflex_node(
         worker_state(
             goal="AI 엔지니어 공고",
@@ -108,7 +106,11 @@ def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
                 "query": "AI 엔지니어",
             }},
         ),
-        node_runtime(),
+        node_runtime(
+            data=worker_data_services(
+                load_site_recipes=load_site_recipes,
+            )
+        ),
     )
 
     call = result["decision"]["pending_action"].tool_calls[0]
@@ -120,7 +122,6 @@ def test_reflex_replays_one_parameterized_roi_step(monkeypatch, tmp_path):
 
 
 def test_reflex_replays_action_group_then_advances_after_verification(
-    monkeypatch,
     tmp_path,
 ):
     from PIL import Image, ImageDraw
@@ -237,13 +238,11 @@ def test_reflex_replays_action_group_then_advances_after_verification(
         completion_state=completion,
     )
 
-    class FakeStore:
-        def get_site_recipes(self, site, task_category=None):
-            return [("recipe-search-set", recipe)]
+    def load_site_recipes(_site, *, task_category=None):
+        return [("recipe-search-set", recipe)]
 
-    monkeypatch.setattr(
-        "agent.recipe.store.RecipeStore",
-        lambda: FakeStore(),
+    replay_runtime = node_runtime(
+        data=worker_data_services(load_site_recipes=load_site_recipes)
     )
     first = reflex_node(
         worker_state(
@@ -267,7 +266,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 "query": "AI 엔지니어",
             }},
         ),
-        node_runtime(),
+        replay_runtime,
     )
 
     assert first["replay"]["reflex_trace"]["hit"] is True
@@ -324,7 +323,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 ]
             },
         ),
-        node_runtime(),
+        replay_runtime,
     )
 
     assert verified["transition"]["transition_result"]["status"] == "ready"
@@ -366,7 +365,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 ]
             },
         ),
-        node_runtime(),
+        replay_runtime,
     )
 
     assert second["replay"]["reflex_trace"]["hit"] is True

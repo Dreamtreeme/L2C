@@ -15,7 +15,7 @@ from agent.utils.job_fields import (
     IDENTITY_JOB_FIELDS,
     normalize_job_collection_fields,
 )
-from shared.schema.agent_contract import JOB_COLLECTION_FIELDS
+from shared.schema.jd_schema import JOB_FIELDS
 from shared.schema.jd_schema import JobPosting
 
 
@@ -38,7 +38,7 @@ def _normalized_url(value: Any) -> str:
 
 
 def normalize_job_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {name: record.get(name) for name in JOB_COLLECTION_FIELDS}
+    return {name: record.get(name) for name in JOB_FIELDS}
 
 
 def extract_job_records(payload: Any) -> list[dict[str, Any]]:
@@ -49,7 +49,7 @@ def extract_job_records(payload: Any) -> list[dict[str, Any]]:
     value = payload.get("jobs")
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
-    if any(field in payload for field in JOB_COLLECTION_FIELDS):
+    if any(field in payload for field in JOB_FIELDS):
         return [payload]
     return []
 
@@ -196,12 +196,6 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
         for item in payload.get("persisted_items", [])
         if isinstance(item, dict)
     ]
-    persisted_ids = {
-        int(item["job_id"])
-        for item in persisted_items
-        if str(item.get("job_id") or "").isdigit()
-        and int(item["job_id"]) > 0
-    }
     detail_url_items = persisted_items
     valid_detail_urls = 0
     for item in detail_url_items:

@@ -6,18 +6,16 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from agent.utils.text import site_of
-from agent.runtime.job_collection import job_count, job_items
+from agent.runtime.worker_contracts import ActionRequest
 from agent.runtime.worker_actions import (
     STATE_UPDATE_ACTIONS,
     TERMINAL_ACTIONS,
     UI_ACTIONS,
 )
-from agent.utils.logger import logger
-from agent.utils.model_dump import dump_model
+from agent.utils.model_conversion import dump_model
 from agent.vision.target_snapshot import build_action_target_snapshot
 from shared.schema.feedback_schema import (
     ActionFeedback,
@@ -40,48 +38,6 @@ def _message_text(content: Any) -> str:
     return "" if content is None else str(content).strip()
 
 
-def _preview_value(value: Any, depth: int = 0) -> Any:
-    if depth > 2:
-        return "..."
-    if isinstance(value, str):
-        return value if len(value) <= 160 else value[:157] + "..."
-    if isinstance(value, list):
-        preview = [_preview_value(item, depth + 1) for item in value[:3]]
-        if len(value) > 3:
-            preview.append(f"...(+{len(value) - 3})")
-        return preview
-    if isinstance(value, dict):
-        items = list(value.items())[:12]
-        preview = {str(key): _preview_value(item, depth + 1) for key, item in items}
-        if len(value) > 12:
-            preview["..."] = f"+{len(value) - 12}"
-        return preview
-    return value
-
-
-def _compact_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
-    if action_name == "update_extracted_info":
-        raw = args.get("data_json", "")
-        try:
-            data = json.loads(raw or "{}")
-        except Exception:
-            return {"data_json": "<invalid json>", "payload_chars": len(raw)}
-        jobs = job_items(data)
-        fields = []
-        if isinstance(jobs, list):
-            for job in jobs:
-                if isinstance(job, dict):
-                    fields.extend(job.keys())
-        fields.extend(key for key in data.keys() if key != "jobs")
-        return {
-            "incoming_jobs": len(jobs) if isinstance(jobs, list) else 0,
-            "fields": sorted({str(field) for field in fields}),
-            "payload_chars": len(raw),
-            "payload_preview": _preview_value(data),
-        }
-    return dict(args or {})
-
-
 def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, Any]) -> ActionFeedback:
     status = result.get("status", "")
     reason = result.get("reason", "") or ""
@@ -92,10 +48,6 @@ def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, A
     if status == "error":
         return ActionFeedback(label="error", reason=str(result.get("error") or "action_error"), confidence=0.9)
 
-    if action_name == "update_extracted_info":
-        if after.get("extracted_job_count", 0) > 0:
-            return ActionFeedback(label="success", reason="extracted data changed", confidence=0.65)
-        return ActionFeedback(label="partial", reason="state update executed but no job count observed", confidence=0.35)
     if action_name == "finish_task":
         return ActionFeedback(label="success", reason="task finished", confidence=0.8)
     if action_name == "open_browser" and isinstance(result.get("result"), dict) and result["result"].get("opened") is False:
@@ -112,7 +64,7 @@ def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, A
 def record_action_episode(
     episodes: list[dict[str, Any]],
     state: dict,
-    action_request: Any,
+    action_request: ActionRequest,
     action_name: str,
     args: dict[str, Any],
     enriched_result: dict[str, Any],
@@ -120,55 +72,57 @@ def record_action_episode(
     after_context: dict[str, Any],
     seq: int,
 ) -> None:
-    """피드백 기록(feedback episode)을 하나 추가한다. 실패해도 실행을 막지 않는다."""
-    try:
-        goal = str(state.get("goal") or "")
-        target = enriched_result.get("target") or build_action_target_snapshot(
-            state,
-            action_name,
-            args,
-        )
-        proposal = ActionProposal(
-            action=action_name,
-            args=_compact_args(action_name, args),
-            llm_thought=_message_text(getattr(action_request, "summary", "")),
-            reason=str(args.get("reason") or ""),
-            target=target,
-            target_label=(args.get("target_label") or args.get("semantic_label")),
-            component_candidate=args.get("target_component") or args.get("component_candidate"),
-            target_role_candidate=args.get("target_role") or args.get("target_role_candidate"),
-            expected_after=str(args.get("expected_after") or ""),
-        )
-        before = {
-            "capture_id": str(before_snapshot.get("capture_id") or ""),
-            "url": before_snapshot.get("url", ""),
-            "screenshot": before_snapshot.get("screenshot", ""),
-            "marked_image": before_snapshot.get("marked_image", ""),
-            "page_role": str(state.get("current_page_role") or ""),
-            "screen_signature": dict(before_snapshot.get("screen_signature", {}) or {}),
-            "marker_texts": [
-                str(marker.get("text") or "")
-                for marker in state.get("current_markers", []) or []
-                if isinstance(marker, dict) and marker.get("text")
-            ],
-        }
-        after = {
-            "url": after_context.get("current_url", ""),
-            "current_url_stale": bool(after_context.get("current_url_stale", True)),
-            "screen_changed": bool(after_context.get("screen_changed", False)),
-            "is_finished": bool(after_context.get("is_finished", False)),
-            "extracted_job_count": job_count(after_context.get("extracted_jd", {})),
-        }
-        observation = ActionObservation(before=before, after=after, result=dict(enriched_result))
-        feedback = _feedback_label(action_name, enriched_result, after)
-        episode = FeedbackEpisode(
-            seq=seq,
-            goal=goal,
-            site=site_of(before.get("url", "")),
-            proposal=proposal,
-            observation=observation,
-            feedback=feedback,
-        )
-        episodes.append(dump_model(episode))
-    except Exception as e:
-        logger.debug("feedback record_action_episode skipped", error=str(e))
+    """피드백 기록을 하나 추가한다."""
+
+    goal = str(state.get("goal") or "")
+    target = enriched_result.get("target") or build_action_target_snapshot(
+        state,
+        action_name,
+        args,
+    )
+    proposal = ActionProposal(
+        action=action_name,
+        args=dict(args),
+        llm_thought=_message_text(action_request.summary),
+        reason=str(args.get("reason") or ""),
+        target=target,
+        target_label=args.get("target_label"),
+        component_candidate=args.get("target_component"),
+        target_role_candidate=args.get("target_role"),
+        expected_after=str(args.get("expected_after") or ""),
+    )
+    before = {
+        "capture_id": str(before_snapshot.get("capture_id") or ""),
+        "url": before_snapshot.get("url", ""),
+        "screenshot": before_snapshot.get("screenshot", ""),
+        "marked_image": before_snapshot.get("marked_image", ""),
+        "page_role": str(state.get("current_page_role") or ""),
+        "screen_signature": dict(before_snapshot.get("screen_signature", {}) or {}),
+        "marker_texts": [
+            str(marker.get("text") or "")
+            for marker in state.get("current_markers", []) or []
+            if isinstance(marker, dict) and marker.get("text")
+        ],
+    }
+    after = {
+        "url": after_context.get("current_url", ""),
+        "current_url_stale": bool(after_context.get("current_url_stale", True)),
+        "screen_changed": bool(after_context.get("screen_changed", False)),
+        "is_finished": bool(after_context.get("is_finished", False)),
+        "collected_job_count": int(after_context.get("collected_job_count") or 0),
+    }
+    observation = ActionObservation(
+        before=before,
+        after=after,
+        result=dict(enriched_result),
+    )
+    feedback = _feedback_label(action_name, enriched_result, after)
+    episode = FeedbackEpisode(
+        seq=seq,
+        goal=goal,
+        site=site_of(before.get("url", "")),
+        proposal=proposal,
+        observation=observation,
+        feedback=feedback,
+    )
+    episodes.append(dump_model(episode))

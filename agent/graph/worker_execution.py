@@ -28,40 +28,14 @@ from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.graph.worker_execution_policy import compact_action_args
 from agent.runtime.detail_runtime import is_job_detail_context
 from agent.runtime.job_field_contract import merge_job_detail_coverage
+from agent.runtime.job_card_queue import job_detail_key_from_state
 from agent.runtime.worker_actions import (
     STATE_UPDATE_ACTIONS,
     TERMINAL_ACTIONS,
     UI_ACTIONS,
 )
-from agent.runtime.worker_state import job_detail_key_from_state
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.utils.logger import logger
-
-
-def _record_successful_call(
-    context: WorkerExecutionContext,
-    *,
-    action_name: str,
-    args: dict[str, Any],
-    result: dict[str, Any],
-    before_snapshot: dict[str, Any],
-    action_sequence: int,
-    screen_changed: bool,
-    tool_call_id: str,
-    call_metadata: dict[str, Any],
-) -> None:
-    record_action_result(
-        context,
-        action_name=action_name,
-        args=args,
-        result=result,
-        before_snapshot=before_snapshot,
-        action_sequence=action_sequence,
-        screen_changed=screen_changed,
-        record_ui=action_name in UI_ACTIONS,
-        tool_call_id=tool_call_id,
-        tool_call_metadata=call_metadata,
-    )
 
 
 def _record_failed_call(
@@ -115,6 +89,16 @@ def _observe_job_detail_fields(
         args.get("page_role")
         or observation.get("current_page_role")
         or ""
+    )
+    if not is_job_detail_context(current_url, page_role=page_role):
+        return
+    collection = state["collection"]
+    collection["job_detail_coverage"] = merge_job_detail_coverage(
+        dict(collection.get("job_detail_coverage", {}) or {}),
+        args,
+        state=state,
+        current_url=current_url,
+        detail_key=job_detail_key_from_state(state),
     )
 
 
@@ -180,16 +164,6 @@ def _execute_tool_call(
         state["lifecycle"]["is_finished"] = True
         return result, False, None
     raise ValueError(f"Unknown tool: {action_name}")
-    if not is_job_detail_context(current_url, page_role=page_role):
-        return
-    collection = state["collection"]
-    collection["job_detail_coverage"] = merge_job_detail_coverage(
-        dict(collection.get("job_detail_coverage", {}) or {}),
-        args,
-        state=state,
-        current_url=current_url,
-        detail_key=job_detail_key_from_state(state),
-    )
 
 
 def _execute_action_request(context: WorkerExecutionContext) -> None:
@@ -229,7 +203,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 break
             result, screen_changed, follow_up = outcome
 
-            _record_successful_call(
+            record_action_result(
                 context,
                 action_name=action_name,
                 args=args,
@@ -237,8 +211,9 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 before_snapshot=before_snapshot,
                 action_sequence=action_sequence,
                 screen_changed=screen_changed,
+                record_ui=action_name in UI_ACTIONS,
                 tool_call_id=tool_call.id,
-                call_metadata=call_metadata,
+                tool_call_metadata=call_metadata,
             )
             logger.info(
                 "Action execution completed",

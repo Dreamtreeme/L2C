@@ -7,18 +7,23 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
+from agent.recipe.phash_replay import (
+    match_step_by_screen_signature,
+    screen_context_signature_match,
+)
+from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_contracts import (
     WorkerState,
     apply_worker_state_update,
     attach_action_transition,
 )
 from agent.runtime.vision_worker_runtime import WorkerDependencies
-from agent.runtime.site_context import normalize_page_role
 from agent.runtime.transition_runtime import (
     build_transition_observation,
     transition_has_visual_change,
 )
 from agent.utils.logger import logger
+from agent.utils.text import recipe_url_scope_matches, url_template
 
 
 def _verify_reflex_after_state(
@@ -32,12 +37,6 @@ def _verify_reflex_after_state(
     expected = dict(request.get("expected_after_state") or {})
     if not expected:
         return False, "recipe_after_state_missing", {}
-
-    from agent.recipe.phash_replay import (
-        match_step_by_screen_signature,
-        screen_context_signature_match,
-    )
-    from agent.utils.text import recipe_url_scope_matches, url_template
 
     expected_url = str(expected.get("url_template") or "")
     observation = state["observation"]

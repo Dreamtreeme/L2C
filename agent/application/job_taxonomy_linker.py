@@ -8,12 +8,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
-from agent.application.search_taxonomy_constants import (
-    CORE_SOURCE_KEY,
-    CURATED_SOURCE_KEY,
-)
 from agent.application.search_taxonomy_import_service import normalize_term
 from agent.application.search_taxonomy_utils import (
+    CORE_SOURCE_KEY,
+    CURATED_SOURCE_KEY,
     contains_taxonomy_alias,
     taxonomy_timestamp,
 )

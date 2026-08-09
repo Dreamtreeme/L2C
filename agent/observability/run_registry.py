@@ -63,10 +63,7 @@ class RunRegistry:
 
     def complete(self, run_id: str, result: dict[str, Any]) -> None:
         raw_status = str(result.get("run_status") or RunStatus.COMPLETED.value)
-        try:
-            status = RunStatus(raw_status)
-        except ValueError:
-            status = RunStatus.COMPLETED
+        status = RunStatus(raw_status)
         self._finish(run_id, status, result=result)
 
     def fail(self, run_id: str, error: str) -> None:

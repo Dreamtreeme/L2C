@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from shared.db.search_taxonomy_schema import SEARCH_TAXONOMY_SCHEMA
+from shared.schema.jd_schema import JobCollectionEvidence, JobPosting, StoredJob
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,6 @@ JOBS_COLUMNS_SQL = """(
     company_name    TEXT,
     position        TEXT,
     job_category    TEXT,
-    experience_level TEXT,
     education       TEXT,
     employment_type TEXT,
     location        TEXT,
@@ -109,18 +109,24 @@ class Database:
 
     def exists(self, url: str) -> bool:
         with self._conn() as conn:
-            row = conn.execute("SELECT 1 FROM jobs WHERE url = ? LIMIT 1", (url,)).fetchone()
+            row = conn.execute(
+                "SELECT 1 FROM jobs WHERE url = ? LIMIT 1", (url,)
+            ).fetchone()
         result = row is not None
         logger.debug(f"exists({url}) = {result}")
         return result
 
     def upsert(
         self,
-        url: str,
-        data: dict[str, Any],
-        screenshot_path: str | None = None,
-        ocr_text_path: str | None = None,
+        posting: JobPosting,
+        *,
+        evidence: JobCollectionEvidence | None = None,
     ) -> int:
+        url = str(posting.url or "").strip()
+        if not url:
+            raise ValueError("JobPosting.url은 SQLite 저장에 필요합니다.")
+        data = posting.model_dump(mode="json")
+        evidence = evidence or JobCollectionEvidence()
         now = datetime.now().isoformat(timespec="seconds")
         from shared.integrity import source_evidence_hash
 
@@ -132,7 +138,6 @@ class Database:
             "company_name": data.get("company_name"),
             "position": data.get("position"),
             "job_category": data.get("job_category"),
-            "experience_level": data.get("experience_level"),
             "education": data.get("education"),
             "employment_type": data.get("employment_type"),
             "location": data.get("location"),
@@ -142,7 +147,9 @@ class Database:
             "salary": data.get("salary"),
             "tech_stack": json.dumps(data.get("tech_stack") or [], ensure_ascii=False),
             "main_tasks": json.dumps(data.get("main_tasks") or [], ensure_ascii=False),
-            "requirements": json.dumps(data.get("requirements") or [], ensure_ascii=False),
+            "requirements": json.dumps(
+                data.get("requirements") or [], ensure_ascii=False
+            ),
             "preferred": json.dumps(data.get("preferred") or [], ensure_ascii=False),
             "benefits": json.dumps(data.get("benefits") or [], ensure_ascii=False),
             "source_platform": data.get("source_platform"),
@@ -157,8 +164,8 @@ class Database:
             "experience_max": data.get("experience_max"),
             "experience_text": data.get("experience_text"),
             "raw_json": json.dumps(canonical_data, ensure_ascii=False),
-            "screenshot_path": screenshot_path,
-            "ocr_text_path": ocr_text_path,
+            "screenshot_path": evidence.screenshot_path or None,
+            "ocr_text_path": evidence.ocr_text_path or None,
             "updated_at": now,
         }
 
@@ -169,8 +176,10 @@ class Database:
             ).fetchone()
 
             if existing:
-                cols = ", ".join(f"{k} = :{k}" for k in payload.keys())
-                conn.execute(f"UPDATE jobs SET {cols} WHERE id = {existing['id']}", payload)
+                cols = ", ".join(f"{k} = :{k}" for k in payload)
+                conn.execute(
+                    f"UPDATE jobs SET {cols} WHERE id = {existing['id']}", payload
+                )
                 if existing["evidence_hash"] != evidence_hash:
                     self._insert_job_version(
                         conn,
@@ -181,12 +190,14 @@ class Database:
                         evidence_hash=evidence_hash,
                         previous_raw_json=existing["raw_json"],
                     )
-                logger.info(f"DB UPDATE id={existing['id']} url={url} (hash={payload.get('content_hash')})")
+                logger.info(
+                    f"DB UPDATE id={existing['id']} url={url} (hash={payload.get('content_hash')})"
+                )
                 return existing["id"]
 
             payload["created_at"] = now
             cols = ", ".join(payload.keys())
-            placeholders = ", ".join(f":{k}" for k in payload.keys())
+            placeholders = ", ".join(f":{k}" for k in payload)
             cur = conn.execute(
                 f"INSERT INTO jobs ({cols}) VALUES ({placeholders})",
                 payload,
@@ -201,13 +212,17 @@ class Database:
                 evidence_hash=evidence_hash,
                 previous_raw_json=None,
             )
-            logger.info(f"DB INSERT id={new_id} url={url} company={data.get('company_name')!r}")
+            logger.info(
+                f"DB INSERT id={new_id} url={url} company={data.get('company_name')!r}"
+            )
             return new_id
 
     @staticmethod
-    def _changed_fields(previous_raw_json: str | None, data: dict[str, Any]) -> list[str]:
+    def _changed_fields(
+        previous_raw_json: str | None, data: dict[str, Any]
+    ) -> list[str]:
         if not previous_raw_json:
-            return sorted(str(key) for key in data.keys())
+            return sorted(str(key) for key in data)
         try:
             previous = json.loads(previous_raw_json)
         except (TypeError, json.JSONDecodeError):
@@ -249,7 +264,9 @@ class Database:
                 url,
                 data.get("source_platform"),
                 evidence_hash,
-                json.dumps(self._changed_fields(previous_raw_json, data), ensure_ascii=False),
+                json.dumps(
+                    self._changed_fields(previous_raw_json, data), ensure_ascii=False
+                ),
                 json.dumps(data, ensure_ascii=False),
             ),
         )
@@ -291,18 +308,40 @@ class Database:
         logger.debug(f"get_by_url({url}) found={result is not None}")
         return result
 
+    def load_jobs(self, job_ids: list[int]) -> list[StoredJob]:
+        """SQLite 표현을 정규 공고 타입으로 복원해 반환한다."""
+
+        ids = sorted({int(job_id) for job_id in job_ids if int(job_id) > 0})
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM jobs WHERE id IN ({placeholders})",
+                ids,
+            ).fetchall()
+        documents: list[StoredJob] = []
+        for row in rows:
+            decoded = self._row_to_dict(row)
+            documents.append(
+                StoredJob.model_validate(
+                    {
+                        "id": decoded["id"],
+                        **{
+                            field: decoded.get(field)
+                            for field in JobPosting.model_fields
+                        },
+                    }
+                )
+            )
+        return documents
+
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:
         d = dict(row)
         for k in ("tech_stack", "main_tasks", "requirements", "preferred", "benefits"):
             if d.get(k):
-                try:
-                    d[k] = json.loads(d[k])
-                except json.JSONDecodeError:
-                    pass
+                d[k] = json.loads(d[k])
         if d.get("raw_json"):
-            try:
-                d["raw_json"] = json.loads(d["raw_json"])
-            except json.JSONDecodeError:
-                pass
+            d["raw_json"] = json.loads(d["raw_json"])
         return d

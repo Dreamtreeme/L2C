@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_contracts import WorkerState, apply_worker_state_update
 from agent.runtime.worker_data_services import WorkerDataServices
-from agent.graph.worker_execution_policy import (
-    merge_extracted_info,
-    should_skip_job_update_without_detail_url,
-)
-from agent.runtime.worker_state import job_detail_key_from_state
-from agent.runtime.job_collection import job_items
+from agent.runtime.detail_runtime import detail_evidence_screenshot
+from agent.runtime.job_collection import store_collected_job
 from agent.runtime.job_field_contract import (
     detail_coverage_status,
     merge_job_detail_coverage,
@@ -22,9 +17,11 @@ from agent.runtime.job_field_contract import (
 from agent.runtime.job_identity import source_card_key
 from agent.runtime.job_card_queue import (
     active_job_card,
+    job_detail_key_from_state,
     normalize_job_card_queue,
 )
 from agent.utils.job_fields import missing_job_fields
+from shared.schema.jd_schema import CollectedJob, JobCollectionEvidence, JobPosting
 
 
 @dataclass(frozen=True)
@@ -44,7 +41,7 @@ class StateActionOutcome:
     """상태 행동의 결과와 작업자 상태 변경."""
 
     result: dict[str, Any]
-    jobs: dict[str, Any]
+    collected_jobs: list[CollectedJob]
     state_update: StateActionUpdate = field(default_factory=StateActionUpdate)
 
 
@@ -89,8 +86,6 @@ def dispatch_ui_action(
             args["url"],
             current_url=current_url,
         )
-    if action_name == "close_browser":
-        return action_tools.close_browser()
     if action_name == "close_current_tab":
         return action_tools.close_current_tab()
     if action_name == "switch_tab":
@@ -100,107 +95,18 @@ def dispatch_ui_action(
     raise ValueError(f"Unknown UI action: {action_name}")
 
 
-def _attach_active_card_identity(
-    data: dict[str, Any],
-    *,
+def _active_source_card_key(
     state: WorkerState,
     current_url: str,
-) -> dict[str, Any]:
-    """상세 화면에서 추출한 공고에 목록 카드 식별 정보를 붙인다."""
+) -> str:
+    """상세 화면과 현재 카드 큐를 연결하는 로컬 식별자를 만든다."""
 
     active_card = active_job_card(
         list(state["collection"].get("job_card_queue", []) or [])
     )
     company = str(active_card.get("company") or "").strip()
     title = str(active_card.get("title") or "").strip()
-    card_key = source_card_key(current_url, company, title)
-    if not card_key:
-        return data
-
-    extracted_jobs = job_items(data)
-
-    for job in extracted_jobs:
-        job.setdefault("_source_card_key", card_key)
-        job.setdefault("_source_context_url", current_url)
-        job.setdefault("_listing_company", company)
-        job.setdefault("_listing_title", title)
-    return data
-
-
-def _update_extracted_info(
-    args: dict[str, Any],
-    current_jobs: dict[str, Any],
-    *,
-    current_url: str,
-    state: WorkerState,
-) -> StateActionOutcome:
-    try:
-        new_data = _attach_active_card_identity(
-            json.loads(args["data_json"]),
-            state=state,
-            current_url=current_url,
-        )
-        detail_buffer = dict(
-            state["collection"].get("job_detail_buffer", {}) or {}
-        )
-        detail_buffer_active = bool(
-            detail_buffer.get("url") == current_url
-            and detail_buffer.get("lines")
-        )
-        if detail_buffer_active:
-            return StateActionOutcome(
-                result={
-                    "action": "update_extracted_info",
-                    "status": "skipped",
-                    "result": (
-                        "Skipped intermediate extraction: accumulated detail OCR must be "
-                        "finalized with finish_detail_reading."
-                    ),
-                    "reason": "detail_buffer_requires_finish",
-                },
-                jobs=current_jobs,
-            )
-        if should_skip_job_update_without_detail_url(new_data, current_url):
-            return StateActionOutcome(
-                result={
-                    "action": "update_extracted_info",
-                    "status": "skipped",
-                    "result": (
-                        "Skipped extracted data merge: this site requires a detail URL "
-                        "or an explicit job url in data_json"
-                    ),
-                    "reason": "job_update_requires_detail_url",
-                },
-                jobs=current_jobs,
-            )
-
-        merged_jobs, summary = merge_extracted_info(
-            current_jobs,
-            new_data,
-            current_url=current_url,
-        )
-        return StateActionOutcome(
-            result={
-                "action": "update_extracted_info",
-                "status": "success",
-                "result": (
-                    "Extracted data merged "
-                    f"(incoming_jobs={summary['incoming_jobs']}, "
-                    f"total_jobs={summary['total_jobs']}, "
-                    f"fields={summary['fields']})"
-                ),
-            },
-            jobs=merged_jobs,
-        )
-    except Exception as exc:
-        return StateActionOutcome(
-            result={
-                "action": "update_extracted_info",
-                "status": "error",
-                "result": f"Failed to parse data_json: {exc}",
-            },
-            jobs=current_jobs,
-        )
+    return source_card_key(current_url, company, title)
 
 
 def _detail_followup(
@@ -231,7 +137,7 @@ def _detail_followup(
 
 
 def _classify_extraction_missing_fields(
-    extracted_job: dict[str, Any],
+    extracted_job: JobPosting,
     required_fields: list[str],
     coverage_status: dict[str, Any],
 ) -> tuple[list[str], list[str], list[str]]:
@@ -300,7 +206,7 @@ def _detail_retry_update(
 
 
 def _incomplete_detail_evidence_outcome(
-    current_jobs: dict[str, Any],
+    current_jobs: list[CollectedJob],
     state: WorkerState,
     assessment: DetailReadingAssessment,
     current_url: str,
@@ -318,7 +224,7 @@ def _incomplete_detail_evidence_outcome(
             "required_fields": assessment.required_fields,
             "field_coverage": assessment.coverage_status,
         },
-        jobs=current_jobs,
+        collected_jobs=current_jobs,
         state_update=_detail_retry_update(
             state,
             assessment,
@@ -334,11 +240,11 @@ def _extract_detail_job(
     assessment: DetailReadingAssessment,
     current_url: str,
     data_services: WorkerDataServices,
-) -> dict[str, Any]:
-    extraction_state = {
-        **state,
-        "job_detail_coverage": assessment.coverage,
-    }
+) -> JobPosting | None:
+    extraction_state = apply_worker_state_update(
+        state,
+        {"collection": {"job_detail_coverage": assessment.coverage}},
+    )
     return data_services.extract_job_detail(
         extraction_state,
         current_url,
@@ -346,7 +252,7 @@ def _extract_detail_job(
 
 
 def _empty_detail_outcome(
-    current_jobs: dict[str, Any],
+    current_jobs: list[CollectedJob],
 ) -> StateActionOutcome:
     return StateActionOutcome(
         result={
@@ -355,7 +261,7 @@ def _empty_detail_outcome(
             "result": "No accumulated detail OCR text to extract.",
             "reason": "empty_job_detail_buffer",
         },
-        jobs=current_jobs,
+        collected_jobs=current_jobs,
         state_update=StateActionUpdate(
             job_detail_buffer={},
             job_detail_coverage={},
@@ -364,7 +270,7 @@ def _empty_detail_outcome(
 
 
 def _incomplete_detail_extraction_outcome(
-    current_jobs: dict[str, Any],
+    current_jobs: list[CollectedJob],
     state: WorkerState,
     assessment: DetailReadingAssessment,
     current_url: str,
@@ -383,7 +289,7 @@ def _incomplete_detail_extraction_outcome(
             "missing_fields": missing_fields,
             "field_coverage": assessment.coverage_status,
         },
-        jobs=current_jobs,
+        collected_jobs=current_jobs,
         state_update=_detail_retry_update(
             state,
             assessment,
@@ -395,46 +301,41 @@ def _incomplete_detail_extraction_outcome(
 
 
 def _prepare_completed_detail_job(
-    extracted_job: dict[str, Any],
+    extracted_job: JobPosting,
     state: WorkerState,
     assessment: DetailReadingAssessment,
     *,
     current_url: str,
     unavailable_fields: list[str],
     extraction_missing_fields: list[str],
-) -> dict[str, Any]:
-    completed_job = dict(extracted_job)
-    if extraction_missing_fields:
-        completed_job["_collection_extraction_missing_fields"] = list(
-            extraction_missing_fields
-        )
-    completed_job["_collection_required_fields"] = assessment.required_fields
-    completed_job["_collection_unavailable_fields"] = unavailable_fields
-    completed_job["_collection_page_exhausted"] = bool(
-        assessment.coverage_status["page_exhausted"]
+) -> CollectedJob:
+    buffer = dict(state["collection"].get("job_detail_buffer", {}) or {})
+    return CollectedJob(
+        posting=extracted_job,
+        evidence=JobCollectionEvidence(
+            required_fields=assessment.required_fields,
+            unavailable_fields=unavailable_fields,
+            extraction_missing_fields=extraction_missing_fields,
+            page_exhausted=bool(assessment.coverage_status["page_exhausted"]),
+            field_evidence=dict(assessment.coverage_status["field_evidence"]),
+            screenshot_path=detail_evidence_screenshot(buffer),
+            source_card_key=_active_source_card_key(state, current_url),
+        ),
     )
-    completed_job["_collection_field_evidence"] = dict(
-        assessment.coverage_status["field_evidence"]
-    )
-    wrapped_job = _attach_active_card_identity(
-        {"jobs": [completed_job]},
-        state=state,
-        current_url=current_url,
-    )
-    return dict(wrapped_job["jobs"][0])
 
 
 def _merge_completed_detail(
-    current_jobs: dict[str, Any],
-    extracted_job: dict[str, Any],
+    current_jobs: list[CollectedJob],
+    collected_job: CollectedJob,
     *,
-    current_url: str,
     extraction_missing_fields: list[str],
 ) -> StateActionOutcome:
-    merged_jobs, summary = merge_extracted_info(
-        current_jobs,
-        {"jobs": [extracted_job]},
-        current_url=current_url,
+    merged_jobs = store_collected_job(current_jobs, collected_job)
+    fields = sorted(
+        collected_job.posting.model_dump(
+            exclude_none=True,
+            exclude_defaults=True,
+        )
     )
     return StateActionOutcome(
         result={
@@ -442,16 +343,14 @@ def _merge_completed_detail(
             "status": "success",
             "result": (
                 "Detail OCR buffer extracted and merged "
-                f"(incoming_jobs={summary['incoming_jobs']}, "
-                f"total_jobs={summary['total_jobs']}, "
-                f"fields={summary['fields']})"
+                f"(total_jobs={len(merged_jobs)}, fields={fields})"
             ),
-            "incoming_jobs": summary["incoming_jobs"],
-            "total_jobs": summary["total_jobs"],
-            "fields": summary["fields"],
+            "incoming_jobs": 1,
+            "total_jobs": len(merged_jobs),
+            "fields": fields,
             "extraction_missing_fields": extraction_missing_fields,
         },
-        jobs=merged_jobs,
+        collected_jobs=merged_jobs,
         state_update=StateActionUpdate(
             job_detail_buffer={},
             job_detail_coverage={},
@@ -462,7 +361,7 @@ def _merge_completed_detail(
 
 def _finish_detail_reading(
     args: dict[str, Any],
-    current_jobs: dict[str, Any],
+    current_jobs: list[CollectedJob],
     *,
     current_url: str,
     state: WorkerState,
@@ -514,7 +413,6 @@ def _finish_detail_reading(
         return _merge_completed_detail(
             current_jobs,
             completed_job,
-            current_url=current_url,
             extraction_missing_fields=extraction_missing_fields,
         )
     except Exception as exc:
@@ -524,13 +422,13 @@ def _finish_detail_reading(
                 "status": "error",
                 "result": f"Failed to extract detail OCR buffer: {exc}",
             },
-            jobs=current_jobs,
+            collected_jobs=current_jobs,
         )
 
 
 def _set_job_card_queue(
     args: dict[str, Any],
-    current_jobs: dict[str, Any],
+    current_jobs: list[CollectedJob],
     *,
     current_url: str,
     state: WorkerState,
@@ -586,7 +484,7 @@ def _set_job_card_queue(
             "existing_card_count": len(existing_cards),
             "existing_cards": existing_cards,
         },
-        jobs=current_jobs,
+        collected_jobs=current_jobs,
         state_update=StateActionUpdate(
             job_card_queue=queue,
             job_results_memory=memory,
@@ -598,7 +496,7 @@ def _set_job_card_queue(
 def dispatch_state_action(
     action_name: str,
     args: dict[str, Any],
-    current_jobs: dict[str, Any],
+    current_jobs: list[CollectedJob],
     *,
     current_url: str = "",
     state: WorkerState | None = None,
@@ -607,13 +505,6 @@ def dispatch_state_action(
     """공고 추출과 카드 큐처럼 그래프 상태를 변경하는 행동을 실행한다."""
 
     state = state or {}
-    if action_name == "update_extracted_info":
-        return _update_extracted_info(
-            args,
-            current_jobs,
-            current_url=current_url,
-            state=state,
-        )
     if action_name == "finish_detail_reading":
         return _finish_detail_reading(
             args,

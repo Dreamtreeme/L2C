@@ -52,21 +52,20 @@ class VisionWorkerRuntime:
     @property
     def ocr_worker_pid(self) -> int | None:
         perception = self._perception
-        som_engine = getattr(perception, "som_engine", None)
-        worker = getattr(som_engine, "_ocr_worker", None)
-        return int(worker.pid) if worker is not None and worker.poll() is None else None
+        return perception.ocr_worker_pid if perception is not None else None
 
     def resource_snapshot(self) -> dict[str, Any]:
         """장기 실행 자원의 재사용 여부를 외부 관측용 값으로 반환한다."""
 
         with self._resource_lock:
             perception = self._perception
-            browser_window_id = getattr(perception, "_browser_window_id", None)
             return {
                 "closed": self._closed,
                 "initialized": self.is_initialized,
                 "ocr_worker_pid": self.ocr_worker_pid,
-                "browser_window_bound": bool(browser_window_id),
+                "browser_window_bound": bool(
+                    perception is not None and perception.browser_window_id
+                ),
                 "ui_model_variant_count": len(self._ui_models),
                 "graph_initialized": self._graph is not None,
             }
@@ -127,6 +126,9 @@ class VisionWorkerRuntime:
 
         prepare_job_card_selector_model()
 
+    def ensure_ocr_worker_ready(self) -> None:
+        self.get_perception().ensure_ocr_worker_ready()
+
     def check_reasoning_screen(
         self,
         state: WorkerState,
@@ -136,9 +138,7 @@ class VisionWorkerRuntime:
         """저장한 화면과 현재 물리 화면이 같은 행동 대상을 가리키는지 확인한다."""
 
         observation = state.get("observation") or {}
-        if not str(
-            (observation.get("screen_signature") or {}).get("phash") or ""
-        ):
+        if not str((observation.get("screen_signature") or {}).get("phash") or ""):
             return {
                 "checked": False,
                 "stale": False,
@@ -176,7 +176,9 @@ class VisionWorkerRuntime:
 
         action_tools = self._action_tools
         if action_tools is None:
-            logger.info("Browser cleanup skipped", reason="action_tools_not_initialized")
+            logger.info(
+                "Browser cleanup skipped", reason="action_tools_not_initialized"
+            )
             return False
         result = action_tools.close_browser()
         if result.get("status") != "success":
@@ -198,31 +200,32 @@ class VisionWorkerRuntime:
     def close(self) -> None:
         """진행 중인 물리 입력이 끝난 뒤 브라우저, OCR, 캡처 자원을 닫는다."""
 
-        with self._execution_lock:
-            with self._resource_lock:
-                if self._closed:
-                    return
-                action_tools = self._action_tools
-                perception = self._perception
-                bound_window_id = getattr(perception, "_browser_window_id", None)
-                if action_tools is not None and bound_window_id:
-                    try:
-                        result = action_tools.close_browser()
-                        if result.get("status") != "success":
-                            logger.warning(
-                                "Browser shutdown failed",
-                                error=result.get("error") or result.get("result"),
-                            )
-                    except Exception as exc:
-                        logger.warning("Browser shutdown failed", error=str(exc))
-                close_perception = getattr(perception, "close", None)
-                if callable(close_perception):
-                    close_perception()
-                self._ui_models.clear()
-                self._graph = None
-                self._action_tools = None
-                self._perception = None
-                self._closed = True
+        with self._execution_lock, self._resource_lock:
+            if self._closed:
+                return
+            action_tools = self._action_tools
+            perception = self._perception
+            if (
+                action_tools is not None
+                and perception is not None
+                and perception.browser_window_id
+            ):
+                try:
+                    result = action_tools.close_browser()
+                    if result.get("status") != "success":
+                        logger.warning(
+                            "Browser shutdown failed",
+                            error=result.get("error") or result.get("result"),
+                        )
+                except Exception as exc:
+                    logger.warning("Browser shutdown failed", error=str(exc))
+            if perception is not None:
+                perception.close()
+            self._ui_models.clear()
+            self._graph = None
+            self._action_tools = None
+            self._perception = None
+            self._closed = True
 
 
 @dataclass(frozen=True, slots=True)

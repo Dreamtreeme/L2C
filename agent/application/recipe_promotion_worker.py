@@ -113,7 +113,9 @@ class RecipePromotionWorker:
         attempts = int(candidate.get("review_attempts") or 0)
         review_context = None
         try:
-            from agent.recipe.candidate_reviewer import review_and_apply_candidate
+            from agent.application.recipe_candidate_review_service import (
+                review_and_apply_candidate,
+            )
             from agent.observability.run_context import run_context
             from agent.observability.run_contracts import RunStatus
 

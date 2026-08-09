@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from agent.config import get_settings
+
 
 _SCHEMA_LOCK = threading.RLock()
 _INITIALIZED_SCHEMAS: set[tuple[type, Path]] = set()
@@ -17,8 +19,6 @@ _INITIALIZED_SCHEMAS: set[tuple[type, Path]] = set()
 class SQLiteStore:
     def __init__(self, db_path=None):
         if db_path is None:
-            from agent.config import get_settings
-
             db_path = get_settings().paths.db_path
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

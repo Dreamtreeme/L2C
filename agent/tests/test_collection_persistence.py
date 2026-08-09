@@ -1,12 +1,13 @@
 import pytest
 
-from agent.application import collection_submission_service as service
-from agent.application.collection_worker_runner import WorkerRunResult
+from agent.application import collection_persistence as service
 from shared.schema.feedback_schema import WorkerSubmission
+from shared.schema.jd_schema import CollectedJob, JobPosting
+from shared.schema.collection_run import CollectionBatch
 
 
-def _worker_result(*, finished: bool = True) -> WorkerRunResult:
-    return WorkerRunResult(
+def _worker_result(*, finished: bool = True) -> CollectionBatch:
+    return CollectionBatch(
         submission=WorkerSubmission(
             run_id="worker-1",
             run_status="finished" if finished else "recursion_limit",
@@ -19,9 +20,15 @@ def _worker_result(*, finished: bool = True) -> WorkerRunResult:
                 "task_category": "검색",
             },
         ),
-        extracted_jd={
-            "jobs": [{"company_name": "ABC", "position": "개발자"}]
-        },
+        collected_jobs=[
+            CollectedJob(
+                posting=JobPosting(
+                    company_name="ABC",
+                    position="개발자",
+                    url="https://example.com/jobs/1",
+                )
+            )
+        ],
         site_slug="wanted",
         site_name="Wanted",
     )
@@ -38,7 +45,7 @@ def submission_dependencies(monkeypatch):
     )
     monkeypatch.setattr(
         service,
-        "persist_collected_data_with_report",
+        "persist_collected_jobs_with_report",
         lambda *args, **kwargs: {
             "persisted_count": 1,
             "created_count": 1,
@@ -59,11 +66,12 @@ def test_finalize_stores_submission_once_without_persistence_copy(
         lambda self, *args, **kwargs: "candidate-1",
     )
     monkeypatch.setattr(
-        "agent.application.recipe_promotion_service.schedule_recipe_candidate_promotion",
+        service,
+        "schedule_recipe_candidate_promotion",
         lambda _candidate_id: True,
     )
 
-    result = service.finalize_worker_submission(_worker_result())
+    result = service.persist_collection_batch(_worker_result())
 
     assert result.submission_id == "submission-1"
     assert result.persistence["persisted_count"] == 1
@@ -81,7 +89,11 @@ def test_finalize_stores_submission_once_without_persistence_copy(
 @pytest.mark.parametrize(
     ("worker_result", "persistence", "expected"),
     [
-        (_worker_result(finished=False), {"persisted_count": 1, "rejected_count": 0}, "not_eligible"),
+        (
+            _worker_result(finished=False),
+            {"persisted_count": 1, "rejected_count": 0},
+            "not_eligible",
+        ),
         (_worker_result(), {"persisted_count": 0, "rejected_count": 1}, "not_eligible"),
     ],
 )
@@ -94,7 +106,7 @@ def test_incomplete_or_rejected_run_does_not_create_candidate(
 ):
     monkeypatch.setattr(
         service,
-        "persist_collected_data_with_report",
+        "persist_collected_jobs_with_report",
         lambda *args, **kwargs: persistence,
     )
     monkeypatch.setattr(
@@ -102,7 +114,7 @@ def test_incomplete_or_rejected_run_does_not_create_candidate(
         lambda *args, **kwargs: pytest.fail("후보가 생성되면 안 됩니다."),
     )
 
-    result = service.finalize_worker_submission(worker_result)
+    result = service.persist_collection_batch(worker_result)
 
     assert result.recipe_learning["status"] == expected
 
@@ -116,7 +128,7 @@ def test_candidate_storage_failure_is_reported(monkeypatch, submission_dependenc
         fail_candidate,
     )
 
-    result = service.finalize_worker_submission(_worker_result())
+    result = service.persist_collection_batch(_worker_result())
 
     assert result.recipe_learning["status"] == "failed"
     assert result.recipe_learning["reason"] == "candidate_registration_failed"

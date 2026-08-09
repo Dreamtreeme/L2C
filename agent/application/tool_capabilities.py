@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from shared.schema.agent_contract import EVIDENCE_FIELDS
-from shared.schema.investigation_schema import ToolCapability
+from agent.sites import list_supported_sites
 from agent.sites.profile import SiteProfile
+from shared.schema.agent_contract import ANSWER_EVIDENCE_FIELDS
+from shared.schema.investigation_schema import ToolCapability
 
 
 def _site_capability(profile: SiteProfile) -> ToolCapability:
@@ -22,7 +23,7 @@ def _site_capability(profile: SiteProfile) -> ToolCapability:
             "employment_type": str(declared.get("employment_type_filter") or "unknown"),
         },
         verifiable_fields={
-            **{field: "best_effort" for field in EVIDENCE_FIELDS},
+            **{field: "best_effort" for field in ANSWER_EVIDENCE_FIELDS},
             "company_name": "required",
             "position": "required",
             "url": "required",
@@ -59,8 +60,6 @@ def build_tool_capability_catalog() -> list[ToolCapability]:
             expected_latency="1초 이내",
         ),
     ]
-    from agent.sites import list_supported_sites
-
     capabilities.extend(
         _site_capability(profile)
         for profile in list_supported_sites(enabled_only=True)

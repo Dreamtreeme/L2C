@@ -15,6 +15,10 @@ class FakeSct:
         return FakeSctImage()
 
 
+class EmptyWaitStable:
+    last_wait_result = {}
+
+
 def test_paddle_worker_emits_phases_and_request_scoped_result(monkeypatch, capsys):
     import io
     import json
@@ -37,7 +41,9 @@ def test_paddle_worker_emits_phases_and_request_scoped_result(monkeypatch, capsy
     monkeypatch.setattr(
         runner.sys,
         "stdin",
-        io.StringIO(json.dumps({"request_id": "req-1", "image_path": "screen.png"}) + "\n"),
+        io.StringIO(
+            json.dumps({"request_id": "req-1", "image_path": "screen.png"}) + "\n"
+        ),
     )
 
     runner.worker_main()
@@ -48,7 +54,9 @@ def test_paddle_worker_emits_phases_and_request_scoped_result(monkeypatch, capsy
         for line in output_lines
         if line.startswith("__OCR_EVENT__ ")
     ]
-    result_line = next(line for line in output_lines if line.startswith("__OCR_JSON_RESULT__ "))
+    result_line = next(
+        line for line in output_lines if line.startswith("__OCR_JSON_RESULT__ ")
+    )
     result = json.loads(result_line.removeprefix("__OCR_JSON_RESULT__ "))
 
     assert phases == [
@@ -62,7 +70,9 @@ def test_paddle_worker_emits_phases_and_request_scoped_result(monkeypatch, capsy
     assert result["timings"]["inference_sec"] >= 0
 
 
-def test_paddle_worker_emits_explicit_error_instead_of_empty_result(monkeypatch, capsys):
+def test_paddle_worker_emits_explicit_error_instead_of_empty_result(
+    monkeypatch, capsys
+):
     import io
     import json
 
@@ -76,14 +86,18 @@ def test_paddle_worker_emits_explicit_error_instead_of_empty_result(monkeypatch,
     monkeypatch.setattr(
         runner.sys,
         "stdin",
-        io.StringIO(json.dumps({"request_id": "req-2", "image_path": "screen.png"}) + "\n"),
+        io.StringIO(
+            json.dumps({"request_id": "req-2", "image_path": "screen.png"}) + "\n"
+        ),
     )
 
     runner.worker_main()
 
     captured = capsys.readouterr()
     output_lines = captured.out.splitlines()
-    error_line = next(line for line in output_lines if line.startswith("__OCR_WORKER_ERROR__ "))
+    error_line = next(
+        line for line in output_lines if line.startswith("__OCR_WORKER_ERROR__ ")
+    )
     error = json.loads(error_line.removeprefix("__OCR_WORKER_ERROR__ "))
 
     assert error["request_id"] == "req-2"
@@ -130,11 +144,14 @@ def test_opencv_frame_compare_separates_change_ratio_and_stability():
     after = before.copy()
     after[50:150, 50:150] = 255
 
-    assert changed_pixel_ratio(
-        before,
-        after,
-        intensity_threshold=20,
-    ) > 0.2
+    assert (
+        changed_pixel_ratio(
+            before,
+            after,
+            intensity_threshold=20,
+        )
+        > 0.2
+    )
     assert mean_difference_percent(before, before) == 0.0
     assert mean_difference_percent(before, after) > 20.0
 
@@ -166,7 +183,9 @@ def test_capture_screen_reuses_region_for_wait(monkeypatch, tmp_path):
         return region
 
     monkeypatch.setattr(engine, "_get_browser_region", fake_get_browser_region)
-    monkeypatch.setattr("agent.tools.perception.time.sleep", lambda sec: sleeps.append(sec))
+    monkeypatch.setattr(
+        "agent.tools.perception.time.sleep", lambda sec: sleeps.append(sec)
+    )
 
     output = engine.capture_screen(filename="screen.jpg", initial_wait_sec=0.01)
 
@@ -201,7 +220,9 @@ def test_address_bar_url_copy_retries_after_new_tab_focus_delay(monkeypatch):
             if keys[-1] == "c":
                 self.copy_count += 1
                 if self.copy_count == 2:
-                    self.clipboard.value = "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=1"
+                    self.clipboard.value = (
+                        "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=1"
+                    )
 
     engine = object.__new__(PerceptionEngine)
     clipboard = FakeClipboard()
@@ -306,7 +327,9 @@ def test_screen_quality_distinguishes_blank_body_from_content(monkeypatch, tmp_p
     assert engine.screen_quality(content_path)["low_information"] is False
 
 
-def test_screen_quality_excludes_dynamic_browser_chrome_from_blank_page(monkeypatch, tmp_path):
+def test_screen_quality_excludes_dynamic_browser_chrome_from_blank_page(
+    monkeypatch, tmp_path
+):
     from agent.tools.perception import PerceptionEngine
 
     image_path = tmp_path / "blank-browser.png"
@@ -412,6 +435,7 @@ def test_capture_usable_screen_retries_before_ocr(monkeypatch, tmp_path):
     from agent.tools.perception import PerceptionEngine
 
     engine = object.__new__(PerceptionEngine)
+    engine._wait_stable = EmptyWaitStable()
     paths = [tmp_path / "blank.png", tmp_path / "ready.png"]
     calls = []
 
@@ -455,11 +479,7 @@ def test_capture_usable_screen_retries_when_frame_stability_times_out(
         stable = len(calls) > 1
         wait_stable.last_wait_result = {
             "stable": stable,
-            "reason": (
-                "consecutive_frames_stable"
-                if stable
-                else "stability_timeout"
-            ),
+            "reason": ("consecutive_frames_stable" if stable else "stability_timeout"),
             "probe_count": 2,
             "stable_frames": 2 if stable else 0,
             "diff_percent": 0.1 if stable else 2.5,
@@ -485,6 +505,7 @@ def test_capture_usable_screen_honors_single_attempt_override(monkeypatch, tmp_p
     from agent.tools.perception import PerceptionEngine
 
     engine = object.__new__(PerceptionEngine)
+    engine._wait_stable = EmptyWaitStable()
     blank_path = tmp_path / "blank.png"
     calls = []
 
@@ -493,7 +514,9 @@ def test_capture_usable_screen_honors_single_attempt_override(monkeypatch, tmp_p
         "capture_screen",
         lambda filename=None: calls.append(filename) or blank_path,
     )
-    monkeypatch.setattr(engine, "screen_quality", lambda _path: {"low_information": True})
+    monkeypatch.setattr(
+        engine, "screen_quality", lambda _path: {"low_information": True}
+    )
 
     assert engine.capture_usable_screen(max_attempts=1) == blank_path
     assert calls == [None]
@@ -503,6 +526,7 @@ def test_capture_usable_screen_forwards_input_settle_wait(monkeypatch, tmp_path)
     from agent.tools.perception import PerceptionEngine
 
     engine = object.__new__(PerceptionEngine)
+    engine._wait_stable = EmptyWaitStable()
     ready_path = tmp_path / "ready.png"
     calls = []
 
@@ -511,13 +535,19 @@ def test_capture_usable_screen_forwards_input_settle_wait(monkeypatch, tmp_path)
         return ready_path
 
     monkeypatch.setattr(engine, "capture_screen", fake_capture_screen)
-    monkeypatch.setattr(engine, "screen_quality", lambda _path: {"low_information": False})
+    monkeypatch.setattr(
+        engine, "screen_quality", lambda _path: {"low_information": False}
+    )
 
-    assert engine.capture_usable_screen(max_attempts=1, initial_wait_sec=0.7) == ready_path
+    assert (
+        engine.capture_usable_screen(max_attempts=1, initial_wait_sec=0.7) == ready_path
+    )
     assert calls == [(None, 0.7)]
 
 
-def test_prepare_som_image_keeps_full_image_when_boundary_is_weak(monkeypatch, tmp_path):
+def test_prepare_som_image_keeps_full_image_when_boundary_is_weak(
+    monkeypatch, tmp_path
+):
     from agent.tools.perception import PerceptionEngine
 
     image_path = tmp_path / "screen.png"
@@ -584,6 +614,7 @@ def test_som_engine_scales_only_large_images_for_ocr(monkeypatch):
     get_settings.cache_clear()
     assert round(engine._ocr_scale_for_image(3846, 2094), 3) == round(1600 / 3846, 3)
 
+
 def test_som_engine_removes_icon_containers_that_duplicate_ocr_text():
     from agent.tools.som_engine import SomEngine
 
@@ -608,13 +639,17 @@ def test_som_engine_ensure_ocr_worker_ready_starts_reusable_worker(monkeypatch):
     engine = object.__new__(SomEngine)
     worker = object()
     started = []
-    monkeypatch.setattr(engine, "_start_ocr_worker", lambda: started.append(True) or worker)
+    monkeypatch.setattr(
+        engine, "_start_ocr_worker", lambda: started.append(True) or worker
+    )
 
     assert engine.ensure_ocr_worker_ready() is worker
     assert started == [True]
 
 
-def test_som_engine_propagates_worker_failure_without_oneshot_fallback(monkeypatch, tmp_path):
+def test_som_engine_propagates_worker_failure_without_oneshot_fallback(
+    monkeypatch, tmp_path
+):
     from agent.tools.som_engine import SomEngine
 
     engine = object.__new__(SomEngine)
@@ -639,7 +674,9 @@ def test_som_engine_propagates_worker_failure_without_oneshot_fallback(monkeypat
     assert not hasattr(SomEngine, "_run_paddle_ocr_once")
 
 
-def test_som_engine_resolves_ocr_python_from_separate_environment(monkeypatch, tmp_path):
+def test_som_engine_resolves_ocr_python_from_separate_environment(
+    monkeypatch, tmp_path
+):
     from agent.tools.som_engine import SomEngine
 
     engine = object.__new__(SomEngine)
@@ -682,7 +719,9 @@ def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):
         seen["ocr_is_image"] = isinstance(image, Image.Image)
         seen["ocr_scale"] = scale
         seen["ocr_size"] = image.size
-        return [{"bbox": [10, 10, 60, 30], "type": "text", "text": "Search", "conf": 0.9}]
+        return [
+            {"bbox": [10, 10, 60, 30], "type": "text", "text": "Search", "conf": 0.9}
+        ]
 
     def fake_yolo(_img, scale):
         seen["yolo_scale"] = scale
@@ -691,7 +730,9 @@ def test_som_engine_uses_bounded_ocr_resize_from_yolo(monkeypatch, tmp_path):
     monkeypatch.setattr(engine, "_run_paddle_ocr", fake_ocr)
     monkeypatch.setattr(engine, "_run_yolo", fake_yolo)
 
-    _marked, bboxes, elements = engine.process_image(image_path, output_filename="marked.jpg")
+    _marked, bboxes, elements = engine.process_image(
+        image_path, output_filename="marked.jpg"
+    )
 
     assert seen["ocr_is_image"] is True
     assert seen["ocr_scale"] == 1280 / 3200
@@ -717,12 +758,15 @@ def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
         lambda **_kwargs: np.zeros((200, 200), dtype=np.uint8),
     )
 
-    assert wait_stable.wait_for_change(
-        str(reference_path),
-        max_wait_sec=0.1,
-        check_interval_sec=0,
-        region={"top": 0, "left": 0, "width": 200, "height": 200},
-    ) is True
+    assert (
+        wait_stable.wait_for_change(
+            str(reference_path),
+            max_wait_sec=0.1,
+            check_interval_sec=0,
+            region={"top": 0, "left": 0, "width": 200, "height": 200},
+        )
+        is True
+    )
 
 
 def test_wait_stable_requires_consecutive_stable_frames(monkeypatch):
@@ -753,13 +797,16 @@ def test_wait_stable_requires_consecutive_stable_frames(monkeypatch):
         lambda _seconds: None,
     )
 
-    assert wait_stable.wait(
-        max_wait_sec=1,
-        check_interval_sec=0,
-        threshold_percent=1,
-        required_stable_frames=2,
-        region={"top": 0, "left": 0, "width": 200, "height": 200},
-    ) is True
+    assert (
+        wait_stable.wait(
+            max_wait_sec=1,
+            check_interval_sec=0,
+            threshold_percent=1,
+            required_stable_frames=2,
+            region={"top": 0, "left": 0, "width": 200, "height": 200},
+        )
+        is True
+    )
     assert capture_count["value"] == 5
     assert wait_stable.last_wait_result["probe_count"] == 4
     assert wait_stable.last_wait_result["stable_frames"] == 2

@@ -8,9 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-from agent.application.search_taxonomy_constants import CURATED_SOURCE_KEY
 from agent.application.search_taxonomy_import_service import normalize_term
 from agent.application.search_taxonomy_service import SearchTaxonomyService
+from agent.application.search_taxonomy_utils import CURATED_SOURCE_KEY
 from shared.db.database import Database
 
 

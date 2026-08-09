@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Callable
 
 from agent.application.chat_service import ChatService
-from agent.application.collection_service import CollectionService
+from agent.application.collection_persistence import persist_collection_batch
 from agent.application.collection_worker_runner import run_worker_once
+from agent.application.conversation_context_service import (
+    load_conversation_context as load_default_conversation_context,
+    lookup_run as lookup_registered_run,
+)
+from agent.application.clarification_service import apply_clarification_answer
+from agent.application.evidence_service import (
+    inspect_job_evidence,
+    load_stored_jobs,
+)
 from agent.application.occupation_clarification_service import (
     OccupationClarificationService,
 )
-from agent.application.recipe_promotion_service import auto_promotion_enabled
 from agent.application.recipe_promotion_worker import RecipePromotionWorker
 from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
 from agent.application.search_taxonomy_review_service import (
@@ -22,6 +31,7 @@ from agent.application.search_taxonomy_review_service import (
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.tool_capabilities import build_tool_capability_catalog
 from agent.application.worker_execution_service import WorkerExecutionService
+from agent.config import get_settings
 from agent.graph.investigation_answer_nodes import InvestigationAnswerNodes
 from agent.graph.investigation_collection_nodes import (
     InvestigationCollectionNodes,
@@ -34,7 +44,8 @@ from agent.graph.workflow import build_graph
 from agent.runtime.investigation_checkpoint import InvestigationCheckpointRuntime
 from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 from agent.sites import validate_site_profiles
-from shared.schema.collection_intent import CollectionIntent, CollectionResult
+from shared.schema.collection_intent import CollectionIntent
+from shared.schema.collection_run import CollectionBatch, PersistedCollection
 from shared.schema.investigation_schema import ToolCapability
 
 
@@ -42,11 +53,14 @@ def build_investigation_workflow(
     db_path: str | Path,
     *,
     checkpoint_runtime: InvestigationCheckpointRuntime,
-    collect_jobs: Callable[[CollectionIntent], CollectionResult],
+    run_collection: Callable[[CollectionIntent], CollectionBatch],
+    persist_collection: Callable[[CollectionBatch], PersistedCollection],
     taxonomy_service: SearchTaxonomyService,
     models: InvestigationModels | None = None,
     capabilities: list[ToolCapability] | None = None,
     now: Callable[[], datetime] | None = None,
+    conversation_context_loader: Callable | None = None,
+    run_lookup: Callable | None = None,
 ) -> InvestigationWorkflow:
     """애플리케이션 서비스와 조사 노드를 한 번 조립한다."""
 
@@ -68,24 +82,39 @@ def build_investigation_workflow(
         request_nodes=InvestigationRequestNodes(
             models=resolved_models,
             occupation_clarification=occupation_clarification,
+            apply_clarification=apply_clarification_answer,
+            load_conversation_context=(
+                conversation_context_loader or load_default_conversation_context
+            ),
             now=now_provider,
         ),
         evidence_nodes=InvestigationEvidenceNodes(
-            db_path=resolved_db_path,
             models=resolved_models,
             taxonomy_service=taxonomy_service,
+            inspect_evidence=partial(
+                inspect_job_evidence,
+                resolved_db_path,
+                taxonomy_service=taxonomy_service,
+            ),
             now=now_provider,
         ),
-        collection_nodes=InvestigationCollectionNodes(collect_jobs),
+        collection_nodes=InvestigationCollectionNodes(
+            run_collection,
+            persist_collection,
+        ),
         answer_nodes=InvestigationAnswerNodes(
-            db_path=resolved_db_path,
             models=resolved_models,
+            load_documents=partial(
+                load_stored_jobs,
+                resolved_db_path,
+            ),
         ),
         capabilities=(
             list(capabilities)
             if capabilities is not None
             else build_tool_capability_catalog()
         ),
+        lookup_run=run_lookup or lookup_registered_run,
     )
 
 
@@ -114,15 +143,13 @@ class ApplicationRuntime:
             self.vision_runtime,
             run_worker_once,
         )
-        self.collection_service = CollectionService(
-            self.worker_execution_service.run
-        )
         self.investigation_workflow = (
             investigation_workflow
             or build_investigation_workflow(
                 self.db_path,
                 checkpoint_runtime=self.checkpoint_runtime,
-                collect_jobs=self.collection_service.collect,
+                run_collection=self.worker_execution_service.run,
+                persist_collection=persist_collection_batch,
                 taxonomy_service=self.taxonomy_service,
             )
         )
@@ -143,7 +170,7 @@ class ApplicationRuntime:
             if self._started:
                 return
             validate_site_profiles()
-            if auto_promotion_enabled():
+            if get_settings().recipe.auto_promote:
                 self.promotion_worker.start()
             self._started = True
 

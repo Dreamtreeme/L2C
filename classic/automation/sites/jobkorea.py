@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 import time
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 from .base import SiteAdapter, get_inner_text_safe
 
 logger = logging.getLogger(__name__)
@@ -48,9 +50,7 @@ class JobKoreaAdapter(SiteAdapter):
             logger.debug(f"[jobkorea] 상세요강 탭 클릭 스킵: {e}")
 
         # 1) 메인 페이지 본문 (모집요강·기업정보·접수기간 등 메타데이터)
-        content_locator = page.locator(
-            ".readWrap, article, main, body"
-        ).first
+        content_locator = page.locator(".readWrap, article, main, body").first
         main_text = get_inner_text_safe(content_locator) or ""
 
         # 2) iframe 내부 본문 (담당업무·자격요건·우대사항 등 실 모집내용)
@@ -63,15 +63,15 @@ class JobKoreaAdapter(SiteAdapter):
             try:
                 try:
                     frame.wait_for_load_state("domcontentloaded", timeout=5000)
-                except Exception:
-                    pass
+                except PlaywrightTimeoutError:
+                    logger.debug(
+                        "[jobkorea] iframe 로딩 대기 시간 초과 후 본문 추출 계속"
+                    )
                 t = frame.locator("body").inner_text().strip()
                 if t:
                     iframe_texts.append(t)
                     src = (frame.url or frame.name or "?")[:80]
-                    logger.info(
-                        f"[jobkorea] iframe 본문 수집 ({len(t)}자) - {src}"
-                    )
+                    logger.info(f"[jobkorea] iframe 본문 수집 ({len(t)}자) - {src}")
             except Exception as e:
                 logger.debug(f"[jobkorea] iframe 추출 실패 ({frame.url}): {e}")
 

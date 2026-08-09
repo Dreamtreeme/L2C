@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from shared.schema.agent_contract import JobCollectionField
+from shared.schema.jd_schema import JobField
 
 
 class CollectionCountMode(str, Enum):
@@ -53,7 +53,7 @@ class CollectionIntent(BaseModel):
     purpose: CollectionPurpose = CollectionPurpose.COLLECT
     analysis_goal: str = Field(default="", description="비교·트렌드 등 수집 이후 분석 목적")
     task_category: str = Field(default="검색", description="Reflex 레시피 조회에 사용하는 작업 분류")
-    required_fields: list[JobCollectionField] = Field(
+    required_fields: list[JobField] = Field(
         default_factory=list,
         description="사이트 정책과 답변 근거 요구를 합쳐 반드시 확인할 공고 필드",
     )
@@ -62,8 +62,8 @@ class CollectionIntent(BaseModel):
     @classmethod
     def unique_required_fields(
         cls,
-        values: list[JobCollectionField],
-    ) -> list[JobCollectionField]:
+        values: list[JobField],
+    ) -> list[JobField]:
         return list(dict.fromkeys(values))
 
     @model_validator(mode="after")

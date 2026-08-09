@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import get_settings
+from shared.db.database import Database
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,9 @@ def _job_version_candidates(
     for row in version_rows:
         job_id = int(row["job_id"])
         per_job_count[job_id] = per_job_count.get(job_id, 0) + 1
-        if per_job_count[job_id] > policy.keep_job_versions and _expired(row["observed_at"], version_cutoff):
+        if per_job_count[job_id] > policy.keep_job_versions and _expired(
+            row["observed_at"], version_cutoff
+        ):
             candidates.append(int(row["id"]))
     return candidates
 
@@ -99,8 +102,6 @@ def run_retention(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """보존 만료 후보를 보고하고 명시적으로 요청된 경우에만 삭제한다."""
-
-    from shared.db.database import Database
 
     policy = policy or RetentionPolicy.from_env()
     current = now or datetime.now()

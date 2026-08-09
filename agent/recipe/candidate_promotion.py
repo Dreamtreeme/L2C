@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.runtime.site_context import infer_site_page_role, normalize_page_role
+from agent.recipe.candidate_store import RecipeCandidateStore
 from agent.recipe.path_builder import build_recipe_path
 from agent.recipe.promotion_policy import evaluate_candidate_step_evidence
-from agent.runtime.replay_actions import (
+from agent.recipe.store import RecipeStore
+from agent.recipe.task_category import task_category_from_candidate
+from agent.runtime.site_context import infer_site_page_role, normalize_page_role
+from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
-from agent.recipe.task_category import task_category_from_candidate
-from agent.utils.model_dump import dump_model
+from agent.utils.model_conversion import dump_model
 from shared.schema.skill_schema import RecipeSkillMetadata
 
 
@@ -160,6 +162,70 @@ def _parameter_contract_valid(
     )
 
 
+def _declared_input_names(metadata: dict[str, Any]) -> set[str]:
+    return {
+        str(item.get("name") or "").strip()
+        for item in metadata.get("inputs") or []
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+
+
+def _base_promotion_rejection(
+    *,
+    seq: int | None,
+    action: str,
+    mode: str,
+    kept_seqs: set[int],
+    evidence_verdicts: dict[int, dict[str, Any]],
+) -> tuple[str, list[str]] | None:
+    if seq is None:
+        return "seq_missing", []
+    if action not in REVIEWABLE_REPLAY_ACTIONS:
+        return "unsupported_action", []
+    if mode not in {"fixed", "parameterized"}:
+        return "not_proposed_for_replay", []
+    if seq not in kept_seqs:
+        return "critic_pruned", []
+    evidence = evidence_verdicts.get(seq)
+    if evidence and evidence.get("eligible"):
+        return None
+    reasons = list((evidence or {}).get("blocking_reasons") or [])
+    return reasons[0] if reasons else "action_evidence_missing", reasons
+
+
+def _target_promotion_rejection(
+    step: dict[str, Any],
+    mode: str,
+    declared_inputs: set[str],
+) -> str:
+    if not step.get("roi_signature"):
+        return "roi_signature_missing"
+    if mode == "parameterized" and not _parameter_contract_valid(
+        step,
+        declared_inputs,
+    ):
+        return "parameter_slot_contract_missing"
+    if mode == "parameterized" and step.get("action") != "type_in_marker":
+        return "unsupported_parameterized_action"
+    return ""
+
+
+def _contextual_promotion_rejection(
+    step: dict[str, Any],
+    mode: str,
+) -> str:
+    if mode != "fixed":
+        return "contextual_action_not_fixed"
+    if not step.get("screen_context_signature"):
+        return "screen_context_signature_missing"
+    param = step.get("param") if isinstance(step.get("param"), dict) else {}
+    if step.get("action") == "press_key" and not param.get("key"):
+        return "key_missing"
+    if step.get("action") == "switch_tab" and not param.get("direction"):
+        return "tab_direction_missing"
+    return ""
+
+
 def _promotable_steps(
     candidate: dict[str, Any],
     review: dict[str, Any],
@@ -170,11 +236,7 @@ def _promotable_steps(
     kept_seqs = _kept_step_seqs(review)
     evidence_verdicts = evaluate_candidate_step_evidence(candidate)
     page_roles = _page_roles_from_evidence(candidate)
-    declared_inputs = {
-        str(item.get("name") or "").strip()
-        for item in metadata.get("inputs") or []
-        if isinstance(item, dict) and str(item.get("name") or "").strip()
-    }
+    declared_inputs = _declared_input_names(metadata)
     promoted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
 
@@ -185,28 +247,20 @@ def _promotable_steps(
         seq = _step_seq(step)
         action = str(step.get("action") or "")
         mode = str(step.get("replay_mode") or "reasoning")
-
-        if seq is None:
-            _skip(skipped, step, "seq_missing")
-            continue
-        if action not in REVIEWABLE_REPLAY_ACTIONS:
-            _skip(skipped, step, "unsupported_action")
-            continue
-        if mode not in {"fixed", "parameterized"}:
-            _skip(skipped, step, "not_proposed_for_replay")
-            continue
-        if seq not in kept_seqs:
-            _skip(skipped, step, "critic_pruned")
-            continue
-
-        evidence = evidence_verdicts.get(seq)
-        if not evidence or not evidence.get("eligible"):
-            reasons = list((evidence or {}).get("blocking_reasons") or [])
+        rejection = _base_promotion_rejection(
+            seq=seq,
+            action=action,
+            mode=mode,
+            kept_seqs=kept_seqs,
+            evidence_verdicts=evidence_verdicts,
+        )
+        if rejection:
+            reason, blocking_reasons = rejection
             _skip(
                 skipped,
                 step,
-                reasons[0] if reasons else "action_evidence_missing",
-                blocking_reasons=reasons,
+                reason,
+                blocking_reasons=blocking_reasons,
             )
             continue
 
@@ -219,46 +273,17 @@ def _promotable_steps(
         step["page_role"] = page_role
 
         if action in TARGET_REPLAY_ACTIONS:
-            if not step.get("roi_signature"):
-                _skip(skipped, step, "roi_signature_missing")
-                continue
-            if mode == "parameterized" and not _parameter_contract_valid(
-                step,
-                declared_inputs,
-            ):
-                _skip(
-                    skipped,
-                    step,
-                    "parameter_slot_contract_missing",
-                )
-                continue
-            if mode == "parameterized" and action != "type_in_marker":
-                _skip(skipped, step, "unsupported_parameterized_action")
+            reason = _target_promotion_rejection(step, mode, declared_inputs)
+            if reason:
+                _skip(skipped, step, reason)
                 continue
             promoted.append(step)
             continue
 
         if action in CONTEXTUAL_REPLAY_ACTIONS:
-            if mode != "fixed":
-                _skip(skipped, step, "contextual_action_not_fixed")
-                continue
-            if not step.get("screen_context_signature"):
-                _skip(
-                    skipped,
-                    step,
-                    "screen_context_signature_missing",
-                )
-                continue
-            param = (
-                step.get("param")
-                if isinstance(step.get("param"), dict)
-                else {}
-            )
-            if action == "press_key" and not param.get("key"):
-                _skip(skipped, step, "key_missing")
-                continue
-            if action == "switch_tab" and not param.get("direction"):
-                _skip(skipped, step, "tab_direction_missing")
+            reason = _contextual_promotion_rejection(step, mode)
+            if reason:
+                _skip(skipped, step, reason)
                 continue
             promoted.append(step)
 
@@ -271,8 +296,6 @@ def apply_candidate_promotion(
     db_path=None,
 ) -> dict[str, Any]:
     """Critic이 남긴 자율탐색 단계만 원래 순서의 경로로 저장한다."""
-
-    from agent.recipe.store import RecipeStore
 
     metadata = _candidate_skill_metadata(candidate)
     replay_steps, skipped_steps = _promotable_steps(
@@ -316,8 +339,6 @@ def reapply_reviewed_candidate_promotion(
     db_path=None,
 ) -> dict[str, Any]:
     """저장된 가지치기 판정을 현재 결정론 정책으로 다시 적용한다."""
-
-    from agent.recipe.candidate_store import RecipeCandidateStore
 
     candidate = RecipeCandidateStore(db_path).get_candidate(candidate_id)
     if not candidate:

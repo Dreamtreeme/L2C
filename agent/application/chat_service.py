@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import time
 from typing import Any, Protocol
 
@@ -18,26 +17,6 @@ from agent.observability.run_contracts import RunEventSink, RunPhase, RunStatus
 from agent.utils.logger import logger
 
 
-def validate_citations(answer: str, valid_ids: list[int]) -> str:
-    """답변의 job_id 인용이 실제 근거 문서에 포함됐는지 검증한다."""
-
-    valid = {str(job_id) for job_id in valid_ids}
-
-    def expand_group(match: re.Match[str]) -> str:
-        citation_ids = re.findall(r"\d+", match.group(1))
-        return " ".join(f"[job_id:{job_id}]" for job_id in citation_ids)
-
-    def replace(match: re.Match[str]) -> str:
-        return match.group(0) if match.group(1) in valid else "[출처 확인 불가]"
-
-    normalized = re.sub(
-        r"\[job_id:(\d+(?:\s*,\s*\d+)+)\]",
-        expand_group,
-        answer,
-    )
-    return re.sub(r"\[job_id:(\d+)\]", replace, normalized)
-
-
 class InvestigationRunner(Protocol):
     """대화 서비스가 요구하는 조사 실행기의 최소 계약."""
 
@@ -46,6 +25,7 @@ class InvestigationRunner(Protocol):
         query: str,
         *,
         conversation_id: str = "",
+        resume_run_id: str = "",
         investigation_id: str = "",
         clarification_answer: Any = None,
     ) -> dict[str, Any]: ...
@@ -66,6 +46,7 @@ class ChatService:
         status: RunStatus = RunStatus.COMPLETED,
         clarification: dict[str, Any] | None = None,
         investigation_id: str = "",
+        resume_mode: str = "",
     ) -> dict[str, Any]:
         duration = max(0.0, time.perf_counter() - started)
         context.set_outcome(status)
@@ -89,6 +70,8 @@ class ChatService:
             result["clarification"] = clarification
         if investigation_id:
             result["investigation_id"] = investigation_id
+        if resume_mode:
+            result["resume_mode"] = resume_mode
         return result
 
     def run(
@@ -98,6 +81,7 @@ class ChatService:
         run_id: str | None = None,
         event_sink: RunEventSink | None = None,
         conversation_id: str = "",
+        resume_run_id: str = "",
         investigation_id: str = "",
         clarification_answer: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -112,11 +96,7 @@ class ChatService:
             metadata={
                 "conversation_id": conversation_id,
                 "investigation_id": investigation_id,
-                "resume_mode": (
-                    "checkpoint_resume"
-                    if investigation_id and clarification_answer
-                    else ""
-                ),
+                "resume_requested": bool(resume_run_id or investigation_id),
             },
             tags=["chat-request"],
         ) as (context, _created):
@@ -136,7 +116,9 @@ class ChatService:
                 )
 
             logger.info("Executing investigation workflow")
-            emit_run_event("planning_started", RunPhase.PLANNING, "질문을 분석하고 있습니다.")
+            emit_run_event(
+                "planning_started", RunPhase.PLANNING, "질문을 분석하고 있습니다."
+            )
             try:
                 raise_if_cancelled()
                 if self._investigation_workflow is None:
@@ -144,20 +126,20 @@ class ChatService:
                 workflow_result = self._investigation_workflow.run(
                     query,
                     conversation_id=conversation_id,
+                    resume_run_id=resume_run_id,
                     investigation_id=investigation_id,
                     clarification_answer=clarification_answer,
                 )
-                workflow_investigation = dict(workflow_result.get("investigation") or {})
+                workflow_investigation = dict(
+                    workflow_result.get("investigation") or {}
+                )
                 try:
                     workflow_status = RunStatus(
                         workflow_result.get("run_status") or RunStatus.COMPLETED.value
                     )
                 except ValueError:
                     workflow_status = RunStatus.FAILED
-                answer = validate_citations(
-                    str(workflow_result.get("final_answer") or ""),
-                    [int(item) for item in workflow_result.get("valid_ids", [])],
-                )
+                answer = str(workflow_result.get("final_answer") or "")
                 return self._result(
                     answer,
                     context=context,
@@ -165,8 +147,10 @@ class ChatService:
                     status=workflow_status,
                     clarification=workflow_result.get("clarification"),
                     investigation_id=str(
-                        workflow_investigation.get("investigation_id") or investigation_id
+                        workflow_investigation.get("investigation_id")
+                        or investigation_id
                     ),
+                    resume_mode=str(workflow_result.get("resume_mode") or ""),
                 )
             except RunCancelled:
                 emit_run_event(
@@ -229,5 +213,4 @@ class ChatService:
 __all__ = [
     "ChatService",
     "InvestigationRunner",
-    "validate_citations",
 ]

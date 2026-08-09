@@ -8,31 +8,30 @@ L2C는 Windows 로컬 애플리케이션이며 사용자 질의, 필요 시 웹 
 flowchart TD
     U[사용자] --> UI[Chat UI]
     UI --> API[FastAPI]
-    API --> RT[ApplicationRuntime]
-    RT --> CS[ChatService]
+    API --> CS[ChatService 실행 어댑터]
     CS --> PLAN[Investigation LangGraph]
+    RT[ApplicationRuntime 조립 지점] -. 포트와 자원 주입 .-> PLAN
     PLAN --> CLARIFY{중요한 조건이 확정됐는가?}
     CLARIFY -->|아니오| INPUT[객관식 확인 질문 및 중단]
     INPUT --> UI
     CLARIFY -->|예| DBQ[SQLite 근거 충분성 검사]
     DBQ -->|근거가 충분함| ANSWER[답변 및 인용 검증]
-    DBQ -->|추가 수집 필요| TOOL[realtime_scraping 도구]
-    TOOL --> COLLECTION[CollectionService 요청 정규화]
+    DBQ -->|추가 수집 필요| COLLECTION[collect 노드]
     COLLECTION --> LOCK[WorkerExecutionService 실행 세션]
     LOCK --> WG[Vision Worker LangGraph]
     WG --> WEB[브라우저 화면과 물리 입력]
-    WG --> VALIDATION[제출물 구조 검증]
-    VALIDATION --> PERSIST[공고와 제출물 저장]
-    PERSIST --> DB[(SQLite)]
-    PERSIST --> CANDIDATE[승격 후보 pending_replay 또는 pending_review]
+    WG --> BATCH[CollectionBatch]
+    BATCH --> PERSIST[persist 노드]
+    PERSIST --> ADAPTER[collection_persistence 어댑터]
+    ADAPTER --> DB
+    DB[(SQLite)] --> DBQ
+    ADAPTER --> CANDIDATE[승격 후보 pending_replay 또는 pending_review]
     CANDIDATE --> PROMOTION[별도 승격 작업자]
     PROMOTION --> RECIPE[활성 Reflex Recipe]
-    DB --> CS
-    CS --> ANSWER
     ANSWER --> U
 ```
 
-FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫습니다. `agent/bootstrap.py`는 조사 체크포인터, 애플리케이션 서비스, 모델 묶음, 컴파일된 조사·작업자 그래프, 지연 생성 비전 자원과 자동승격 작업자를 조립합니다. 조사 그래프와 작업자 그래프에는 준비된 노드·서비스·런타임 문맥만 전달되며 자원 생성과 종료 권한은 없습니다. `ChatService`가 사용자 진입점이며 요청 이해, 확인 질문, 필요 근거 정의, DB 충분성 검사, 수집 계획, 결과 검증, 답변 순서로 조사 그래프를 실행합니다.
+FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫습니다. `agent/bootstrap.py`는 조사 체크포인터, 포트 구현, 모델 묶음, 컴파일된 조사·작업자 그래프, 지연 생성 비전 자원과 자동승격 작업자를 조립합니다. `ChatService`는 실행 계측과 API 결과 변환만 담당합니다. 요청 이해, 확인 질문, DB 충분성 검사, 수집 계획, 비전 작업자 실행, DB 저장, 근거 재검사와 답변 순서는 Investigation LangGraph가 관리합니다.
 
 ## 백엔드 요청 생명주기
 
@@ -42,7 +41,7 @@ FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫�
 4. UI는 문자 단위 가짜 스트리밍 대신 진행 이벤트와 최종 응답을 구분해 표시합니다.
 5. `GET /api/runs/{run_id}`로 최근 실행 상태와 최종 계측값을 다시 조회할 수 있습니다.
 
-실행 레지스트리는 단일 사용자 로컬 앱을 위한 메모리 저장소입니다. 실행 진행 이벤트는 프로세스 재시작 후 복구하지 않지만, 확인 질문과 확정 조건을 포함한 조사 상태는 업무 DB와 분리된 LangGraph SQLite 체크포인트에 저장합니다. `investigation_id`가 체크포인트의 `thread_id`이며 확인 답변은 같은 스레드를 재개합니다.
+실행 레지스트리는 단일 사용자 로컬 앱을 위한 메모리 저장소입니다. Investigation LangGraph의 `load_context` 노드는 포트를 통해 최근 대화와 명시된 재개 실행을 구조화된 문맥으로 읽습니다. 실행 진행 이벤트는 프로세스 재시작 후 복구하지 않지만, 확인 질문과 확정 조건을 포함한 조사 상태는 업무 DB와 분리된 LangGraph SQLite 체크포인트에 저장합니다. `investigation_id`가 체크포인트의 `thread_id`이며 확인 답변은 같은 스레드를 재개합니다.
 
 ## Vision Worker
 
@@ -81,19 +80,19 @@ flowchart TD
 | 계층 | 주요 파일 | 책임 |
 |---|---|---|
 | 진입점 | `agent/web_server.py` | HTTP 입력과 SSE 응답 |
-| 실행 계약 | `agent/application/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
-| 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py` | 조사 실행 진입과 DB 근거 충분성 검사 |
+| 실행 계약 | `agent/observability/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
+| 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py`, `conversation_context_service.py` | 실행 계측·응답 변환과 그래프가 호출하는 DB·대화 어댑터 |
 | 수집 요청 | `agent/application/collection_request_builder.py` | 사이트 프로필 선택, 확정된 수집 의도로 작업자 목표 생성 |
-| 수집 조율 | `agent/application/collection_service.py` | 수집 의도 1회 정규화, 작업자 실행, 제출물 검증과 저장 순서 |
 | 수집 작업자 | `agent/application/collection_worker_runner.py` | 확정된 `CollectionIntent`로 단일 비전 작업자 실행과 제출물 생성 |
-| 수집 제출물 | `agent/application/collection_submission_service.py` | 공고 저장, 레시피 후보 등록, 제출물 최종 저장 |
+| 수집 저장 | `agent/application/collection_persistence.py` | 그래프의 persist 노드가 넘긴 공고·제출물 저장과 레시피 후보 등록 |
 | 구성·수명주기 | `agent/bootstrap.py` | 체크포인터·서비스·그래프·비전 런타임·승격 작업자의 생성과 종료 |
 | 비전 런타임 | `agent/runtime/vision_worker_runtime.py` | OCR·Perception·ActionTools·판단 모델·작업자 그래프의 지연 생성과 실행 잠금 |
 | 작업자 실행 | `agent/application/worker_execution_service.py` | 화면 잠금, 시작 화면 준비, 그래프 실행, 브라우저 정리 |
-| 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 공고 정규화·UPSERT, 상세 OCR 최종 구조화 |
-| 비동기 승격 | `agent/application/recipe_promotion_service.py`, `recipe_promotion_worker.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
+| 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 상세 OCR의 `JobPosting` 구조화, 정규 공고 UPSERT |
+| 비동기 승격 | `agent/application/recipe_promotion_service.py`, `recipe_promotion_worker.py`, `recipe_candidate_review_service.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
 | 지휘자 그래프 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 주입된 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
-| 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 요청 해석, 근거 판정, 수집 실행, 답변 |
+| 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 문맥 적재, 요청 해석, 근거 판정, 수집, 저장, 재검사와 답변 |
+| 지휘자 경계 포트 | `agent/graph/investigation_ports.py` | 그래프가 호출할 대화·수집·저장·근거 조회·문서 로드 계약 |
 | 직무 확인 | `agent/application/occupation_clarification_service.py` | 직무 사전 후보 질문 생성과 사용자 승인 별칭 기록 |
 | 작업자 그래프 | `agent/graph/workflow.py`, `agent/runtime/worker_contracts.py` | Vision LangGraph 연결, 런타임 문맥과 WorkerState 계약 |
 | 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 선택, 추론과 원자 실행 |
@@ -101,7 +100,7 @@ flowchart TD
 | 추론 문맥 | `agent/graph/worker_reasoning_prompt.py` | 화면·수집·전환 정보를 모델 메시지로 압축 |
 | 런타임 정책 | `agent/runtime/` | 전환 검증, 상세 버퍼, 카드 큐, Reflex 재생 |
 | 화면·입력 | `agent/tools/perception.py`, `som_engine.py`, `actions.py` | 화면/OCR/마커 생성과 물리 입력 |
-| 학습 메모리 | `agent/recipe/` | 행동 기록, 후보 검토, 활성 레시피 저장·매칭 |
+| 경험 메모리 | `agent/recipe/` | 행동 기록, 결정론적 승격 정책, 경로 생성, 활성 레시피 저장·매칭·재생 |
 
 ## 상태와 행동 계약
 
@@ -121,7 +120,9 @@ flowchart TD
 ## 그래프 의존성 주입
 
 - `ApplicationRuntime`이 구체 서비스와 장기 실행 자원을 생성합니다.
-- `build_investigation_workflow()`는 준비된 수집 함수, 모델 묶음, 검색 사전 서비스와 체크포인터 `saver`를 조사 노드에 주입합니다.
+- `build_investigation_workflow()`는 준비된 수집 함수, 모델 묶음, 검색 사전 서비스와 체크포인터 `saver`를 조사 노드에 주입합니다. DB 경로가 필요한 근거 조회와 문서 로드는 이 구성 루트에서 결합합니다.
+- 조사 노드는 `investigation_ports.py`의 계약만 사용합니다. `agent/graph`는 `agent/application`을 import하지 않으며 DB 경로, 서비스 생성과 저장 구현을 알지 못합니다.
+- 상세 추출은 `JobPosting`을 한 번 생성하고 화면 근거는 `JobCollectionEvidence`에 분리합니다. 작업 상태와 저장 서비스는 `CollectedJob`을 그대로 전달하며, SQLite의 목록 JSON 직렬화와 역직렬화는 `shared/db/database.py`만 담당합니다.
 - `VisionWorkerRuntime`은 컴파일된 작업자 그래프를 캐시합니다. `WorkerExecutionService`가 실행할 때 LangGraph `context`에 `WorkerDependencies(vision=...)`를 전달합니다.
 - 캡처, OCR, 추론과 실행 노드는 `Runtime[WorkerDependencies]`에서 비전 의존성을 받습니다. 전역 변수나 `ContextVar`로 현재 작업자를 조회하지 않습니다.
 - 그래프 클래스는 노드 순서, 조건부 분기, 상태 병합과 중단·재개를 담당합니다. 서비스 생성, 프로세스 종료, DB 연결 종료와 백그라운드 작업자 수명주기는 애플리케이션 계층이 담당합니다.

@@ -120,7 +120,7 @@ def check_reasoning_screen_stale(
         }
 
     max_distance = get_settings().vision.reasoning_stale_phash_max_distance
-    stale = distance is not None and distance > max_distance
+    stale = distance > max_distance
     result = {
         "checked": True,
         "stale": stale,

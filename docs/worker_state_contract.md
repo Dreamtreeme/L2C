@@ -3,7 +3,7 @@ title: "작업자 상태 계약"
 type: reference
 area: architecture
 status: active
-updated: 2026-08-08
+updated: 2026-08-09
 tags:
   - l2c
   - docs/architecture
@@ -22,11 +22,13 @@ Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`�
 | `decision` | `pending_action`, 카드 선택 trace | 선택·Reflex·추론 노드 |
 | `transition` | 행동 이벤트, 오류 수, 전환 요청과 판정 결과 | 실행·전환 노드 |
 | `replay` | Reflex trace, 활성 경로, 차단 경로 | Reflex·전환 노드 |
-| `collection` | 추출 공고, 카드 큐, 목록 기억, 상세 OCR 버퍼와 판독 범위 | OCR·선택·실행 효과 |
+| `collection` | `collected_jobs`, 카드 큐, 목록 기억, 상세 OCR 버퍼와 판독 범위 | OCR·선택·실행 효과 |
 | `lifecycle` | `is_finished` | 실행 효과와 종료 정책 |
 | `safety` | 행동 권한, 사용자 승인 대기 | 실행 전 안전 검증 |
 
 `request`는 한 작업자 실행의 입력 계약이다. 나머지 구역은 그래프가 현재 캡처를 처리하면서 갱신하는 실행 상태다.
+
+`collection.collected_jobs`는 `list[CollectedJob]`이다. `CollectedJob.posting`은 수집·저장·답변이 공유하는 `JobPosting`이고, `CollectedJob.evidence`는 화면 파일, 필드 근거, 미제공 필드와 카드 식별자를 보관한다. 공고 필드 안에 실행용 `_collection_*` 키를 섞거나 `jobs` 래퍼를 추가하지 않는다.
 
 ## 노드 갱신 계약
 
@@ -67,5 +69,6 @@ app.stream(
 6. 활성 Reflex 전이 번호는 저장된 도착 상태 검증이 성공한 뒤에만 증가한다.
 7. 뒤로가기 후 목록 마커는 목록 화면 검증이 끝난 경우에만 다음 카드 선택에 사용한다.
 8. `request`에는 직렬화 가능한 값만 저장하고 런타임 객체는 LangGraph 문맥으로 전달한다.
+9. 수집 완료 공고는 `CollectedJob`으로 생성한 뒤 필드 이름이나 타입을 다시 변환하지 않는다.
 
 `current_observation_matches_capture()`가 현재 캡처와 OCR 결합을 검사한다. Reflex 전이 범위와 도착 상태는 `agent/recipe/replay_runtime.py`와 `worker_transition.py`에서 검증한다.

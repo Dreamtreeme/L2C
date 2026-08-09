@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from agent.utils.text import site_of
+from agent.config import get_settings
 from agent.runtime.job_identity import (
     canonical_company_name,
     canonical_position_title,
@@ -14,6 +14,7 @@ from agent.runtime.job_identity import (
 )
 from agent.sites.loader import SiteProfileError, load_site_profile
 from agent.utils.logger import logger
+from agent.utils.text import site_of
 
 
 def _site_identity_scope(site_url: str) -> tuple[str, set[str]] | None:
@@ -87,8 +88,6 @@ def find_job_id_by_url(url: str, *, db_path: str | Path | None = None) -> int | 
     if not normalized:
         return None
     if db_path is None:
-        from agent.config import get_settings
-
         db_path = get_settings().paths.db_path
     resolved = Path(db_path)
     if not resolved.exists():
@@ -134,8 +133,6 @@ def find_job_ids_by_card_identities(
     source_platform, site_domains = site_scope
 
     if db_path is None:
-        from agent.config import get_settings
-
         db_path = get_settings().paths.db_path
     resolved = Path(db_path)
     if not resolved.exists():

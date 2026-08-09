@@ -1,3 +1,5 @@
+"""FastAPI 전송 경계와 장기 실행 자원의 수명주기를 검증한다."""
+
 import threading
 from contextlib import contextmanager
 
@@ -5,13 +7,14 @@ import pytest
 
 
 def test_citation_validation_normalizes_grouped_ids_before_validation():
-    from agent.application.chat_service import validate_citations
+    from agent.graph.investigation_answer_nodes import validate_citations
 
     answer = "공통 기술입니다 [job_id:64, 85, 999]."
 
     assert validate_citations(answer, [64, 85]) == (
         "공통 기술입니다 [job_id:64] [job_id:85] [출처 확인 불가]."
     )
+
 
 def test_chat_service_returns_run_contract_and_progress_events():
     from agent.application.chat_service import ChatService
@@ -47,6 +50,7 @@ def test_chat_service_returns_run_contract_and_progress_events():
     assert result["duration_sec"] >= 0
     assert events[-1].event == "run_completed"
 
+
 def test_run_registry_tracks_cancellation_and_conversation_history():
     from agent.observability.run_registry import RunRegistry
 
@@ -61,7 +65,9 @@ def test_run_registry_tracks_cancellation_and_conversation_history():
         "conversation-run-1",
         {"run_status": "completed", "last_action_result": "첫 답변"},
     )
-    registry.start("conversation-run-2", "두 번째 질문", conversation_id="conversation-1")
+    registry.start(
+        "conversation-run-2", "두 번째 질문", conversation_id="conversation-1"
+    )
 
     cancelled = registry.request_cancel("conversation-run-2")
     history = registry.conversation_history("conversation-1")
@@ -69,6 +75,7 @@ def test_run_registry_tracks_cancellation_and_conversation_history():
     assert cancelled["cancel_requested"] is True
     assert registry.is_cancel_requested("conversation-run-2") is True
     assert [item["run_id"] for item in history] == ["conversation-run-1"]
+
 
 def test_chat_service_stops_before_llm_when_cancel_is_requested():
     from agent.application.chat_service import ChatService
@@ -90,6 +97,7 @@ def test_chat_service_stops_before_llm_when_cancel_is_requested():
     assert result["run_status"] == "cancelled"
     assert result["is_finished"] is False
     assert result["last_action_result"] == "실행을 취소했습니다."
+
 
 def test_chat_api_streams_structured_progress_without_character_delay(monkeypatch):
     from fastapi.testclient import TestClient
@@ -128,6 +136,7 @@ def test_chat_api_streams_structured_progress_without_character_delay(monkeypatc
     assert '"text": "최종 답변"' in response.text
     assert "data: 최" not in response.text
 
+
 def test_chat_api_resumes_from_structured_clarification(monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -161,18 +170,15 @@ def test_chat_api_resumes_from_structured_clarification(monkeypatch):
     class FakeChatService:
         def run(self, query, *, run_id=None, event_sink=None, **kwargs):
             assert query == "개발"
-            assert kwargs["investigation_id"] == "investigation-clarification"
-            assert kwargs["clarification_answer"] == {
-                "question_id": "job_scope",
-                "selected_option_id": "",
-                "value": "",
-                "custom_value": "개발",
-            }
+            assert kwargs["resume_run_id"] == "previous-clarification"
+            assert kwargs["investigation_id"] == ""
+            assert kwargs["clarification_answer"] is None
             return {
                 "run_id": run_id,
                 "run_status": "completed",
                 "last_action_result": "개발 공고를 찾았습니다.",
                 "investigation_id": "investigation-clarification",
+                "resume_mode": "checkpoint_resume",
                 "metrics": {},
             }
 
@@ -190,7 +196,8 @@ def test_chat_api_resumes_from_structured_clarification(monkeypatch):
     assert '"resumed_from_run_id": "previous-clarification"' in response.text
     assert '"resume_mode": "checkpoint_resume"' in response.text
 
-def test_chat_api_uses_recent_conversation_context(monkeypatch):
+
+def test_chat_api_passes_conversation_id_without_rewriting_query(monkeypatch):
     from fastapi.testclient import TestClient
 
     from agent.observability.run_registry import get_run_registry
@@ -210,10 +217,8 @@ def test_chat_api_uses_recent_conversation_context(monkeypatch):
 
     class FakeChatService:
         def run(self, query, *, run_id=None, event_sink=None, **kwargs):
-            assert "[최근 대화 문맥]" in query
-            assert "사용자: iOS 공고 두 개 찾아줘" in query
-            assert "도우미: 두 건을 찾았습니다." in query
-            assert "[현재 사용자 요청]\n그중 경력 조건만 비교해줘" in query
+            assert query == "그중 경력 조건만 비교해줘"
+            assert kwargs["conversation_id"] == "conversation-context"
             return {
                 "run_id": run_id,
                 "run_status": "completed",
@@ -236,6 +241,7 @@ def test_chat_api_uses_recent_conversation_context(monkeypatch):
     assert response.status_code == 200
     assert "비교했습니다." in response.text
 
+
 def test_cancel_run_api_marks_active_run():
     from fastapi.testclient import TestClient
 
@@ -251,9 +257,12 @@ def test_cancel_run_api_marks_active_run():
     assert response.json()["cancel_requested"] is True
     assert registry.is_cancel_requested("cancel-api-run") is True
 
-def test_cancelled_run_resume_restarts_from_original_request():
+
+def test_cancelled_run_is_loaded_as_structured_graph_context():
+    from agent.application.conversation_context_service import (
+        load_conversation_context,
+    )
     from agent.observability.run_registry import get_run_registry
-    from agent.web_server import _effective_chat_query
 
     registry = get_run_registry()
     registry.start(
@@ -266,117 +275,18 @@ def test_cancelled_run_resume_restarts_from_original_request():
         {"run_status": "cancelled", "last_action_result": "실행을 취소했습니다."},
     )
 
-    query = _effective_chat_query(
-        "다시 계속해줘",
-        resume_run_id="cancelled-resume-run",
-        conversation_id="",
+    context = load_conversation_context(
+        "",
+        "cancelled-resume-run",
+        registry=registry,
     )
 
-    assert "[취소된 사용자 요청]\n원티드 iOS 공고 두 개" in query
-    assert "오래된 화면 좌표는 재사용하지 말고" in query
-    assert "[사용자의 재개 지시]\n다시 계속해줘" in query
-
-@pytest.mark.parametrize(
-    ("worker", "persistence", "target", "status", "resolved", "exhausted"),
-    [
-        (
-            {"observed_job_ids": [], "is_finished": True},
-            {"persisted_count": 1, "persisted_items": [{"job_id": 1}]},
-            2,
-            "partial",
-            1,
-            False,
-        ),
-        (
-            {"observed_job_ids": [7, 8], "is_finished": True},
-            {"persisted_count": 0, "persisted_items": []},
-            2,
-            "completed",
-            2,
-            False,
-        ),
-        (
-            {"observed_job_ids": [], "is_finished": False},
-            {"persisted_count": 1, "persisted_items": [{"job_id": 7}]},
-            10,
-            "completed",
-            1,
-            True,
-        ),
-    ],
-)
-def test_collection_service_status_contract(
-    worker,
-    persistence,
-    target,
-    status,
-    resolved,
-    exhausted,
-):
-    from agent.application.collection_service import CollectionService
-    from agent.application.collection_submission_service import FinalizedSubmission
-    from agent.application.collection_worker_runner import WorkerRunResult
-    from agent.observability.run_context import run_context
-    from shared.schema.collection_intent import CollectionIntent
-    from shared.schema.feedback_schema import WorkerSubmission
-
-    summary = (
-        {
-            "job_results_availability": {
-                "available_job_count": 1,
-                "count_evidence": "포지션 1",
-                "count_confidence": 0.97,
-            }
-        }
-        if exhausted
-        else {}
-    )
-    submission = WorkerSubmission(
-        run_id="worker-1",
-        is_finished=worker["is_finished"],
-        hit_recursion_limit=not worker["is_finished"],
-        collected_count=persistence["persisted_count"],
-        observed_job_ids=worker["observed_job_ids"],
-        extracted_summary=summary,
-    )
-    worker_result = WorkerRunResult(
-        submission=submission,
-        extracted_jd={},
-        site_name="Wanted",
-        site_slug="wanted",
-    )
-    finalized = FinalizedSubmission(
-        submission=submission,
-        submission_id="submission-1",
-        persistence={**persistence, "rejected_count": 0},
-        recipe_learning={},
-    )
-    with run_context(run_id=f"collection-status-{target}-{resolved}"):
-        result = CollectionService(
-            lambda _intent: worker_result,
-            lambda _worker: finalized,
-        ).collect(
-            CollectionIntent(
-                site="wanted",
-                search_keyword="iOS 개발자",
-                target_count=target,
-            )
-        )
-
-    assert result.status == status
-    assert result.resolved_count == resolved
-    assert result.scope_exhausted is exhausted
+    assert len(context) == 1
+    assert context[0].user_query == "원티드 iOS 공고 두 개"
+    assert context[0].run_status == "cancelled"
 
 
-def test_collection_failure_uses_collection_result_contract():
-    from agent.application.collection_service import CollectionService
-    from shared.schema.collection_intent import CollectionIntent
-
-    result = CollectionService(lambda _intent: {}).collect(CollectionIntent())
-
-    assert result.status == "failed"
-    assert result.error_code == "missing_search_keyword"
-
+# 브라우저·OCR·후처리 작업자의 프로세스 수명주기
 def test_worker_execution_session_serializes_concurrent_requests():
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 
@@ -410,6 +320,7 @@ def test_worker_execution_session_serializes_concurrent_requests():
     assert first_thread.is_alive() is False
     assert second_thread.is_alive() is False
 
+
 def test_worker_graph_does_not_start_before_failed_ocr_readiness():
     from agent.application.worker_execution_service import (
         OcrWorkerReadinessError,
@@ -418,22 +329,16 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness():
     from agent.sites import load_site_profile
     from agent.runtime.worker_contracts import create_worker_state
 
-    class FakeSomEngine:
-        def ensure_ocr_worker_ready(self):
-            raise RuntimeError("startup failed")
-
-    class FakePerception:
-        som_engine = FakeSomEngine()
-
     class FakeActionTools:
-        perception = FakePerception()
-
         def open_browser(self, url="", current_url="", site=""):
             return {"status": "success", "result": {"url": "https://www.wanted.co.kr"}}
 
     class FakeRuntime:
         def get_action_tools(self):
             return FakeActionTools()
+
+        def ensure_ocr_worker_ready(self):
+            raise RuntimeError("startup failed")
 
         def prepare_reasoning_models(self, _tool_schemas):
             return None
@@ -444,6 +349,7 @@ def test_worker_graph_does_not_start_before_failed_ocr_readiness():
             load_site_profile("wanted"),
             worker_runtime=FakeRuntime(),
         )
+
 
 def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
     from fastapi.testclient import TestClient
@@ -470,6 +376,7 @@ def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
 
     assert calls[0][0] == "init"
     assert calls[1:] == ["start", ("close", 0.5)]
+
 
 def test_browser_closes_by_default(monkeypatch):
     from agent.application.worker_execution_service import (
@@ -563,34 +470,19 @@ def test_worker_execution_service_closes_browser_after_worker_failure():
         "lock_released",
     ]
 
+
 def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch):
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 
     events = []
 
-    class FakeWorker:
-        pid = 7007
-
-        @staticmethod
-        def poll():
-            return None
-
-    class FakeSomEngine:
-        def __init__(self):
-            self._ocr_worker = FakeWorker()
-
-        def close(self):
-            events.append("ocr_closed")
-            self._ocr_worker = None
-
     class FakePerception:
-        def __init__(self):
-            self.som_engine = FakeSomEngine()
-            self._browser_window_id = None
+        browser_window_id = None
+        ocr_worker_pid = 7007
 
         def close(self):
             events.append("perception_closed")
-            self.som_engine.close()
+            events.append("ocr_closed")
 
     class FakeActionTools:
         def __init__(self, perception):
@@ -630,6 +522,7 @@ def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch
     runtime.close()
 
     assert events == ["browser_closed", "perception_closed", "ocr_closed"]
+
 
 def test_application_runtime_keeps_vision_lazy_until_collection(monkeypatch, tmp_path):
     from agent.bootstrap import ApplicationRuntime

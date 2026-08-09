@@ -13,7 +13,7 @@ from typing import Any
 
 from agent.runtime.site_context import normalize_page_role
 from agent.recipe.payload_sanitizer import strip_replay_runtime_fields
-from agent.runtime.replay_actions import (
+from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
@@ -21,7 +21,7 @@ from agent.runtime.replay_actions import (
 from agent.recipe.sqlite_store import SQLiteStore
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.utils.text import normalize_text
-from agent.utils.model_dump import dump_model
+from agent.utils.model_conversion import dump_model
 from shared.schema.recipe_schema import RecipePath, SiteRecipe
 from shared.schema.skill_schema import RecipeSkillMetadata
 

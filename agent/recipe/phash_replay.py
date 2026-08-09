@@ -9,7 +9,6 @@ from agent.runtime.target_matching import match_target_by_ratio
 from agent.vision.screen_signature import (
     compute_roi_signature,
     hamming_distance,
-    image_dimensions,
 )
 
 
@@ -25,7 +24,6 @@ def _capture_size(value: Any) -> list[int]:
 def capture_context_match(
     saved: dict[str, Any],
     current_signature: dict[str, Any],
-    current_image_path: str,
 ) -> dict[str, Any]:
     """반응형 레이아웃이 달라질 정도의 캡처 크기 차이를 먼저 차단한다."""
 
@@ -35,15 +33,12 @@ def capture_context_match(
         or saved.get("source_size")
         or saved.get("size")
     )
-    current_context = dict((current_signature or {}).get("capture_context") or {})
-    current_size = _capture_size(current_context.get("size") or (current_signature or {}).get("size"))
-    if not current_size and current_image_path:
-        try:
-            current_size = list(image_dimensions(current_image_path))
-        except Exception:
-            current_size = []
+    current_context = dict(current_signature.get("capture_context") or {})
+    current_size = _capture_size(
+        current_context.get("size") or current_signature.get("size")
+    )
     if not saved_size or not current_size:
-        return {"matched": True, "reason": "capture_context_unknown"}
+        return {"matched": False, "reason": "capture_context_missing"}
 
     settings = get_settings().reflex
     width_tolerance = settings.capture_width_tolerance_px
@@ -77,7 +72,10 @@ def roi_signature_match(
         return {"matched": False, "reason": "roi_current_image_missing", "distance": None, "mode": "roi_phash"}
     if not saved.get("phash") or not crop_rect_ratio:
         return {"matched": False, "reason": "roi_signature_missing", "distance": None, "mode": "roi_phash"}
-    context_result = capture_context_match(saved, dict(current_signature or {}), current_image_path)
+    context_result = capture_context_match(
+        saved,
+        dict(current_signature or {}),
+    )
     if not context_result.get("matched"):
         return {**context_result, "distance": None, "mode": "roi_phash"}
     current_context = dict((current_signature or {}).get("capture_context") or {})
@@ -115,8 +113,8 @@ def screen_context_signature_match(
 ) -> dict[str, Any]:
     """좌표 없는 행동 직전 화면이 자율탐색 기록과 같은지 확인한다."""
 
-    saved_phash = str((saved or {}).get("phash") or "")
-    current_phash = str((current_signature or {}).get("phash") or "")
+    saved_phash = str(saved.get("phash") or "")
+    current_phash = str(current_signature.get("phash") or "")
     if not saved_phash or not current_phash:
         return {
             "matched": False,
@@ -125,9 +123,8 @@ def screen_context_signature_match(
             "mode": "screen_context_phash",
         }
     context_result = capture_context_match(
-        dict(saved or {}),
-        dict(current_signature or {}),
-        "",
+        saved,
+        current_signature,
     )
     if not context_result.get("matched"):
         return {
@@ -144,11 +141,12 @@ def screen_context_signature_match(
             "mode": "screen_context_phash",
         }
     max_distance = get_settings().reflex.screen_context_phash_max_distance
+    matched = distance <= max_distance
     return {
-        "matched": distance <= max_distance,
+        "matched": matched,
         "reason": (
             "screen_context_matched"
-            if distance <= max_distance
+            if matched
             else "screen_context_phash_distance"
         ),
         "distance": distance,

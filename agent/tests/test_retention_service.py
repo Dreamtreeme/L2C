@@ -2,6 +2,9 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 
+from agent.tests.job_test_data import insert_job
+from shared.schema.jd_schema import JobCollectionEvidence
+
 def test_operations_api_previews_and_requires_confirmation_header(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
 
@@ -69,7 +72,9 @@ def test_retention_is_dry_run_by_default_and_preserves_referenced_artifacts(tmp_
 
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    job_id = db.upsert(
+    evidence = JobCollectionEvidence(screenshot_path=str(referenced_artifact))
+    job_id = insert_job(
+        db,
         "https://example.com/jobs/retention",
         {
             "company_name": "Acme",
@@ -77,10 +82,11 @@ def test_retention_is_dry_run_by_default_and_preserves_referenced_artifacts(tmp_
             "content_hash": "retention-job",
             "raw_ocr_text": "version 1",
         },
-        screenshot_path=str(referenced_artifact),
+        evidence=evidence,
     )
     for version in range(2, 8):
-        db.upsert(
+        insert_job(
+            db,
             "https://example.com/jobs/retention",
             {
                 "company_name": "Acme",
@@ -88,7 +94,7 @@ def test_retention_is_dry_run_by_default_and_preserves_referenced_artifacts(tmp_
                 "content_hash": "retention-job",
                 "raw_ocr_text": f"version {version}",
             },
-            screenshot_path=str(referenced_artifact),
+            evidence=evidence,
         )
     with sqlite3.connect(db_path) as conn:
         conn.execute("UPDATE job_versions SET observed_at = ? WHERE job_id = ?", (old, job_id))

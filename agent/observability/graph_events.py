@@ -6,6 +6,8 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from langgraph.config import get_stream_writer
+
 from agent.observability.run_contracts import RunPhase
 from agent.observability.run_context import current_run_context
 from agent.utils.logger import logger
@@ -13,10 +15,8 @@ from agent.utils.logger import logger
 
 def _stream_writer():
     try:
-        from langgraph.config import get_stream_writer
-
         return get_stream_writer()
-    except Exception:
+    except RuntimeError:
         return None
 
 

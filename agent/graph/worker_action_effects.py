@@ -9,8 +9,8 @@ from agent.graph.worker_transition_recording import set_transition_request
 from agent.runtime.worker_contracts import ActionRequest, build_action_request
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.runtime.worker_state import (
+    collected_job_count,
     count_mode_from_state,
-    extracted_job_count,
     target_count_from_state,
 )
 from agent.runtime.job_card_queue import (
@@ -261,9 +261,7 @@ def _apply_job_detail_completion(
     collection = state["collection"]
     job_card_queue = list(collection.get("job_card_queue", []) or [])
     target_count = target_count_from_state(state)
-    collected_count = extracted_job_count(
-        dict(collection.get("extracted_jd", {}) or {})
-    )
+    collected_count = collected_job_count(state)
 
     job_card_queue = complete_active_job_card(job_card_queue)
     collection["job_card_queue"] = job_card_queue
@@ -304,9 +302,7 @@ def _apply_collection_target_completion(
     collection = state["collection"]
     job_card_queue = list(collection.get("job_card_queue", []) or [])
     target_count = target_count_from_state(state)
-    collected_count = extracted_job_count(
-        dict(collection.get("extracted_jd", {}) or {})
-    )
+    collected_count = collected_job_count(state)
     resolved_count = max(
         collected_count,
         resolved_job_card_count(job_card_queue),
@@ -333,7 +329,7 @@ def execute_state_action(
     state = context.result.state
     observation = state["observation"]
     collection = state["collection"]
-    current_jobs = dict(collection.get("extracted_jd", {}) or {})
+    current_jobs = list(collection.get("collected_jobs", []))
     outcome = worker_execution_dispatch.dispatch_state_action(
         action_name,
         args,
@@ -343,7 +339,7 @@ def execute_state_action(
         data_services=context.input.data_services,
     )
     raise_for_action_failure(outcome.result)
-    collection["extracted_jd"] = dict(outcome.jobs)
+    collection["collected_jobs"] = list(outcome.collected_jobs)
     _apply_state_action_update(context, outcome.state_update)
     result = outcome.result
     follow_up: ActionRequest | None = None
@@ -365,7 +361,7 @@ def execute_state_action(
         )
 
     if (
-        action_name in {"update_extracted_info", "finish_detail_reading"}
+        action_name == "finish_detail_reading"
         and result.get("status") == "success"
     ):
         _apply_collection_target_completion(context, result)

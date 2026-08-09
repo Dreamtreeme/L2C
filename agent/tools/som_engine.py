@@ -1,5 +1,5 @@
-import os
 import json
+import os
 import queue
 import subprocess
 import tempfile
@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Tuple
 from PIL import Image, ImageDraw, ImageFont
 
 from agent.config import get_settings
+from agent.observability.run_context import current_run_context, observe_step
 from agent.utils.logger import logger
 
 
@@ -38,7 +39,9 @@ class SomEngine:
 
         from ultralytics import YOLO
 
-        logger.info("Loading local YOLOv8 OmniParser model", model_path=str(self.model_path))
+        logger.info(
+            "Loading local YOLOv8 OmniParser model", model_path=str(self.model_path)
+        )
         self.yolo_model = YOLO(str(self.model_path))
 
         logger.info(
@@ -47,13 +50,17 @@ class SomEngine:
         )
         logger.info("SomEngine initialization complete")
 
-    def __del__(self):
-        self.close()
-
     def close(self) -> None:
         """재사용 OCR 하위 프로세스를 종료한다."""
 
         self._stop_ocr_worker()
+
+    @property
+    def ocr_worker_pid(self) -> int | None:
+        worker = self._ocr_worker
+        if worker is None or worker.poll() is not None:
+            return None
+        return int(worker.pid)
 
     def _configure_cache_paths(self) -> None:
         yolo_config_dir = get_settings().ocr.yolo_config_dir
@@ -109,21 +116,14 @@ class SomEngine:
     def _ocr_worker_attempts(self) -> int:
         return get_settings().ocr.worker_max_attempts
 
-    def _ocr_lifecycle_lock(self):
-        """테스트용 비정상 생성 경로에서도 OCR 작업자 잠금을 지연 생성한다."""
-
-        lock = getattr(self, "_ocr_worker_lifecycle_lock", None)
-        if lock is None:
-            lock = threading.RLock()
-            self._ocr_worker_lifecycle_lock = lock
-        return lock
-
     def ensure_ocr_worker_ready(self):
         """재사용 OCR 작업자가 요청을 받을 수 있을 때까지 대기한다."""
 
         return self._start_ocr_worker()
 
-    def _read_ocr_worker_stdout(self, worker: subprocess.Popen, generation: int, output_queue: queue.Queue) -> None:
+    def _read_ocr_worker_stdout(
+        self, worker: subprocess.Popen, generation: int, output_queue: queue.Queue
+    ) -> None:
         try:
             assert worker.stdout is not None
             while True:
@@ -131,10 +131,12 @@ class SomEngine:
                 output_queue.put((generation, line))
                 if line == "":
                     return
-        except Exception:
+        except (OSError, ValueError):
             output_queue.put((generation, ""))
 
-    def _read_ocr_worker_stderr(self, worker: subprocess.Popen, generation: int) -> None:
+    def _read_ocr_worker_stderr(
+        self, worker: subprocess.Popen, generation: int
+    ) -> None:
         try:
             assert worker.stderr is not None
             for line in worker.stderr:
@@ -143,14 +145,14 @@ class SomEngine:
                 stripped = line.strip()
                 if stripped:
                     self._ocr_worker_stderr_lines.append(stripped[:500])
-        except Exception:
-            return
+        except (OSError, ValueError) as exc:
+            logger.debug("PaddleOCR stderr reader stopped", error=str(exc))
 
     def _ocr_worker_diagnostics(self, request_id: str = "") -> dict[str, Any]:
-        phase = dict(getattr(self, "_ocr_worker_last_phase", {}) or {})
+        phase = dict(self._ocr_worker_last_phase)
         if request_id and phase.get("request_id") not in {"", request_id}:
             phase = {}
-        stderr_lines = list(getattr(self, "_ocr_worker_stderr_lines", []) or [])
+        stderr_lines = list(self._ocr_worker_stderr_lines)
         return {
             "last_phase": str(phase.get("phase") or ""),
             "last_phase_details": phase,
@@ -174,7 +176,7 @@ class SomEngine:
                 return line
 
     def _start_ocr_worker(self):
-        with self._ocr_lifecycle_lock():
+        with self._ocr_worker_lifecycle_lock:
             return self._start_ocr_worker_locked()
 
     def _start_ocr_worker_locked(self):
@@ -223,11 +225,15 @@ class SomEngine:
             remaining = start_timeout - (time.monotonic() - started)
             if remaining <= 0:
                 self._stop_ocr_worker()
-                raise TimeoutError(f"PaddleOCR worker startup timed out after {start_timeout:.1f}s")
+                raise TimeoutError(
+                    f"PaddleOCR worker startup timed out after {start_timeout:.1f}s"
+                )
             line = self._next_ocr_worker_line(remaining)
             if line is None:
                 self._stop_ocr_worker()
-                raise TimeoutError(f"PaddleOCR worker startup timed out after {start_timeout:.1f}s")
+                raise TimeoutError(
+                    f"PaddleOCR worker startup timed out after {start_timeout:.1f}s"
+                )
             if line == "":
                 self._ocr_worker = None
                 raise RuntimeError("PaddleOCR worker exited during startup")
@@ -240,8 +246,6 @@ class SomEngine:
                     pid=self._ocr_worker.pid,
                     startup=f"{startup_duration:.2f}s",
                 )
-                from agent.observability.run_context import current_run_context
-
                 context = current_run_context()
                 if context is not None:
                     context.record_step(
@@ -255,17 +259,21 @@ class SomEngine:
                 self._ocr_worker = None
                 raise RuntimeError(
                     "PaddleOCR worker failed during startup"
-                    + (f": {diagnostics['worker_stderr'][-1]}" if diagnostics["worker_stderr"] else "")
+                    + (
+                        f": {diagnostics['worker_stderr'][-1]}"
+                        if diagnostics["worker_stderr"]
+                        else ""
+                    )
                 )
             if stripped:
                 logger.debug("PaddleOCR worker startup output", line=stripped[:200])
 
     def _stop_ocr_worker(self) -> None:
-        with self._ocr_lifecycle_lock():
+        with self._ocr_worker_lifecycle_lock:
             self._stop_ocr_worker_locked()
 
     def _stop_ocr_worker_locked(self) -> None:
-        worker = getattr(self, "_ocr_worker", None)
+        worker = self._ocr_worker
         self._ocr_worker = None
         self._ocr_worker_stdout_queue = None
         self._ocr_worker_last_phase = {}
@@ -280,15 +288,12 @@ class SomEngine:
                 except subprocess.TimeoutExpired:
                     worker.kill()
                     worker.wait(timeout=2)
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.debug("PaddleOCR worker shutdown failed", error=str(exc))
 
     def _run_paddle_ocr_worker(self, image_path: Path) -> List[Dict[str, Any]]:
         attempts = self._ocr_worker_attempts()
         request_timeout = self._ocr_worker_request_timeout_sec()
-        last_error: Exception | None = None
-        from agent.observability.run_context import observe_step
-
         for attempt in range(1, attempts + 1):
             worker = self._start_ocr_worker()
             with observe_step(
@@ -330,7 +335,9 @@ class SomEngine:
                                 f"stderr={diagnostics['worker_stderr']})"
                             )
                         if line == "":
-                            raise RuntimeError("PaddleOCR worker exited before returning a result")
+                            raise RuntimeError(
+                                "PaddleOCR worker exited before returning a result"
+                            )
                         stripped = line.strip()
                         if stripped.startswith("__OCR_EVENT__"):
                             event_payload = json.loads(
@@ -341,7 +348,8 @@ class SomEngine:
                             continue
                         if stripped.startswith("__OCR_WORKER_ERROR__"):
                             error_payload = json.loads(
-                                stripped.removeprefix("__OCR_WORKER_ERROR__").strip() or "{}"
+                                stripped.removeprefix("__OCR_WORKER_ERROR__").strip()
+                                or "{}"
                             )
                             if str(error_payload.get("request_id") or "") != request_id:
                                 continue
@@ -382,8 +390,11 @@ class SomEngine:
                         )
                         return results
                 except Exception as exc:
-                    last_error = exc
-                    failure_code = "ocr_timeout" if isinstance(exc, TimeoutError) else "ocr_worker_error"
+                    failure_code = (
+                        "ocr_timeout"
+                        if isinstance(exc, TimeoutError)
+                        else "ocr_worker_error"
+                    )
                     observation.update(
                         success=False,
                         error=str(exc)[:300],
@@ -400,15 +411,13 @@ class SomEngine:
                     if attempt >= attempts:
                         raise
 
-        if last_error:
-            raise last_error
-        return []
-
     def _ensure_model_downloaded(self) -> None:
         if self.model_path.exists():
             return
 
-        logger.info("YOLOv8 weights not found locally. Triggering Hugging Face download")
+        logger.info(
+            "YOLOv8 weights not found locally. Triggering Hugging Face download"
+        )
         self.model_dir.mkdir(parents=True, exist_ok=True)
         from huggingface_hub import hf_hub_download
 
@@ -418,9 +427,13 @@ class SomEngine:
                 filename="icon_detect/model.pt",
                 local_dir=str(self.model_dir),
             )
-            logger.info("Model weights downloaded successfully", downloaded_path=downloaded_path)
+            logger.info(
+                "Model weights downloaded successfully", downloaded_path=downloaded_path
+            )
         except Exception as exc:
-            logger.error("Failed to download model weights from Hugging Face", error=str(exc))
+            logger.error(
+                "Failed to download model weights from Hugging Face", error=str(exc)
+            )
             raise
 
     def _get_area(self, box: List[float]) -> float:
@@ -445,7 +458,9 @@ class SomEngine:
             return 1.0
         return max_dim / longest
 
-    def _normalize_paddleocr_results(self, ocr_results: List, scale: float = 1.0) -> List[Dict]:
+    def _normalize_paddleocr_results(
+        self, ocr_results: List, scale: float = 1.0
+    ) -> List[Dict]:
         raw_boxes = []
         for item in ocr_results:
             if not isinstance(item, dict):
@@ -466,7 +481,9 @@ class SomEngine:
         logger.debug("PaddleOCR text detection complete", count=len(raw_boxes))
         return raw_boxes
 
-    def _run_paddle_ocr(self, image: Image.Image | Path, scale: float = 1.0) -> List[Dict]:
+    def _run_paddle_ocr(
+        self, image: Image.Image | Path, scale: float = 1.0
+    ) -> List[Dict]:
         temp_path: Path | None = None
         if isinstance(image, Image.Image):
             fd, raw_temp = tempfile.mkstemp(suffix=".jpg")
@@ -484,32 +501,34 @@ class SomEngine:
             if temp_path is not None:
                 try:
                     temp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug(
+                        "Failed to remove temporary OCR image",
+                        error=str(exc),
+                    )
 
     def _run_yolo(self, inference_img: Image.Image, scale: float) -> List[Dict]:
         raw_boxes = []
-        try:
-            yolo_results = self.yolo_model(inference_img, conf=0.15, verbose=False)
-            if yolo_results and len(yolo_results) > 0:
-                for box in yolo_results[0].boxes:
-                    coords = box.xyxy[0].cpu().numpy().tolist()
-                    confidence = float(box.conf.item())
-                    raw_boxes.append(
-                        {
-                            "bbox": [coord / scale for coord in coords],
-                            "type": "icon",
-                            "text": "icon",
-                            "conf": confidence,
-                        }
-                    )
-            logger.debug("YOLOv8 element detection complete", count=len(raw_boxes))
-        except Exception as exc:
-            logger.error("YOLOv8 inference failed", error=str(exc))
+        yolo_results = self.yolo_model(inference_img, conf=0.15, verbose=False)
+        if yolo_results:
+            for box in yolo_results[0].boxes:
+                coords = box.xyxy[0].cpu().numpy().tolist()
+                confidence = float(box.conf.item())
+                raw_boxes.append(
+                    {
+                        "bbox": [coord / scale for coord in coords],
+                        "type": "icon",
+                        "text": "icon",
+                        "conf": confidence,
+                    }
+                )
+        logger.debug("YOLOv8 element detection complete", count=len(raw_boxes))
         return raw_boxes
 
     def _filter_overlaps(self, raw_boxes: List[Dict]) -> List[Dict]:
-        sorted_boxes = sorted(raw_boxes, key=lambda item: self._get_area(item["bbox"]), reverse=True)
+        sorted_boxes = sorted(
+            raw_boxes, key=lambda item: self._get_area(item["bbox"]), reverse=True
+        )
         final_elements = []
 
         for box in sorted_boxes:
@@ -532,7 +551,11 @@ class SomEngine:
                 final_elements.append(box)
 
         final_elements.sort(key=lambda item: (item["bbox"][1] // 20, item["bbox"][0]))
-        logger.info("Overlap filtering complete", before=len(raw_boxes), after=len(final_elements))
+        logger.info(
+            "Overlap filtering complete",
+            before=len(raw_boxes),
+            after=len(final_elements),
+        )
         return final_elements
 
     def _remove_text_covered_icons(
@@ -584,7 +607,12 @@ class SomEngine:
 
         for marker_id, elem in enumerate(final_elements):
             bbox = elem["bbox"]
-            xmin, ymin, xmax, ymax = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            xmin, ymin, xmax, ymax = (
+                int(bbox[0]),
+                int(bbox[1]),
+                int(bbox[2]),
+                int(bbox[3]),
+            )
 
             marker_bboxes[marker_id] = [xmin, ymin, xmax, ymax]
 
@@ -601,7 +629,12 @@ class SomEngine:
             tag_ymax = tag_ymin + text_h + 4
 
             draw.rectangle([tag_xmin, tag_ymin, tag_xmax, tag_ymax], fill=(0, 0, 0))
-            draw.text((tag_xmin + 3, tag_ymin + 1), label_text, fill=(255, 255, 255), font=font)
+            draw.text(
+                (tag_xmin + 3, tag_ymin + 1),
+                label_text,
+                fill=(255, 255, 255),
+                font=font,
+            )
 
         return marked_img, marker_bboxes
 
@@ -613,11 +646,7 @@ class SomEngine:
         if not image_path.exists():
             raise FileNotFoundError(f"Image not found at: {image_path}")
 
-        try:
-            img = Image.open(image_path)
-        except Exception as exc:
-            logger.error("Failed to load image for processing", error=str(exc))
-            raise
+        img = Image.open(image_path)
 
         original_w, original_h = img.size
 

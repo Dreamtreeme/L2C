@@ -15,6 +15,9 @@ from langchain_core.callbacks.usage import get_usage_metadata_callback
 from langchain_core.messages import BaseMessageChunk
 from structlog.contextvars import bound_contextvars
 
+from agent.config import get_settings
+from agent.llm.cost import estimate_llm_cost
+from agent.observability.run_registry import get_run_registry
 from agent.observability.run_contracts import (
     RunEvent,
     RunEventSink,
@@ -22,7 +25,6 @@ from agent.observability.run_contracts import (
     RunStatus,
     new_run_id,
 )
-from agent.llm.cost import estimate_llm_cost
 from agent.observability.langsmith_adapter import (
     finish_langsmith_trace,
     langsmith_project_name,
@@ -309,8 +311,6 @@ def raise_if_cancelled() -> None:
     context = current_run_context()
     if context is None:
         return
-    from agent.observability.run_registry import get_run_registry
-
     if get_run_registry().is_cancel_requested(context.run_id):
         raise RunCancelled(f"run cancelled: {context.run_id}")
     if (
@@ -346,8 +346,6 @@ def run_context(
 
     resolved_run_id = run_id or new_run_id(prefix)
     if deadline_sec is None:
-        from agent.config import get_settings
-
         deadline_sec = get_settings().execution.run_deadline_sec
     resolved_deadline_sec = max(0.0, float(deadline_sec))
     with get_usage_metadata_callback() as usage_callback:

@@ -8,7 +8,9 @@ from typing import Annotated, Any, TypedDict, cast
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
+from agent.runtime.worker_actions import is_supported_recipe_action_group
 from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
+from shared.schema.jd_schema import CollectedJob
 
 
 def _message_text(content: Any) -> str:
@@ -83,10 +85,6 @@ class ActionRequest(BaseModel):
                     normalized_args.pop(empty_collection_field, None)
             call.args = normalized_args
         if len(self.tool_calls) > 1:
-            from agent.runtime.replay_actions import (
-                is_supported_recipe_action_group,
-            )
-
             action_group = [
                 {
                     "action": call.name,
@@ -96,8 +94,7 @@ class ActionRequest(BaseModel):
             ]
             if (
                 self.source != "reflex"
-                or self.metadata.get("execution_unit")
-                != "recipe_transition"
+                or self.metadata.get("execution_unit") != "recipe_transition"
                 or not is_supported_recipe_action_group(action_group)
             ):
                 raise ValueError(
@@ -142,7 +139,9 @@ def action_event_results(events: Sequence[ActionEvent | dict]) -> list[dict[str,
     ]
 
 
-def action_event_recipe_steps(events: Sequence[ActionEvent | dict]) -> list[dict[str, Any]]:
+def action_event_recipe_steps(
+    events: Sequence[ActionEvent | dict],
+) -> list[dict[str, Any]]:
     return [
         dict(event.get("recipe_step") or {})
         for event in events or []
@@ -159,7 +158,9 @@ def action_event_feedback(events: Sequence[ActionEvent | dict]) -> list[dict[str
     ]
 
 
-def action_event_transitions(events: Sequence[ActionEvent | dict]) -> list[dict[str, Any]]:
+def action_event_transitions(
+    events: Sequence[ActionEvent | dict],
+) -> list[dict[str, Any]]:
     return [
         dict(event.get("transition") or {})
         for event in events or []
@@ -333,7 +334,7 @@ class RecipeReplayState(TypedDict, total=False):
 class JobCollectionState(TypedDict, total=False):
     """공고 목록 선택, 상세 판독과 결과 누적 상태."""
 
-    extracted_jd: dict[str, Any]
+    collected_jobs: list[CollectedJob]
     job_card_queue: list[dict[str, Any]]
     job_results_memory: dict[str, Any]
     job_results_availability: dict[str, Any]
@@ -508,7 +509,7 @@ def create_worker_state(
             "reflex_blocked_recipe_keys": [],
         },
         "collection": {
-            "extracted_jd": {},
+            "collected_jobs": [],
             "job_card_queue": [],
             "job_results_memory": {},
             "job_results_availability": {},

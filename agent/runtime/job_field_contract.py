@@ -35,21 +35,8 @@ def build_job_collection_contract(
 def required_fields_from_state(state: WorkerState) -> list[str]:
     """그래프 상태에서 현재 실행의 필수 필드 목록을 읽는다."""
 
-    request = state["request"]
-    contract = request.get("job_collection_contract")
-    if isinstance(contract, Mapping):
-        fields = normalize_job_collection_fields(
-            contract.get("required_fields")
-        )
-        if fields:
-            return list(fields)
-    recipe_params = request.get("recipe_params")
-    intent = (
-        recipe_params.get("collection_intent")
-        if isinstance(recipe_params, Mapping)
-        else {}
-    )
-    return list(required_job_fields(intent if isinstance(intent, Mapping) else {}))
+    contract = state["request"]["job_collection_contract"]
+    return normalize_job_collection_fields(contract["required_fields"])
 
 
 def field_contract_items(fields: list[str] | tuple[str, ...]) -> list[dict[str, str]]:

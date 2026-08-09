@@ -3,34 +3,35 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
+from agent.config import get_settings
 from agent.application.job_lookup_service import (
     find_job_ids_by_card_identities,
     find_job_id_by_url,
 )
-from agent.runtime.job_collection import job_items
+from shared.schema.jd_schema import CollectedJob
 
 
 def _url_key(value: Any) -> str:
     return str(value or "").strip().rstrip("/")
 
 
-def _current_run_contains_url(extracted_jd: Any, url: str) -> bool:
-    if not isinstance(extracted_jd, dict):
-        return False
-    jobs = job_items(extracted_jd)
+def _current_run_contains_url(
+    collected_jobs: Sequence[CollectedJob],
+    url: str,
+) -> bool:
     target = _url_key(url)
     return any(
-        isinstance(job, dict)
-        and _url_key(job.get("url")) == target
-        for job in jobs
+        _url_key(item.posting.url) == target
+        for item in collected_jobs
     )
 
 
 def existing_job_url_trace(
     url: str,
-    extracted_jd: Any,
+    collected_jobs: Sequence[CollectedJob],
     *,
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -39,12 +40,10 @@ def existing_job_url_trace(
     target = _url_key(url)
     if not target:
         return {"matched": False, "reason": "url_missing"}
-    if _current_run_contains_url(extracted_jd, target):
+    if _current_run_contains_url(collected_jobs, target):
         return {"matched": True, "source": "current_run", "url": target}
 
     if db_path is None:
-        from agent.config import get_settings
-
         db_path = get_settings().paths.db_path
     job_id = find_job_id_by_url(target, db_path=db_path)
     if job_id is not None:

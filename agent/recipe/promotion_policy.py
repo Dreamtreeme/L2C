@@ -5,11 +5,12 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from agent.runtime.replay_actions import (
+from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
 )
+
 _BLOCKING_FEEDBACK_LABELS = {"wrong_target", "no_effect", "loop_risk", "error"}
 _BLOCKING_RESULT_STATUSES = {"error", "skipped"}
 _BLOCKING_TRANSITION_REASONS = {
@@ -38,15 +39,9 @@ def _seq(value: Any) -> int | None:
 
 def _step_before_capture_id(step: dict[str, Any]) -> str:
     before_state = (
-        step.get("before_state")
-        if isinstance(step.get("before_state"), dict)
-        else {}
+        step.get("before_state") if isinstance(step.get("before_state"), dict) else {}
     )
-    return str(
-        before_state.get("capture_id")
-        or step.get("decision_capture_id")
-        or ""
-    )
+    return str(before_state.get("capture_id") or "")
 
 
 def _transition_after_capture_id(
@@ -58,11 +53,7 @@ def _transition_after_capture_id(
             if isinstance(observation.get("after_state"), dict)
             else {}
         )
-        capture_id = str(
-            after_state.get("capture_id")
-            or observation.get("to_capture_id")
-            or ""
-        )
+        capture_id = str(after_state.get("capture_id") or "")
         if capture_id:
             return capture_id
     return ""
@@ -133,95 +124,166 @@ def _apply_verified_action_groups(
         )
 
 
-def evaluate_candidate_step_evidence(candidate: dict[str, Any]) -> dict[int, dict[str, Any]]:
+def _records_by_seq(
+    records: list[Any],
+    seq_field: str,
+) -> dict[int, list[dict[str, Any]]]:
+    indexed: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        seq = _seq(record.get(seq_field))
+        if seq is not None:
+            indexed[seq].append(record)
+    return indexed
+
+
+def _feedback_evidence(
+    feedback_items: list[dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    labels: list[str] = []
+    reasons: list[str] = []
+    for episode in feedback_items:
+        feedback = (
+            episode.get("feedback") if isinstance(episode.get("feedback"), dict) else {}
+        )
+        observation = (
+            episode.get("observation")
+            if isinstance(episode.get("observation"), dict)
+            else {}
+        )
+        result = (
+            observation.get("result")
+            if isinstance(observation.get("result"), dict)
+            else {}
+        )
+        label = str(feedback.get("label") or "").strip()
+        result_status = str(result.get("status") or "").strip()
+        if label:
+            labels.append(label)
+        if label in _BLOCKING_FEEDBACK_LABELS:
+            reasons.append(f"feedback_{label}")
+        if result_status in _BLOCKING_RESULT_STATUSES:
+            reasons.append(f"action_{result_status}")
+    return labels, reasons
+
+
+def _transition_evidence(
+    transition_items: list[dict[str, Any]],
+) -> tuple[list[str], list[str], list[str]]:
+    sources: list[str] = []
+    statuses: list[str] = []
+    reasons: list[str] = []
+    for observation in transition_items:
+        source = str(observation.get("source") or "").strip()
+        status = str(observation.get("status") or "").strip()
+        reason = str(observation.get("reason") or "").strip()
+        if source:
+            sources.append(source)
+        if status:
+            statuses.append(status)
+        managed_reason = _CODE_MANAGED_TRANSITION_SOURCES.get(source)
+        if managed_reason:
+            reasons.append(managed_reason)
+        if reason in _BLOCKING_TRANSITION_REASONS:
+            reasons.append(reason)
+    return sources, statuses, reasons
+
+
+def _step_policy_reasons(step: dict[str, Any]) -> list[str]:
+    reasons = []
+    if str(step.get("risk_level") or "").strip().casefold() == "sensitive":
+        reasons.append("sensitive_action")
+    if step.get("needs_user_confirmation") is True:
+        reasons.append("user_confirmation_required")
+    return reasons
+
+
+def _missing_evidence_reasons(
+    action: str,
+    feedback_items: list[dict[str, Any]],
+    transition_items: list[dict[str, Any]],
+    transition_statuses: list[str],
+) -> list[str]:
+    if action not in CONTEXTUAL_REPLAY_ACTIONS:
+        return (
+            ["action_evidence_missing"]
+            if not feedback_items and not transition_items
+            else []
+        )
+    reasons = []
+    if not feedback_items:
+        reasons.append("action_evidence_missing")
+    if not transition_items:
+        reasons.append("transition_evidence_missing")
+    elif "ready" not in transition_statuses:
+        reasons.append("transition_not_ready")
+    return reasons
+
+
+def _step_evidence_verdict(
+    step: dict[str, Any],
+    seq: int,
+    feedback_items: list[dict[str, Any]],
+    transition_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    action = str(step.get("action") or "")
+    feedback_labels, feedback_reasons = _feedback_evidence(feedback_items)
+    transition_sources, transition_statuses, transition_reasons = _transition_evidence(
+        transition_items
+    )
+    reasons = _step_policy_reasons(step)
+    reasons.extend(feedback_reasons)
+    reasons.extend(transition_reasons)
+    reasons.extend(
+        _missing_evidence_reasons(
+            action,
+            feedback_items,
+            transition_items,
+            transition_statuses,
+        )
+    )
+    return {
+        "seq": seq,
+        "action": action,
+        "eligible": not reasons,
+        "blocking_reasons": list(dict.fromkeys(reasons)),
+        "feedback_labels": list(dict.fromkeys(feedback_labels)),
+        "transition_sources": list(dict.fromkeys(transition_sources)),
+        "transition_statuses": list(dict.fromkeys(transition_statuses)),
+    }
+
+
+def evaluate_candidate_step_evidence(
+    candidate: dict[str, Any],
+) -> dict[int, dict[str, Any]]:
     """재사용 가능한 행동별 증거를 검사해 명백한 차단 사유를 반환한다."""
 
     payload = dict(candidate.get("payload", {}) or {})
-    feedback_by_seq: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    transitions_by_seq: dict[int, list[dict[str, Any]]] = defaultdict(list)
-
-    for episode in payload.get("feedback_episodes", []) or []:
-        if not isinstance(episode, dict):
-            continue
-        seq = _seq(episode.get("seq"))
-        if seq is not None:
-            feedback_by_seq[seq].append(episode)
-
-    for observation in payload.get("transition_records", []) or []:
-        if not isinstance(observation, dict):
-            continue
-        seq = _seq(observation.get("action_seq"))
-        if seq is not None:
-            transitions_by_seq[seq].append(observation)
-
+    feedback_by_seq = _records_by_seq(
+        list(payload.get("feedback_episodes", []) or []),
+        "seq",
+    )
+    transitions_by_seq = _records_by_seq(
+        list(payload.get("transition_records", []) or []),
+        "action_seq",
+    )
     verdicts: dict[int, dict[str, Any]] = {}
-    for step in candidate.get("steps", []) or []:
-        if (
-            not isinstance(step, dict)
-            or step.get("action") not in REVIEWABLE_REPLAY_ACTIONS
-        ):
-            continue
+    reviewable_steps = (
+        step
+        for step in candidate.get("steps", []) or []
+        if isinstance(step, dict) and step.get("action") in REVIEWABLE_REPLAY_ACTIONS
+    )
+    for step in reviewable_steps:
         seq = _seq(step.get("seq"))
         if seq is None:
             continue
-
-        feedback_items = feedback_by_seq.get(seq, [])
-        transition_items = transitions_by_seq.get(seq, [])
-        feedback_labels: list[str] = []
-        transition_sources: list[str] = []
-        transition_statuses: list[str] = []
-        reasons: list[str] = []
-        if str(step.get("risk_level") or "").strip().casefold() == "sensitive":
-            reasons.append("sensitive_action")
-        if step.get("needs_user_confirmation") is True:
-            reasons.append("user_confirmation_required")
-
-        for episode in feedback_items:
-            feedback = episode.get("feedback") if isinstance(episode.get("feedback"), dict) else {}
-            observation = episode.get("observation") if isinstance(episode.get("observation"), dict) else {}
-            result = observation.get("result") if isinstance(observation.get("result"), dict) else {}
-            label = str(feedback.get("label") or "").strip()
-            result_status = str(result.get("status") or "").strip()
-            if label:
-                feedback_labels.append(label)
-            if label in _BLOCKING_FEEDBACK_LABELS:
-                reasons.append(f"feedback_{label}")
-            if result_status in _BLOCKING_RESULT_STATUSES:
-                reasons.append(f"action_{result_status}")
-
-        for observation in transition_items:
-            source = str(observation.get("source") or "").strip()
-            status = str(observation.get("status") or "").strip()
-            reason = str(observation.get("reason") or "").strip()
-            if source:
-                transition_sources.append(source)
-            if status:
-                transition_statuses.append(status)
-            managed_reason = _CODE_MANAGED_TRANSITION_SOURCES.get(source)
-            if managed_reason:
-                reasons.append(managed_reason)
-            if reason in _BLOCKING_TRANSITION_REASONS:
-                reasons.append(reason)
-
-        if step.get("action") in CONTEXTUAL_REPLAY_ACTIONS:
-            if not feedback_items:
-                reasons.append("action_evidence_missing")
-            if not transition_items:
-                reasons.append("transition_evidence_missing")
-            elif "ready" not in transition_statuses:
-                reasons.append("transition_not_ready")
-        elif not feedback_items and not transition_items:
-            reasons.append("action_evidence_missing")
-
-        verdicts[seq] = {
-            "seq": seq,
-            "action": str(step.get("action") or ""),
-            "eligible": not reasons,
-            "blocking_reasons": list(dict.fromkeys(reasons)),
-            "feedback_labels": list(dict.fromkeys(feedback_labels)),
-            "transition_sources": list(dict.fromkeys(transition_sources)),
-            "transition_statuses": list(dict.fromkeys(transition_statuses)),
-        }
+        verdicts[seq] = _step_evidence_verdict(
+            step,
+            seq,
+            feedback_by_seq.get(seq, []),
+            transitions_by_seq.get(seq, []),
+        )
     _apply_verified_action_groups(
         candidate,
         transitions_by_seq,

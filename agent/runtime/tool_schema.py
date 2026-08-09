@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
-from shared.schema.agent_contract import (
-    JOB_COLLECTION_FIELDS,
-    JobCollectionField,
-)
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from shared.schema.jd_schema import JOB_FIELDS, JobField
 
 
-# 클래스 이름은 LLM에 노출되는 도구 이름과 같아야 하므로 소문자를 유지한다.
+# 행동 스키마 이름은 LLM에 노출되는 도구 이름과 같아야 하므로 소문자를 유지한다.
 class _ReplayProposal(BaseModel):
     """자율탐색이 현재 행동의 재사용 가능성을 함께 선언한다."""
 
@@ -35,7 +32,7 @@ class _DetailObservation(BaseModel):
         description=(
             "현재 상세 화면에서 실제로 확인한 공고 필드와 짧은 화면 근거. "
             "상세 화면에서만 채우며 추측한 값은 넣지 않는다. 허용 키: "
-            + ", ".join(JOB_COLLECTION_FIELDS)
+            + ", ".join(JOB_FIELDS)
         ),
     )
 
@@ -71,7 +68,7 @@ class _DetailObservation(BaseModel):
         cls,
         values: Dict[str, str],
     ) -> Dict[str, str]:
-        unknown = sorted(set(values) - set(JOB_COLLECTION_FIELDS))
+        unknown = sorted(set(values) - set(JOB_FIELDS))
         if unknown:
             raise ValueError(
                 "지원하지 않는 공고 필드입니다: "
@@ -169,16 +166,6 @@ class open_browser(BaseModel):
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
-class close_browser(BaseModel):
-    """열려 있는 브라우저 창을 닫습니다."""
-
-    reason: Optional[str] = Field(None, description="브라우저를 닫는 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="브라우저 종료 후 기대 상태(expected_after)")
-    page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
-
-
 class close_current_tab(_ReplayProposal):
     """현재 활성 브라우저 탭 하나를 닫습니다."""
 
@@ -203,27 +190,11 @@ class switch_tab(_ReplayProposal):
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
-class update_extracted_info(BaseModel):
-    """상세 OCR 버퍼가 없는 화면에서 식별한 정보를 수집 상태에 병합합니다."""
-
-    data_json: str = Field(
-        ...,
-        description=(
-            "업데이트할 정보의 JSON 문자열. 공고 목록은 "
-            '{"jobs": [{"company_name": ..., "position": ..., "url": ...}]} '
-            "형식을 사용합니다."
-        ),
-    )
-    page_role: Optional[str] = Field(None, description="현재 정보를 읽은 페이지 역할(page_role). 상세 공고면 job_detail.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
-
-
 class finish_detail_reading(_DetailObservation):
     """누적한 상세 페이지 OCR을 한 번 정제하여 수집 상태에 병합합니다."""
 
     reason: Optional[str] = Field(None, description="상세 페이지 읽기를 종료하는 이유(reason)")
-    unavailable_fields: List[JobCollectionField] = Field(
+    unavailable_fields: List[JobField] = Field(
         default_factory=list,
         description=(
             "페이지 전체를 확인했지만 공고가 제공하지 않는 필수 필드. "
@@ -250,13 +221,29 @@ class go_back(_ReplayProposal):
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
+class VisibleJobCard(BaseModel):
+    """현재 화면에서 실제로 보이는 공고 카드 하나."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    marker_id: int = Field(..., ge=0)
+    title: str = Field(..., min_length=1)
+    company: str = Field(
+        "",
+        description=(
+            "공고 제목과 인접해 별도로 표시된 회사명. "
+            "제목 괄호 안의 직무 분야는 회사명으로 사용하지 않는다."
+        ),
+    )
+
+
 class set_job_card_queue(BaseModel):
     """현재 화면의 수집 대상 공고 카드를 런타임 작업 큐에 저장합니다."""
 
-    cards: Optional[List[Dict[str, Any]]] = Field(
-        None,
+    cards: List[VisibleJobCard] = Field(
+        default_factory=list,
         description=(
-            "수집할 공고 카드 목록. 각 항목에는 현재 캡처의 marker_id와 title/target_label, company를 가능한 만큼 넣으십시오. "
+            "수집할 공고 카드 목록. 각 항목에는 현재 캡처의 marker_id, title, company를 넣으십시오. "
             "현재 화면에 보이는 카드만 넣어야 합니다."
         ),
     )
@@ -284,9 +271,7 @@ ACTION_TOOL_SCHEMAS = {
         scroll,
         press_key,
         open_browser,
-        close_browser,
         close_current_tab,
-        update_extracted_info,
         finish_detail_reading,
         go_back,
         set_job_card_queue,
@@ -298,8 +283,8 @@ ACTION_TOOL_SCHEMAS = {
 
 __all__ = [
     "ACTION_TOOL_SCHEMAS",
+    "VisibleJobCard",
     "click_marker",
-    "close_browser",
     "close_current_tab",
     "finish_detail_reading",
     "finish_task",
@@ -310,5 +295,4 @@ __all__ = [
     "set_job_card_queue",
     "switch_tab",
     "type_in_marker",
-    "update_extracted_info",
 ]

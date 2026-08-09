@@ -89,8 +89,7 @@ def _runtime_config() -> dict[str, str]:
         "VISION_STABLE_REQUIRED_FRAMES": "2",
     }
     return {
-        key: os.getenv(key, "").strip() or default
-        for key, default in defaults.items()
+        key: os.getenv(key, "").strip() or default for key, default in defaults.items()
     }
 
 
@@ -154,9 +153,7 @@ def _finalize_experience_guided_preconditions(
     if not out.get("required"):
         return out
     reasons = list(out.get("reasons") or [])
-    observed_existing_count = int(
-        quality.get("observed_existing_count") or 0
-    )
+    observed_existing_count = int(quality.get("observed_existing_count") or 0)
     if observed_existing_count > 0:
         reasons.append("existing_jobs_observed")
     out["observed_existing_count"] = observed_existing_count
@@ -166,7 +163,9 @@ def _finalize_experience_guided_preconditions(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run realtime_scraping E2E and tee stdout/stderr to a log file.")
+    parser = argparse.ArgumentParser(
+        description="Run realtime_scraping E2E and tee stdout/stderr to a log file."
+    )
     parser.add_argument("--site", default="wanted")
     parser.add_argument("--search-keyword", required=True)
     parser.add_argument("--target-count", type=int, default=0)
@@ -190,7 +189,9 @@ def main() -> int:
 
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path = Path(args.summary) if args.summary else log_path.with_suffix(".summary.json")
+    summary_path = (
+        Path(args.summary) if args.summary else log_path.with_suffix(".summary.json")
+    )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     if log_path.exists():
         raise SystemExit(f"log already exists: {log_path}")
@@ -202,9 +203,7 @@ def main() -> int:
     runtime_config = _runtime_config()
     config_fingerprint = _config_fingerprint(runtime_config)
     experiment_name = (
-        args.experiment_name
-        or os.getenv("L2C_E2E_EXPERIMENT", "manual")
-        or "manual"
+        args.experiment_name or os.getenv("L2C_E2E_EXPERIMENT", "manual") or "manual"
     )
     recipe_version = args.recipe_version or os.getenv("VISION_RECIPE_VERSION", "")
     experience_guided_preconditions = _experience_guided_preconditions(
@@ -238,8 +237,13 @@ def main() -> int:
             from agent.observability.langsmith_adapter import publish_langsmith_feedback
             from agent.graph.workflow import build_graph
             from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
-            from agent.application.collection_service import CollectionService
+            from agent.application.collection_persistence import (
+                persist_collection_batch,
+            )
             from agent.application.collection_worker_runner import run_worker_once
+            from agent.graph.investigation_collection_nodes import (
+                build_collection_result,
+            )
             from agent.application.worker_execution_service import (
                 WorkerExecutionService,
             )
@@ -257,7 +261,6 @@ def main() -> int:
                 vision_runtime,
                 run_worker_once,
             )
-            collection_service = CollectionService(worker_service.run)
             events = []
             status = "failed"
             result = ""
@@ -293,17 +296,16 @@ def main() -> int:
                 try:
                     from shared.schema.collection_intent import CollectionIntent
 
-                    result = collection_service.collect(
-                        CollectionIntent(
-                            site=args.site,
-                            search_keyword=args.search_keyword,
-                            target_count=max(0, args.target_count),
-                            count_mode=args.count_mode,
-                            original_query=(
-                                args.original_query or args.search_keyword
-                            ),
-                        )
+                    intent = CollectionIntent(
+                        site=args.site,
+                        search_keyword=args.search_keyword,
+                        target_count=max(0, args.target_count),
+                        count_mode=args.count_mode,
+                        original_query=(args.original_query or args.search_keyword),
                     )
+                    batch = worker_service.run(intent)
+                    persisted = persist_collection_batch(batch)
+                    result = build_collection_result(intent, batch, persisted)
                     parsed_during_run = result.model_dump(mode="json")
                     quality = evaluate_collection_summary(parsed_during_run)
                     if result.status == "failed":
@@ -350,7 +352,9 @@ def main() -> int:
                         get_recipe_candidate_promotion_status,
                     )
 
-                    recipe_promotion = get_recipe_candidate_promotion_status(candidate_id)
+                    recipe_promotion = get_recipe_candidate_promotion_status(
+                        candidate_id
+                    )
                     print(
                         "RECIPE_PROMOTION="
                         + json.dumps(recipe_promotion, ensure_ascii=False)
@@ -360,14 +364,10 @@ def main() -> int:
             print(f"LOG_TARGET={log_path}")
 
             parsed_result = parsed_during_run
-            final_quality = quality or evaluate_collection_summary(
-                parsed_result
-            )
-            experience_guided_preconditions = (
-                _finalize_experience_guided_preconditions(
-                    experience_guided_preconditions,
-                    final_quality,
-                )
+            final_quality = quality or evaluate_collection_summary(parsed_result)
+            experience_guided_preconditions = _finalize_experience_guided_preconditions(
+                experience_guided_preconditions,
+                final_quality,
             )
             summary = {
                 "schema_version": 3,
@@ -395,9 +395,7 @@ def main() -> int:
                 "metrics": metrics,
                 "events": [event.model_dump(mode="json") for event in events],
                 "quality": final_quality,
-                "experience_guided_preconditions": (
-                    experience_guided_preconditions
-                ),
+                "experience_guided_preconditions": (experience_guided_preconditions),
                 "recipe_promotion": recipe_promotion,
                 "result": parsed_result,
             }

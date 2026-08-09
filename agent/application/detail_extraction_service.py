@@ -8,20 +8,24 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from agent.config import get_settings
+from agent.application.job_normalization_service import complete_extracted_job
+from agent.llm.policy import lightweight_model_name
+from agent.observability.run_context import invoke_with_metrics
 from agent.prompts.detail_extraction import build_detail_extraction_system_prompt
 from agent.runtime.detail_runtime import detail_buffer_text
+from agent.runtime.job_field_contract import (
+    detail_coverage_status,
+    required_fields_from_state,
+)
 from agent.runtime.worker_contracts import WorkerState
 from agent.utils.logger import logger
-from agent.utils.model_dump import dump_model
+from shared.schema.jd_schema import JobPosting
 
 
 def detail_extraction_model_spec() -> str:
-    from agent.config import get_settings
-    from agent.llm.policy import lightweight_model_name
-
     return (
-        get_settings().models.detail_final_extraction_model
-        or lightweight_model_name()
+        get_settings().models.detail_final_extraction_model or lightweight_model_name()
     )
 
 
@@ -29,8 +33,6 @@ def get_detail_extraction_llm() -> Any:
     """상세 OCR 정제용 Gemini 구조화 모델을 지연 초기화한다."""
 
     from agent.llm.clients import get_structured_google_model
-    from shared.schema.jd_schema import JobPosting
-
     return get_structured_google_model(
         detail_extraction_model_spec(),
         JobPosting,
@@ -42,19 +44,14 @@ def get_detail_extraction_llm() -> Any:
 def extract_job_from_job_detail_buffer(
     state: WorkerState,
     current_url: str,
-) -> dict[str, Any]:
+) -> JobPosting | None:
     """상태의 OCR 버퍼를 공고 한 건으로 정제한다."""
-
-    from agent.runtime.job_field_contract import (
-        detail_coverage_status,
-        required_fields_from_state,
-    )
 
     collection = state["collection"]
     buffer = dict(collection.get("job_detail_buffer", {}) or {})
     ocr_text = detail_buffer_text(buffer)
     if not ocr_text.strip():
-        return {}
+        return None
     required_fields = required_fields_from_state(state)
     coverage = detail_coverage_status(
         dict(collection.get("job_detail_coverage", {}) or {}),
@@ -78,9 +75,7 @@ def extract_job_from_job_detail_buffer(
                     "current_url": current_url,
                     "required_fields": required_fields,
                     "field_evidence": coverage["field_evidence"],
-                    "unavailable_fields": coverage[
-                        "unavailable_fields"
-                    ],
+                    "unavailable_fields": coverage["unavailable_fields"],
                     "ocr_text": ocr_text,
                 },
                 ensure_ascii=False,
@@ -90,15 +85,17 @@ def extract_job_from_job_detail_buffer(
     ]
     started = time.perf_counter()
     llm = get_detail_extraction_llm()
-    from agent.observability.run_context import invoke_with_metrics
-
     response = invoke_with_metrics(
         llm,
         messages,
         "detail_extraction",
         stream=True,
     )
-    extracted = dump_model(response)
+    posting = (
+        response
+        if isinstance(response, JobPosting)
+        else JobPosting.model_validate(response)
+    )
     duration = time.perf_counter() - started
     logger.info(
         "Detail OCR final extraction completed",
@@ -107,28 +104,11 @@ def extract_job_from_job_detail_buffer(
         ocr_chars=len(ocr_text),
         ocr_lines=len(buffer.get("lines") or []),
     )
-    extracted = {key: value for key, value in extracted.items() if value not in (None, "", [], {})}
-    if current_url and not extracted.get("url"):
-        extracted["url"] = current_url
-    # 구조화 결과와 별개로 실제 누적 OCR과 대표 화면을 출처 증거로 보존합니다.
-    extracted["raw_ocr_text"] = ocr_text
-    screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]
-    screen_evidence = [
-        dict(item)
-        for item in (buffer.get("screen_evidence") or [])
-        if isinstance(item, dict) and str(item.get("path") or "").strip()
-    ]
-    representative = next(
-        (
-            str(item["path"])
-            for item in screen_evidence
-            if int(item.get("added_lines") or 0) > 0
-        ),
-        screens[0] if screens else "",
+    return complete_extracted_job(
+        posting,
+        current_url=current_url,
+        raw_ocr_text=ocr_text,
     )
-    if representative:
-        extracted["_evidence_screenshot_path"] = representative
-    return extracted
 
 
 __all__ = [

@@ -5,6 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 
 
+CORE_SOURCE_KEY = "l2c_ko_core"
+CURATED_SOURCE_KEY = "l2c_user_curated"
+OCCUPATION_DOMAIN_ROOT_KEY = "l2c:domain:occupation"
+
+
 def taxonomy_timestamp() -> str:
     """현재 시각을 사전 DB 기록 형식으로 반환한다."""
 
@@ -33,4 +38,10 @@ def contains_taxonomy_alias(text: str, alias: str) -> bool:
         start = index + 1
 
 
-__all__ = ["contains_taxonomy_alias", "taxonomy_timestamp"]
+__all__ = [
+    "CORE_SOURCE_KEY",
+    "CURATED_SOURCE_KEY",
+    "OCCUPATION_DOMAIN_ROOT_KEY",
+    "contains_taxonomy_alias",
+    "taxonomy_timestamp",
+]

@@ -135,16 +135,15 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
     ↓
 [Chat UI → FastAPI]
     ↓
-[ChatService — 사용자 진입점의 단일 지휘자]
-  요청 이해 → 중요한 모호성 확인 → 객관식 사용자 질문
-  → 답변에 필요한 근거 정의 → SQLite 충분성 검사
-  → 부족한 근거의 수집 행동계획 → 계획된 도구만 실행
-  → 의미 조건·게시일 검증 → 최종 답변 및 job_id 인용 검증
+[ChatService — 실행 계측과 API 응답 변환]
     ↓
-[CollectionService — 수집 요청과 결과 조율]
-  CollectionIntent 1회 정규화
-  → Worker 실행 → 제출물 구조 검증
-  → 공고 저장·레시피 후보 등록·제출물 최종 저장
+[Investigation LangGraph — 요청별 최상위 실행 관리자]
+  대화 문맥 적재 → 요청 이해 → 중요한 모호성 확인
+  → 답변 근거 정의 → SQLite 충분성 검사
+  → 부족한 근거의 수집 행동계획
+  → collect 노드에서 비전 작업자 실행
+  → persist 노드에서 공고·제출물·레시피 후보 저장
+  → SQLite 근거 재검사 → 최종 답변 및 job_id 인용 검증
     ↓
 [WorkerExecutionService — 단일 로컬 작업자 직렬화]
   브라우저 준비·LangGraph 실행·정리를 하나의 잠금 범위로 실행
@@ -157,7 +156,7 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
   └─ 의미 판단 필요: reasoning → execution
   execution → capture·reasoning·종료
     ↓
-[SQLite 저장 → ChatService 근거 재검사 → 최종 답변]
+[SQLite 저장 → Investigation LangGraph 근거 재검사 → 최종 답변]
 
 [비동기 RecipePromotionWorker]
   레시피 후보 → Critic 가지치기 → 활성 Reflex Recipe 승격
@@ -165,11 +164,11 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 
 지휘자는 `agent/graph/investigation_workflow.py`의 LangGraph로 실행됩니다. 확인 질문이 남아 있으면 DB와 브라우저 도구를 호출하지 않고 `waiting_input`으로 중단하며, 사용자의 선택은 SQLite 조사 상태에 반영되어 다음 질문 또는 근거 검사 단계부터 재개됩니다. 사이트·날짜·개수·분석 목적은 실행 전에 확정된 행동계획에서만 수집 worker로 전달됩니다.
 
-`agent/bootstrap.py`가 체크포인터, 애플리케이션 서비스, 모델 묶음과 비전 런타임을 생성하고 그래프 노드에 주입합니다. Investigation LangGraph와 Vision Worker LangGraph는 노드 순서, 분기, 중단·재개와 상태 갱신만 담당합니다. Vision 노드는 전역 런타임 조회 없이 LangGraph `Runtime` 문맥으로 전달된 `VisionWorkerRuntime`을 사용합니다.
+`agent/bootstrap.py`는 체크포인터, DB·대화·수집 포트, 모델 묶음과 비전 런타임을 생성해 그래프에 주입하는 조립 지점입니다. Investigation LangGraph가 대화 문맥, 노드 순서, DB 조회·저장 시점, 분기, 중단·재개와 상태 갱신을 담당합니다. 실제 SQL, 브라우저와 OCR 자원 수명은 주입된 어댑터가 담당합니다. Vision 노드는 전역 런타임 조회 없이 LangGraph `Runtime` 문맥으로 전달된 `VisionWorkerRuntime`을 사용합니다.
 
 작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`의 8개 책임 구역으로 나뉩니다. 노드는 자신이 변경한 구역만 `WorkerStateUpdate`로 반환하고 LangGraph reducer가 해당 구역을 병합합니다. 행동 실행은 불변 입력과 가변 결과를 분리하고, 결과 상태에서 최초 입력과 달라진 구역만 반환합니다.
 
-Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. 사용자 지휘, 작업자 실행, 상세 정제, DB 적재와 자원 수명주기는 `agent/application/` 서비스와 `agent/bootstrap.py`가 담당합니다.
+Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. Investigation LangGraph가 요청과 저장 흐름을 지휘하고, `agent/application/`은 상세 정제·DB 작업·비전 실행 어댑터를 제공하며 `agent/bootstrap.py`는 자원 수명주기만 조립합니다.
 
 운영 경로는 지연 초기화(lazy initialization)를 적용합니다. DB 질의와 웹 Q&A 서버는 비전 엔진, YOLO 모델, 물리 GUI 제어 도구를 import 시점에 초기화하지 않고, 실시간 수집이 실제로 필요할 때만 비전 파이프라인을 준비합니다. PaddleOCR subprocess는 작업 동안 계속 재사용하고, 요청 timeout이나 worker 오류가 발생할 때만 재시작합니다. OCR 입력 최대 변은 1152로 제한합니다.
 

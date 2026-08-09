@@ -1,20 +1,18 @@
 """
-Phase 0: 비전 런의 UI 행동과 타깃 ROI 기록.
-execution_node의 기록 단계에서 호출되며, 실패해도 실제 실행 흐름에는 영향을 주지 않는다.
+비전 실행의 UI 행동과 타깃 ROI를 기록한다.
 """
 
 from __future__ import annotations
 
 from agent.recipe.matcher import marker_ordinal, marker_region
 from agent.runtime.site_context import normalize_page_role
-from agent.runtime.replay_actions import (
+from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     RECORDED_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
 from agent.utils.text import normalize_text, url_template
-from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox, marker_center
 from agent.vision.screen_signature import (
     compact_screen_context_signature,
@@ -124,131 +122,196 @@ def _evidence_texts_for_marker(
     return [item[-1] for item in scored[:max_items]]
 
 
-def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
-    """UI 액션 디스패치 직후 호출. recorded_steps에 in-place append (예외 안전)."""
-    try:
-        if action_name not in RECORDED_REPLAY_ACTIONS:
-            return
-        markers = state.get("current_markers", []) or []
-        url = state.get("current_url", "") or ""
-        slot_name = normalize_text(args.get("slot_name"))
-        screen_signature = dict(state.get("screen_signature", {}) or {})
-        observed_page_role = normalize_page_role(state.get("current_page_role"))
-        declared_page_role = normalize_page_role(args.get("page_role"))
-        page_role = observed_page_role or declared_page_role
-        context_signature = compact_screen_context_signature(
-            screen_signature
-        )
-        step = {
-            "seq": seq,
-            "decision_capture_id": str(state.get("current_capture_id") or ""),
+def _new_recorded_step(
+    state: dict,
+    action_name: str,
+    args: dict,
+    seq: int,
+    slot_name: str,
+    context_signature: dict,
+) -> dict:
+    url = state.get("current_url", "") or ""
+    observed_page_role = normalize_page_role(state.get("current_page_role"))
+    declared_page_role = normalize_page_role(args.get("page_role"))
+    page_role = observed_page_role or declared_page_role
+    return {
+        "seq": seq,
+        "decision_capture_id": str(state.get("current_capture_id") or ""),
+        "url_template": url_template(url),
+        "page_role": page_role,
+        "observed_page_role": observed_page_role,
+        "declared_page_role": declared_page_role,
+        "before_state": {
+            "capture_id": str(state.get("current_capture_id") or ""),
             "url_template": url_template(url),
             "page_role": page_role,
-            "observed_page_role": observed_page_role,
-            "declared_page_role": declared_page_role,
-            "before_state": {
-                "capture_id": str(
-                    state.get("current_capture_id") or ""
-                ),
-                "url_template": url_template(url),
-                "page_role": page_role,
-                "screen_context_signature": context_signature,
-            },
-            "action": action_name,
-            "target": None,
-            "value": None,
-            "param": {},
-            "is_param": False,
-            "expected_after": normalize_text(args.get("expected_after")),
-            "intent": normalize_text(args.get("reason")),
-            "target_role": normalize_text(args.get("target_role") or args.get("target_role_candidate")),
-            "component": normalize_text(args.get("target_component") or args.get("component_candidate")),
-            "slot_refs": [slot_name] if slot_name else [],
-            "risk_level": normalize_text(args.get("risk_level")),
-            "needs_user_confirmation": bool(
-                args.get("needs_user_confirmation")
-            ),
-            "replay_mode": _recorded_replay_mode(
-                action_name,
-                args,
-                slot_name,
-            ),
+            "screen_context_signature": context_signature,
+        },
+        "action": action_name,
+        "target": None,
+        "value": None,
+        "param": {},
+        "is_param": False,
+        "expected_after": normalize_text(args.get("expected_after")),
+        "intent": normalize_text(args.get("reason")),
+        "target_role": normalize_text(args.get("target_role")),
+        "component": normalize_text(args.get("target_component")),
+        "slot_refs": [slot_name] if slot_name else [],
+        "risk_level": normalize_text(args.get("risk_level")),
+        "needs_user_confirmation": bool(args.get("needs_user_confirmation")),
+        "replay_mode": _recorded_replay_mode(action_name, args, slot_name),
+    }
+
+
+def _target_descriptor(
+    marker: dict,
+    markers: list[dict],
+    args: dict,
+    screen_signature: dict,
+) -> dict:
+    snapshot = build_marker_target_snapshot(
+        markers,
+        args.get("marker_id"),
+        screen_signature=screen_signature,
+    ) or {}
+    target = {
+        "text": normalize_text(marker.get("text")),
+        "region": marker_region(marker, markers),
+        "ordinal": marker_ordinal(marker, markers),
+    }
+    marker_type = normalize_text(marker.get("type"))
+    if marker_type:
+        target["marker_type"] = marker_type
+    for key in ("bbox_ratio", "center_ratio"):
+        if snapshot.get(key):
+            target[key] = snapshot[key]
+    target_label = normalize_text(args.get("target_label"))
+    if target_label:
+        target["semantic_label"] = target_label
+    evidence_texts = _evidence_texts_for_marker(marker, markers)
+    if evidence_texts:
+        target["evidence_texts"] = evidence_texts
+    return target
+
+
+def _target_roi_signature(
+    state: dict,
+    marker: dict,
+    screen_signature: dict,
+) -> dict:
+    screen_size = screen_signature.get("size") or []
+    image_path = str(state.get("current_screenshot") or "")
+    if not image_path or not isinstance(screen_size, list) or len(screen_size) != 2:
+        return {}
+    return compute_target_roi_signature(
+        image_path,
+        marker_bbox(marker),
+        screen_size,
+        capture_context=dict(screen_signature.get("capture_context", {}) or {}),
+    )
+
+
+def _record_target_parameters(
+    step: dict,
+    action_name: str,
+    args: dict,
+    slot_name: str,
+) -> None:
+    if action_name == "type_in_marker":
+        value = (args.get("text") or "").strip()
+        step["value"] = value
+        step["param"] = {"text": value}
+        if slot_name:
+            step["param"]["slot_name"] = slot_name
+        step["is_param"] = bool(slot_name)
+    elif action_name == "scroll":
+        step["value"] = args.get("direction", "down")
+        step["param"] = {
+            "direction": step["value"],
+            "amount": args.get("amount", "page"),
+            "targeted": True,
         }
-        if action_name in TARGET_REPLAY_ACTIONS or (
-            action_name == "scroll" and args.get("marker_id") is not None
+
+
+def _record_target_action(
+    step: dict,
+    state: dict,
+    action_name: str,
+    args: dict,
+    slot_name: str,
+    screen_signature: dict,
+) -> bool:
+    markers = state.get("current_markers", []) or []
+    marker = marker_by_id(markers, args.get("marker_id"))
+    if not marker:
+        return False
+    step["target"] = _target_descriptor(
+        marker,
+        markers,
+        args,
+        screen_signature,
+    )
+    roi_signature = _target_roi_signature(state, marker, screen_signature)
+    if roi_signature:
+        step["roi_signature"] = roi_signature
+    _record_target_parameters(step, action_name, args, slot_name)
+    return True
+
+
+def _record_contextual_parameters(
+    step: dict,
+    action_name: str,
+    args: dict,
+) -> None:
+    keys = {
+        "scroll": ("direction", "down"),
+        "press_key": ("key", None),
+        "switch_tab": ("direction", None),
+    }
+    key_and_default = keys.get(action_name)
+    if key_and_default is None:
+        return
+    key, default = key_and_default
+    value = args.get(key, default)
+    step["value"] = value
+    step["param"] = {key: value}
+    if action_name == "scroll":
+        step["param"]["amount"] = args.get("amount", "page")
+
+
+def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
+    """UI 액션 디스패치 직후 재생 후보 단계를 기록한다."""
+
+    if action_name not in RECORDED_REPLAY_ACTIONS:
+        return
+    slot_name = normalize_text(args.get("slot_name"))
+    screen_signature = dict(state.get("screen_signature", {}) or {})
+    context_signature = compact_screen_context_signature(
+        screen_signature
+    )
+    step = _new_recorded_step(
+        state,
+        action_name,
+        args,
+        seq,
+        slot_name,
+        context_signature,
+    )
+    targeted_action = action_name in TARGET_REPLAY_ACTIONS or (
+        action_name == "scroll" and args.get("marker_id") is not None
+    )
+    if targeted_action:
+        if not _record_target_action(
+            step,
+            state,
+            action_name,
+            args,
+            slot_name,
+            screen_signature,
         ):
-            marker = marker_by_id(markers, args.get("marker_id"))
-            if not marker:
-                return
-            target_snapshot = build_marker_target_snapshot(
-                markers,
-                args.get("marker_id"),
-                screen_signature=screen_signature,
-            ) or {}
-            target = {
-                "text": normalize_text(marker.get("text")),
-                "region": marker_region(marker, markers),
-                "ordinal": marker_ordinal(marker, markers),
-            }
-            marker_type = normalize_text(marker.get("type"))
-            if marker_type:
-                target["marker_type"] = marker_type
-            if target_snapshot.get("bbox_ratio"):
-                target["bbox_ratio"] = target_snapshot["bbox_ratio"]
-            if target_snapshot.get("center_ratio"):
-                target["center_ratio"] = target_snapshot["center_ratio"]
-            screen_size = screen_signature.get("size") or []
-            if isinstance(screen_size, list) and len(screen_size) == 2:
-                bbox = marker_bbox(marker)
-                image_path = str(state.get("current_screenshot") or "")
-                roi_signature = (
-                    compute_target_roi_signature(
-                        image_path,
-                        bbox,
-                        screen_size,
-                        capture_context=dict(screen_signature.get("capture_context", {}) or {}),
-                    )
-                    if image_path
-                    else {}
-                )
-                if roi_signature:
-                    step["roi_signature"] = roi_signature
-            target_label = normalize_text(args.get("target_label") or args.get("semantic_label"))
-            if target_label:
-                target["semantic_label"] = target_label
-            evidence_texts = _evidence_texts_for_marker(marker, markers)
-            if evidence_texts:
-                target["evidence_texts"] = evidence_texts
-            step["target"] = target
-            if action_name == "type_in_marker":
-                val = (args.get("text") or "").strip()
-                step["value"] = val
-                step["param"] = {"text": val}
-                if slot_name:
-                    step["param"]["slot_name"] = slot_name
-                step["is_param"] = bool(slot_name)
-            elif action_name == "scroll":
-                step["value"] = args.get("direction", "down")
-                step["param"] = {
-                    "direction": step["value"],
-                    "amount": args.get("amount", "page"),
-                    "targeted": True,
-                }
-        elif action_name == "scroll":
-            step["value"] = args.get("direction", "down")
-            step["param"] = {
-                "direction": step["value"],
-                "amount": args.get("amount", "page"),
-            }
-        elif action_name == "press_key":
-            step["value"] = args.get("key")
-            step["param"] = {"key": step["value"]}
-        elif action_name == "switch_tab":
-            step["value"] = args.get("direction")
-            step["param"] = {"direction": step["value"]}
-        if action_name in CONTEXTUAL_REPLAY_ACTIONS:
-            if context_signature:
-                step["screen_context_signature"] = context_signature
-        recorded_steps.append(step)
-    except Exception as e:
-        logger.debug("reflex record_ui_step skipped", error=str(e))
+            return
+    else:
+        _record_contextual_parameters(step, action_name, args)
+    if action_name in CONTEXTUAL_REPLAY_ACTIONS and context_signature:
+        step["screen_context_signature"] = context_signature
+    recorded_steps.append(step)

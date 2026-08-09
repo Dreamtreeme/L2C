@@ -16,6 +16,7 @@ from agent.application.search_taxonomy_service import (
     SearchTaxonomyService,
 )
 from agent.graph.investigation_context import InvestigationModels
+from agent.tests.job_test_data import insert_job
 from shared.db.database import Database
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
@@ -69,7 +70,7 @@ def _insert_and_link(
     suffix: str,
     **data,
 ) -> int:
-    job_id = db.upsert(f"https://example.com/jobs/{suffix}", data)
+    job_id = insert_job(db, f"https://example.com/jobs/{suffix}", data)
     taxonomy.link_job(job_id)
     return job_id
 
@@ -150,7 +151,8 @@ def test_evidence_inspection_does_not_reindex_pending_job(tmp_path):
     db_path = tmp_path / "jobs.db"
     taxonomy = _prepared_taxonomy(db_path)
     db = Database(db_path)
-    job_id = db.upsert(
+    job_id = insert_job(
+        db,
         "https://example.com/jobs/pending",
         {
             "company_name": "대기회사",
@@ -600,7 +602,8 @@ def test_failed_taxonomy_index_is_retried_once_before_search(tmp_path):
     db_path = tmp_path / "retry-index.db"
     db = Database(db_path)
     taxonomy = _prepared_taxonomy(db_path)
-    job_id = db.upsert(
+    job_id = insert_job(
+        db,
         "https://example.com/jobs/retry-index",
         {
             "company_name": "예시회사",
@@ -705,7 +708,8 @@ def test_workflow_returns_cardinality_question_before_evidence_planning(
     _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
     workflow = investigation_workflow_factory(
         db_path=db_path,
-        collect_jobs=_unexpected_collection,
+        run_collection=_unexpected_collection,
+        persist_collection=_unexpected_collection,
         taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(
@@ -738,7 +742,8 @@ def test_workflow_progresses_from_generic_request_to_domain_then_family(
     taxonomy = _prepared_taxonomy(db_path)
     workflow = investigation_workflow_factory(
         db_path=db_path,
-        collect_jobs=_unexpected_collection,
+        run_collection=_unexpected_collection,
+        persist_collection=_unexpected_collection,
         taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(
@@ -791,7 +796,8 @@ def test_semantic_resolution_uses_selected_domain_and_promotes_confirmed_alias(
     )
     workflow = investigation_workflow_factory(
         db_path=db_path,
-        collect_jobs=_unexpected_collection,
+        run_collection=_unexpected_collection,
+        persist_collection=_unexpected_collection,
         taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(

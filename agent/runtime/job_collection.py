@@ -1,51 +1,47 @@
-"""수집 상태에서 공고 목록을 읽는 공통 계약."""
+"""작업자 상태의 정규화된 공고 목록 연산."""
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
+
+from shared.schema.jd_schema import CollectedJob, JobPosting
 
 
-JOB_LIST_KEY = "jobs"
-JOB_IDENTITY_KEYS = (
-    "company_name",
-    "position",
-    "url",
-)
+def job_count(collected_jobs: Sequence[CollectedJob]) -> int:
+    return len(collected_jobs)
 
 
-def job_list_value(data: dict) -> Any:
-    """내부 표준 공고 목록을 반환한다."""
-
-    return data.get(JOB_LIST_KEY)
+def job_postings(collected_jobs: Sequence[CollectedJob]) -> list[JobPosting]:
+    return [item.posting for item in collected_jobs]
 
 
-def job_items(data: Any) -> list[dict[str, Any]]:
-    """공고 목록 계약에 해당하는 항목만 반환한다."""
-
-    if not isinstance(data, dict) or not data:
-        return []
-
-    def is_job_item(item: Any) -> bool:
-        return (
-            isinstance(item, dict)
-            and bool(item)
-            and any(item.get(key) not in (None, "") for key in JOB_IDENTITY_KEYS)
-        )
-
-    value = job_list_value(data)
-    if isinstance(value, list):
-        return [item for item in value if is_job_item(item)]
-    return []
+def _job_identity(collected_job: CollectedJob) -> tuple[str, ...]:
+    posting = collected_job.posting
+    url = str(posting.url or "").strip()
+    card_key = collected_job.evidence.source_card_key.strip()
+    if url:
+        return ("url", url, card_key)
+    return (
+        "text",
+        str(posting.company_name or "").strip(),
+        str(posting.position or "").strip(),
+    )
 
 
-def job_count(data: Any) -> int:
-    return len(job_items(data))
+def store_collected_job(
+    collected_jobs: Sequence[CollectedJob],
+    collected_job: CollectedJob,
+) -> list[CollectedJob]:
+    """같은 공고의 재완료는 교체하고 새 공고는 뒤에 추가한다."""
+
+    identity = _job_identity(collected_job)
+    updated = list(collected_jobs)
+    for index, existing in enumerate(updated):
+        if _job_identity(existing) == identity:
+            updated[index] = collected_job
+            return updated
+    updated.append(collected_job)
+    return updated
 
 
-__all__ = [
-    "JOB_IDENTITY_KEYS",
-    "JOB_LIST_KEY",
-    "job_count",
-    "job_items",
-    "job_list_value",
-]
+__all__ = ["job_count", "job_postings", "store_collected_job"]

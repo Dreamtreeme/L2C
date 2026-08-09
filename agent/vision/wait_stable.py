@@ -16,6 +16,7 @@ from agent.vision.frame_compare import (
     mean_difference_percent,
 )
 
+
 class WaitStable:
     """
     OCR 캡처 직전의 큰 화면 흔들림이 잦아들 때까지 기다리는 보조 모듈입니다.
@@ -64,7 +65,9 @@ class WaitStable:
                 )
             return frame
         except Exception as e:
-            logger.exception("Failed to capture memory image for stabilization check", error=str(e))
+            logger.exception(
+                "Failed to capture memory image for stabilization check", error=str(e)
+            )
             raise
 
     def wait_for_change(
@@ -86,8 +89,10 @@ class WaitStable:
         intensity_threshold = get_settings().reflex.visual_change_pixel_threshold
         try:
             reference = load_gray_frame(reference_image_path)
-        except Exception as exc:
-            logger.debug("Transition reference image could not be loaded", error=str(exc))
+        except (OSError, ValueError) as exc:
+            logger.debug(
+                "Transition reference image could not be loaded", error=str(exc)
+            )
             return False
 
         started = time.perf_counter()
@@ -127,12 +132,12 @@ class WaitStable:
         """
         연속 프레임의 픽셀 변화율이 여러 번 안정 범위에 들어올 때까지 기다립니다.
         정보량 검사는 이후 capture_usable_screen에서 수행합니다.
-        
+
         Args:
             max_wait_sec: 최대 대기 시간(초). 이 시간이 넘어가면 무한 대기를 멈추고 반환.
             check_interval_sec: 화면 변화를 체크하는 간격(초).
             threshold_percent: 안정화로 판단할 픽셀 변화 강도(%).
-            
+
         Returns:
             안정화 도달 시 True, 시간 초과 시 False
         """
@@ -200,9 +205,7 @@ class WaitStable:
             "probe_count": probe_count,
             "stable_frames": stable_count,
             "diff_percent": (
-                round(last_diff_percent, 3)
-                if last_diff_percent is not None
-                else None
+                round(last_diff_percent, 3) if last_diff_percent is not None else None
             ),
         }
         logger.warning(

@@ -1,81 +1,68 @@
-import time
+import json
 
-import pytest
-
-from agent.graph import (
-    worker_execution_dispatch,
-    worker_observation,
-    worker_selection,
-    worker_transition,
-)
-from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
-from agent.graph.worker_execution_policy import merge_extracted_info
-from agent.runtime.job_collection import job_items
-from agent.runtime.job_card_queue import replay_job_card_after_return
+from agent.graph import worker_execution_dispatch
+from agent.graph.worker_execution_policy import compact_action_args
+from agent.runtime.job_field_contract import merge_job_detail_coverage
+from agent.runtime.worker_contracts import build_action_request
 from agent.tests.worker_test_support import worker_data_services, worker_state
+from shared.schema.jd_schema import JobPosting
 
 
-def test_detail_finish_extracts_once_and_clears_buffer():
-    def extract_job_detail(_state, current_url):
-        return {
-            "company_name": "보이저엑스",
-            "position": "iOS 개발자",
-            "url": current_url,
-            "requirements": ["Swift"],
-        }
+def posting(current_url: str, *, include_requirements: bool = True) -> JobPosting:
+    return JobPosting(
+        company_name="예시회사",
+        position="백엔드 개발자",
+        url=current_url,
+        main_tasks=["API 개발"],
+        requirements=["Python"] if include_requirements else [],
+    )
 
+
+def detail_state(current_url: str, required_fields: list[str]):
+    return worker_state(
+        request={
+            "job_collection_contract": {"required_fields": required_fields}
+        },
+        collection={
+            "job_detail_buffer": {
+                "url": current_url,
+                "lines": [{"text": "API 개발"}, {"text": "Python"}],
+                "screens": ["detail.png"],
+            }
+        },
+    )
+
+
+def test_detail_finish_creates_one_collected_job_and_clears_buffer():
+    current_url = "https://www.wanted.co.kr/wd/1"
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
-            "page_role": "job_detail",
             "observed_fields": {
-                "company_name": "보이저엑스",
-                "position": "iOS 개발자",
-                "requirements": "자격요건 Swift",
-            },
+                "company_name": "예시회사",
+                "position": "백엔드 개발자",
+                "main_tasks": "API 개발",
+                "requirements": "Python",
+            }
         },
-        {},
-        current_url="https://www.wanted.co.kr/wd/1",
-        state=worker_state(
-            request={"job_collection_contract": {
-                "required_fields": [
-                    "company_name",
-                    "position",
-                    "url",
-                    "requirements",
-                ]
-            }},
-            collection={"job_detail_buffer": {
-                "url": "https://www.wanted.co.kr/wd/1",
-                "lines": [{"text": "자격요건 Swift"}],
-            }},
+        [],
+        current_url=current_url,
+        state=detail_state(
+            current_url,
+            ["company_name", "position", "url", "main_tasks", "requirements"],
         ),
         data_services=worker_data_services(
-            extract_job_detail=extract_job_detail,
+            extract_job_detail=lambda _state, url: posting(url)
         ),
     )
 
     assert outcome.result["status"] == "success"
     assert outcome.state_update.job_detail_buffer == {}
-    assert outcome.jobs["jobs"][0]["position"] == "iOS 개발자"
-
-
-def test_internal_job_collection_accepts_only_canonical_jobs_list():
-    canonical_job = {
-        "company_name": "예시회사",
-        "position": "백엔드 개발자",
-        "url": "https://example.com/jobs/1",
-    }
-
-    assert job_items({"jobs": [canonical_job]}) == [canonical_job]
-    assert job_items({"공고목록": [canonical_job]}) == []
-    with pytest.raises(ValueError, match="jobs 목록"):
-        merge_extracted_info({}, canonical_job)
+    assert outcome.collected_jobs[0].posting.position == "백엔드 개발자"
+    assert outcome.collected_jobs[0].evidence.screenshot_path == "detail.png"
 
 
 def test_detail_action_args_compaction_is_idempotent():
-    from agent.graph.worker_execution_policy import compact_action_args
-
     args = {
         "page_role": "job_detail",
         "observed_fields": {
@@ -87,23 +74,20 @@ def test_detail_action_args_compaction_is_idempotent():
 
     compacted = compact_action_args("finish_detail_reading", args)
 
-    assert compact_action_args(
-        "finish_detail_reading",
-        compacted,
-    ) == compacted
+    assert compact_action_args("finish_detail_reading", compacted) == compacted
 
 
 def test_card_queue_identity_does_not_overwrite_detail_ocr_evidence():
-    from agent.runtime.job_field_contract import merge_job_detail_coverage
-
     state = worker_state(
-        collection={"job_card_queue": [
-            {
-                "status": "active",
-                "company": "잘못 연결된 회사",
-                "title": "잘못 연결된 직무",
-            }
-        ]}
+        collection={
+            "job_card_queue": [
+                {
+                    "status": "active",
+                    "company": "잘못 연결된 회사",
+                    "title": "잘못 연결된 직무",
+                }
+            ]
+        }
     )
     current_url = "https://www.wanted.co.kr/wd/365869"
     coverage = merge_job_detail_coverage(
@@ -117,25 +101,13 @@ def test_card_queue_identity_does_not_overwrite_detail_ocr_evidence():
         state=state,
         current_url=current_url,
     )
-    coverage = merge_job_detail_coverage(
-        coverage,
-        {"observed_fields": {"main_tasks": "iOS 앱 개발"}},
-        state=state,
-        current_url=current_url,
-    )
 
     assert coverage["field_evidence"]["company_name"] == "백패커"
-    assert coverage["field_evidence"]["position"] == (
-        "[텀블벅] iOS 개발자(1~3년)"
-    )
+    assert coverage["field_evidence"]["position"] == "[텀블벅] iOS 개발자(1~3년)"
     assert coverage["field_evidence"]["url"] == current_url
 
 
-def test_detail_extraction_does_not_use_card_identity_as_fallback(
-    monkeypatch,
-):
-    import json
-
+def test_detail_extraction_does_not_use_card_identity_as_fallback(monkeypatch):
     from agent.application import detail_extraction_service
 
     class FakeDetailLLM:
@@ -144,10 +116,10 @@ def test_detail_extraction_does_not_use_card_identity_as_fallback(
 
         def invoke(self, messages):
             self.messages = list(messages)
-            return {
-                "position": "[텀블벅] iOS 개발자(1~3년)",
-                "main_tasks": ["iOS 앱 개발"],
-            }
+            return JobPosting(
+                position="[텀블벅] iOS 개발자(1~3년)",
+                main_tasks=["iOS 앱 개발"],
+            )
 
     fake_llm = FakeDetailLLM()
     monkeypatch.setattr(
@@ -161,10 +133,9 @@ def test_detail_extraction_does_not_use_card_identity_as_fallback(
         lambda: "test-model",
     )
     current_url = "https://www.wanted.co.kr/wd/365869"
-    result = (
-        detail_extraction_service.extract_job_from_job_detail_buffer(
-            worker_state(
-                collection={
+    result = detail_extraction_service.extract_job_from_job_detail_buffer(
+        worker_state(
+            collection={
                 "job_card_queue": [
                     {
                         "status": "active",
@@ -186,22 +157,19 @@ def test_detail_extraction_does_not_use_card_identity_as_fallback(
                         {"text": "[텀블벅] iOS 개발자(1~3년)"},
                     ]
                 },
-                },
-            ),
-            current_url,
-        )
+            }
+        ),
+        current_url,
     )
     request_payload = json.loads(fake_llm.messages[1].content)
 
     assert "active_card" not in request_payload
     assert "글로벌머니익스프레스" not in fake_llm.messages[1].content
-    assert "company_name" not in result
-    assert result["url"] == current_url
+    assert result.company_name is None
+    assert result.url == current_url
 
 
 def test_detail_observation_accepts_multiple_evidence_lines():
-    from agent.runtime.worker_contracts import build_action_request
-
     request = build_action_request(
         "llm",
         "",
@@ -209,14 +177,7 @@ def test_detail_observation_accepts_multiple_evidence_lines():
             {
                 "id": "finish",
                 "name": "finish_detail_reading",
-                "args": {
-                    "observed_fields": {
-                        "main_tasks": [
-                            "API 개발",
-                            "성능 최적화",
-                        ]
-                    }
-                },
+                "args": {"observed_fields": {"main_tasks": ["API 개발", "성능 최적화"]}},
             }
         ],
     )
@@ -226,45 +187,31 @@ def test_detail_observation_accepts_multiple_evidence_lines():
     }
 
 
-def test_detail_finish_skips_extraction_until_required_evidence_is_complete():
+def test_detail_finish_waits_for_required_screen_evidence():
     calls = []
+    current_url = "https://www.wanted.co.kr/wd/2"
 
     def fail_if_called(_state, _current_url):
         calls.append(True)
-        return {}
+        return None
 
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
-            "page_role": "job_detail",
             "observed_fields": {
                 "company_name": "예시회사",
                 "position": "백엔드 개발자",
-            },
+            }
         },
-        {},
-        current_url="https://www.wanted.co.kr/wd/2",
-        state=worker_state(
-            request={"job_collection_contract": {
-                "required_fields": [
-                    "company_name",
-                    "position",
-                    "url",
-                    "main_tasks",
-                    "requirements",
-                ]
-            }},
-            collection={"job_detail_buffer": {
-                "url": "https://www.wanted.co.kr/wd/2",
-                "lines": [{"text": "백엔드 개발자"}],
-            }},
+        [],
+        current_url=current_url,
+        state=detail_state(
+            current_url,
+            ["company_name", "position", "url", "main_tasks", "requirements"],
         ),
-        data_services=worker_data_services(
-            extract_job_detail=fail_if_called,
-        ),
+        data_services=worker_data_services(extract_job_detail=fail_if_called),
     )
 
-    assert outcome.result["status"] == "skipped"
     assert outcome.result["reason"] == "required_field_evidence_incomplete"
     assert outcome.state_update.job_detail_followup["missing_fields"] == [
         "main_tasks",
@@ -273,19 +220,8 @@ def test_detail_finish_skips_extraction_until_required_evidence_is_complete():
     assert calls == []
 
 
-def test_detail_finish_allows_explicit_unavailable_field_at_page_end():
-    calls = []
-
-    def extract_once(_state, current_url):
-        calls.append(True)
-        return {
-            "company_name": "예시회사",
-            "position": "백엔드 개발자",
-            "url": current_url,
-            "main_tasks": ["API 개발"],
-            "requirements": ["Python"],
-        }
-
+def test_detail_finish_preserves_confirmed_unavailable_field():
+    current_url = "https://www.wanted.co.kr/wd/3"
     required_fields = [
         "company_name",
         "position",
@@ -294,11 +230,9 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end():
         "requirements",
         "benefits",
     ]
-
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
-            "page_role": "job_detail",
             "observed_fields": {
                 "company_name": "예시회사",
                 "position": "백엔드 개발자",
@@ -308,42 +242,21 @@ def test_detail_finish_allows_explicit_unavailable_field_at_page_end():
             "unavailable_fields": ["benefits"],
             "page_exhausted": True,
         },
-        {},
-        current_url="https://www.wanted.co.kr/wd/3",
-        state=worker_state(
-            request={"job_collection_contract": {
-                "required_fields": required_fields,
-            }},
-            collection={"job_detail_buffer": {
-                "url": "https://www.wanted.co.kr/wd/3",
-                "lines": [{"text": "API 개발"}, {"text": "Python"}],
-            }},
-        ),
+        [],
+        current_url=current_url,
+        state=detail_state(current_url, required_fields),
         data_services=worker_data_services(
-            extract_job_detail=extract_once,
+            extract_job_detail=lambda _state, url: posting(url)
         ),
     )
 
-    assert outcome.result["status"] == "success"
-    assert calls == [True]
-    job = outcome.jobs["jobs"][0]
-    assert job["_collection_required_fields"] == required_fields
-    assert job["_collection_unavailable_fields"] == ["benefits"]
+    evidence = outcome.collected_jobs[0].evidence
+    assert [field.value for field in evidence.required_fields] == required_fields
+    assert [field.value for field in evidence.unavailable_fields] == ["benefits"]
 
 
-def test_detail_finish_does_not_repeat_extraction_after_page_end():
-    calls = []
-
-    def extract_once(_state, current_url):
-        calls.append(True)
-        return {
-            "company_name": "예시회사",
-            "position": "백엔드 개발자",
-            "url": current_url,
-            "main_tasks": ["API 개발"],
-            "requirements": ["Python"],
-        }
-
+def test_page_end_converts_visible_but_unextracted_field_to_partial_evidence():
+    current_url = "https://www.wanted.co.kr/wd/4"
     required_fields = [
         "company_name",
         "position",
@@ -352,11 +265,9 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end():
         "requirements",
         "benefits",
     ]
-
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
-            "page_role": "job_detail",
             "observed_fields": {
                 "company_name": "예시회사",
                 "position": "백엔드 개발자",
@@ -366,72 +277,46 @@ def test_detail_finish_does_not_repeat_extraction_after_page_end():
             },
             "page_exhausted": True,
         },
-        {},
-        current_url="https://www.wanted.co.kr/wd/4",
-        state=worker_state(
-            request={"job_collection_contract": {
-                "required_fields": required_fields,
-            }},
-            collection={"job_detail_buffer": {
-                "url": "https://www.wanted.co.kr/wd/4",
-                "lines": [{"text": "API 개발"}, {"text": "Python"}],
-            }},
-        ),
+        [],
+        current_url=current_url,
+        state=detail_state(current_url, required_fields),
         data_services=worker_data_services(
-            extract_job_detail=extract_once,
+            extract_job_detail=lambda _state, url: posting(url)
         ),
     )
 
-    assert outcome.result["status"] == "success"
-    assert calls == [True]
-    job = outcome.jobs["jobs"][0]
-    assert job["_collection_extraction_missing_fields"] == ["benefits"]
-    assert job["_collection_unavailable_fields"] == ["benefits"]
+    evidence = outcome.collected_jobs[0].evidence
+    assert [field.value for field in evidence.extraction_missing_fields] == [
+        "benefits"
+    ]
+    assert [field.value for field in evidence.unavailable_fields] == ["benefits"]
 
 
 def test_detail_finish_retries_missing_extraction_before_page_end():
-    def extract_job_detail(_state, current_url):
-        return {
-            "company_name": "예시회사",
-            "position": "백엔드 개발자",
-            "url": current_url,
-            "main_tasks": ["API 개발"],
-        }
-
+    current_url = "https://www.wanted.co.kr/wd/5"
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
         {
-            "page_role": "job_detail",
             "observed_fields": {
                 "company_name": "예시회사",
                 "position": "백엔드 개발자",
                 "main_tasks": "API 개발",
                 "requirements": "Python",
-            },
+            }
         },
-        {},
-        current_url="https://www.wanted.co.kr/wd/5",
-        state=worker_state(
-            request={"job_collection_contract": {
-                "required_fields": [
-                    "company_name",
-                    "position",
-                    "url",
-                    "main_tasks",
-                    "requirements",
-                ],
-            }},
-            collection={"job_detail_buffer": {
-                "url": "https://www.wanted.co.kr/wd/5",
-                "lines": [{"text": "API 개발"}, {"text": "Python"}],
-            }},
+        [],
+        current_url=current_url,
+        state=detail_state(
+            current_url,
+            ["company_name", "position", "url", "main_tasks", "requirements"],
         ),
         data_services=worker_data_services(
-            extract_job_detail=extract_job_detail,
+            extract_job_detail=lambda _state, url: posting(
+                url,
+                include_requirements=False,
+            )
         ),
     )
 
-    result = outcome.result
-    assert result["status"] == "skipped"
-    assert result["reason"] == "required_field_extraction_incomplete"
-    assert result["missing_fields"] == ["requirements"]
+    assert outcome.result["reason"] == "required_field_extraction_incomplete"
+    assert outcome.result["missing_fields"] == ["requirements"]

@@ -10,7 +10,7 @@ from agent.runtime.job_field_contract import (
     field_contract_items,
 )
 from agent.sites.profile import SiteProfile
-from agent.utils.model_dump import dump_model
+from agent.utils.model_conversion import dump_model
 from shared.schema.collection_intent import (
     CollectionCountMode,
     CollectionIntent,

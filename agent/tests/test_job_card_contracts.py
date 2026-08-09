@@ -14,23 +14,21 @@ def _state(image_path: Path) -> dict:
             "current_url": "https://example.com/search?q=ios",
             "marked_image": str(image_path),
             "current_markers": [
-            {
-                "id": 10,
-                "type": "text",
-                "text": "iOS 개발자",
-                "bbox": [10, 10, 80, 30],
-            },
-            {
-                "id": 20,
-                "type": "text",
-                "text": "백엔드 개발자",
-                "bbox": [10, 50, 90, 70],
-            },
+                {
+                    "id": 10,
+                    "type": "text",
+                    "text": "iOS 개발자",
+                    "bbox": [10, 10, 80, 30],
+                },
+                {
+                    "id": 20,
+                    "type": "text",
+                    "text": "백엔드 개발자",
+                    "bbox": [10, 50, 90, 70],
+                },
             ],
         },
-        request={
-            "recipe_params": {"query": "iOS 개발자", "target_count": 2}
-        },
+        request={"recipe_params": {"query": "iOS 개발자", "target_count": 2}},
     )
 
 
@@ -145,15 +143,10 @@ def test_loading_result_recaptures_without_general_reasoning(tmp_path, monkeypat
     )
 
     assert result["decision"]["pending_action"] is None
-    assert (
-        result["decision"]["job_card_selection_trace"]["reason"]
-        == "screen_loading"
-    )
+    assert result["decision"]["job_card_selection_trace"]["reason"] == "screen_loading"
 
 
 def test_general_reasoning_converts_model_tool_call(monkeypatch):
-    from agent.observability import run_context
-
     monkeypatch.setattr(
         worker_reasoning,
         "select_job_cards",
@@ -170,7 +163,7 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
         lambda _runtime: object(),
     )
     monkeypatch.setattr(
-        run_context,
+        worker_reasoning,
         "invoke_with_metrics",
         lambda *_args: SimpleNamespace(
             content="아래 내용을 확인합니다.",

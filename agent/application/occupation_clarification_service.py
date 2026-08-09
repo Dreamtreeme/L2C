@@ -14,7 +14,7 @@ from agent.application.search_taxonomy_review_service import (
 )
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.prompts.investigation import taxonomy_resolution_prompt
-from agent.utils.model_payload import parse_model_payload
+from agent.utils.model_conversion import parse_model_payload
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     ClarificationOption,

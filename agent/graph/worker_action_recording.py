@@ -9,6 +9,7 @@ from agent.graph.worker_execution_policy import compact_action_args
 from agent.recipe.feedback import record_action_episode
 from agent.recipe.record import record_ui_step
 from agent.runtime.worker_contracts import build_action_event
+from agent.runtime.job_collection import job_count
 from agent.vision.target_snapshot import build_action_target_snapshot
 
 
@@ -19,12 +20,13 @@ def _after_context(
 ) -> dict[str, Any]:
     state = context.result.state
     observation = state["observation"]
-    collection = state["collection"]
     return {
         "current_url": str(observation.get("current_url") or ""),
         "current_url_stale": bool(observation.get("current_url_stale", True)),
         "screen_changed": screen_changed,
-        "extracted_jd": dict(collection.get("extracted_jd", {}) or {}),
+        "collected_job_count": job_count(
+            state["collection"].get("collected_jobs", [])
+        ),
         "is_finished": bool(state["lifecycle"].get("is_finished", False)),
     }
 

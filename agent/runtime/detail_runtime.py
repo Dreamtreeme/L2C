@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from agent.runtime.worker_contracts import WorkerState
 
 from agent.config import get_settings
+from agent.runtime.job_field_contract import (
+    detail_coverage_status,
+    field_contract_items,
+    required_fields_from_state,
+)
 from agent.runtime.site_context import is_job_detail_context, page_guidance_for_url
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox
@@ -50,7 +56,9 @@ def line_bbox(markers: list[dict]) -> list[int]:
 
 
 def join_line_marker_text(markers: list[dict]) -> str:
-    ordered = sorted(markers, key=lambda marker: (marker_bbox(marker)[0], marker_bbox(marker)[1]))
+    ordered = sorted(
+        markers, key=lambda marker: (marker_bbox(marker)[0], marker_bbox(marker)[1])
+    )
     pieces: list[str] = []
     for marker in ordered:
         text = str(marker.get("text") or "").strip()
@@ -78,11 +86,7 @@ def _group_markers_by_y(
         bbox = marker_bbox(marker)
         center_y = (bbox[1] + bbox[3]) / 2
         matched = next(
-            (
-                line
-                for line in lines
-                if abs(center_y - line["center_y"]) <= tolerance
-            ),
+            (line for line in lines if abs(center_y - line["center_y"]) <= tolerance),
             None,
         )
         if matched is None:
@@ -90,9 +94,7 @@ def _group_markers_by_y(
             continue
         matched["markers"].append(marker)
         count = len(matched["markers"])
-        matched["center_y"] = (
-            (matched["center_y"] * (count - 1)) + center_y
-        ) / count
+        matched["center_y"] = ((matched["center_y"] * (count - 1)) + center_y) / count
     return [line["markers"] for line in lines]
 
 
@@ -125,11 +127,7 @@ def _compacted_marker_line(segment: list[dict]) -> dict[str, Any] | None:
         return None
     return {
         "text": text,
-        "ids": [
-            marker.get("id")
-            for marker in segment
-            if marker.get("id") is not None
-        ],
+        "ids": [marker.get("id") for marker in segment if marker.get("id") is not None],
         "bbox": line_bbox(segment),
     }
 
@@ -144,7 +142,10 @@ def group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
     ]
     if not text_markers:
         return []
-    heights = sorted(max(1, marker_bbox(marker)[3] - marker_bbox(marker)[1]) for marker in text_markers)
+    heights = sorted(
+        max(1, marker_bbox(marker)[3] - marker_bbox(marker)[1])
+        for marker in text_markers
+    )
     median_height = heights[len(heights) // 2] if heights else 16
     tolerance = max(8, min(24, int(median_height * 0.7)))
     compacted: list[dict] = []
@@ -164,7 +165,9 @@ def is_probable_detail_noise_line(line: dict) -> bool:
     return not text
 
 
-def append_limited_ocr_line(parts: list[str], index: int, line: dict, max_line_chars: int) -> None:
+def append_limited_ocr_line(
+    parts: list[str], index: int, line: dict, max_line_chars: int
+) -> None:
     text = str(line.get("text") or "").strip()
     if len(text) > max_line_chars:
         text = text[: max_line_chars - 1].rstrip() + "…"
@@ -206,10 +209,14 @@ def detail_reveal_controls(current_url: str) -> list[str]:
     """사이트가 명시한 본문 펼치기 컨트롤을 반환하며 빈 목록은 자동 클릭 금지를 뜻한다."""
 
     guidance = page_guidance_for_url(current_url, "job_detail")
-    return [str(item) for item in guidance.get("reveal_controls", []) if str(item).strip()]
+    return [
+        str(item) for item in guidance.get("reveal_controls", []) if str(item).strip()
+    ]
 
 
-def draw_detail_lightweight_marker(draw: Any, marker: dict, color: tuple[int, int, int], font: Any) -> None:
+def draw_detail_lightweight_marker(
+    draw: Any, marker: dict, color: tuple[int, int, int], font: Any
+) -> None:
     bbox = marker_bbox(marker)
     if bbox == [0, 0, 0, 0]:
         return
@@ -219,7 +226,9 @@ def draw_detail_lightweight_marker(draw: Any, marker: dict, color: tuple[int, in
     label = f"[{marker.get('id')}]"
     label_box = [x1 - pad, max(0, y1 - 30), x1 + 70, max(24, y1 - 4)]
     draw.rectangle(label_box, fill=color)
-    draw.text((label_box[0] + 4, label_box[1] + 2), label, fill=(255, 255, 255), font=font)
+    draw.text(
+        (label_box[0] + 4, label_box[1] + 2), label, fill=(255, 255, 255), font=font
+    )
 
 
 def build_detail_lightweight_marked_image(
@@ -231,7 +240,9 @@ def build_detail_lightweight_marked_image(
 ) -> str:
     """상세 페이지 reasoning에는 클릭 후보만 표시한 가벼운 이미지를 만든다."""
 
-    marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
+    marker_texts = [
+        marker.get("text") for marker in markers if isinstance(marker, dict)
+    ]
     if not current_url or not is_job_detail_context(
         current_url,
         page_role=page_role,
@@ -239,8 +250,6 @@ def build_detail_lightweight_marked_image(
     ):
         return ""
     try:
-        from pathlib import Path
-
         from PIL import Image, ImageDraw, ImageFont
 
         source_path = Path(image_path)
@@ -259,7 +268,7 @@ def build_detail_lightweight_marked_image(
         draw = ImageDraw.Draw(image)
         try:
             font = ImageFont.truetype("arial.ttf", 18)
-        except Exception:
+        except OSError:
             font = ImageFont.load_default()
         for marker in candidates:
             draw_detail_lightweight_marker(draw, marker, (0, 120, 255), font)
@@ -273,7 +282,7 @@ def build_detail_lightweight_marked_image(
             output_path=str(output_path),
         )
         return str(output_path)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         logger.debug("detail lightweight marked image skipped", error=str(exc))
         return ""
 
@@ -292,11 +301,17 @@ def build_detail_section_context(markers: list[dict]) -> str:
     if text_marker_count < min_text_markers:
         return ""
 
-    lines = [line for line in group_text_markers_into_lines(markers) if not is_probable_detail_noise_line(line)]
+    lines = [
+        line
+        for line in group_text_markers_into_lines(markers)
+        if not is_probable_detail_noise_line(line)
+    ]
     if not lines:
         return ""
 
-    parts = ["상세 페이지 OCR 본문(읽기용, 위에서 아래 순서. 원본 마커는 클릭/좌표용으로 유지됨):"]
+    parts = [
+        "상세 페이지 OCR 본문(읽기용, 위에서 아래 순서. 원본 마커는 클릭/좌표용으로 유지됨):"
+    ]
     shown_lines = lines[:max_lines]
     for index, line in enumerate(shown_lines, start=1):
         append_limited_ocr_line(parts, index, line, max_line_chars)
@@ -304,7 +319,9 @@ def build_detail_section_context(markers: list[dict]) -> str:
     if omitted_lines:
         parts.append(f"본문 압축으로 생략된 줄: {omitted_lines}개")
 
-    parts.append(f"원본 텍스트 마커 {text_marker_count}개를 읽기용 줄 {len(lines)}개로 압축")
+    parts.append(
+        f"원본 텍스트 마커 {text_marker_count}개를 읽기용 줄 {len(lines)}개로 압축"
+    )
     return "\n".join(parts)
 
 
@@ -353,16 +370,10 @@ def new_job_detail_buffer(current_url: str, detail_key: str = "") -> dict[str, A
 
 
 def _detail_screen_path(image_path: Any) -> tuple[str, str]:
-    try:
-        from pathlib import Path
-
-        return (
-            Path(image_path).name if image_path else "",
-            str(Path(image_path).resolve()) if image_path else "",
-        )
-    except Exception:
-        screen_name = str(image_path or "")
-        return screen_name, screen_name
+    return (
+        Path(image_path).name if image_path else "",
+        str(Path(image_path).resolve()) if image_path else "",
+    )
 
 
 def _append_detail_buffer_lines(
@@ -374,13 +385,9 @@ def _append_detail_buffer_lines(
     max_line_chars: int,
 ) -> tuple[list[dict], list[str], int, int]:
     lines = [
-        dict(item)
-        for item in (buffer.get("lines") or [])
-        if isinstance(item, dict)
+        dict(item) for item in (buffer.get("lines") or []) if isinstance(item, dict)
     ]
-    seen_keys = [
-        str(item) for item in (buffer.get("seen_keys") or []) if str(item)
-    ]
+    seen_keys = [str(item) for item in (buffer.get("seen_keys") or []) if str(item)]
     seen = set(seen_keys)
     added = 0
     duplicate = 0
@@ -450,7 +457,9 @@ def update_job_detail_buffer(
 ) -> dict[str, Any]:
     """상세 페이지 OCR 본문 줄을 공고 단위 버퍼에 누적한다."""
 
-    marker_texts = [marker.get("text") for marker in markers if isinstance(marker, dict)]
+    marker_texts = [
+        marker.get("text") for marker in markers if isinstance(marker, dict)
+    ]
     if not current_url or not is_job_detail_context(
         current_url,
         page_role=page_role,
@@ -531,12 +540,6 @@ def compact_job_detail_buffer_context(
     preview = [line for line in preview if line]
     followup = dict(collection.get("job_detail_followup") or {})
     followup_active = detail_context_matches(followup, current_url, detail_key)
-    from agent.runtime.job_field_contract import (
-        detail_coverage_status,
-        field_contract_items,
-        required_fields_from_state,
-    )
-
     required_fields = required_fields_from_state(state)
     coverage = detail_coverage_status(
         dict(collection.get("job_detail_coverage") or {}),
@@ -571,7 +574,6 @@ def compact_job_detail_buffer_context(
             ensure_ascii=False,
             separators=(",", ":"),
         ),
-        "- 상세 페이지에서는 중간 DB 추출을 위해 update_extracted_info를 호출하지 마십시오.",
         "- 더 읽어야 하면 scroll 또는 현재 사이트 안내에 선언된 상세 펼치기 버튼을 선택하고, "
         "현재 화면에서 확인한 필드를 observed_fields에 함께 넣으십시오.",
         "- 모든 필수 필드가 확인되었을 때만 finish_detail_reading을 호출하십시오. "
@@ -625,12 +627,32 @@ def detail_buffer_text(buffer: dict[str, Any]) -> str:
     return "\n".join(rendered)
 
 
+def detail_evidence_screenshot(buffer: dict[str, Any]) -> str:
+    """새 OCR 본문을 처음 제공한 상세 화면을 대표 근거로 선택한다."""
+
+    screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]
+    screen_evidence = [
+        item
+        for item in (buffer.get("screen_evidence") or [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
+    return next(
+        (
+            str(item["path"])
+            for item in screen_evidence
+            if int(item.get("added_lines") or 0) > 0
+        ),
+        screens[0] if screens else "",
+    )
+
+
 __all__ = [
     "build_detail_lightweight_marked_image",
     "build_detail_section_context",
     "compact_job_detail_buffer_context",
     "detail_action_marker_candidates",
     "detail_buffer_text",
+    "detail_evidence_screenshot",
     "detail_buffer_line_key",
     "detail_context_matches",
     "detail_lines_for_buffer",

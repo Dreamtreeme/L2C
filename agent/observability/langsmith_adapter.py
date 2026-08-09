@@ -5,6 +5,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Iterator, Sequence
 
+import langsmith
+import langsmith.utils as langsmith_utils
+
 from agent.config import get_settings
 from agent.utils.logger import logger
 
@@ -12,12 +15,7 @@ from agent.utils.logger import logger
 def langsmith_tracing_enabled() -> bool:
     """표준 LangSmith 설정을 기준으로 추적 활성 여부를 반환한다."""
 
-    try:
-        from langsmith.utils import tracing_is_enabled
-
-        return bool(tracing_is_enabled())
-    except Exception:
-        return False
+    return bool(langsmith_utils.tracing_is_enabled())
 
 
 def langsmith_project_name() -> str:
@@ -40,9 +38,7 @@ def langsmith_trace(
         return
 
     try:
-        from langsmith import trace
-
-        manager = trace(
+        manager = langsmith.trace(
             str(name),
             run_type=run_type,
             inputs=inputs or {},
@@ -120,9 +116,7 @@ def publish_langsmith_feedback(
 
     published = 0
     try:
-        from langsmith import Client
-
-        client = Client()
+        client = langsmith.Client()
         for item in feedback:
             key = str(item.get("key") or "").strip()
             if not key:

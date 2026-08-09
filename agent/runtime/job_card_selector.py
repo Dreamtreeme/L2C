@@ -10,34 +10,29 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from agent.config import get_settings
+from agent.observability.run_context import invoke_with_metrics
 from agent.runtime.worker_contracts import (
     ActionRequest,
     WorkerState,
     build_action_request,
 )
+from agent.runtime.tool_schema import VisibleJobCard
 from agent.runtime.site_context import normalize_page_role, site_runtime_guidance
 from agent.runtime.action_validation import text_input_target_rejection
-from agent.runtime.job_collection import job_count
 from agent.runtime.job_card_queue import (
     active_job_card,
     job_card_queue_scope_complete,
     resolved_job_card_count,
 )
+from agent.runtime.worker_state import (
+    collected_job_count,
+    count_mode_from_state,
+    target_count_from_state,
+)
 from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.utils.image_utils import image_to_base64_jpeg
 from agent.utils.logger import logger
-from agent.utils.model_dump import dump_model
-
-
-class VisibleJobCard(BaseModel):
-    """현재 화면에서 실제로 보이는 공고 카드 하나."""
-
-    marker_id: int
-    title: str
-    company: str = Field(
-        "",
-        description="공고 카드에서 제목과 인접해 별도 표시된 회사명. 제목 괄호의 직무 분야는 회사명이 아님",
-    )
+from agent.utils.model_conversion import dump_model
 
 
 class JobCardSelection(BaseModel):
@@ -59,47 +54,24 @@ class JobCardSelection(BaseModel):
         ge=0,
         description="화면의 검색 결과 탭이나 결과 요약이 명시한 전체 공고 개수",
     )
-    count_evidence: str = Field("", description="전체 결과 개수를 판단한 화면의 짧은 문구")
+    count_evidence: str = Field(
+        "", description="전체 결과 개수를 판단한 화면의 짧은 문구"
+    )
     count_confidence: float = Field(0.0, ge=0.0, le=1.0)
     cards: list[VisibleJobCard] = Field(default_factory=list)
-
-
-def _target_count(state: WorkerState) -> int:
-    try:
-        return max(
-            0,
-            int(
-                (state["request"].get("recipe_params") or {}).get(
-                    "target_count"
-                )
-                or 0
-            ),
-        )
-    except (TypeError, ValueError):
-        return 0
-
-
-def _count_mode(state: WorkerState) -> str:
-    params = state["request"].get("recipe_params") or {}
-    raw = params.get("count_mode") or ""
-    return str(getattr(raw, "value", raw)).strip().lower()
-
-
-def _collected_count(state: WorkerState) -> int:
-    return job_count(state["collection"].get("extracted_jd") or {})
 
 
 def should_select_job_cards(state: WorkerState) -> bool:
     """아직 큐가 없는 검색 결과 화면에만 전용 판단을 적용한다."""
 
-    target_count = _target_count(state)
-    collected_count = _collected_count(state)
+    target_count = target_count_from_state(state)
+    collected_count = collected_job_count(state)
     queue = [
         item
         for item in (state["collection"].get("job_card_queue") or [])
         if isinstance(item, dict)
     ]
-    count_mode = _count_mode(state)
+    count_mode = count_mode_from_state(state)
     if job_card_queue_scope_complete(
         queue,
         count_mode=count_mode,
@@ -108,14 +80,11 @@ def should_select_job_cards(state: WorkerState) -> bool:
         return False
     needs_visible_screen = count_mode == "visible_all" and not queue
     queue_exhausted = bool(queue) and not any(
-        str(item.get("status") or "pending") in {"pending", "active"}
-        for item in queue
+        str(item.get("status") or "pending") in {"pending", "active"} for item in queue
     )
     return bool(
         not latest_no_effect_transition(state)
-        and normalize_page_role(
-            state["observation"].get("current_page_role")
-        )
+        and normalize_page_role(state["observation"].get("current_page_role"))
         == "search"
         and (target_count > collected_count or needs_visible_screen)
         and (not queue or queue_exhausted)
@@ -128,10 +97,7 @@ def should_select_job_cards(state: WorkerState) -> bool:
 def _selector_model_name() -> str:
     from agent.llm.policy import lightweight_model_name
 
-    return (
-        get_settings().models.job_card_selector_model
-        or lightweight_model_name()
-    )
+    return get_settings().models.job_card_selector_model or lightweight_model_name()
 
 
 def _get_job_card_selector_model() -> Any:
@@ -165,7 +131,11 @@ def _compact_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
         input_candidate = False
         if not text:
             bbox = marker.get("bbox")
-            if marker_type != "icon" or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            if (
+                marker_type != "icon"
+                or not isinstance(bbox, (list, tuple))
+                or len(bbox) != 4
+            ):
                 continue
             try:
                 width = float(bbox[2]) - float(bbox[0])
@@ -187,12 +157,15 @@ def _compact_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
-    markers = _compact_markers(
-        list(state["observation"].get("current_markers") or [])
-    )
+    markers = _compact_markers(list(state["observation"].get("current_markers") or []))
     recipe_params = dict(state["request"].get("recipe_params") or {})
-    search_query = str(recipe_params.get("query") or recipe_params.get("keyword") or "").strip()
-    visible_all = _count_mode(state) == "visible_all" and _target_count(state) == 0
+    search_query = str(
+        recipe_params.get("query") or recipe_params.get("keyword") or ""
+    ).strip()
+    visible_all = (
+        count_mode_from_state(state) == "visible_all"
+        and target_count_from_state(state) == 0
+    )
     settings = get_settings().vision
     max_dim = settings.reasoning_image_max_dim
     quality = settings.reasoning_image_quality
@@ -258,7 +231,7 @@ def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
         instruction += "\n\n" + site_guidance.strip()
     payload = {
         "search_query": search_query,
-        "count_mode": _count_mode(state),
+        "count_mode": count_mode_from_state(state),
         "remaining_count": remaining_count,
         "current_url": current_url,
         "allowed_markers": markers,
@@ -267,9 +240,7 @@ def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
                 "title": str(item.get("title") or ""),
                 "company": str(item.get("company") or ""),
             }
-            for item in (
-                state["collection"].get("job_card_queue") or []
-            )
+            for item in (state["collection"].get("job_card_queue") or [])
             if isinstance(item, dict)
         ],
     }
@@ -277,8 +248,16 @@ def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
         SystemMessage(content=instruction),
         HumanMessage(
             content=[
-                {"type": "text", "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}},
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        payload, ensure_ascii=False, separators=(",", ":")
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                },
             ]
         ),
     ]
@@ -336,7 +315,8 @@ def _validated_refinement_target(
         (
             item
             for item in markers or []
-            if isinstance(item, dict) and str(item.get("id", "")).lstrip("-").isdigit()
+            if isinstance(item, dict)
+            and str(item.get("id", "")).lstrip("-").isdigit()
             and int(item["id"]) == marker_id
         ),
         None,
@@ -346,8 +326,12 @@ def _validated_refinement_target(
     marker_label = str(marker.get("text") or "").strip()
     selected_label = str(selection.get("refinement_label") or "").strip()
     if marker_label:
-        normalized_marker = "".join(char.casefold() for char in marker_label if char.isalnum())
-        normalized_selected = "".join(char.casefold() for char in selected_label if char.isalnum())
+        normalized_marker = "".join(
+            char.casefold() for char in marker_label if char.isalnum()
+        )
+        normalized_selected = "".join(
+            char.casefold() for char in selected_label if char.isalnum()
+        )
         if (
             normalized_selected
             and normalized_marker not in normalized_selected
@@ -360,7 +344,9 @@ def _validated_refinement_target(
                 selected_label=selected_label,
             )
             return None
-    elif action != "type" or text_input_target_rejection(markers, marker_id) is not None:
+    elif (
+        action != "type" or text_input_target_rejection(markers, marker_id) is not None
+    ):
         return None
     text = str(selection.get("refinement_text") or "").strip()
     if action == "type" and not text:
@@ -370,12 +356,10 @@ def _validated_refinement_target(
 
 
 def _remaining_job_count(state: WorkerState) -> int:
-    target_count = _target_count(state)
+    target_count = target_count_from_state(state)
     resolved_count = max(
-        _collected_count(state),
-        resolved_job_card_count(
-            list(state["collection"].get("job_card_queue") or [])
-        ),
+        collected_job_count(state),
+        resolved_job_card_count(list(state["collection"].get("job_card_queue") or [])),
     )
     return (
         target_count - resolved_count
@@ -388,8 +372,6 @@ def _invoke_job_card_selector(
     state: WorkerState,
     remaining_count: int,
 ) -> dict[str, Any]:
-    from agent.observability.run_context import invoke_with_metrics
-
     raw = invoke_with_metrics(
         _get_job_card_selector_model(),
         _selection_messages(state, remaining_count),
@@ -443,9 +425,7 @@ def _refinement_action_args(
     refinement_reason: str,
 ) -> tuple[str, dict[str, Any]]:
     action_name = (
-        "type_in_marker"
-        if refinement_target["action"] == "type"
-        else "click_marker"
+        "type_in_marker" if refinement_target["action"] == "type" else "click_marker"
     )
     action_args: dict[str, Any] = {
         "marker_id": refinement_target["marker_id"],
@@ -485,9 +465,7 @@ def _build_refinement_selection(
         selection,
         list(state["observation"].get("current_markers") or []),
     )
-    refinement_reason = str(
-        selection.get("refinement_reason") or ""
-    ).strip()[:300]
+    refinement_reason = str(selection.get("refinement_reason") or "").strip()[:300]
     if not refinement_target:
         return None, {
             "attempted": True,
@@ -553,7 +531,8 @@ def _unvisited_cards(
         if (
             str(card.get("title") or "").strip().casefold(),
             str(card.get("company") or "").strip().casefold(),
-        ) not in excluded
+        )
+        not in excluded
         and (str(card.get("title") or "").strip().casefold(), "") not in excluded
     ]
 

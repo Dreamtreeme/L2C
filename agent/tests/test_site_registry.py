@@ -54,16 +54,7 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
     warmed = []
     reasoning_warmed = []
 
-    class FakeSomEngine:
-        def ensure_ocr_worker_ready(self):
-            warmed.append(True)
-
-    class FakePerception:
-        som_engine = FakeSomEngine()
-
     class FakeActionTools:
-        perception = FakePerception()
-
         def open_browser(self, url="", current_url="", site=""):
             calls.append({"url": url, "current_url": current_url, "site": site})
             return {
@@ -74,6 +65,9 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
     class FakeRuntime:
         def get_action_tools(self):
             return FakeActionTools()
+
+        def ensure_ocr_worker_ready(self):
+            warmed.append(True)
 
         def prepare_reasoning_models(self, _tool_schemas):
             reasoning_warmed.append(True)
@@ -132,7 +126,10 @@ def test_all_site_profiles_define_role_scoped_guidance():
 
 
 def test_jobkorea_detail_role_uses_declared_url_signal():
-    from agent.runtime.site_context import infer_site_page_role, looks_like_job_detail_url
+    from agent.runtime.site_context import (
+        infer_site_page_role,
+        looks_like_job_detail_url,
+    )
 
     url = "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001"
 
@@ -141,7 +138,10 @@ def test_jobkorea_detail_role_uses_declared_url_signal():
 
 
 def test_work24_detail_role_uses_declared_url_signal():
-    from agent.runtime.site_context import infer_site_page_role, looks_like_job_detail_url
+    from agent.runtime.site_context import (
+        infer_site_page_role,
+        looks_like_job_detail_url,
+    )
 
     url = (
         "https://www.work24.go.kr/wk/a/b/1500/empDetailAuthView.do"
@@ -173,14 +173,20 @@ def test_unregistered_site_does_not_use_generic_job_url_heuristic():
 def test_detail_context_does_not_require_a_detail_url_pattern():
     from agent.runtime.site_context import is_job_detail_context
 
-    assert is_job_detail_context(
-        "https://www.rocketpunch.com/jobs",
-        page_role="side_panel_detail",
-    ) is True
-    assert is_job_detail_context(
-        "https://www.work24.go.kr/search",
-        marker_texts=["모집요강", "직무내용", "근무조건"],
-    ) is True
+    assert (
+        is_job_detail_context(
+            "https://www.rocketpunch.com/jobs",
+            page_role="side_panel_detail",
+        )
+        is True
+    )
+    assert (
+        is_job_detail_context(
+            "https://www.work24.go.kr/search",
+            marker_texts=["모집요강", "직무내용", "근무조건"],
+        )
+        is True
+    )
 
 
 def test_rocketpunch_jobs_list_uses_job_search_guidance_without_hiding_side_panel():
@@ -195,10 +201,13 @@ def test_rocketpunch_jobs_list_uses_job_search_guidance_without_hiding_side_pane
     guidance = site_runtime_guidance(url, "search")
     assert "페이지 중앙 채용 검색 영역" in guidance
     assert "왼쪽 사이드바" in guidance
-    assert infer_site_page_role(
-        url,
-        list_markers + ["주요업무", "자격요건", "채용 상세"],
-    ) == "job_detail"
+    assert (
+        infer_site_page_role(
+            url,
+            list_markers + ["주요업무", "자격요건", "채용 상세"],
+        )
+        == "job_detail"
+    )
 
 
 def test_rocketpunch_selected_job_query_identifies_side_panel_detail():
@@ -207,10 +216,7 @@ def test_rocketpunch_selected_job_query_identifies_side_panel_detail():
         looks_like_job_detail_url,
     )
 
-    url = (
-        "https://www.rocketpunch.com/jobs"
-        "?keyword=백엔드+개발자&selectedJobId=159079"
-    )
+    url = "https://www.rocketpunch.com/jobs?keyword=백엔드+개발자&selectedJobId=159079"
 
     assert looks_like_job_detail_url(url) is True
     assert infer_site_page_role(url, ["주요업무"]) == "job_detail"
@@ -236,9 +242,7 @@ def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path)
             observation={
                 "current_url": "https://www.rocketpunch.com/jobs",
                 "current_page_role": "search",
-                "current_markers": [
-                    {"id": 1, "type": "text", "text": "키워드"}
-                ],
+                "current_markers": [{"id": 1, "type": "text", "text": "키워드"}],
                 "marked_image": str(image_path),
             },
         ),
@@ -263,11 +267,11 @@ def test_runtime_guidance_contains_only_current_site_and_role():
     assert "원티드" not in guidance
 
 
-def test_preprocessor_uses_registry_source_platform():
-    from agent.application.job_preprocessor import Preprocessor
+def test_job_normalization_uses_registry_source_platform():
+    from agent.application.job_normalization_service import source_platform_for_url
 
     assert (
-        Preprocessor.parse_source_platform(
+        source_platform_for_url(
             "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001"
         )
         == "JobKorea"
@@ -289,6 +293,7 @@ def test_realtime_scraping_goal_uses_requested_site_profile():
     assert "AI 엔지니어" in goal
     assert "원티드(" not in goal
 
+
 def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
     from agent.application.collection_request_builder import build_site_goal
     from agent.sites import load_site_profile
@@ -308,6 +313,7 @@ def test_site_goal_injects_selected_skill_without_duplicate_profile_sections():
     assert "[사이트 공통 흐름]" not in goal
     assert "[허용 도구]" not in goal
 
+
 def test_realtime_scraping_wanted_starts_from_home_without_query_url():
     from agent.application.collection_request_builder import build_site_goal
     from agent.sites import load_site_profile
@@ -320,7 +326,10 @@ def test_realtime_scraping_wanted_starts_from_home_without_query_url():
         profile,
     )
 
-    assert "Open only the site home page with open_browser: https://www.wanted.co.kr" in goal
+    assert (
+        "Open only the site home page with open_browser: https://www.wanted.co.kr"
+        in goal
+    )
     assert "Do not construct or open a search/query URL yourself" in goal
 
 
@@ -341,7 +350,7 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
         final_state = {
             **initial_state,
             "lifecycle": {**initial_state["lifecycle"], "is_finished": True},
-            "collection": {**initial_state["collection"], "extracted_jd": {}},
+            "collection": {**initial_state["collection"], "collected_jobs": []},
         }
         return final_state, False
 
@@ -376,9 +385,7 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
         "posted_at",
     ]
     assert (
-        captured["recipe_params"]["collection_intent"][
-            "required_fields"
-        ]
+        captured["recipe_params"]["collection_intent"]["required_fields"]
         == captured["job_collection_contract"]["required_fields"]
     )
     assert "required_record_shape" in captured["goal"]
@@ -391,4 +398,6 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
         "location": "서울",
         "employment_type": "",
     }
-    assert "posted_at" in captured["recipe_params"]["collection_intent"]["required_fields"]
+    assert (
+        "posted_at" in captured["recipe_params"]["collection_intent"]["required_fields"]
+    )

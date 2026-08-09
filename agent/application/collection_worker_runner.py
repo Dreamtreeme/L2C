@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 from agent.application.collection_request_builder import (
     build_site_goal,
+)
+from agent.application.worker_submission_builder import (
+    build_worker_submission,
+    new_worker_run_id,
 )
 from agent.application.worker_execution_service import (
     execute_worker_graph,
@@ -21,25 +24,18 @@ from agent.recipe.task_category import (
 from agent.runtime.job_field_contract import (
     build_job_collection_contract,
 )
+from agent.runtime.action_permissions import (
+    build_public_collection_permission_contract,
+)
 from agent.sites import load_site_profile
-from agent.utils.model_dump import dump_model
+from agent.utils.model_conversion import dump_model
 from shared.schema.collection_intent import (
     CollectionCountMode,
     CollectionIntent,
 )
-from shared.schema.feedback_schema import WorkerSubmission
+from shared.schema.collection_run import CollectionBatch
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class WorkerRunResult:
-    """작업자 실행에서 제출·저장 계층에 필요한 결과."""
-
-    submission: WorkerSubmission
-    extracted_jd: dict[str, Any]
-    site_slug: str
-    site_name: str
 
 
 def run_worker_once(
@@ -47,19 +43,15 @@ def run_worker_once(
     task_category: str | None = None,
     run_id: str | None = None,
     worker_runtime: Any = None,
-) -> WorkerRunResult:
+) -> CollectionBatch:
     """비전 작업자 한 번을 실행하고 검토 전 제출물을 반환한다."""
-
-    from agent.recipe.reviewer import build_worker_submission, new_worker_run_id
 
     site_profile = load_site_profile(collection_intent.site)
     site_slug = site_profile.slug or collection_intent.site or "unknown"
     site_name = site_profile.display_name or site_slug
     run_id = run_id or new_worker_run_id()
     task_category = normalize_task_category(
-        task_category
-        or collection_intent.task_category
-        or DEFAULT_SEARCH_TASK_CATEGORY
+        task_category or collection_intent.task_category or DEFAULT_SEARCH_TASK_CATEGORY
     )
     resolved_intent = collection_intent.model_copy(
         update={"site": site_slug, "task_category": task_category},
@@ -71,9 +63,7 @@ def run_worker_once(
         intent_payload,
         profile_fields=site_profile.collection_policy.required_fields,
     )
-    intent_payload["required_fields"] = list(
-        job_collection_contract["required_fields"]
-    )
+    intent_payload["required_fields"] = list(job_collection_contract["required_fields"])
     goal = build_site_goal(
         resolved_intent,
         site_profile,
@@ -99,10 +89,6 @@ def run_worker_once(
             },
         },
     )
-    from agent.runtime.action_permissions import (
-        build_public_collection_permission_contract,
-    )
-
     initial_state["safety"]["action_permission_contract"] = (
         build_public_collection_permission_contract(
             site_profile,
@@ -121,7 +107,7 @@ def run_worker_once(
         recursion_limit,
         worker_runtime=worker_runtime,
     )
-    extracted = final_state["collection"].get("extracted_jd", {}) or {}
+    collected_jobs = list(final_state["collection"].get("collected_jobs", []))
     is_finished = bool(final_state["lifecycle"].get("is_finished", False))
     run_status = "stopped"
     if is_finished:
@@ -136,15 +122,14 @@ def run_worker_once(
         run_id=run_id,
     )
 
-    return WorkerRunResult(
+    return CollectionBatch(
         submission=submission,
-        extracted_jd=extracted,
+        collected_jobs=collected_jobs,
         site_slug=site_slug,
         site_name=site_name,
     )
 
 
 __all__ = [
-    "WorkerRunResult",
     "run_worker_once",
 ]

@@ -7,8 +7,9 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
 
-from agent.utils.text import normalize_text
+from agent.sites import list_supported_sites
 from agent.sites.profile import PageGuidance, SiteProfile
+from agent.utils.text import normalize_text
 
 
 _PAGE_ROLE_ALIASES = {
@@ -38,8 +39,6 @@ def _site_profile_for_host(host: str) -> SiteProfile | None:
         host = host[4:]
     if not host:
         return None
-    from agent.sites import list_supported_sites
-
     for profile in list_supported_sites(enabled_only=False):
         if any(
             host == domain or host.endswith("." + domain)

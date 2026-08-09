@@ -7,13 +7,16 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from shared.schema.agent_contract import EVIDENCE_FIELDS, EvidenceDocument
-from shared.schema.investigation_schema import EvidenceRequirement, InvestigationConstraints
-
-if TYPE_CHECKING:
-    from agent.application.search_taxonomy_service import SearchTaxonomyService
+from agent.application.search_taxonomy_service import SearchTaxonomyService
+from shared.db.database import Database
+from shared.schema.agent_contract import ANSWER_EVIDENCE_FIELDS
+from shared.schema.jd_schema import StoredJob
+from shared.schema.investigation_schema import (
+    EvidenceRequirement,
+    InvestigationConstraints,
+)
 
 
 @dataclass(frozen=True)
@@ -106,7 +109,7 @@ def _load_evidence_rows(db_path: str | Path) -> EvidenceRows:
     conn = sqlite3.connect(Path(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        columns = ", ".join(("id", "source_platform", *EVIDENCE_FIELDS))
+        columns = ", ".join(("id", "source_platform", *ANSWER_EVIDENCE_FIELDS))
         total_db_rows = int(
             conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
         )
@@ -219,7 +222,7 @@ def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
     field_coverage = {
         field: sum(1 for row in matched if str(row[field] or "").strip())
         for field in requirement.required_fields
-        if field in EVIDENCE_FIELDS
+        if field in ANSWER_EVIDENCE_FIELDS
     }
     posted_dates = [
         parsed
@@ -273,7 +276,7 @@ def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
                 "field_presence": {
                     field: bool(str(row[field] or "").strip())
                     for field in requirement.required_fields
-                    if field in EVIDENCE_FIELDS
+                    if field in ANSWER_EVIDENCE_FIELDS
                 },
             }
             for row in matched
@@ -293,8 +296,6 @@ def inspect_job_evidence(
     taxonomy_service: SearchTaxonomyService | None = None,
 ) -> dict[str, Any]:
     """요구사항별 표본 수, 날짜 근거, 필드 충족률을 반환한다."""
-
-    from agent.application.search_taxonomy_service import SearchTaxonomyService
 
     taxonomy = taxonomy_service or SearchTaxonomyService(db_path)
     evidence_rows = _load_evidence_rows(db_path)
@@ -341,53 +342,13 @@ def inspect_job_evidence(
     }
 
 
-def load_job_evidence_documents(
+def load_stored_jobs(
     db_path: str | Path,
     document_ids: list[int],
-) -> list[EvidenceDocument]:
-    """검증된 ID의 공고를 답변용 구조화 문서로 조회한다."""
+) -> list[StoredJob]:
+    """검증된 ID의 공고를 SQLite 저장소에서 정규 타입으로 조회한다."""
 
-    ids = sorted({int(document_id) for document_id in document_ids if int(document_id) > 0})
-    if not ids:
-        return []
-    selected_fields = (
-        "id",
-        "url",
-        "company_name",
-        "position",
-        "job_category",
-        "experience_text",
-        "employment_type",
-        "location",
-        "posted_at",
-        "posted_at_text",
-        "tech_stack",
-        "main_tasks",
-        "requirements",
-        "preferred",
-        "benefits",
-        "raw_ocr_text",
-    )
-    placeholders = ",".join("?" for _ in ids)
-    conn = sqlite3.connect(Path(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            f"SELECT {', '.join(selected_fields)} FROM jobs "
-            f"WHERE id IN ({placeholders})",
-            ids,
-        ).fetchall()
-    finally:
-        conn.close()
-    return [
-        EvidenceDocument.model_validate(
-            {
-                key: int(row[key]) if key == "id" else str(row[key] or "")
-                for key in selected_fields
-            }
-        )
-        for row in rows
-    ]
+    return Database(db_path).load_jobs(document_ids)
 
 
-__all__ = ["EVIDENCE_FIELDS", "inspect_job_evidence", "load_job_evidence_documents"]
+__all__ = ["inspect_job_evidence", "load_stored_jobs"]

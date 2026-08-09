@@ -8,13 +8,7 @@ from typing import Any
 from langgraph.runtime import Runtime
 
 from agent.config import get_settings
-
-from agent.runtime.worker_contracts import (
-    WorkerState,
-    WorkerStateUpdate,
-    apply_worker_state_update,
-)
-from agent.runtime.worker_state import job_detail_key_from_state
+from agent.observability.run_context import raise_if_cancelled
 from agent.runtime.detail_runtime import (
     build_detail_lightweight_marked_image,
     build_detail_section_context,
@@ -23,15 +17,25 @@ from agent.runtime.detail_runtime import (
     marker_prompt_rank,
     update_job_detail_buffer,
 )
+from agent.runtime.job_card_queue import job_detail_key_from_state
 from agent.runtime.job_field_contract import (
     detail_coverage_matches,
     merge_job_detail_coverage,
 )
 from agent.runtime.site_context import is_job_detail_context
-from agent.runtime.transition_runtime import raw_screen_phash_signature
 from agent.runtime.vision_worker_runtime import WorkerDependencies
+from agent.runtime.worker_contracts import (
+    WorkerState,
+    WorkerStateUpdate,
+    apply_worker_state_update,
+)
+from agent.runtime.worker_state import infer_current_page_role
 from agent.utils.logger import logger
-
+from agent.vision.screen_signature import (
+    build_capture_context,
+    compute_screen_phash_signature,
+    compute_screen_signature,
+)
 
 _WAIT_ACTIONS = {
     "click_marker",
@@ -99,10 +103,6 @@ def _build_ui_context(
     return "\n".join(parts) if parts else "발견된 UI 마커 없음"
 
 
-def _perception_engine(runtime: Runtime[WorkerDependencies]) -> Any:
-    return runtime.context.vision.get_perception()
-
-
 def _next_capture_identity(state: WorkerState) -> tuple[int, str]:
     """작업자 실행 안에서 읽기 쉬운 단조 증가 캡처 ID를 만든다."""
 
@@ -150,10 +150,8 @@ def capture_node(
 ) -> dict[str, Any]:
     """화면 변화 대기, 캡처, URL 읽기와 원본 pHash 계산만 수행한다."""
 
-    from agent.observability.run_context import raise_if_cancelled
-
     raise_if_cancelled()
-    perception = _perception_engine(runtime)
+    perception = runtime.context.vision.get_perception()
     observation = state["observation"]
     transition_request = dict(
         state["transition"].get("transition_request", {}) or {}
@@ -161,42 +159,29 @@ def capture_node(
     pending_action = str(transition_request.get("action") or "")
 
     if pending_action in _WAIT_ACTIONS:
-        wait_for_change = getattr(perception, "wait_for_transition_change", None)
         before_screenshot = str(
             transition_request.get("before_screenshot") or ""
         )
-        if callable(wait_for_change) and before_screenshot:
-            try:
-                wait_for_change(before_screenshot)
-            except Exception as exc:
-                logger.debug("Transition screen change wait skipped", error=str(exc))
+        if before_screenshot:
+            perception.wait_for_transition_change(before_screenshot)
 
-    capture_usable = getattr(perception, "capture_usable_screen", None)
-    if callable(capture_usable):
-        if pending_action == "type_in_marker":
-            try:
-                initial_wait = max(
-                    0.0,
-                    get_settings().browser.input_capture_initial_wait_sec,
-                )
-            except ValueError:
-                initial_wait = 0.7
-            image_path = capture_usable(initial_wait_sec=initial_wait)
-        else:
-            image_path = capture_usable()
+    if pending_action == "type_in_marker":
+        initial_wait = get_settings().browser.input_capture_initial_wait_sec
+        image_path = perception.capture_usable_screen(
+            initial_wait_sec=initial_wait
+        )
     else:
-        image_path = perception.capture_screen()
+        image_path = perception.capture_usable_screen()
 
-    capture_quality = dict(getattr(perception, "last_capture_quality", {}) or {})
+    capture_quality = dict(perception.last_capture_quality)
     current_url = str(observation.get("current_url") or "")
     current_url_stale = bool(observation.get("current_url_stale", True))
-    read_current_url = getattr(perception, "get_current_url", None)
     if (
         current_url_stale
         or not current_url
         or transition_request
-    ) and callable(read_current_url):
-        fetched_url = str(read_current_url() or "")
+    ):
+        fetched_url = str(perception.get_current_url() or "")
         if fetched_url:
             current_url = fetched_url
             current_url_stale = False
@@ -204,7 +189,7 @@ def capture_node(
             current_url_stale = True
 
     raw_signature = (
-        raw_screen_phash_signature(image_path)
+        compute_screen_phash_signature(image_path)
         if transition_request
         else {}
     )
@@ -251,10 +236,6 @@ def ocr_node(
 ) -> dict[str, Any]:
     """현재 캡처 한 장에 SoM/OCR을 한 번 실행하고 화면 문맥을 만든다."""
 
-    from agent.observability.run_context import raise_if_cancelled
-    from agent.runtime.worker_state import infer_current_page_role
-    from agent.vision.screen_signature import build_capture_context, compute_screen_signature
-
     raise_if_cancelled()
     observation_state = state["observation"]
     image_path_text = str(observation_state.get("current_screenshot") or "")
@@ -262,28 +243,24 @@ def ocr_node(
         raise RuntimeError("OCR을 실행할 캡처 이미지가 없습니다.")
     image_path = Path(image_path_text)
 
-    analysis = _perception_engine(runtime).analyze_ui(image_path)
+    analysis = runtime.context.vision.get_perception().analyze_ui(image_path)
     markers = list(analysis.get("markers", []) or [])
     marked_image = str(analysis.get("marked_image") or "")
-    screen_signature: dict[str, Any] = {}
-    try:
-        screen_signature = compute_screen_signature(image_path, markers)
-        capture_context = build_capture_context(
-            list(screen_signature.get("size") or []),
-            int(analysis.get("content_top", 0) or 0),
+    screen_signature = compute_screen_signature(image_path, markers)
+    capture_context = build_capture_context(
+        list(screen_signature.get("size") or []),
+        int(analysis.get("content_top", 0) or 0),
+    )
+    if capture_context:
+        screen_signature["capture_context"] = capture_context
+    raw_signature = dict(
+        observation_state.get("raw_screen_signature", {}) or {}
+    )
+    if raw_signature.get("phash"):
+        screen_signature["phash"] = raw_signature["phash"]
+        screen_signature["size"] = (
+            raw_signature.get("size") or screen_signature.get("size")
         )
-        if capture_context:
-            screen_signature["capture_context"] = capture_context
-        raw_signature = dict(
-            observation_state.get("raw_screen_signature", {}) or {}
-        )
-        if raw_signature.get("phash"):
-            screen_signature["phash"] = raw_signature["phash"]
-            screen_signature["size"] = (
-                raw_signature.get("size") or screen_signature.get("size")
-            )
-    except Exception as exc:
-        logger.debug("Screen signature skipped", error=str(exc))
 
     current_url = str(observation_state.get("current_url") or "")
     page_role = infer_current_page_role(current_url, markers)
