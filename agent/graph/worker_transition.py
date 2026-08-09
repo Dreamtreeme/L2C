@@ -12,8 +12,10 @@ from agent.recipe.phash_replay import (
     screen_context_signature_match,
 )
 from agent.runtime.site_context import normalize_page_role
+from agent.runtime.job_card_queue import release_active_job_card
 from agent.runtime.worker_contracts import (
     WorkerState,
+    action_event_transitions,
     apply_worker_state_update,
     attach_action_transition,
 )
@@ -325,6 +327,99 @@ def _evaluate_before_ocr(
                     needs_ocr=True,
                 ),
             }
+        }
+
+    if source == "job_card_queue":
+        prior_transitions = action_event_transitions(
+            state["transition"].get("action_events", []) or []
+        )
+        prior = dict(prior_transitions[-1]) if prior_transitions else {}
+        retried_with_current_ocr = bool(
+            prior.get("source") == "job_card_queue"
+            and prior.get("status") == "unknown"
+            and prior.get("reason") == "no_screen_change"
+        )
+        if retried_with_current_ocr:
+            reason = "queue_retry_no_screen_change"
+            observation_update = _reused_observation(state, request)
+            record_state = apply_worker_state_update(
+                state,
+                {"observation": observation_update},
+            )
+            record = _transition_record(
+                request,
+                status="unknown",
+                source=source,
+                reason=reason,
+                attempt=2,
+                state=record_state,
+                visual_change_ratio=visual_ratio,
+                ocr_skipped=True,
+            )
+            logger.info(
+                "Queue click retry had no effect; handing control to reasoning",
+                action=request.get("action", ""),
+                visual_change_ratio=visual_ratio,
+            )
+            return {
+                "transition": {
+                    "transition_request": {},
+                    "transition_result": _transition_result(
+                        request,
+                        status="unknown",
+                        reason=reason,
+                        visual_change_ratio=visual_ratio,
+                    ),
+                    "action_events": attach_action_transition(
+                        state["transition"].get("action_events", []) or [],
+                        record,
+                    ),
+                },
+                "observation": observation_update,
+                "collection": {
+                    "job_card_queue": release_active_job_card(
+                        list(
+                            state["collection"].get("job_card_queue", []) or []
+                        )
+                    ),
+                },
+            }
+
+        reason = "queue_click_no_screen_change"
+        record = _transition_record(
+            request,
+            status="needs_ocr",
+            source=source,
+            reason=reason,
+            attempt=1,
+            state=state,
+            visual_change_ratio=visual_ratio,
+            ocr_skipped=True,
+        )
+        logger.info(
+            "Queue click had no effect; refreshing OCR before retry",
+            action=request.get("action", ""),
+            visual_change_ratio=visual_ratio,
+        )
+        return {
+            "transition": {
+                "transition_result": _transition_result(
+                    request,
+                    status="needs_ocr",
+                    reason=reason,
+                    visual_change_ratio=visual_ratio,
+                    needs_ocr=True,
+                ),
+                "action_events": attach_action_transition(
+                    state["transition"].get("action_events", []) or [],
+                    record,
+                ),
+            },
+            "collection": {
+                "job_card_queue": release_active_job_card(
+                    list(state["collection"].get("job_card_queue", []) or [])
+                ),
+            },
         }
 
     reason = (

@@ -1,4 +1,4 @@
-"""채용공고 카드 큐를 만들고 목록 복귀 후 다음 카드를 재생한다."""
+"""채용공고 카드 큐를 만들고 확인된 목록 화면에서 다음 카드를 재생한다."""
 
 from __future__ import annotations
 
@@ -105,21 +105,14 @@ def _normalized_job_card(
 
 def _job_results_memory(
     observation: dict[str, Any],
-    collection: dict[str, Any],
     current_url: str,
 ) -> dict[str, Any]:
-    memory = {
+    return {
         "url": current_url or observation.get("current_url", "") or "",
         "screen_signature": dict(observation.get("screen_signature", {}) or {}),
         "screenshot": str(observation.get("current_screenshot") or ""),
         "marked_image": observation.get("marked_image", "") or "",
     }
-    previous_return_action = dict(
-        (collection.get("job_results_memory") or {}).get("return_action") or {}
-    )
-    if previous_return_action:
-        memory["return_action"] = previous_return_action
-    return memory
 
 
 def normalize_job_card_queue(
@@ -160,7 +153,7 @@ def normalize_job_card_queue(
             continue
         existing_labels.add(identity)
         queue.append(card)
-    return queue, _job_results_memory(observation, collection, current_url)
+    return queue, _job_results_memory(observation, current_url)
 
 
 def pending_job_cards(queue: list[dict]) -> list[dict]:
@@ -206,6 +199,35 @@ def job_card_queue_scope_complete(
     if str(count_mode or "").strip().lower() == "visible_all":
         return True
     return target_count > 0 and resolved_job_card_count(queue) >= target_count
+
+
+def needs_job_results_navigation(state: WorkerState) -> bool:
+    """상세 처리가 끝났고 다음 공고를 위해 목록 화면이 필요한지 계산한다."""
+
+    queue = [
+        dict(item)
+        for item in state["collection"].get("job_card_queue", []) or []
+        if isinstance(item, dict)
+    ]
+    if not queue or active_job_card(queue):
+        return False
+    target_count = target_count_from_state(state)
+    resolved_count = max(
+        len(state["collection"].get("job_captures", [])),
+        resolved_job_card_count(queue),
+    )
+    needs_more_cards = bool(pending_job_cards(queue)) or (
+        target_count > 0 and resolved_count < target_count
+    )
+    if not needs_more_cards:
+        return False
+    observation = state["observation"]
+    return (
+        str(observation.get("current_page_role") or "") == "job_detail"
+        or looks_like_job_detail_url(
+            str(observation.get("current_url") or "")
+        )
+    )
 
 
 def same_job_card(item: dict, args: dict) -> bool:
@@ -257,6 +279,23 @@ def activate_job_card(queue: list[dict], args: dict) -> list[dict]:
             activated = True
         updated.append(item)
     return updated
+
+
+def release_active_job_card(queue: list[dict]) -> list[dict]:
+    """화면 전환이 없었던 카드 클릭을 다시 대기 상태로 돌린다."""
+
+    return [
+        {
+            **dict(item),
+            "status": (
+                "pending"
+                if str(item.get("status") or "") == "active"
+                else item.get("status", "pending")
+            ),
+        }
+        for item in queue or []
+        if isinstance(item, dict)
+    ]
 
 
 def job_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
@@ -381,42 +420,12 @@ def job_results_page_matches(
     }
 
 
-def normalized_return_action(value: Any) -> dict[str, Any]:
-    """목록 복귀에 성공한 원자 행동만 재사용 가능한 형태로 정규화한다."""
-
-    if not isinstance(value, dict):
-        return {}
-    name = str(value.get("name") or value.get("action") or "").strip()
-    if name not in {"go_back", "close_current_tab", "switch_tab"}:
-        return {}
-    args = value.get("args") if isinstance(value.get("args"), dict) else {}
-    if name == "switch_tab":
-        direction = str(args.get("direction") or "").strip()
-        if direction not in {"next", "previous"}:
-            return {}
-        return {"name": name, "args": {"direction": direction}}
-    return {"name": name, "args": {}}
-
-
-def return_action_from_transition(
-    transition_result: dict,
-) -> dict[str, Any]:
-    step = (
-        transition_result.get("step")
-        if isinstance(transition_result.get("step"), dict)
-        else {}
-    )
-    args = step.get("args") if isinstance(step.get("args"), dict) else {}
-    return normalized_return_action(
-        {
-            "name": transition_result.get("action"),
-            "args": args,
-        }
-    )
-
-
 def job_card_marker_for_item(
-    item: dict, markers: list[dict], signature: dict
+    item: dict,
+    markers: list[dict],
+    signature: dict,
+    *,
+    allow_synthetic: bool = True,
 ) -> tuple[int | None, list[dict], dict]:
     target = dict(item.get("target") or {})
     target.setdefault("text", item.get("title", ""))
@@ -431,6 +440,9 @@ def job_card_marker_for_item(
     )
     if marker_id is not None:
         return marker_id, markers, {"reason": "current_marker_ratio_match"}
+
+    if not allow_synthetic:
+        return None, markers, {"reason": "current_marker_missing"}
 
     bbox = bbox_from_ratio(
         item.get("bbox_ratio") or [], screen_size_from_signature(signature)
@@ -464,7 +476,7 @@ def job_card_marker_for_item(
     )
 
 
-def replay_job_card_after_return(
+def replay_job_card_on_results(
     state: WorkerState,
     transition_result: dict,
     current_url: str,
@@ -473,7 +485,7 @@ def replay_job_card_after_return(
     *,
     require_anchors: bool = True,
 ) -> tuple[ActionRequest | None, list[dict], dict]:
-    """어떤 물리 행동으로 복귀했든 목록 화면이 확인되면 다음 카드를 준비한다."""
+    """직전 행동 뒤 목록 화면이 확인되면 다음 카드를 준비한다."""
 
     if not str(transition_result.get("action") or ""):
         return None, markers, {"reason": "return_transition_missing"}
@@ -508,7 +520,10 @@ def replay_job_card_after_return(
 
     item = pending[0]
     marker_id, next_markers, marker_trace = job_card_marker_for_item(
-        item, markers, screen_signature
+        item,
+        markers,
+        screen_signature,
+        allow_synthetic=not require_anchors,
     )
     if marker_id is None:
         trace = dict(match_trace)
@@ -544,7 +559,7 @@ def replay_job_card_after_return(
             "hit": True,
             "queue_id": item.get("queue_id", ""),
             "title": item.get("title", ""),
-            "return_match": match_trace,
+            "results_match": match_trace,
             "marker": marker_trace,
         },
     )
@@ -556,16 +571,16 @@ __all__ = [
     "complete_active_job_card",
     "activate_job_card",
     "normalize_job_card_queue",
-    "normalized_return_action",
+    "needs_job_results_navigation",
     "pending_job_cards",
     "job_card_queue_scope_complete",
     "job_detail_key_from_state",
     "job_card_label",
     "job_card_marker_for_item",
     "job_card_match_text",
-    "replay_job_card_after_return",
+    "release_active_job_card",
+    "replay_job_card_on_results",
     "job_results_page_matches",
-    "return_action_from_transition",
     "job_card_click_matches_queue",
     "job_card_entries_from_args",
     "same_job_card",

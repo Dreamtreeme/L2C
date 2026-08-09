@@ -19,10 +19,8 @@ from agent.graph.worker_observation import (
 from agent.graph.worker_selection import selection_node
 from agent.graph.worker_transition import transition_node
 from agent.graph.worker_execution import execution_node
-from agent.runtime.worker_state import (
-    current_observation_ready,
-    return_to_job_results_for_url,
-)
+from agent.runtime.job_card_queue import needs_job_results_navigation
+from agent.runtime.worker_state import current_observation_ready
 from agent.observability.graph_events import graph_step
 from agent.observability.reflex_paths import (
     reflex_selection_observation,
@@ -55,7 +53,7 @@ def route_after_selection(state: WorkerState) -> str:
         return "capture"
     if not current_observation_ready(state):
         return "ocr" if transition_result.get("needs_ocr") else "reasoning"
-    if return_to_job_results_for_url(state):
+    if needs_job_results_navigation(state):
         return "reasoning"
     if state["collection"].get("job_detail_followup"):
         return "reasoning"
@@ -63,6 +61,7 @@ def route_after_selection(state: WorkerState) -> str:
         str(transition_result.get("source") or "").startswith("reflex")
         or transition_result.get("source")
         in {
+            "job_card_queue",
             "page_policy",
             "duplicate_job_policy",
         }

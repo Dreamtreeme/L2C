@@ -118,7 +118,7 @@ class ActionEvent(TypedDict, total=False):
     result: dict[str, Any]
     recipe_step: RecordedRecipeStep
     feedback_episode: FeedbackEpisode
-    transition: RecordedTransition
+    transition: dict[str, Any]
 
 
 def build_action_event(
@@ -170,11 +170,11 @@ def action_event_feedback(events: Sequence[ActionEvent]) -> list[FeedbackEpisode
 
 def action_event_transitions(
     events: Sequence[ActionEvent],
-) -> list[RecordedTransition]:
+) -> list[dict[str, Any]]:
     return [
-        event["transition"]
+        dict(event["transition"])
         for event in events or []
-        if event.get("transition") is not None
+        if isinstance(event.get("transition"), Mapping)
     ]
 
 
@@ -193,7 +193,7 @@ def attach_action_transition(
     for raw_event in events or []:
         event: ActionEvent = dict(raw_event)
         if event["seq"] == target_seq:
-            event["transition"] = recorded_transition
+            event["transition"] = recorded_transition.model_dump(mode="json")
         updated.append(event)
     return updated
 
@@ -344,7 +344,6 @@ class JobCollectionState(TypedDict, total=False):
     job_detail_buffer: dict[str, Any]
     job_detail_coverage: dict[str, Any]
     job_detail_followup: dict[str, Any]
-    return_to_job_results: dict[str, Any]
 
 
 class ActionSafetyState(TypedDict, total=False):
@@ -518,7 +517,6 @@ def create_worker_state(
             "job_detail_buffer": {},
             "job_detail_coverage": {},
             "job_detail_followup": {},
-            "return_to_job_results": {},
         },
         "lifecycle": {"is_finished": False},
         "safety": {

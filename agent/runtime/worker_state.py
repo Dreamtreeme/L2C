@@ -43,28 +43,9 @@ def infer_current_page_role(
     )
 
 
-def return_to_job_results_for_url(
-    state: WorkerState,
-    current_url: str | None = None,
-) -> dict[str, Any]:
-    """현재 상세 URL에서 완료 후 목록 복귀가 남아 있는지 반환한다."""
-
-    pending = dict(state["collection"].get("return_to_job_results", {}) or {})
-    pending_url = str(pending.get("url") or "").strip()
-    resolved_url = str(
-        current_url
-        if current_url is not None
-        else state["observation"].get("current_url") or ""
-    ).strip()
-    if not pending_url or pending_url != resolved_url:
-        return {}
-    return pending
-
-
 __all__ = [
     "count_mode_from_state",
     "current_observation_ready",
-    "return_to_job_results_for_url",
     "job_capture_count",
     "infer_current_page_role",
     "target_count_from_state",

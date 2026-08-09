@@ -12,15 +12,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from agent.config import get_settings
 from agent.runtime.worker_contracts import WorkerState, action_event_results
 from agent.prompts.trust_boundary import external_content_contract_en
-from agent.runtime.worker_state import (
-    return_to_job_results_for_url,
-)
+from agent.runtime.worker_state import target_count_from_state
 from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT
 from agent.runtime.action_validation import IMPLAUSIBLE_TEXT_INPUT_TARGET
 from agent.runtime.detail_runtime import compact_job_detail_buffer_context
 from agent.runtime.job_card_queue import (
     job_detail_key_from_state,
+    needs_job_results_navigation,
     pending_job_cards,
+    resolved_job_card_count,
 )
 from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
@@ -122,6 +122,7 @@ def _safety_page_role_contract() -> str:
         "- Set needs_user_confirmation=true before login, password/authentication, personal data, agreement/terms, application/submission, payment, transfer, account, finance, or legal-effect steps. The executor will stop and ask the user.\n"
         "- Set needs_user_confirmation=false for safe UI actions. For type_in_marker, set slot_name to the matching task input key such as query or keyword; type only values supplied by the task contract.\n"
         "- For public job collection, do not attempt login, signup, authentication, or account switching unless the user explicitly asked for it. If such a screen appears, leave that flow and return to a public search/list/home surface. Use neutral action reasons such as 'return to public search surface' instead of describing a login/signup action.\n"
+        "- If a login or signup modal covers public content, do not interact with credentials. Dismiss it using one suitable visible action: a close control, Escape, or a click on the dimmed area outside the modal. If it cannot be dismissed, return to the public results and skip the blocked item.\n"
         "- A marker whose OCR text is only a generic icon label has no known semantic identity. Infer it only from a clearly visible symbol; otherwise choose a nearby labeled text marker or another visible navigation path instead of inventing what its ID means.\n"
         "- Unknown or newly released tasks should be researched and narrowed before execution. Do not try random branches first.\n"
         "- On detail pages, report fields visibly confirmed on the current screen in observed_fields whenever you scroll, click a reveal control, or finish. The state keeps this evidence across screens without another extraction call.\n"
@@ -229,28 +230,55 @@ def _compact_job_card_queue_context(state: WorkerState) -> str:
         for item in queue
     ]
     pending_count = len(pending_job_cards(queue))
+    transition_result = dict(
+        state["transition"].get("transition_result", {}) or {}
+    )
+    if transition_result.get("reason") == "queue_retry_no_screen_change":
+        guidance = (
+            "- 저장 좌표와 현재 OCR 좌표의 카드 클릭이 모두 화면을 바꾸지 못했습니다. "
+            "현재 화면에서 같은 카드의 다른 클릭 가능한 영역을 고르거나, 해당 카드를 "
+            "열 수 없으면 다음 후보로 진행하십시오.\n"
+        )
+    else:
+        guidance = (
+            "- 큐가 있으면 상세 수집 완료 후 다음 카드 선택은 executor가 처리합니다. "
+            "같은 목록에서 다음 카드를 다시 고르지 마십시오.\n"
+        )
     return (
         "공고 카드 큐:\n"
         f"- pending_count: {pending_count}\n"
         f"- cards: {json.dumps(compact, ensure_ascii=False, separators=(',', ':'))}\n"
-        "- 큐가 있으면 상세 수집 완료 후 다음 카드 선택은 executor가 처리합니다. 같은 목록에서 다음 카드를 다시 고르지 마십시오.\n\n"
+        f"{guidance}\n"
     )
 
 
-def _compact_detail_return_context(
-    state: WorkerState,
-    current_url: str,
-) -> str:
-    pending = return_to_job_results_for_url(state, current_url)
-    if not pending:
+def _compact_next_card_navigation_context(state: WorkerState) -> str:
+    if not needs_job_results_navigation(state):
         return ""
+    queue = [
+        dict(item)
+        for item in state["collection"].get("job_card_queue", []) or []
+        if isinstance(item, dict)
+    ]
+    pending_count = len(pending_job_cards(queue))
+    target_count = target_count_from_state(state)
+    resolved_count = max(
+        len(state["collection"].get("job_captures", [])),
+        resolved_job_card_count(queue),
+    )
+    remaining_count = (
+        max(0, target_count - resolved_count)
+        if target_count > 0
+        else pending_count
+    )
     return (
-        "상세 수집 완료 후 목록 복귀 대기:\n"
+        "다음 공고로 이동:\n"
         "- 현재 공고의 상세 OCR 정제와 큐 완료 처리는 이미 성공했습니다.\n"
         "- 같은 공고에서 finish_detail_reading, scroll, 본문 펼치기, 정보 추출을 반복하지 마십시오.\n"
-        "- 현재 탭 상태를 보고 go_back, close_current_tab, switch_tab 중 맞는 원자 행동 하나로 "
-        "검색 결과 화면에 복귀하십시오.\n"
-        f"- 남은 목표/대기 카드 수: {pending.get('pending_count', 0)}\n\n"
+        "- 현재 화면을 보고 go_back, close_current_tab, switch_tab 또는 화면 안의 목록·닫기 버튼을 "
+        "click_marker로 선택하는 방법 중 맞는 물리 행동 하나를 실행하십시오.\n"
+        "- 검색 결과 화면이 확인되면 executor가 큐의 다음 카드를 선택합니다.\n"
+        f"- 남은 목표/대기 카드 수: {remaining_count}\n\n"
     )
 
 
@@ -373,7 +401,7 @@ def build_reasoning_messages(
         f"{collection_context}"
         f"{_compact_job_results_availability_context(state)}"
         f"{_compact_job_card_queue_context(state)}"
-        f"{_compact_detail_return_context(state, current_url)}"
+        f"{_compact_next_card_navigation_context(state)}"
         f"{compact_job_detail_buffer_context(state, current_url, job_detail_key_from_state(state))}"
         f"{transition_context}"
         f"{job_results_refinement_context}"

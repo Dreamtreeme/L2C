@@ -296,6 +296,23 @@ def test_scroll_request_defaults_to_safe_read():
     )
 
 
+def test_scroll_request_accepts_reasoning_replay_declaration():
+    request = _action_request(
+        [
+            {
+                "name": "scroll",
+                "args": {
+                    "direction": "down",
+                    "replay_mode": "reasoning",
+                },
+                "id": "scroll_detail",
+            }
+        ]
+    )
+
+    assert request.tool_calls[0].args["replay_mode"] == "reasoning"
+
+
 def test_explicit_sensitive_recipe_step_is_not_promotion_eligible():
     from agent.recipe.promotion_policy import (
         evaluate_candidate_step_evidence,

@@ -113,7 +113,7 @@ class type_in_marker(_ReplayProposal):
     needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
-class scroll(_DetailObservation):
+class scroll(_DetailObservation, _ReplayProposal):
     """화면을 스크롤합니다."""
 
     direction: Literal["down", "up", "left", "right"] = Field(

@@ -94,7 +94,11 @@ def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
     latest = observations[-1]
     if not isinstance(latest, dict) or latest.get("status") != "unknown":
         return {}
-    if latest.get("reason") not in {"reflex_no_screen_change", "no_screen_change"}:
+    if latest.get("reason") not in {
+        "queue_retry_no_screen_change",
+        "reflex_no_screen_change",
+        "no_screen_change",
+    }:
         return {}
     latest_screen = str(state["observation"].get("current_screenshot") or "")
     observed_screen = str(latest.get("screenshot") or "")

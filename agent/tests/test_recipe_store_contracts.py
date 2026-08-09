@@ -1,4 +1,4 @@
-from agent.runtime.job_card_queue import replay_job_card_after_return
+from agent.runtime.job_card_queue import replay_job_card_on_results
 from agent.tests.worker_test_support import worker_state
 from shared.schema.feedback_schema import RecipeCandidate, WorkerSubmission
 from shared.schema.skill_schema import RecipeSkillMetadata
@@ -86,7 +86,7 @@ def _active_recipe_path(actions: list[dict]) -> dict:
     }
 
 
-def test_result_queue_replays_cached_card_after_return():
+def test_result_queue_replays_cached_card_on_results_screen():
     state = worker_state(
         collection={
             "job_card_queue": [
@@ -113,7 +113,7 @@ def test_result_queue_replays_cached_card_after_return():
         }
     )
 
-    request, markers, trace = replay_job_card_after_return(
+    request, markers, trace = replay_job_card_on_results(
         state,
         {"action": "go_back"},
         "https://www.wanted.co.kr/search?query=ios",
@@ -123,6 +123,7 @@ def test_result_queue_replays_cached_card_after_return():
             "size": [1000, 1000],
             "anchors": ["두 번째 iOS 개발자"],
         },
+        require_anchors=False,
     )
 
     assert request is not None

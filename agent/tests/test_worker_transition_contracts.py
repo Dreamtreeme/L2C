@@ -13,7 +13,7 @@ from agent.tests.worker_test_support import (
 )
 
 
-def test_queue_phash_match_records_return_transition(monkeypatch):
+def test_queue_phash_match_records_results_transition(monkeypatch):
     from agent.graph import worker_selection
 
     result = worker_selection.selection_node(
@@ -76,11 +76,12 @@ def test_queue_phash_match_records_return_transition(monkeypatch):
 
     assert result["decision"]["pending_action"].source == "job_card_queue"
     record = action_event_transitions(result["transition"]["action_events"])[0]
-    assert record.action_seq == 9
-    assert record.action == "go_back"
-    assert record.status == "ready"
-    assert record.reason == "queue_return_phash_match"
-    assert record.marker_texts == [
+    assert isinstance(record, dict)
+    assert record["action_seq"] == 9
+    assert record["action"] == "go_back"
+    assert record["status"] == "ready"
+    assert record["reason"] == "queue_results_phash_match"
+    assert record["marker_texts"] == [
         "검색 결과",
         "두 번째 iOS 개발자",
     ]
@@ -138,6 +139,111 @@ def test_queue_phash_mismatch_falls_through_to_ocr():
     assert "decision" not in result
     assert "transition" not in result
     assert route_after_selection(apply_update(state, result)) == "ocr"
+
+
+def test_queue_click_without_screen_change_refreshes_ocr(monkeypatch):
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (False, 0.0),
+    )
+    state = worker_state(
+        observation={
+            "observation_id": "observation:0010",
+            "current_screenshot": "same-list.png",
+            "ocr_complete": False,
+        },
+        transition={
+            "transition_request": {
+                "action": "click_marker",
+                "action_seq": 10,
+                "source": "job_card_queue",
+                "started_at": time.time(),
+            },
+        },
+        collection={
+            "job_card_queue": [
+                {
+                    "queue_id": "card-2",
+                    "status": "active",
+                    "title": "두 번째 공고",
+                }
+            ]
+        },
+    )
+
+    result = worker_transition.transition_node(state, node_runtime())
+    updated = apply_update(state, result)
+
+    assert updated["transition"]["transition_request"]["action"] == "click_marker"
+    assert updated["transition"]["transition_result"]["needs_ocr"] is True
+    assert (
+        updated["transition"]["transition_result"]["reason"]
+        == "queue_click_no_screen_change"
+    )
+    assert updated["collection"]["job_card_queue"][0]["status"] == "pending"
+    assert worker_selection.selection_node(updated, node_runtime()) == {}
+    assert route_after_selection(updated) == "ocr"
+
+
+def test_queue_click_retry_without_change_returns_to_reasoning(monkeypatch):
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (False, 0.0),
+    )
+    state = worker_state(
+        observation={
+            "observation_id": "observation:0012",
+            "current_screenshot": "same-list-again.png",
+            "ocr_complete": False,
+        },
+        transition={
+            "transition_request": {
+                "action": "click_marker",
+                "action_seq": 12,
+                "source": "job_card_queue",
+                "started_at": time.time(),
+            },
+            "action_events": [
+                {
+                    "seq": 11,
+                    "result": {"action": "click_marker", "status": "success"},
+                    "transition": {
+                        "action": "click_marker",
+                        "source": "job_card_queue",
+                        "status": "unknown",
+                        "reason": "no_screen_change",
+                    },
+                },
+                {
+                    "seq": 12,
+                    "result": {"action": "click_marker", "status": "success"},
+                },
+            ],
+        },
+        collection={
+            "job_card_queue": [
+                {
+                    "queue_id": "card-2",
+                    "status": "active",
+                    "title": "두 번째 공고",
+                }
+            ]
+        },
+    )
+
+    result = worker_transition.transition_node(state, node_runtime())
+    updated = apply_update(state, result)
+
+    assert updated["transition"]["transition_request"] == {}
+    assert (
+        updated["transition"]["transition_result"]["reason"]
+        == "queue_retry_no_screen_change"
+    )
+    assert updated["collection"]["job_card_queue"][0]["status"] == "pending"
+    assert worker_selection.selection_node(updated, node_runtime()) == {}
+    assert route_after_selection(updated) == "reasoning"
 
 
 def test_reflex_transition_rejects_change_without_saved_after_state():

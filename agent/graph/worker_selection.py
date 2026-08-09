@@ -22,8 +22,7 @@ from agent.runtime.worker_state import (
 from agent.runtime.job_card_queue import (
     active_job_card,
     job_card_queue_scope_complete,
-    replay_job_card_after_return,
-    return_action_from_transition,
+    replay_job_card_on_results,
     skip_active_job_card,
 )
 from agent.runtime.site_context import looks_like_job_detail_url
@@ -75,26 +74,7 @@ def _skip_duplicate_detail(
         count_mode=count_mode_from_state(state),
         target_count=target_count_from_state(state),
     )
-    request = build_action_request(
-        "duplicate_job_policy",
-        "skip detail OCR for an already collected job",
-        [
-            {
-                "name": "finish_task" if queue_complete else "go_back",
-                "args": (
-                    {"result": "현재 검색 결과 큐의 모든 공고 처리를 마쳤습니다."}
-                    if queue_complete
-                    else {
-                        "reason": "이미 수집한 공고 URL이므로 상세 읽기를 생략합니다.",
-                        "expected_after": "검색 결과 목록으로 돌아간다.",
-                    }
-                ),
-                "id": "skip_existing_job_detail",
-            }
-        ],
-    )
-    return {
-        "decision": {"pending_action": request},
+    update: dict[str, Any] = {
         "transition": {
             "transition_request": {},
             "transition_result": {
@@ -107,15 +87,17 @@ def _skip_duplicate_detail(
         },
         "collection": {"job_card_queue": queue},
     }
+    if queue_complete:
+        update["lifecycle"] = {"is_finished": True}
+    return update
 
 
-def _queue_return_transition(
+def _queue_results_transition(
     state: WorkerState,
     transition_result: dict[str, Any],
     trace: dict[str, Any],
 ) -> dict[str, Any] | None:
-    return_action = return_action_from_transition(transition_result)
-    if not return_action:
+    if not str(transition_result.get("action") or ""):
         return None
     saved_signature = dict(
         (state["collection"].get("job_results_memory", {}) or {}).get(
@@ -128,9 +110,9 @@ def _queue_return_transition(
         for text in saved_signature.get("anchors", []) or []
         if str(text)
     ]
-    return_match = (
-        trace.get("return_match")
-        if isinstance(trace.get("return_match"), dict)
+    results_match = (
+        trace.get("results_match")
+        if isinstance(trace.get("results_match"), dict)
         else {}
     )
     started_at = float(
@@ -139,9 +121,9 @@ def _queue_return_transition(
     return build_transition_observation(
         transition_result,
         status="ready",
-        outcome="queue_return_phash_match",
+        outcome="queue_results_phash_match",
         source=str(transition_result.get("source") or ""),
-        reason="queue_return_phash_match",
+        reason="queue_results_phash_match",
         elapsed_sec=max(0.0, time.time() - started_at),
         attempt=1,
         markers=[
@@ -155,7 +137,7 @@ def _queue_return_transition(
         after_observation_id=str(
             state["observation"].get("observation_id") or ""
         ),
-        phash_distance=return_match.get("distance"),
+        phash_distance=results_match.get("distance"),
         ocr_skipped=True,
     )
 
@@ -170,11 +152,8 @@ def _replay_queued_card(
     signature: dict[str, Any],
     memory: dict[str, Any],
     saved_signature: dict[str, Any],
-    return_action: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if return_action:
-        memory["return_action"] = return_action
-    transition = _queue_return_transition(
+    transition = _queue_results_transition(
         state,
         transition_result,
         trace,
@@ -186,8 +165,8 @@ def _replay_queued_card(
             "transition_result": {
                 **transition_result,
                 "status": "ready",
-                "outcome": "queue_return_phash_match",
-                "reason": "queue_return_phash_match",
+                "outcome": "queue_results_phash_match",
+                "reason": "queue_results_phash_match",
                 "needs_ocr": False,
             },
         },
@@ -199,7 +178,6 @@ def _replay_queued_card(
         },
         "collection": {
             "job_results_memory": memory,
-            "return_to_job_results": {},
         },
     }
     if transition:
@@ -210,11 +188,22 @@ def _replay_queued_card(
     return update
 
 
+def _defer_queue_replay(
+    transition_result: dict[str, Any],
+    *,
+    ocr_complete: bool,
+) -> bool:
+    reason = str(transition_result.get("reason") or "")
+    return reason == "queue_retry_no_screen_change" or (
+        reason == "queue_click_no_screen_change" and not ocr_complete
+    )
+
+
 def selection_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
 ) -> dict[str, Any]:
-    """중복 공고와 목록 복귀 큐를 검사해 원자 행동 하나를 선택한다."""
+    """중복 공고와 확인된 목록 화면의 큐를 검사해 원자 행동 하나를 선택한다."""
 
     decision = state["decision"]
     observation = state["observation"]
@@ -264,6 +253,11 @@ def selection_node(
 
     if transition_result.get("action"):
         ocr_complete = bool(observation.get("ocr_complete"))
+        if _defer_queue_replay(
+            transition_result,
+            ocr_complete=ocr_complete,
+        ):
+            return {}
         markers = (
             list(observation.get("current_markers") or [])
             if ocr_complete
@@ -275,16 +269,13 @@ def selection_node(
             else observation.get("raw_screen_signature")
         )
         signature = dict(signature_value or {})
-        request, selected_markers, trace = replay_job_card_after_return(
+        request, selected_markers, trace = replay_job_card_on_results(
             state,
             transition_result,
             current_url,
             markers,
             signature,
             require_anchors=ocr_complete,
-        )
-        return_action = return_action_from_transition(
-            transition_result
         )
         memory = dict(collection.get("job_results_memory", {}) or {})
         saved_signature = dict(memory.get("screen_signature", {}) or {})
@@ -303,7 +294,6 @@ def selection_node(
                 signature=signature,
                 memory=memory,
                 saved_signature=saved_signature,
-                return_action=return_action,
             )
 
     return {}

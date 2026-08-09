@@ -13,15 +13,9 @@ from agent.graph.worker_execution_policy import (
     sensitive_action_reason,
 )
 from agent.graph.worker_transition_recording import set_transition_request
-from agent.runtime.worker_state import return_to_job_results_for_url
 from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.transition_runtime import latest_no_effect_transition
-from agent.runtime.worker_actions import (
-    DIRECT_SCREEN_ACTION_SOURCES,
-    RETURN_ACTIONS,
-    STATE_UPDATE_ACTIONS,
-    UI_ACTIONS,
-)
+from agent.runtime.worker_actions import DIRECT_SCREEN_ACTION_SOURCES
 from agent.utils.logger import logger
 
 
@@ -116,44 +110,6 @@ def _require_human_approval(
     )
 
 
-def guard_return_to_results(
-    context: WorkerExecutionContext,
-    action_name: str,
-    args: dict[str, Any],
-    before_snapshot: dict[str, Any],
-    step_started: float,
-) -> bool:
-    """상세 수집이 끝난 뒤 목록 복귀 외의 추가 탐색을 차단한다."""
-
-    state = context.state
-    current_url = str(state["observation"].get("current_url") or "")
-    return_pending = return_to_job_results_for_url(
-        state,
-        current_url,
-    )
-    if not return_pending:
-        return False
-    if action_name not in STATE_UPDATE_ACTIONS and (
-        action_name not in UI_ACTIONS or action_name in RETURN_ACTIONS
-    ):
-        return False
-
-    _record_guard_result(
-        context,
-        action_name,
-        args,
-        before_snapshot,
-        status="skipped",
-        reason="return_to_job_results",
-        message=(
-            "상세 수집이 이미 완료되었습니다. 같은 공고를 더 읽지 말고 "
-            "검색 결과 화면으로 복귀해야 합니다."
-        ),
-        step_started=step_started,
-    )
-    return True
-
-
 def guard_ui_action(
     context: WorkerExecutionContext,
     action_name: str,
@@ -234,6 +190,7 @@ def guard_ui_action(
                 "screen. Choose another navigation method."
             ),
             step_started=step_started,
+            increments_error=True,
         )
         return True
 
@@ -263,4 +220,4 @@ def guard_ui_action(
     return False
 
 
-__all__ = ["guard_return_to_results", "guard_ui_action"]
+__all__ = ["guard_ui_action"]

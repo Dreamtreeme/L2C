@@ -20,7 +20,6 @@ from agent.graph.worker_action_effects import (
     raise_for_action_failure,
 )
 from agent.graph.worker_action_guard import (
-    guard_return_to_results,
     guard_ui_action,
 )
 from agent.graph.worker_action_recording import record_action_result
@@ -110,14 +109,6 @@ def _execute_tool_call(
     """가드가 허용한 도구 하나를 유형에 맞는 실행기로 전달한다."""
 
     state = context.state
-    if guard_return_to_results(
-        context,
-        action_name,
-        args,
-        before_snapshot,
-        step_started,
-    ):
-        return None
     if action_name in UI_ACTIONS:
         if guard_ui_action(
             context,
@@ -147,7 +138,6 @@ def _execute_tool_call(
             context,
             action_name,
             args,
-            action_sequence,
         )
         return result, False, follow_up
     if action_name in TERMINAL_ACTIONS:
@@ -207,6 +197,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 tool_call_id=tool_call.id,
                 tool_call_metadata=call_metadata,
             )
+            state["transition"]["error_count"] = 0
             logger.info(
                 "Action execution completed",
                 action=action_name,

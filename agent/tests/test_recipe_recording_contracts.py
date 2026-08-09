@@ -5,6 +5,7 @@ from agent.graph import (
     worker_transition,
 )
 from agent.runtime.worker_contracts import action_event_transitions
+from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.tests.worker_test_support import (
     apply_update,
     node_runtime,
@@ -287,6 +288,16 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
 
     assert stale.get("observation", {}).get("ocr_complete") is None
     assert (
-        action_event_transitions(stale["transition"]["action_events"])[0].marker_count
+        action_event_transitions(stale["transition"]["action_events"])[0][
+            "marker_count"
+        ]
         == 0
     )
+    stale_state = apply_update(
+        worker_state(
+            observation={"current_screenshot": str(screenshot)},
+            transition={"action_events": []},
+        ),
+        stale,
+    )
+    assert latest_no_effect_transition(stale_state)["action"] == "click_marker"

@@ -325,11 +325,6 @@ def _collect_job_detail_observation(
         detail_key,
     ):
         detail_followup = {}
-    return_to_results = dict(
-        collection.get("return_to_job_results", {}) or {}
-    )
-    if return_to_results and return_to_results.get("url") != current_url:
-        return_to_results = {}
     detail_coverage = dict(collection.get("job_detail_coverage", {}) or {})
     if (
         detail_context_matches(detail_buffer, current_url, detail_key)
@@ -351,7 +346,6 @@ def _collect_job_detail_observation(
             "job_detail_buffer": detail_buffer,
             "job_detail_coverage": detail_coverage,
             "job_detail_followup": detail_followup,
-            "return_to_job_results": return_to_results,
         }
     }
 

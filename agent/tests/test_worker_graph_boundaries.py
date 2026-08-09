@@ -59,7 +59,6 @@ def _execution_state(
     current_markers=None,
     current_url="https://example.com/jobs",
     reflex_trace=None,
-    return_to_job_results=None,
     job_captures=None,
     collection_intent: CollectionIntent | None = None,
 ):
@@ -77,7 +76,6 @@ def _execution_state(
         decision={"pending_action": request},
         replay={"reflex_trace": dict(reflex_trace or {})},
         collection={
-            "return_to_job_results": dict(return_to_job_results or {}),
             "job_captures": list(job_captures or []),
         },
     )
@@ -523,6 +521,53 @@ def test_execution_records_one_complete_action_event(monkeypatch):
     )
 
 
+def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("효과가 없던 동일 마커를 다시 클릭하면 안 됩니다.")
+        ),
+    )
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "click_marker",
+                "args": {"marker_id": 1},
+                "id": "click",
+            }
+        ],
+    )
+    state = _execution_state(
+        request,
+        current_markers=[
+            {"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"},
+        ],
+    )
+    state["transition"]["action_events"] = [
+        {
+            "seq": 0,
+            "result": {"action": "click_marker", "status": "success"},
+            "transition": {
+                "action": "click_marker",
+                "status": "unknown",
+                "reason": "no_screen_change",
+                "step": {"args": {"marker_id": 1}},
+            },
+        }
+    ]
+
+    result = _run_execution(state)
+    action_result = action_event_results(
+        result["transition"]["action_events"]
+    )[-1]
+
+    assert action_result["status"] == "skipped"
+    assert action_result["reason"] == "same_screen_no_effect_action_blocked"
+    assert result["transition"]["error_count"] == 1
+
+
 def test_execution_accumulates_detail_field_evidence(monkeypatch):
     monkeypatch.setattr(
         worker_execution_dispatch,
@@ -557,6 +602,33 @@ def test_execution_accumulates_detail_field_evidence(monkeypatch):
     coverage = result["collection"]["job_detail_coverage"]
     assert coverage["field_evidence"]["requirements"] == "Python"
     assert coverage["field_evidence"]["url"] == ("https://example.com/jobs/1")
+
+
+def test_successful_execution_resets_consecutive_error_count(monkeypatch):
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        lambda *_args, **_kwargs: {
+            "action": "scroll",
+            "status": "success",
+        },
+    )
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "scroll",
+                "args": {"direction": "down"},
+                "id": "scroll",
+            }
+        ],
+    )
+    state = _execution_state(request)
+    state["transition"]["error_count"] = 2
+
+    result = _run_execution(state)
+
+    assert result["transition"]["error_count"] == 0
 
 
 def test_reflex_transition_executes_input_and_enter_without_recapture(
@@ -656,41 +728,6 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
         ]
         == "example.com/jobs"
     )
-
-
-def test_detail_completion_guard_blocks_more_screen_exploration(monkeypatch):
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "dispatch_ui_action",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("목록 복귀 전에 상세 화면을 더 탐색하면 안 됩니다.")
-        ),
-    )
-    request = _request(
-        "llm",
-        [
-            {
-                "name": "scroll",
-                "args": {"direction": "down"},
-                "id": "scroll",
-            }
-        ],
-    )
-    result = _run_execution(
-        _execution_state(
-            request,
-            current_url="https://example.com/jobs/1",
-            return_to_job_results={
-                "url": "https://example.com/jobs/1",
-                "reason": "required_fields_complete",
-            },
-        )
-    )
-
-    action_result = action_event_results(result["transition"]["action_events"])[0]
-    assert action_result["status"] == "skipped"
-    assert action_result["reason"] == "return_to_job_results"
-    assert result["transition"]["error_count"] == 0
 
 
 def test_failed_ui_dispatch_is_recorded_once(monkeypatch):

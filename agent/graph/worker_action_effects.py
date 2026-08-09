@@ -18,11 +18,9 @@ from agent.runtime.job_card_queue import (
     complete_active_job_card,
     job_card_click_matches_queue,
     job_card_queue_scope_complete,
-    normalized_return_action,
     pending_job_cards,
     resolved_job_card_count,
 )
-from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.runtime.worker_actions import (
     DIRECT_SCREEN_ACTION_SOURCES,
     URL_STALE_ACTIONS,
@@ -198,49 +196,11 @@ def _apply_state_action_update(
         collection["job_detail_followup"] = dict(update.job_detail_followup)
 
 
-def _confirmed_job_results_return_action(
-    context: WorkerExecutionContext,
-    result: dict[str, Any],
-) -> ActionRequest | None:
-    state = context.state
-    collection = state["collection"]
-    no_effect_return = latest_no_effect_transition(state)
-    failed_return_action = str(no_effect_return.get("action") or "")
-    return_action = normalized_return_action(
-        (collection.get("job_results_memory", {}) or {}).get("return_action")
-    )
-    if not return_action or failed_return_action == return_action.get("name"):
-        result["detail_policy"] = "return_requires_reasoning"
-        if failed_return_action:
-            result["failed_return_action"] = failed_return_action
-        return None
-
-    return_name = str(return_action["name"])
-    return_args = {
-        **dict(return_action.get("args") or {}),
-        "reason": "이전에 확인된 검색 결과 복귀 행동을 재사용합니다.",
-        "expected_after": "검색 결과 목록이 표시된다.",
-    }
-    return build_action_request(
-        "page_policy",
-        "reuse_confirmed_result_return_action",
-        [
-            {
-                "name": return_name,
-                "args": return_args,
-                "id": f"detail_policy_{return_name}",
-            }
-        ],
-    )
-
-
 def _apply_job_detail_completion(
     context: WorkerExecutionContext,
     result: dict[str, Any],
-    action_sequence: int,
-) -> ActionRequest | None:
+) -> None:
     state = context.state
-    observation = state["observation"]
     collection = state["collection"]
     job_card_queue = list(collection.get("job_card_queue", []) or [])
     target_count = target_count_from_state(state)
@@ -255,13 +215,9 @@ def _apply_job_detail_completion(
         resolved_job_card_count(job_card_queue),
     )
     if pending_cards or (target_count > 0 and resolved_count < target_count):
-        collection["return_to_job_results"] = {
-            "url": str(observation.get("current_url") or ""),
-            "reason": "required_fields_complete",
-            "pending_count": len(pending_cards),
-            "completed_action_seq": action_sequence,
-        }
-        return _confirmed_job_results_return_action(context, result)
+        result["next_step"] = "navigate_to_job_results"
+        result["pending_count"] = len(pending_cards)
+        return
 
     if (
         count_mode_from_state(state) == "visible_all"
@@ -272,7 +228,6 @@ def _apply_job_detail_completion(
         result["auto_finished"] = True
         result["count_mode"] = "visible_all"
         result["collected_count"] = collected_count
-    return None
 
 
 def _apply_collection_target_completion(
@@ -291,7 +246,6 @@ def _apply_collection_target_completion(
     if target_count <= 0 or resolved_count < target_count:
         return
 
-    collection["return_to_job_results"] = {}
     state["lifecycle"]["is_finished"] = True
     result["auto_finished"] = True
     result["target_count"] = target_count
@@ -303,7 +257,6 @@ def execute_state_action(
     context: WorkerExecutionContext,
     action_name: str,
     args: dict[str, Any],
-    action_sequence: int,
 ) -> tuple[dict[str, Any], ActionRequest | None]:
     """상태 행동을 실행하고 카드·상세 완료 후속 효과를 반영한다."""
 
@@ -331,14 +284,7 @@ def execute_state_action(
         action_name == "finish_detail_reading" and result.get("status") == "success"
     )
     if is_successful_detail_update:
-        follow_up = (
-            _apply_job_detail_completion(
-                context,
-                result,
-                action_sequence,
-            )
-            or follow_up
-        )
+        _apply_job_detail_completion(context, result)
 
     if action_name == "finish_detail_reading" and result.get("status") == "success":
         _apply_collection_target_completion(context, result)
