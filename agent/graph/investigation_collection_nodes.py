@@ -1,14 +1,10 @@
-"""조사 계획의 비전 수집과 DB 저장 단계를 실행한다."""
+"""조사 계획의 원문 수집, 후처리와 저장 단계를 실행한다."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from agent.graph.investigation_context import InvestigationState
-from agent.graph.investigation_ports import (
-    CollectionPersistencePort,
-    CollectionRunnerPort,
-)
 from agent.observability.run_context import (
     ModelRequestTimeout,
     RunCancelled,
@@ -20,12 +16,15 @@ from agent.observability.run_context import (
 from agent.observability.run_contracts import RunPhase
 from agent.utils.logger import logger
 from shared.schema.collection_intent import CollectionIntent, CollectionResult
-from shared.schema.collection_run import CollectionBatch, PersistedCollection
-from shared.schema.feedback_schema import WorkerSubmission
-from shared.schema.investigation_schema import (
-    InvestigationPlanStep,
-    InvestigationStatus,
+from shared.schema.collection_run import (
+    CollectionBatch,
+    CollectionExperienceResult,
+    PersistenceReport,
+    PostprocessedCollection,
+    RecipeLearningResult,
 )
+from shared.schema.feedback_schema import WorkerSubmission
+from shared.schema.investigation_schema import InvestigationPlanStep
 
 
 def _scope_exhausted(submission: WorkerSubmission, resolved_count: int) -> bool:
@@ -62,63 +61,60 @@ def _collection_status(
 
 
 def build_collection_result(
-    intent: CollectionIntent,
     batch: CollectionBatch,
-    persisted: PersistedCollection,
+    persistence: PersistenceReport,
+    experience: CollectionExperienceResult,
 ) -> CollectionResult:
     """작업자 관찰과 DB 저장 결과를 지휘자용 결과로 합친다."""
 
-    report = persisted.persistence
-    persisted_items = list(report.get("persisted_items") or [])
+    submission = batch.submission
+    intent = submission.collection_intent
+    persisted_items = list(persistence.persisted_items)
     persisted_ids = {
         int(item["job_id"])
         for item in persisted_items
         if str(item.get("job_id") or "").isdigit()
     }
     observed_ids = {
-        int(job_id)
-        for job_id in persisted.submission.observed_job_ids
-        if int(job_id) > 0
+        int(job_id) for job_id in submission.observed_job_ids if int(job_id) > 0
     }
     document_ids = sorted(persisted_ids | observed_ids)
     resolved_count = len(document_ids)
-    scope_exhausted = _scope_exhausted(persisted.submission, resolved_count)
-    rejected_count = int(report.get("rejected_count") or 0)
-    persisted_count = int(report.get("persisted_count") or 0)
+    scope_exhausted = _scope_exhausted(submission, resolved_count)
     status = _collection_status(
         resolved_count=resolved_count,
         target_count=intent.target_count,
-        rejected_count=rejected_count,
-        worker_finished=persisted.submission.is_finished,
+        rejected_count=persistence.rejected_count,
+        worker_finished=submission.is_finished,
         scope_exhausted=scope_exhausted,
     )
     return CollectionResult(
         status=status,
         message=(
             f"collection {status}: keyword={intent.search_keyword!r}, "
-            f"site={batch.site_name or intent.site}, "
-            f"resolved={resolved_count}, persisted={persisted_count}"
+            f"site={batch.site_name}, resolved={resolved_count}, "
+            f"persisted={persistence.persisted_count}"
         ),
-        site=batch.site_slug or intent.site,
-        site_name=batch.site_name or intent.site,
+        site=intent.site,
+        site_name=batch.site_name,
         search_keyword=intent.search_keyword,
         task_category=intent.task_category,
         target_count=intent.target_count,
-        collected_count=persisted.submission.collected_count,
+        collected_count=submission.collected_count,
         resolved_count=resolved_count,
-        persisted_count=persisted_count,
-        created_count=int(report.get("created_count") or 0),
-        updated_count=int(report.get("updated_count") or 0),
-        rejected_count=rejected_count,
+        persisted_count=persistence.persisted_count,
+        created_count=persistence.created_count,
+        updated_count=persistence.updated_count,
+        rejected_count=persistence.rejected_count,
         persisted_items=persisted_items,
         observed_job_ids=sorted(observed_ids),
         document_ids=document_ids,
         scope_exhausted=scope_exhausted,
-        worker_finished=persisted.submission.is_finished,
-        hit_recursion_limit=persisted.submission.hit_recursion_limit,
-        submission_id=persisted.submission_id,
-        worker_run_id=persisted.submission.run_id,
-        candidate_id=str(persisted.recipe_learning.get("candidate_id") or ""),
+        worker_finished=submission.is_finished,
+        hit_recursion_limit=submission.hit_recursion_limit,
+        submission_id=experience.submission_id,
+        worker_run_id=submission.run_id,
+        candidate_id=experience.recipe_learning.candidate_id,
     )
 
 
@@ -139,34 +135,77 @@ def _failed_result(
     )
 
 
+def _complete_step_update(
+    state: InvestigationState,
+    step: InvestigationPlanStep,
+    result: CollectionResult,
+) -> dict[str, Any]:
+    execution = state["execution"]
+    emit_run_event(
+        "collection_completed",
+        RunPhase.COLLECTION,
+        "채용공고 수집과 저장을 마쳤습니다.",
+        data={
+            "collection_status": result.status,
+            "site": result.site,
+            "target_count": result.target_count,
+            "resolved_count": result.resolved_count,
+            "persisted_count": result.persisted_count,
+            "submission_id": result.submission_id,
+            "document_ids": result.document_ids,
+        },
+    )
+    return {
+        "execution": {
+            "executed_step_ids": [
+                *execution.get("executed_step_ids", []),
+                step.step_id,
+            ],
+            "collection_document_ids": sorted(
+                set(execution.get("collection_document_ids", []))
+                | set(result.document_ids)
+            ),
+            "collection_results": [
+                *execution.get("collection_results", []),
+                result,
+            ],
+            "pending_collection": None,
+            "postprocessed_collection": None,
+        }
+    }
+
+
 class InvestigationCollectionNodes:
-    """수집과 저장을 별도 체크포인트 단계로 실행한다."""
+    """원문 수집, 구조화와 저장의 책임 경계를 순서대로 실행한다."""
 
     def __init__(
         self,
-        run_collection: CollectionRunnerPort,
-        persist_collection: CollectionPersistencePort,
+        run_collection: Callable[[CollectionIntent], CollectionBatch],
+        postprocess_collection: Callable[
+            [CollectionBatch], PostprocessedCollection
+        ],
+        store_collection: Callable[[PostprocessedCollection], PersistenceReport],
+        record_experience: Callable[
+            [CollectionBatch, PersistenceReport], CollectionExperienceResult
+        ],
     ) -> None:
         self.run_collection = run_collection
-        self.persist_collection = persist_collection
+        self.postprocess_collection = postprocess_collection
+        self.store_collection = store_collection
+        self.record_experience = record_experience
 
     @staticmethod
-    def _active_step(state: InvestigationState) -> InvestigationPlanStep:
-        investigation = state["request"]["investigation"]
-        active_step_id = state["execution"].get("active_step_id", "")
-        if active_step_id:
-            return next(
-                item for item in investigation.plan if item.step_id == active_step_id
-            )
+    def _next_step(state: InvestigationState) -> InvestigationPlanStep:
+        execution = state["execution"]
         return next(
             item
-            for item in investigation.plan
-            if item.step_id not in investigation.executed_step_ids
+            for item in execution.get("plan", [])
+            if item.step_id not in execution.get("executed_step_ids", [])
         )
 
     def collect(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
-        step = self._active_step(state)
+        step = self._next_step(state)
         emit_run_event(
             "collection_started",
             RunPhase.COLLECTION,
@@ -175,89 +214,108 @@ class InvestigationCollectionNodes:
         try:
             with measure_step("vision_worker", site=step.arguments.site):
                 batch = self.run_collection(step.arguments)
-            error = ""
         except (RunCancelled, RunDeadlineExceeded, ModelRequestTimeout):
             raise
         except Exception as exc:
             logger.exception("Vision worker execution failed", error=str(exc))
-            batch = None
-            error = f"{type(exc).__name__}: {exc}"
+            return _complete_step_update(
+                state,
+                step,
+                _failed_result(
+                    step.arguments,
+                    f"collection error: {type(exc).__name__}: {exc}",
+                    error_code="collection_worker_failed",
+                ),
+            )
         return {
-            "request": {
-                "investigation": state["request"]["investigation"].model_copy(
-                    update={"status": InvestigationStatus.PERSISTING}
-                )
-            },
             "execution": {
-                "active_step_id": step.step_id,
                 "pending_collection": batch,
-                "collection_error": error,
-            },
+                "postprocessed_collection": None,
+            }
         }
 
-    def persist(self, state: InvestigationState) -> dict[str, Any]:
-        raise_if_cancelled()
-        investigation = state["request"]["investigation"]
-        step = self._active_step(state)
+    @staticmethod
+    def route_after_collect(state: InvestigationState) -> str:
+        return (
+            "postprocess"
+            if state["execution"].get("pending_collection") is not None
+            else "inspect_evidence"
+        )
+
+    def postprocess(self, state: InvestigationState) -> dict[str, Any]:
         batch = state["execution"].get("pending_collection")
-        error = state["execution"].get("collection_error", "")
-        if batch is None:
-            result = _failed_result(
-                step.arguments,
-                f"collection error: {error or 'worker returned no collection batch'}",
-                error_code="collection_worker_failed",
+        if not isinstance(batch, CollectionBatch):
+            raise TypeError("후처리할 CollectionBatch가 없습니다.")
+        step = self._next_step(state)
+        try:
+            with measure_step("collection_postprocessing"):
+                processed = self.postprocess_collection(batch)
+        except (RunCancelled, RunDeadlineExceeded, ModelRequestTimeout):
+            raise
+        except Exception as exc:
+            logger.exception("Collection postprocessing failed", error=str(exc))
+            return _complete_step_update(
+                state,
+                step,
+                _failed_result(
+                    step.arguments,
+                    f"collection postprocessing error: {exc}",
+                    error_code=f"postprocessing_error:{type(exc).__name__}",
+                ),
             )
-        else:
-            try:
-                with measure_step("job_persistence"):
-                    persisted = self.persist_collection(batch)
-                result = build_collection_result(step.arguments, batch, persisted)
-            except (RunCancelled, RunDeadlineExceeded, ModelRequestTimeout):
-                raise
-            except Exception as exc:
-                logger.exception("Collection persistence failed", error=str(exc))
-                result = _failed_result(
+        return {"execution": {"postprocessed_collection": processed}}
+
+    @staticmethod
+    def route_after_postprocess(state: InvestigationState) -> str:
+        return (
+            "persist"
+            if state["execution"].get("postprocessed_collection") is not None
+            else "inspect_evidence"
+        )
+
+    def persist(self, state: InvestigationState) -> dict[str, Any]:
+        execution = state["execution"]
+        batch = execution.get("pending_collection")
+        processed = execution.get("postprocessed_collection")
+        if not isinstance(batch, CollectionBatch) or not isinstance(
+            processed, PostprocessedCollection
+        ):
+            raise TypeError("저장할 후처리 결과가 없습니다.")
+        step = self._next_step(state)
+        try:
+            with measure_step("job_persistence"):
+                persistence = self.store_collection(processed)
+        except (RunCancelled, RunDeadlineExceeded, ModelRequestTimeout):
+            raise
+        except Exception as exc:
+            logger.exception("Collection persistence failed", error=str(exc))
+            return _complete_step_update(
+                state,
+                step,
+                _failed_result(
                     step.arguments,
                     f"collection persistence error: {exc}",
                     error_code=f"persistence_error:{type(exc).__name__}",
-                )
-
-        updated = investigation.model_copy(
-            update={
-                "executed_step_ids": [*investigation.executed_step_ids, step.step_id],
-                "collection_document_ids": sorted(
-                    set(investigation.collection_document_ids)
-                    | set(result.document_ids)
                 ),
-                "status": InvestigationStatus.VALIDATING,
-            }
+            )
+
+        try:
+            experience = self.record_experience(batch, persistence)
+        except Exception as exc:
+            logger.warning("Collection experience recording failed: %s", exc)
+            experience = CollectionExperienceResult(
+                submission_id="",
+                recipe_learning=RecipeLearningResult(
+                    status="failed",
+                    reason="experience_recording_failed",
+                    error=f"{type(exc).__name__}: {exc}"[:1000],
+                ),
+            )
+        return _complete_step_update(
+            state,
+            step,
+            build_collection_result(batch, persistence, experience),
         )
-        emit_run_event(
-            "collection_completed",
-            RunPhase.COLLECTION,
-            "채용공고 수집과 저장을 마쳤습니다.",
-            data={
-                "collection_status": result.status,
-                "site": result.site,
-                "target_count": result.target_count,
-                "resolved_count": result.resolved_count,
-                "persisted_count": result.persisted_count,
-                "submission_id": result.submission_id,
-                "document_ids": result.document_ids,
-            },
-        )
-        return {
-            "request": {"investigation": updated},
-            "execution": {
-                "active_step_id": "",
-                "pending_collection": None,
-                "collection_error": "",
-                "collection_results": [
-                    *state["execution"].get("collection_results", []),
-                    result,
-                ],
-            },
-        }
 
 
 __all__ = ["InvestigationCollectionNodes", "build_collection_result"]

@@ -139,7 +139,9 @@ def action_plan_prompt() -> str:
 
 
 def evidence_validation_prompt() -> str:
-    return external_content_contract_ko() + """
+    return (
+        external_content_contract_ko()
+        + """
 당신은 DB 공고 후보가 조사에서 정의한 근거 집단에 실제로 속하는지 판정합니다.
 - 이 단계에는 사전으로 확정할 수 없었던 직무·기술 또는 비정형 조건만 들어옵니다.
 - 공고의 직무명, 직군, 기술, 자격요건, 우대사항, 지역, 경력, 고용형태와 게시일만 사용하십시오.
@@ -153,10 +155,13 @@ def evidence_validation_prompt() -> str:
 - 서로 다른 비교 집단을 섞지 마십시오.
 - 제공되지 않은 문서 ID를 만들지 마십시오.
 """
+    )
 
 
 def answer_prompt() -> str:
-    return external_content_contract_ko() + """
+    return (
+        external_content_contract_ko()
+        + """
 당신은 질문의 근거 정책에 따라 보편 지식 또는 검증된 자료로 답변합니다.
 질문의 evidence_policy를 먼저 확인하십시오.
 - 질문에 먼저 답하고 사용자가 요청하지 않은 배경, 심화 항목, 조사 과정은 덧붙이지 마십시오.
@@ -176,9 +181,9 @@ def answer_prompt() -> str:
 - 근거가 부족하면 부족한 항목과 확보된 범위를 분명히 말하십시오.
 - created_at을 공고 게시일로 해석하지 마십시오.
 - 비교 집단 중 하나라도 부족하면 증가·감소나 우열을 단정하지 마십시오.
-- collection_document_ids는 이번 조사 중 수집 도구가 관찰해 저장한 공고이고, evidence_document_ids는 기존 DB를 포함해 답변 근거로 채택된 공고입니다.
 - 기존 공고를 갱신한 결과를 새 공고로 표현하지 말고 collection_results의 created_count와 updated_count를 구분하십시오.
 """
+    )
 
 
 __all__ = [

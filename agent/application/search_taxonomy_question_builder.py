@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Iterable, Protocol
+from typing import TYPE_CHECKING, Any, Iterable
 
 from agent.application.search_taxonomy_utils import OCCUPATION_DOMAIN_ROOT_KEY
 from shared.schema.investigation_schema import (
@@ -12,32 +12,14 @@ from shared.schema.investigation_schema import (
     InvestigationConstraints,
 )
 
-
-class TaxonomyQuestionSource(Protocol):
-    """질문 생성에 필요한 검색 의미 사전 조회 계약."""
-
-    def list_direct_children(self, concept_key: str) -> list[dict[str, str]]: ...
-
-    def matching_occupation_job_ids(
-        self,
-        concept_keys: Iterable[str],
-        constraints: InvestigationConstraints | None = None,
-    ) -> set[int]: ...
-
-    def occupation_descendant_count(self, concept_key: str) -> int: ...
-
-    def occupation_resolution_candidates(
-        self,
-        domain_concept_keys: Iterable[str],
-    ) -> list[dict[str, Any]]: ...
-
-    def concept_label(self, concept_key: str) -> str: ...
+if TYPE_CHECKING:
+    from agent.application.search_taxonomy_service import SearchTaxonomyService
 
 
 class TaxonomyQuestionBuilder:
     """현재 확정된 직무 범위에 맞는 다음 질문 하나를 만든다."""
 
-    def __init__(self, source: TaxonomyQuestionSource):
+    def __init__(self, source: SearchTaxonomyService):
         self.source = source
 
     @staticmethod
@@ -75,17 +57,12 @@ class TaxonomyQuestionBuilder:
             return None
         domains = [
             item
-            for item in self.source.list_direct_children(
-                OCCUPATION_DOMAIN_ROOT_KEY
-            )
+            for item in self.source.list_direct_children(OCCUPATION_DOMAIN_ROOT_KEY)
             if item["concept_type"] == "domain"
         ]
         if not domains:
             return None
-        counted = [
-            self._counted_scope_item(item, constraints)
-            for item in domains
-        ]
+        counted = [self._counted_scope_item(item, constraints) for item in domains]
         options = [
             ClarificationOption(
                 option_id=self._concept_option_id(str(item["concept_key"])),
@@ -164,8 +141,7 @@ class TaxonomyQuestionBuilder:
         if not families:
             return None
         counted = [
-            self._counted_scope_item(item, constraints)
-            for item in families.values()
+            self._counted_scope_item(item, constraints) for item in families.values()
         ]
         counted.sort(
             key=lambda item: (
@@ -188,10 +164,7 @@ class TaxonomyQuestionBuilder:
             )
             for item in counted
         ]
-        domain_labels = ", ".join(
-            self.source.concept_label(key)
-            for key in domain_keys
-        )
+        domain_labels = ", ".join(self.source.concept_label(key) for key in domain_keys)
         return ClarificationQuestion(
             question_id=question_id,
             field="occupation_concept_keys",
@@ -294,9 +267,7 @@ class TaxonomyQuestionBuilder:
             )
             options = [
                 ClarificationOption(
-                    option_id=self._concept_option_id(
-                        str(item["concept_key"])
-                    ),
+                    option_id=self._concept_option_id(str(item["concept_key"])),
                     label=f"{item['label']} ({item['count']}건)",
                     value=str(item["concept_key"]),
                     collection_search_term=str(item["label"]),
@@ -305,8 +276,7 @@ class TaxonomyQuestionBuilder:
                         str(item["concept_key"])
                     ),
                     description=(
-                        f"현재 조건에서 이 직무로 연결된 공고 "
-                        f"{item['count']}건"
+                        f"현재 조건에서 이 직무로 연결된 공고 {item['count']}건"
                     ),
                 )
                 for item in counted
@@ -317,9 +287,7 @@ class TaxonomyQuestionBuilder:
                     label=f"전체 범위 ({total_count}건)",
                     value=concept_key,
                     matching_count=total_count,
-                    concept_count=self.source.occupation_descendant_count(
-                        concept_key
-                    ),
+                    concept_count=self.source.occupation_descendant_count(concept_key),
                     description="현재 검색어를 유지하고 모든 하위 직무를 포함",
                 )
             )
@@ -337,12 +305,10 @@ class TaxonomyQuestionBuilder:
                     "복합 직무 공고는 여러 선택지에 포함될 수 있습니다."
                 ),
                 candidate_count=total_count,
-                concept_count=self.source.occupation_descendant_count(
-                    concept_key
-                ),
+                concept_count=self.source.occupation_descendant_count(concept_key),
                 facet_type="occupation",
             )
         return None
 
 
-__all__ = ["TaxonomyQuestionBuilder", "TaxonomyQuestionSource"]
+__all__ = ["TaxonomyQuestionBuilder"]

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
-from typing import Any, Protocol
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Any
 
 from agent.observability.run_context import (
     ModelRequestTimeout,
@@ -13,29 +16,41 @@ from agent.observability.run_context import (
     raise_if_cancelled,
     run_context,
 )
-from agent.observability.run_contracts import RunEventSink, RunPhase, RunStatus
+from agent.observability.run_contracts import (
+    ChatErrorPayload,
+    ChatRequest,
+    ChatResult,
+    ChatStartedPayload,
+    ChatStreamFrame,
+    RunEvent,
+    RunEventSink,
+    RunPhase,
+    new_run_id,
+)
+from agent.observability.run_registry import RunRegistry, get_run_registry
 from agent.utils.logger import logger
+from shared.schema.investigation_schema import ClarificationAnswer
+from shared.schema.run_schema import RunStatus
 
 
-class InvestigationRunner(Protocol):
-    """대화 서비스가 요구하는 조사 실행기의 최소 계약."""
-
-    def run(
-        self,
-        query: str,
-        *,
-        conversation_id: str = "",
-        resume_run_id: str = "",
-        investigation_id: str = "",
-        clarification_answer: Any = None,
-    ) -> dict[str, Any]: ...
+@dataclass(frozen=True, slots=True)
+class _ResolvedExecution:
+    investigation_id: str = ""
+    context_run_id: str = ""
+    clarification_answer: ClarificationAnswer | None = None
 
 
 class ChatService:
-    """로컬 API가 사용하는 사용자 요청 애플리케이션 서비스."""
+    """채팅 실행과 진행 상태의 전체 수명주기를 관리한다."""
 
-    def __init__(self, investigation_workflow: "InvestigationRunner"):
+    def __init__(
+        self,
+        investigation_workflow: Any,
+        *,
+        run_registry: RunRegistry | None = None,
+    ) -> None:
         self._investigation_workflow = investigation_workflow
+        self._run_registry = run_registry or get_run_registry()
 
     @staticmethod
     def _result(
@@ -43,65 +58,91 @@ class ChatService:
         *,
         context: Any,
         started: float,
-        status: RunStatus = RunStatus.COMPLETED,
+        status: RunStatus,
+        request: ChatRequest,
         clarification: dict[str, Any] | None = None,
         investigation_id: str = "",
         resume_mode: str = "",
-    ) -> dict[str, Any]:
+    ) -> ChatResult:
         duration = max(0.0, time.perf_counter() - started)
         context.set_outcome(status)
         metrics = context.snapshot()
         metrics["duration_sec"] = round(duration, 6)
-        result = {
-            "run_id": context.run_id,
-            "run_status": status.value,
-            "last_action_result": answer,
-            "is_finished": status
-            in {
-                RunStatus.COMPLETED,
-                RunStatus.PARTIAL,
-                RunStatus.FAILED,
-            },
-            "duration_sec": duration,
-            "metrics": metrics,
-            "llm_usage": metrics.get("llm", {}),
-        }
-        if clarification:
-            result["clarification"] = clarification
-        if investigation_id:
-            result["investigation_id"] = investigation_id
-        if resume_mode:
-            result["resume_mode"] = resume_mode
-        return result
+        return ChatResult(
+            run_id=context.run_id,
+            status=status,
+            text=answer,
+            clarification=clarification,
+            investigation_id=investigation_id or request.investigation_id,
+            resumed_from_run_id=request.resume_run_id,
+            resume_mode=resume_mode,
+            conversation_id=request.conversation_id,
+            metrics=metrics,
+        )
 
-    def run(
+    def _resolve_execution(self, request: ChatRequest) -> _ResolvedExecution:
+        if request.investigation_id:
+            return _ResolvedExecution(
+                investigation_id=request.investigation_id,
+                clarification_answer=request.clarification_answer,
+            )
+        if not request.resume_run_id:
+            return _ResolvedExecution(
+                clarification_answer=request.clarification_answer,
+            )
+
+        previous = self._run_registry.get(request.resume_run_id)
+        if previous is None:
+            raise ValueError("재개할 실행을 찾을 수 없습니다.")
+        if previous.get("status") != RunStatus.WAITING_INPUT.value:
+            return _ResolvedExecution(
+                context_run_id=request.resume_run_id,
+                clarification_answer=request.clarification_answer,
+            )
+
+        previous_result = ChatResult.model_validate(previous.get("result"))
+        clarification = previous_result.clarification or {}
+        question_id = str(clarification.get("question_id") or "")
+        if not previous_result.investigation_id or not question_id:
+            raise ValueError("재개할 확인 질문의 상태가 올바르지 않습니다.")
+        answer = request.clarification_answer or ClarificationAnswer(
+            question_id=question_id,
+            custom_value=request.query.strip(),
+        )
+        return _ResolvedExecution(
+            investigation_id=previous_result.investigation_id,
+            clarification_answer=answer,
+        )
+
+    def execute(
         self,
-        query: str,
+        request: ChatRequest,
         *,
-        run_id: str | None = None,
+        run_id: str,
         event_sink: RunEventSink | None = None,
-        conversation_id: str = "",
-        resume_run_id: str = "",
-        investigation_id: str = "",
-        clarification_answer: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """요청을 계획·확인·근거 검사·실행 순서로 처리한다."""
+    ) -> ChatResult:
+        """구조화된 사용자 요청으로 조사 그래프를 한 번 실행한다."""
 
-        query = str(query or "").strip()
+        query = request.query.strip()
         with run_context(
             run_id=run_id,
             query=query,
             event_sink=event_sink,
+            cancel_requested=self._run_registry.is_cancel_requested,
             prefix="chat",
             metadata={
-                "conversation_id": conversation_id,
-                "investigation_id": investigation_id,
-                "resume_requested": bool(resume_run_id or investigation_id),
+                "conversation_id": request.conversation_id,
+                "investigation_id": request.investigation_id,
+                "resume_requested": bool(
+                    request.resume_run_id or request.investigation_id
+                ),
             },
             tags=["chat-request"],
         ) as (context, _created):
             started = time.perf_counter()
-            if not query and not (investigation_id and clarification_answer):
+            if not query and not (
+                request.investigation_id and request.clarification_answer
+            ):
                 emit_run_event(
                     "run_failed",
                     RunPhase.FAILED,
@@ -113,44 +154,29 @@ class ChatService:
                     context=context,
                     started=started,
                     status=RunStatus.FAILED,
+                    request=request,
                 )
 
             logger.info("Executing investigation workflow")
-            emit_run_event(
-                "planning_started", RunPhase.PLANNING, "질문을 분석하고 있습니다."
-            )
             try:
                 raise_if_cancelled()
-                if self._investigation_workflow is None:
-                    raise RuntimeError("이미 종료된 채팅 서비스입니다.")
+                resolved = self._resolve_execution(request)
                 workflow_result = self._investigation_workflow.run(
                     query,
-                    conversation_id=conversation_id,
-                    resume_run_id=resume_run_id,
-                    investigation_id=investigation_id,
-                    clarification_answer=clarification_answer,
+                    conversation_id=request.conversation_id,
+                    context_run_id=resolved.context_run_id,
+                    investigation_id=resolved.investigation_id,
+                    clarification_answer=resolved.clarification_answer,
                 )
-                workflow_investigation = dict(
-                    workflow_result.get("investigation") or {}
-                )
-                try:
-                    workflow_status = RunStatus(
-                        workflow_result.get("run_status") or RunStatus.COMPLETED.value
-                    )
-                except ValueError:
-                    workflow_status = RunStatus.FAILED
-                answer = str(workflow_result.get("final_answer") or "")
                 return self._result(
-                    answer,
+                    workflow_result.final_answer,
                     context=context,
                     started=started,
-                    status=workflow_status,
-                    clarification=workflow_result.get("clarification"),
-                    investigation_id=str(
-                        workflow_investigation.get("investigation_id")
-                        or investigation_id
-                    ),
-                    resume_mode=str(workflow_result.get("resume_mode") or ""),
+                    status=workflow_result.run_status,
+                    request=request,
+                    clarification=workflow_result.clarification,
+                    investigation_id=workflow_result.investigation.investigation_id,
+                    resume_mode=workflow_result.resume_mode,
                 )
             except RunCancelled:
                 emit_run_event(
@@ -164,7 +190,7 @@ class ChatService:
                     context=context,
                     started=started,
                     status=RunStatus.CANCELLED,
-                    investigation_id=investigation_id,
+                    request=request,
                 )
             except (RunDeadlineExceeded, ModelRequestTimeout) as exc:
                 emit_run_event(
@@ -182,7 +208,7 @@ class ChatService:
                     context=context,
                     started=started,
                     status=RunStatus.PARTIAL,
-                    investigation_id=investigation_id,
+                    request=request,
                 )
             except Exception as exc:
                 emit_run_event(
@@ -195,22 +221,77 @@ class ChatService:
                 logger.exception("Investigation workflow failed", error=str(exc))
                 raise
 
-    def answer(
-        self,
-        query: str,
-        *,
-        run_id: str | None = None,
-        event_sink: RunEventSink | None = None,
-    ) -> str:
-        return str(
-            self.run(query, run_id=run_id, event_sink=event_sink).get(
-                "last_action_result"
-            )
-            or ""
+    async def stream(self, request: ChatRequest) -> AsyncIterator[ChatStreamFrame]:
+        """실행을 등록하고 진행 이벤트와 최종 결과를 순서대로 내보낸다."""
+
+        query = request.query.strip()
+        run_id = new_run_id("chat")
+        self._run_registry.start(
+            run_id,
+            query,
+            conversation_id=request.conversation_id,
+            user_query=query,
         )
+        event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def event_sink(event: RunEvent) -> None:
+            self._run_registry.apply_event(event)
+            loop.call_soon_threadsafe(event_queue.put_nowait, event)
+
+        logger.info("Received query for commander", query=query, run_id=run_id)
+        yield ChatStreamFrame("processing", ChatStartedPayload(run_id=run_id))
+
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                self.execute,
+                request,
+                run_id=run_id,
+                event_sink=event_sink,
+            )
+        )
+        try:
+            while not task.done() or not event_queue.empty():
+                try:
+                    event = await asyncio.wait_for(
+                        event_queue.get(),
+                        timeout=0.25,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                yield ChatStreamFrame("event", event)
+            result = await task
+        except asyncio.CancelledError:
+            self._run_registry.request_cancel(run_id)
+            raise
+        except Exception as exc:
+            self._run_registry.fail(run_id, str(exc))
+            logger.exception(
+                "Commander execution failed",
+                error=str(exc),
+                run_id=run_id,
+            )
+            yield ChatStreamFrame(
+                "error",
+                ChatErrorPayload(
+                    run_id=run_id,
+                    message=f"지휘자 에이전트 실행 실패: {exc}",
+                ),
+            )
+            return
+
+        self._run_registry.complete(run_id, result)
+        yield ChatStreamFrame("final", result)
+        yield ChatStreamFrame("done")
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        return self._run_registry.get(run_id)
+
+    def cancel_run(self, run_id: str) -> dict[str, Any] | None:
+        return self._run_registry.request_cancel(run_id)
+
+    def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+        return self._run_registry.list_recent(limit=limit)
 
 
-__all__ = [
-    "ChatService",
-    "InvestigationRunner",
-]
+__all__ = ["ChatService"]

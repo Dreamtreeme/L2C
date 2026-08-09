@@ -13,7 +13,6 @@ from shared.schema.investigation_schema import (
     InvestigationConstraints,
     InvestigationPurpose,
     InvestigationRequest,
-    InvestigationStatus,
 )
 
 
@@ -142,9 +141,7 @@ def _apply_collection_scope_answer(
     """수집 사이트와 목표 건수를 실행 가능한 값으로 바꾼다."""
 
     if question.field == "site_scope":
-        constraints.sites = (
-            [] if selected_value == "all_enabled" else [selected_value]
-        )
+        constraints.sites = [] if selected_value == "all_enabled" else [selected_value]
         return True
     if question.field != "target_count":
         return False
@@ -325,17 +322,11 @@ def apply_clarification_answer(
         for item in investigation.clarification_questions
         if item.question_id != question.question_id
     ]
-    status = (
-        InvestigationStatus.AWAITING_CLARIFICATION
-        if remaining_questions
-        else InvestigationStatus.CHECKING_EVIDENCE
-    )
     return investigation.model_copy(
         update={
             "constraints": constraints,
             "clarification_answers": answers,
             "clarification_questions": remaining_questions,
-            "status": status,
         }
     )
 

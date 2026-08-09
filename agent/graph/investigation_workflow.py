@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from agent.observability.run_context import emit_run_event
-from agent.observability.run_contracts import RunPhase, RunStatus
+from agent.observability.run_contracts import RunPhase
 from agent.graph.investigation_answer_nodes import InvestigationAnswerNodes
 from agent.graph.investigation_collection_nodes import InvestigationCollectionNodes
 from agent.graph.investigation_context import (
@@ -18,11 +18,13 @@ from agent.graph.investigation_context import (
 )
 from agent.graph.investigation_evidence_nodes import InvestigationEvidenceNodes
 from agent.graph.investigation_request_nodes import InvestigationRequestNodes
-from agent.graph.investigation_ports import RunLookupPort
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
+    InvestigationOutcome,
     InvestigationRequest,
+    InvestigationResumeMode,
 )
+from shared.schema.run_schema import RunStatus
 
 
 class InvestigationWorkflow:
@@ -36,31 +38,25 @@ class InvestigationWorkflow:
         evidence_nodes: InvestigationEvidenceNodes,
         collection_nodes: InvestigationCollectionNodes,
         answer_nodes: InvestigationAnswerNodes,
-        capabilities: list[Any],
-        lookup_run: RunLookupPort,
     ) -> None:
-        self.capabilities = list(capabilities)
         self.request_nodes = request_nodes
         self.evidence_nodes = evidence_nodes
         self.collection_nodes = collection_nodes
         self.answer_nodes = answer_nodes
-        self.lookup_run = lookup_run
         self.graph = self._build_graph(checkpointer)
 
     def _build_graph(self, checkpointer: Any):
         workflow = StateGraph(InvestigationState)
-        workflow.add_node("load_context", self.request_nodes.load_context)
         workflow.add_node("understand", self.request_nodes.understand)
         workflow.add_node("clarify", self.request_nodes.clarify)
         workflow.add_node("define_evidence", self.evidence_nodes.define_evidence)
         workflow.add_node("inspect_evidence", self.evidence_nodes.inspect_evidence)
         workflow.add_node("plan_actions", self.evidence_nodes.plan_actions)
         workflow.add_node("collect", self.collection_nodes.collect)
+        workflow.add_node("postprocess", self.collection_nodes.postprocess)
         workflow.add_node("persist", self.collection_nodes.persist)
-        workflow.add_node("load_documents", self.answer_nodes.load_documents)
         workflow.add_node("answer", self.answer_nodes.answer)
-        workflow.add_edge(START, "load_context")
-        workflow.add_edge("load_context", "understand")
+        workflow.add_edge(START, "understand")
         workflow.add_conditional_edges(
             "understand",
             self.request_nodes.route_after_understand,
@@ -84,7 +80,7 @@ class InvestigationWorkflow:
             "inspect_evidence",
             self.evidence_nodes.route_after_evidence,
             {
-                "load_documents": "load_documents",
+                "answer": "answer",
                 "collect": "collect",
                 "plan_actions": "plan_actions",
             },
@@ -92,46 +88,31 @@ class InvestigationWorkflow:
         workflow.add_conditional_edges(
             "plan_actions",
             self.evidence_nodes.route_after_plan,
-            {"collect": "collect", "load_documents": "load_documents"},
+            {"collect": "collect", "answer": "answer"},
         )
-        workflow.add_edge("collect", "persist")
+        workflow.add_conditional_edges(
+            "collect",
+            self.collection_nodes.route_after_collect,
+            {
+                "postprocess": "postprocess",
+                "inspect_evidence": "inspect_evidence",
+            },
+        )
+        workflow.add_conditional_edges(
+            "postprocess",
+            self.collection_nodes.route_after_postprocess,
+            {
+                "persist": "persist",
+                "inspect_evidence": "inspect_evidence",
+            },
+        )
         workflow.add_edge("persist", "inspect_evidence")
-        workflow.add_edge("load_documents", "answer")
         workflow.add_edge("answer", END)
         return workflow.compile(checkpointer=checkpointer)
 
     @staticmethod
     def _thread_config(investigation_id: str) -> dict[str, dict[str, str]]:
         return {"configurable": {"thread_id": investigation_id}}
-
-    def _resolve_resume(
-        self,
-        query: str,
-        *,
-        resume_run_id: str,
-        investigation_id: str,
-        clarification_answer: ClarificationAnswer | dict[str, Any] | None,
-    ) -> tuple[str, str, ClarificationAnswer | dict[str, Any] | None, str]:
-        if investigation_id:
-            return query, investigation_id, clarification_answer, "checkpoint_resume"
-        if not resume_run_id:
-            return query, "", clarification_answer, ""
-
-        previous = self.lookup_run(resume_run_id) or {}
-        result = dict(previous.get("result") or {})
-        clarification = dict(result.get("clarification") or {})
-        checkpoint_id = str(result.get("investigation_id") or "")
-        if (
-            previous.get("status") == RunStatus.WAITING_INPUT.value
-            and checkpoint_id
-            and clarification.get("question_id")
-        ):
-            answer = clarification_answer or ClarificationAnswer(
-                question_id=str(clarification["question_id"]),
-                custom_value=query,
-            )
-            return query, checkpoint_id, answer, "checkpoint_resume"
-        return query, "", clarification_answer, "restart_from_request"
 
     @staticmethod
     def _pending_clarification(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -141,68 +122,47 @@ class InvestigationWorkflow:
         payload = getattr(interruptions[0], "value", None)
         return dict(payload) if isinstance(payload, dict) else None
 
-    def _normalize_result(self, result: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_result(
+        self,
+        result: dict[str, Any],
+        *,
+        resume_mode: InvestigationResumeMode,
+    ) -> InvestigationOutcome:
         clarification = self._pending_clarification(result)
         request = dict(result.get("request") or {})
-        evidence = dict(result.get("evidence") or {})
-        execution = dict(result.get("execution") or {})
         answer = dict(result.get("answer") or {})
         investigation = request.get("investigation")
-        normalized = {
-            "investigation": (
-                investigation.model_dump(mode="json")
-                if isinstance(investigation, InvestigationRequest)
-                else {}
-            ),
-            "db_report": evidence.get("db_report", {}),
-            "documents": evidence.get("documents", []),
-            "valid_ids": evidence.get("valid_ids", []),
-            "collection_results": [
-                item.model_dump(mode="json")
-                for item in execution.get("collection_results", [])
-            ],
-            "run_status": execution.get("run_status", ""),
-            "cannot_proceed_reason": execution.get(
-                "cannot_proceed_reason",
-                "",
-            ),
-            "final_answer": answer.get("final_answer", ""),
-        }
-        if clarification is None:
-            return normalized
-        emit_run_event(
-            "clarification_required",
-            RunPhase.CLARIFICATION,
-            str(clarification.get("question") or "추가 정보가 필요합니다."),
-            status=RunStatus.WAITING_INPUT,
-            data=clarification,
+        if not isinstance(investigation, InvestigationRequest):
+            raise TypeError("조사 그래프 결과에 InvestigationRequest가 없습니다.")
+        run_status = RunStatus.COMPLETED
+        final_answer = str(answer.get("final_answer") or "")
+        if clarification is not None:
+            run_status = RunStatus.WAITING_INPUT
+            final_answer = str(clarification.get("question") or "")
+            emit_run_event(
+                "clarification_required",
+                RunPhase.CLARIFICATION,
+                final_answer or "추가 정보가 필요합니다.",
+                status=RunStatus.WAITING_INPUT,
+                data=clarification,
+            )
+        return InvestigationOutcome(
+            investigation=investigation,
+            run_status=run_status,
+            final_answer=final_answer,
+            clarification=clarification,
+            resume_mode=resume_mode,
         )
-        normalized.update(
-            {
-                "clarification": clarification,
-                "final_answer": str(clarification.get("question") or ""),
-                "run_status": RunStatus.WAITING_INPUT.value,
-            }
-        )
-        return normalized
 
     def run(
         self,
         query: str,
         *,
         conversation_id: str = "",
-        resume_run_id: str = "",
+        context_run_id: str = "",
         investigation_id: str = "",
-        clarification_answer: ClarificationAnswer | dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        query, investigation_id, clarification_answer, resume_mode = (
-            self._resolve_resume(
-                query,
-                resume_run_id=resume_run_id,
-                investigation_id=investigation_id,
-                clarification_answer=clarification_answer,
-            )
-        )
+        clarification_answer: ClarificationAnswer | None = None,
+    ) -> InvestigationOutcome:
         if investigation_id:
             config = self._thread_config(investigation_id)
             snapshot = self.graph.get_state(config)
@@ -210,7 +170,7 @@ class InvestigationWorkflow:
                 raise ValueError("재개할 조사 상태를 찾을 수 없습니다.")
             if clarification_answer is None:
                 raise ValueError("조사를 재개하려면 확인 질문의 답변이 필요합니다.")
-            answer = ClarificationAnswer.model_validate(clarification_answer)
+            answer = clarification_answer
             pending = [
                 interrupt_value.value
                 for task in snapshot.tasks
@@ -225,9 +185,10 @@ class InvestigationWorkflow:
                 Command(resume=answer.model_dump(mode="json")),
                 config=config,
             )
-            normalized = self._normalize_result(dict(result))
-            normalized["resume_mode"] = resume_mode
-            return normalized
+            return self._normalize_result(
+                dict(result),
+                resume_mode="checkpoint_resume",
+            )
 
         investigation = InvestigationRequest(
             investigation_id=f"investigation-{uuid.uuid4().hex}",
@@ -236,16 +197,16 @@ class InvestigationWorkflow:
         )
         state = create_investigation_state(
             investigation,
-            [item.model_dump(mode="json") for item in self.capabilities],
-            resume_run_id=resume_run_id,
+            context_run_id=context_run_id,
         )
         result = self.graph.invoke(
             state,
             config=self._thread_config(investigation.investigation_id),
         )
-        normalized = self._normalize_result(dict(result))
-        normalized["resume_mode"] = resume_mode
-        return normalized
+        return self._normalize_result(
+            dict(result),
+            resume_mode="restart_from_request" if context_run_id else "",
+        )
 
 
 __all__ = ["InvestigationWorkflow"]

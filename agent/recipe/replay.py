@@ -19,7 +19,6 @@ from agent.runtime.site_context import normalize_page_role
 from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
 from agent.runtime.worker_contracts import WorkerState
 from agent.runtime.worker_data_services import SiteRecipeLoader
-from agent.utils.model_conversion import dump_model
 from agent.utils.text import recipe_url_scope_matches, url_template
 from shared.schema.recipe_schema import RecipeTransition, SiteRecipe
 
@@ -204,9 +203,7 @@ def _type_action_args(
         args["slot_name"] = slot_name
     if step.get("risk_level"):
         args["risk_level"] = step.get("risk_level")
-    args["needs_user_confirmation"] = bool(
-        step.get("needs_user_confirmation")
-    )
+    args["needs_user_confirmation"] = bool(step.get("needs_user_confirmation"))
     return args
 
 
@@ -239,9 +236,7 @@ def _contextual_action_args(
         }
     )
     args["risk_level"] = step.get("risk_level") or "safe_navigation"
-    args["needs_user_confirmation"] = bool(
-        step.get("needs_user_confirmation")
-    )
+    args["needs_user_confirmation"] = bool(step.get("needs_user_confirmation"))
     return args
 
 
@@ -284,15 +279,14 @@ def load_reflex_replay_context(
     observation = state["observation"]
     request = state["request"]
     replay = state["replay"]
+    intent = request["collection_intent"]
     markers = list(observation.get("current_markers", []) or [])
-    params = dict(request.get("recipe_params") or {})
+    params = dict(request.get("recipe_inputs") or {})
     params.setdefault("goal", request.get("goal", ""))
-    task_category = str(params.get("task_category") or "").strip()
-    site = str(params.get("site") or "").strip()
+    task_category = intent.task_category.strip()
+    site = intent.site.strip()
     current_image_path = str(observation.get("current_screenshot") or "")
-    current_page_role = normalize_page_role(
-        observation.get("current_page_role", "")
-    )
+    current_page_role = normalize_page_role(observation.get("current_page_role", ""))
     current_url = str(observation.get("current_url") or "")
     active_recipe = dict(replay.get("active_reflex_recipe", {}) or {})
     active_recipe_key = str(active_recipe.get("recipe_key") or "")
@@ -338,8 +332,7 @@ def _eligible_candidates(
     candidates: list[ReflexCandidate] = []
     for recipe_key, recipe in context.recipe_candidates:
         if recipe_key in context.blocked_recipe_keys or (
-            not context.active_recipe_key
-            and recipe_key in context.used_recipe_keys
+            not context.active_recipe_key and recipe_key in context.used_recipe_keys
         ):
             reason = (
                 "recipe_blocked_after_transition_failure"
@@ -489,9 +482,7 @@ def _match_action_screen(
 
     if trace["match_mode"] == "none":
         trace["match_mode"] = (
-            "grouped_recipe_action"
-            if action_index > 0
-            else "active_recipe_context"
+            "grouped_recipe_action" if action_index > 0 else "active_recipe_context"
         )
     return None, ""
 
@@ -502,13 +493,13 @@ def _bind_candidate(
     candidate: ReflexCandidate,
     rejection_log: ReflexRejectionLog,
 ) -> ReflexSelection | None:
-    transition_data = dump_model(candidate.transition)
+    transition_data = candidate.transition.model_dump(mode="json")
     before_state = dict(transition_data.get("before") or {})
     tool_calls: list[dict[str, Any]] = []
     tool_call_traces: dict[str, dict[str, Any]] = {}
 
     for action_index, recipe_action in enumerate(candidate.transition.actions):
-        step = dump_model(recipe_action)
+        step = recipe_action.model_dump(mode="json")
         step.update(
             {
                 "page_role": before_state.get("page_role", ""),

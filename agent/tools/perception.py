@@ -2,7 +2,6 @@ import ctypes
 import ctypes.wintypes as wintypes
 import datetime
 import hashlib
-import math
 import os
 import platform
 import time
@@ -14,24 +13,25 @@ import mss.tools
 import pyautogui
 import pygetwindow as gw
 import pyperclip
-from PIL import Image, ImageFilter, ImageStat
+from PIL import Image
 
 from agent.config import get_settings
-from agent.tools.som_engine import SomEngine
+from agent.tools.ocr_engine import OcrEngine
 from agent.utils.logger import logger
+from agent.vision.loading_wait import LoadingWait
 
 
 class PerceptionEngine:
     """
     모니터 화면을 인식하고 분석하는 Perception 엔진입니다.
-    mss를 이용한 고속 화면 캡처 및 OmniParser 연동을 담당합니다.
+    mss 화면 캡처와 OCR 진입점을 담당합니다.
     """
 
     def __init__(self):
         self.screenshot_dir = get_settings().paths.screenshot_dir
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         self.sct = mss.mss()
-        self.som_engine = SomEngine()
+        self.ocr_engine = OcrEngine()
         self.scale_x = 1.0
         self.scale_y = 1.0
         self.last_region = None
@@ -42,20 +42,17 @@ class PerceptionEngine:
         self._analysis_cache_order: list[str] = []
         self._analysis_cache_limit = get_settings().vision.ui_analysis_cache_limit
 
-        # WaitStable은 PerceptionEngine을 역참조하므로 순환 import를 피하기 위해 lazy 로딩합니다.
-        from agent.vision.wait_stable import WaitStable
-
-        self._wait_stable = WaitStable(self)
+        self.loading_wait = LoadingWait(self)
 
         logger.info(
-            "PerceptionEngine initialized with SomEngine",
+            "Perception engine initialized",
             screenshot_dir=str(self.screenshot_dir),
         )
 
     def close(self) -> None:
         """OCR 하위 프로세스와 화면 캡처 핸들을 명시적으로 정리한다."""
 
-        self.som_engine.close()
+        self.ocr_engine.close()
         self.sct.close()
         self.clear_browser_window()
 
@@ -65,10 +62,10 @@ class PerceptionEngine:
 
     @property
     def ocr_worker_pid(self) -> int | None:
-        return self.som_engine.ocr_worker_pid
+        return self.ocr_engine.worker_pid
 
     def ensure_ocr_worker_ready(self) -> None:
-        self.som_engine.ensure_ocr_worker_ready()
+        self.ocr_engine.ensure_ready()
 
     @staticmethod
     def _window_id(window) -> int | None:
@@ -241,31 +238,18 @@ class PerceptionEngine:
     def capture_screen(
         self,
         filename: Optional[str] = None,
-        initial_wait_sec: Optional[float] = None,
-        *,
-        wait_for_stable: bool = True,
     ) -> Path:
-        """
-        큰 화면 흔들림이 잦아든 뒤 브라우저 창 영역을 캡처합니다.
-        행동 후 변화 시작과 안정화 시간은 OpenCV 프레임 비교로 판단합니다.
+        """현재 브라우저 화면을 즉시 한 장 저장한다."""
 
-        Args:
-            filename: 저장할 파일명. 입력하지 않으면 타임스탬프 기반 자동 생성.
-
-        Returns:
-            저장된 스크린샷 이미지의 절대 경로 (Path 객체)
-        """
-        # 액션 효과가 캡처에 반영되기 시작할 짧은 시간만 확보합니다.
-        if initial_wait_sec is None:
-            initial_wait_sec = get_settings().vision.capture_initial_wait_sec
-        if initial_wait_sec > 0:
-            time.sleep(initial_wait_sec)
-
-        # Browser region lookup activates the window and is relatively expensive.
-        # Resolve it once and share it with WaitStable and the final capture.
         region = self._get_browser_region()
-        if wait_for_stable:
-            self._wait_stable.wait(region=region)
+        return self._save_capture(region, filename)
+
+    def _save_capture(
+        self,
+        region: Optional[Dict[str, int]],
+        filename: Optional[str] = None,
+    ) -> Path:
+        """이미 찾은 브라우저 영역을 다시 조회하지 않고 저장한다."""
 
         if not filename:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -323,138 +307,28 @@ class PerceptionEngine:
     def wait_for_transition_change(self, reference_image_path: str) -> bool:
         """화면 변경 행동 뒤 이전 화면이 그대로인 동안에는 OCR 캡처를 미룹니다."""
         region = self._get_browser_region()
-        return self._wait_stable.wait_for_change(
+        return self.loading_wait.wait_for_change(
             reference_image_path,
             region=region,
         )
 
-    def screen_quality(self, image_path: Path) -> Dict[str, Any]:
-        """브라우저 본문이 단색 빈 화면에 가까운지 저비용 이미지 지표로 검사한다."""
-        settings = get_settings().vision
-        bottom_ignore = settings.page_content_bottom_ignore_px
-        sample_width = settings.page_quality_sample_width
-        try:
-            with Image.open(image_path) as source:
-                source_rgb = source.convert("RGB")
-                content_top_setting = settings.page_content_top_px.strip().lower()
-                if content_top_setting in {"", "auto"}:
-                    content_top = self._detect_browser_content_top(source_rgb)
-                else:
-                    try:
-                        content_top = max(0, int(content_top_setting))
-                    except ValueError:
-                        content_top = self._detect_browser_content_top(source_rgb)
-                image = source_rgb.convert("L")
-                bottom = max(content_top + 1, image.height - bottom_ignore)
-                content = image.crop(
-                    (0, min(content_top, image.height - 1), image.width, bottom)
-                )
-                if sample_width > 0 and content.width > sample_width:
-                    ratio = sample_width / content.width
-                    content = content.resize(
-                        (sample_width, max(1, int(content.height * ratio))),
-                        Image.Resampling.BILINEAR,
-                    )
-                stats = ImageStat.Stat(content)
-                edge_image = content.filter(ImageFilter.FIND_EDGES)
-                if edge_image.width > 2 and edge_image.height > 2:
-                    # FIND_EDGES가 단색 이미지 외곽에 만드는 인공 경계는 품질 계산에서 제외한다.
-                    edge_image = edge_image.crop(
-                        (1, 1, edge_image.width - 1, edge_image.height - 1)
-                    )
-                edge_mean = ImageStat.Stat(edge_image).mean[0]
-                histogram = content.histogram()
-                pixel_count = max(1, sum(histogram))
-                dominant_ratio = max(histogram) / pixel_count
-                stddev = stats.stddev[0]
-        except (OSError, ValueError) as exc:
-            logger.debug(
-                "Screen quality check skipped",
-                error=str(exc),
-                image_path=str(image_path),
-            )
-            return {"low_information": False, "reason": "quality_check_error"}
-
-        settings = get_settings().vision
-        max_stddev = settings.page_blank_max_stddev
-        max_edge_mean = settings.page_blank_max_edge_mean
-        min_dominant_ratio = settings.page_blank_min_dominant_ratio
-        low_information = (
-            stddev <= max_stddev
-            and edge_mean <= max_edge_mean
-            and dominant_ratio >= min_dominant_ratio
-        )
-        return {
-            "low_information": low_information,
-            "reason": "low_information_page"
-            if low_information
-            else "page_content_present",
-            "stddev": round(stddev, 3),
-            "edge_mean": round(edge_mean, 3),
-            "dominant_ratio": round(dominant_ratio, 4),
-        }
-
     def capture_usable_screen(
         self,
-        max_attempts: Optional[int] = None,
         *,
         initial_wait_sec: Optional[float] = None,
     ) -> Path:
-        """단색 빈 본문이면 한 경로에서 기다리고 마지막 화면만 보존한다."""
-        settings = get_settings().vision
-        retry_interval = settings.page_capture_retry_sec
-        ready_timeout = settings.page_ready_timeout_sec
-        if max_attempts is None:
-            polling_interval = max(0.05, retry_interval)
-            max_attempts = max(
-                1, math.ceil(max(0.0, ready_timeout) / polling_interval) + 1
-            )
-            deadline = time.monotonic() + max(0.0, ready_timeout)
-        else:
-            max_attempts = max(1, int(max_attempts))
-            deadline = None
-        last_path: Path | None = None
-        for attempt in range(1, max_attempts + 1):
-            # 로딩 재관찰은 같은 파일을 덮어써 빈 화면 산출물이 쌓이지 않게 한다.
-            filename = last_path.name if last_path is not None else None
-            if initial_wait_sec is None:
-                last_path = self.capture_screen(filename=filename)
-            else:
-                last_path = self.capture_screen(
-                    filename=filename, initial_wait_sec=initial_wait_sec
-                )
-            quality = self.screen_quality(last_path)
-            stability = dict(self._wait_stable.last_wait_result or {})
-            if stability:
-                quality.update(
-                    {
-                        "stable": bool(stability.get("stable")),
-                        "stability_reason": str(stability.get("reason") or ""),
-                        "stability_probe_count": int(stability.get("probe_count") or 0),
-                        "stability_confirmations": int(
-                            stability.get("stable_frames") or 0
-                        ),
-                        "stability_diff_percent": stability.get("diff_percent"),
-                    }
-                )
-            self.last_capture_quality = dict(quality)
-            logger.info(
-                "Screen quality checked",
-                attempt=attempt,
-                max_attempts=max_attempts,
-                **quality,
-            )
-            if not quality.get("low_information") and quality.get("stable", True):
-                return last_path
-            if deadline is not None and time.monotonic() >= deadline:
-                break
-            if attempt < max_attempts and retry_interval > 0:
-                wait_sec = retry_interval
-                if deadline is not None:
-                    wait_sec = min(wait_sec, max(0.0, deadline - time.monotonic()))
-                if wait_sec > 0:
-                    time.sleep(wait_sec)
-        return last_path
+        """메모리 프레임으로 로딩을 기다린 뒤 준비된 화면만 한 번 저장한다."""
+
+        wait_sec = (
+            get_settings().vision.capture_initial_wait_sec
+            if initial_wait_sec is None
+            else initial_wait_sec
+        )
+        if wait_sec > 0:
+            time.sleep(wait_sec)
+        region = self._get_browser_region()
+        self.last_capture_quality = self.loading_wait.wait_until_ready(region=region)
+        return self._save_capture(region)
 
     def get_current_url(self) -> str:
         """활성 브라우저의 주소창 URL을 클립보드 경유로 읽습니다."""
@@ -564,82 +438,8 @@ class PerceptionEngine:
             old_key = self._analysis_cache_order.pop(0)
             self._analysis_cache.pop(old_key, None)
 
-    def _prepare_som_image(self, image_path: Path) -> tuple[Path, int]:
-        crop_setting = get_settings().vision.som_crop_top.strip().lower()
-        try:
-            with Image.open(image_path) as img:
-                if crop_setting in {"", "auto"}:
-                    crop_top = self._detect_browser_content_top(img)
-                else:
-                    try:
-                        crop_top = max(0, int(crop_setting))
-                    except ValueError:
-                        crop_top = self._detect_browser_content_top(img)
-                if crop_top <= 0:
-                    return image_path, 0
-                if img.height <= crop_top + 400:
-                    return image_path, 0
-                cropped_path = image_path.with_name(f"som_{image_path.name}")
-                cropped = img.crop((0, crop_top, img.width, img.height))
-                if cropped_path.suffix.lower() in (".jpg", ".jpeg"):
-                    cropped.save(cropped_path, "JPEG", quality=80)
-                else:
-                    cropped.save(cropped_path)
-                return cropped_path, crop_top
-        except (OSError, ValueError) as e:
-            logger.debug("Failed to crop browser chrome for SoM", error=str(e))
-            return image_path, 0
-
-    def _detect_browser_content_top(self, image: Image.Image) -> int:
-        """브라우저 chrome과 페이지 사이의 전체 폭 수평 경계를 찾는다."""
-
-        settings = get_settings().vision
-        min_y = settings.som_crop_scan_min_y
-        max_y = min(
-            settings.som_crop_scan_max_y,
-            max(0, image.height - 400),
-        )
-        if max_y <= min_y:
-            return 0
-
-        sample_width = settings.som_crop_sample_width
-        sample = image.convert("RGB")
-        if sample.width > sample_width:
-            sample = sample.resize(
-                (sample_width, sample.height), Image.Resampling.BILINEAR
-            )
-
-        row_means = [
-            ImageStat.Stat(sample.crop((0, y, sample.width, y + 1))).mean
-            for y in range(max_y + 1)
-        ]
-        best_y = 0
-        best_delta = 0.0
-        for y in range(max(1, min_y), max_y + 1):
-            delta = sum(
-                abs(row_means[y][channel] - row_means[y - 1][channel])
-                for channel in range(3)
-            )
-            if delta > best_delta:
-                best_delta = delta
-                best_y = y
-
-        min_delta = settings.som_crop_min_row_delta
-        if best_delta < min_delta:
-            logger.debug(
-                "Browser content boundary was weak; using full image",
-                best_delta=round(best_delta, 2),
-            )
-            return 0
-        logger.info(
-            "Detected browser content boundary",
-            crop_top=best_y,
-            row_delta=round(best_delta, 2),
-        )
-        return best_y
-
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
-        """OmniParser와 PaddleOCR 결과를 물리 좌표가 있는 SoM 마커로 변환한다."""
+        """PaddleOCR와 OmniParser 결과를 물리 좌표가 있는 마커로 변환한다."""
 
         if not image_path.exists():
             logger.error(
@@ -660,28 +460,13 @@ class PerceptionEngine:
                 "analysis_mode": str(cached.get("analysis_mode") or "full"),
             }
 
-        # 1. 로컬 SoM 엔진 실행 (마킹 이미지 합성 및 좌표 추출)
-        som_image_path, crop_top = self._prepare_som_image(image_path)
-        try:
-            marked_filename = f"marked_{image_path.name}"
-            marked_path, marker_bboxes, final_elements = self.som_engine.process_image(
-                som_image_path,
-                output_filename=marked_filename,
-            )
-            if crop_top:
-                for bbox in marker_bboxes.values():
-                    bbox[1] += crop_top
-                    bbox[3] += crop_top
-                logger.info("Applied browser chrome crop for SoM", crop_top=crop_top)
-        finally:
-            if som_image_path != image_path:
-                try:
-                    som_image_path.unlink(missing_ok=True)
-                except OSError as exc:
-                    logger.debug(
-                        "Failed to remove temporary SoM image",
-                        error=str(exc),
-                    )
+        crop_top = int(self.last_capture_quality.get("content_top", 0) or 0)
+        marked_filename = f"marked_{image_path.name}"
+        marked_path, marker_bboxes, final_elements = self.ocr_engine.process_image(
+            image_path,
+            output_filename=marked_filename,
+            content_top=crop_top,
+        )
 
         markers = []
         for marker_id, bbox in marker_bboxes.items():

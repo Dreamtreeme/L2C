@@ -7,36 +7,18 @@ from typing import Any
 
 from agent.utils.job_fields import (
     normalize_job_collection_fields,
-    required_job_fields,
 )
 from shared.schema.agent_contract import (
     JOB_COLLECTION_FIELD_LABELS,
-    JobCollectionContract,
 )
 from agent.runtime.worker_contracts import WorkerState
-
-
-def build_job_collection_contract(
-    collection_intent: Mapping[str, Any] | None,
-    *,
-    profile_fields: list[str] | tuple[str, ...] = (),
-) -> dict[str, Any]:
-    """사이트 기본 필드와 요청 근거 필드를 하나의 계약으로 합친다."""
-
-    contract = JobCollectionContract(
-        required_fields=required_job_fields(
-            collection_intent,
-            profile_fields=profile_fields,
-        )
-    )
-    return contract.model_dump(mode="json")
 
 
 def required_fields_from_state(state: WorkerState) -> list[str]:
     """그래프 상태에서 현재 실행의 필수 필드 목록을 읽는다."""
 
-    contract = state["request"]["job_collection_contract"]
-    return normalize_job_collection_fields(contract["required_fields"])
+    intent = state["request"]["collection_intent"]
+    return [field.value for field in intent.required_fields]
 
 
 def field_contract_items(fields: list[str] | tuple[str, ...]) -> list[dict[str, str]]:
@@ -64,10 +46,7 @@ def detail_coverage_matches(
     current_key = str(detail_key or "").strip()
     if stored_key and current_key:
         return stored_key == current_key
-    return bool(
-        current_url
-        and str(coverage.get("url") or "").strip() == current_url
-    )
+    return bool(current_url and str(coverage.get("url") or "").strip() == current_url)
 
 
 def new_job_detail_coverage(
@@ -121,16 +100,12 @@ def merge_job_detail_coverage(
     if not detail_coverage_matches(current, current_url, detail_key):
         current = new_job_detail_coverage(current_url, detail_key)
 
-    evidence = _normalize_field_evidence(
-        current.get("field_evidence")
-    )
+    evidence = _normalize_field_evidence(current.get("field_evidence"))
     # 카드 큐의 회사명·직무명은 탐색 힌트일 뿐 상세 화면의 사실 근거가 아닙니다.
     evidence.update(_system_field_evidence(current_url))
 
     observed = observation if isinstance(observation, Mapping) else {}
-    evidence.update(
-        _normalize_field_evidence(observed.get("observed_fields"))
-    )
+    evidence.update(_normalize_field_evidence(observed.get("observed_fields")))
 
     unavailable = normalize_job_collection_fields(
         observed.get("unavailable_fields")
@@ -143,8 +118,7 @@ def merge_job_detail_coverage(
         "field_evidence": evidence,
         "unavailable_fields": list(unavailable),
         "page_exhausted": bool(
-            current.get("page_exhausted")
-            or observed.get("page_exhausted")
+            current.get("page_exhausted") or observed.get("page_exhausted")
         ),
     }
 
@@ -156,9 +130,7 @@ def detail_coverage_status(
     """필수 필드가 확인·미제공·누락 중 어디에 속하는지 계산한다."""
 
     required = list(normalize_job_collection_fields(required_fields))
-    evidence = _normalize_field_evidence(
-        coverage.get("field_evidence")
-    )
+    evidence = _normalize_field_evidence(coverage.get("field_evidence"))
     found = [field for field in required if field in evidence]
     unavailable = (
         [
@@ -185,7 +157,6 @@ def detail_coverage_status(
 
 
 __all__ = [
-    "build_job_collection_contract",
     "detail_coverage_matches",
     "detail_coverage_status",
     "field_contract_items",

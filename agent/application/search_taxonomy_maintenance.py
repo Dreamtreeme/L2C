@@ -6,12 +6,13 @@ import json
 import sqlite3
 from pathlib import Path
 
+from agent.application.job_taxonomy_linker import JobTaxonomyLinker
 from agent.application.search_taxonomy_import_service import import_local_seed
 from agent.application.search_taxonomy_service import (
     DEFAULT_LOCAL_SEED,
-    LOCAL_SOURCE_KEY,
     SearchTaxonomyService,
 )
+from agent.application.search_taxonomy_utils import CORE_SOURCE_KEY
 from shared.db.database import Database
 
 
@@ -20,7 +21,7 @@ def _installed_seed_version(db_path: Path) -> str:
     try:
         row = connection.execute(
             "SELECT version FROM taxonomy_sources WHERE source_key = ?",
-            (LOCAL_SOURCE_KEY,),
+            (CORE_SOURCE_KEY,),
         ).fetchone()
     finally:
         connection.close()
@@ -38,6 +39,7 @@ def prepare_search_taxonomy(
     resolved_seed_path = Path(seed_path)
     Database(resolved_db_path)
     service = SearchTaxonomyService(resolved_db_path)
+    linker = JobTaxonomyLinker(resolved_db_path)
 
     seed_changed = False
     if resolved_seed_path.exists():
@@ -48,9 +50,9 @@ def prepare_search_taxonomy(
             import_local_seed(resolved_db_path, resolved_seed_path)
 
     if seed_changed:
-        service.relink_all_jobs()
+        linker.relink_all_jobs()
     else:
-        service.relink_pending_jobs(limit=100, max_attempts=2)
+        linker.relink_pending_jobs(limit=100, max_attempts=2)
     return service
 
 

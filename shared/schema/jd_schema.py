@@ -100,7 +100,6 @@ class JobCollectionEvidence(BaseModel):
 
     required_fields: list[JobField] = Field(default_factory=list)
     unavailable_fields: list[JobField] = Field(default_factory=list)
-    extraction_missing_fields: list[JobField] = Field(default_factory=list)
     field_evidence: dict[JobField, str] = Field(default_factory=dict)
     page_exhausted: bool = False
     screenshot_path: str = ""
@@ -110,15 +109,32 @@ class JobCollectionEvidence(BaseModel):
     @field_validator(
         "required_fields",
         "unavailable_fields",
-        "extraction_missing_fields",
     )
     @classmethod
     def unique_fields(cls, values: list[JobField]) -> list[JobField]:
         return list(dict.fromkeys(values))
 
 
+class JobCapture(BaseModel):
+    """비전 작업자가 상세 화면에서 확보한 정제 전 원문과 근거."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    raw_ocr_text: str
+    evidence: JobCollectionEvidence = Field(default_factory=JobCollectionEvidence)
+
+    @field_validator("url", "raw_ocr_text")
+    @classmethod
+    def require_non_empty_text(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("상세 URL과 OCR 원문은 비어 있을 수 없습니다.")
+        return normalized
+
+
 class CollectedJob(BaseModel):
-    """작업자가 저장 계층에 전달하는 공고 한 건."""
+    """후처리를 마치고 저장할 수 있는 공고 한 건."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -160,6 +176,7 @@ __all__ = [
     "JOB_FIELDS",
     "JOB_IDENTITY_FIELDS",
     "JobCollectionEvidence",
+    "JobCapture",
     "JobField",
     "JobPosting",
     "StoredJob",

@@ -238,7 +238,7 @@ def build_transition_observation(
     markers: list[dict[str, Any]],
     screenshot: str,
     marked_image: str,
-    to_capture_id: str = "",
+    after_observation_id: str = "",
     current_url: str = "",
     page_role: str = "",
     screen_signature: dict[str, Any] | None = None,
@@ -249,7 +249,7 @@ def build_transition_observation(
     """행동 step과 관찰 결과를 한 묶음으로 만든다."""
 
     after_state = {
-        "capture_id": str(to_capture_id or ""),
+        "observation_id": str(after_observation_id or ""),
         "url_template": url_template(str(current_url or "")),
         "page_role": str(page_role or ""),
         "screen_context_signature": compact_screen_context_signature(screen_signature),
@@ -257,8 +257,10 @@ def build_transition_observation(
     return {
         "action_seq": transition_request.get("action_seq"),
         "action": transition_request.get("action", ""),
-        "from_capture_id": str(transition_request.get("from_capture_id") or ""),
-        "to_capture_id": str(to_capture_id or ""),
+        "before_observation_id": str(
+            transition_request.get("before_observation_id") or ""
+        ),
+        "after_observation_id": str(after_observation_id or ""),
         "step": dict(transition_request.get("step", {}) or {}),
         "expected_after": dict(transition_request.get("step") or {}).get(
             "expected_after", ""

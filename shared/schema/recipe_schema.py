@@ -29,7 +29,10 @@ class RecipeTarget(BaseModel):
 class RecipeCheckpoint(BaseModel):
     """전이 전후에 다시 확인할 화면 상태."""
 
-    capture_id: str = Field("", description="자율탐색 당시 캡처 식별자(capture id)")
+    observation_id: str = Field(
+        "",
+        description="자율탐색 당시 화면 관찰 식별자(observation id)",
+    )
     url_template: str = Field("", description="URL 템플릿(url template)")
     page_role: str = Field("", description="관찰된 화면 역할(page role)")
     screen_context_signature: Dict[str, Any] = Field(

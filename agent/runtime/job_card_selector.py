@@ -25,14 +25,14 @@ from agent.runtime.job_card_queue import (
     resolved_job_card_count,
 )
 from agent.runtime.worker_state import (
-    collected_job_count,
+    job_capture_count,
     count_mode_from_state,
     target_count_from_state,
 )
 from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.utils.image_utils import image_to_base64_jpeg
 from agent.utils.logger import logger
-from agent.utils.model_conversion import dump_model
+from agent.utils.model_conversion import parse_model_payload
 
 
 class JobCardSelection(BaseModel):
@@ -65,7 +65,7 @@ def should_select_job_cards(state: WorkerState) -> bool:
     """아직 큐가 없는 검색 결과 화면에만 전용 판단을 적용한다."""
 
     target_count = target_count_from_state(state)
-    collected_count = collected_job_count(state)
+    collected_count = job_capture_count(state)
     queue = [
         item
         for item in (state["collection"].get("job_card_queue") or [])
@@ -158,10 +158,7 @@ def _compact_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _selection_messages(state: WorkerState, remaining_count: int) -> list[Any]:
     markers = _compact_markers(list(state["observation"].get("current_markers") or []))
-    recipe_params = dict(state["request"].get("recipe_params") or {})
-    search_query = str(
-        recipe_params.get("query") or recipe_params.get("keyword") or ""
-    ).strip()
+    search_query = state["request"]["collection_intent"].search_keyword.strip()
     visible_all = (
         count_mode_from_state(state) == "visible_all"
         and target_count_from_state(state) == 0
@@ -358,7 +355,7 @@ def _validated_refinement_target(
 def _remaining_job_count(state: WorkerState) -> int:
     target_count = target_count_from_state(state)
     resolved_count = max(
-        collected_job_count(state),
+        job_capture_count(state),
         resolved_job_card_count(list(state["collection"].get("job_card_queue") or [])),
     )
     return (
@@ -378,7 +375,7 @@ def _invoke_job_card_selector(
         "job_card_selection",
         stream=True,
     )
-    return dump_model(raw)
+    return parse_model_payload(raw, JobCardSelection).model_dump(mode="json")
 
 
 def _selection_availability(

@@ -19,55 +19,55 @@ def test_queue_phash_match_records_return_transition(monkeypatch):
     result = worker_selection.selection_node(
         worker_state(
             observation={
-                "current_capture_id": "capture:0009",
+                "observation_id": "observation:0009",
                 "current_screenshot": "returned-list.png",
                 "current_url": "https://www.wanted.co.kr/search",
                 "ocr_complete": False,
                 "raw_screen_signature": {
-                "phash": "0" * 16,
-                "size": [1000, 1000],
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
                 },
             },
             transition={
                 "transition_result": {
-                "status": "needs_ocr",
-                "action": "go_back",
-                "action_seq": 9,
-                "source": "autonomous",
-                "started_at": time.time(),
-                "step": {
-                    "seq": 9,
+                    "status": "needs_ocr",
                     "action": "go_back",
-                    "page_role": "job_detail",
-                    "args": {"page_role": "job_detail"},
-                },
+                    "action_seq": 9,
+                    "source": "autonomous",
+                    "started_at": time.time(),
+                    "step": {
+                        "seq": 9,
+                        "action": "go_back",
+                        "page_role": "job_detail",
+                        "args": {"page_role": "job_detail"},
+                    },
                 },
                 "action_events": [
-                {
-                    "seq": 9,
-                    "result": {
-                        "action": "go_back",
-                        "status": "success",
-                    },
-                }
+                    {
+                        "seq": 9,
+                        "result": {
+                            "action": "go_back",
+                            "status": "success",
+                        },
+                    }
                 ],
             },
             collection={
                 "job_card_queue": [
-                {
-                    "queue_id": "card-2",
-                    "status": "pending",
-                    "title": "두 번째 iOS 개발자",
-                    "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
-                    "center_ratio": [0.4, 0.425],
-                }
+                    {
+                        "queue_id": "card-2",
+                        "status": "pending",
+                        "title": "두 번째 iOS 개발자",
+                        "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+                        "center_ratio": [0.4, 0.425],
+                    }
                 ],
                 "job_results_memory": {
-                "screen_signature": {
-                    "phash": "0" * 16,
-                    "size": [1000, 1000],
-                    "anchors": ["검색 결과", "두 번째 iOS 개발자"],
-                },
+                    "screen_signature": {
+                        "phash": "0" * 16,
+                        "size": [1000, 1000],
+                        "anchors": ["검색 결과", "두 번째 iOS 개발자"],
+                    },
                 },
             },
         ),
@@ -75,14 +75,12 @@ def test_queue_phash_match_records_return_transition(monkeypatch):
     )
 
     assert result["decision"]["pending_action"].source == "job_card_queue"
-    record = action_event_transitions(
-        result["transition"]["action_events"]
-    )[0]
-    assert record["action_seq"] == 9
-    assert record["action"] == "go_back"
-    assert record["status"] == "ready"
-    assert record["reason"] == "queue_return_phash_match"
-    assert record["marker_texts"] == [
+    record = action_event_transitions(result["transition"]["action_events"])[0]
+    assert record.action_seq == 9
+    assert record.action == "go_back"
+    assert record.status == "ready"
+    assert record.reason == "queue_return_phash_match"
+    assert record.marker_texts == [
         "검색 결과",
         "두 번째 iOS 개발자",
     ]
@@ -104,13 +102,12 @@ def test_queue_phash_mismatch_falls_through_to_ocr():
     }
     state = worker_state(
         observation={
-            "current_capture_id": "capture:0009",
-            "ocr_capture_id": "",
+            "observation_id": "observation:0009",
             "current_url": "https://www.wanted.co.kr/search",
             "ocr_complete": False,
             "raw_screen_signature": {
-            "phash": "f" * 16,
-            "size": [1000, 1000],
+                "phash": "f" * 16,
+                "size": [1000, 1000],
             },
         },
         transition={
@@ -119,19 +116,19 @@ def test_queue_phash_mismatch_falls_through_to_ocr():
         },
         collection={
             "job_card_queue": [
-            {
-                "queue_id": "card-2",
-                "status": "pending",
-                "title": "두 번째 iOS 개발자",
-                "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
-            },
+                {
+                    "queue_id": "card-2",
+                    "status": "pending",
+                    "title": "두 번째 iOS 개발자",
+                    "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+                },
             ],
             "job_results_memory": {
-            "screen_signature": {
-                "phash": "0" * 16,
-                "size": [1000, 1000],
-                "anchors": ["검색 결과", "두 번째 iOS 개발자"],
-            },
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
+                    "anchors": ["검색 결과", "두 번째 iOS 개발자"],
+                },
             },
         },
     )
@@ -157,7 +154,7 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
             transition={"transition_request": request},
             observation={
                 "current_url": "https://www.wanted.co.kr/search",
-                "current_capture_id": "capture:0002",
+                "observation_id": "observation:0002",
                 "current_markers": [{"id": 1, "text": "검색 결과"}],
                 "screen_signature": {"phash": "f" * 16},
                 "ocr_complete": True,
@@ -171,9 +168,7 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
         transition["transition"]["transition_result"]["reason"]
         == "recipe_after_state_missing"
     )
-    assert transition["replay"]["reflex_blocked_recipe_keys"] == [
-        "path6#search"
-    ]
+    assert transition["replay"]["reflex_blocked_recipe_keys"] == ["path6#search"]
 
 
 def test_reflex_transition_accepts_changed_page_role_with_dynamic_content(
@@ -186,24 +181,27 @@ def test_reflex_transition_accepts_changed_page_role_with_dynamic_content(
     )
     result = worker_transition.transition_node(
         worker_state(
-            transition={"transition_request": {
-                "source": "reflex",
-            "before_page_role": "search_overlay",
-            "expected_after_state": {
-                "url_template": "wanted.co.kr/search?query",
-                "page_role": "search_results",
-                "screen_context_signature": {
-                    "phash": "0" * 16,
-                    "size": [1920, 1080],
-                },
-            }}},
+            transition={
+                "transition_request": {
+                    "source": "reflex",
+                    "before_page_role": "search_overlay",
+                    "expected_after_state": {
+                        "url_template": "wanted.co.kr/search?query",
+                        "page_role": "search_results",
+                        "screen_context_signature": {
+                            "phash": "0" * 16,
+                            "size": [1920, 1080],
+                        },
+                    },
+                }
+            },
             observation={
                 "current_url": "https://www.wanted.co.kr/search?query=ios",
                 "current_page_role": "search",
                 "current_markers": [{"id": 1, "text": "검색 결과"}],
                 "screen_signature": {
-                "phash": "f" * 16,
-                "size": [1920, 1080],
+                    "phash": "f" * 16,
+                    "size": [1920, 1080],
                 },
                 "ocr_complete": True,
             },
@@ -226,22 +224,25 @@ def test_reflex_transition_keeps_phash_check_within_same_page_role(monkeypatch):
     )
     result = worker_transition.transition_node(
         worker_state(
-            transition={"transition_request": {
-                "source": "reflex",
-            "before_page_role": "job_detail",
-            "expected_after_state": {
-                "page_role": "job_detail",
-                "screen_context_signature": {
-                    "phash": "0" * 16,
-                    "size": [1920, 1080],
-                },
-            }}},
+            transition={
+                "transition_request": {
+                    "source": "reflex",
+                    "before_page_role": "job_detail",
+                    "expected_after_state": {
+                        "page_role": "job_detail",
+                        "screen_context_signature": {
+                            "phash": "0" * 16,
+                            "size": [1920, 1080],
+                        },
+                    },
+                }
+            },
             observation={
                 "current_page_role": "job_detail",
                 "current_markers": [{"id": 1, "text": "상세"}],
                 "screen_signature": {
-                "phash": "f" * 16,
-                "size": [1920, 1080],
+                    "phash": "f" * 16,
+                    "size": [1920, 1080],
                 },
                 "ocr_complete": True,
             },

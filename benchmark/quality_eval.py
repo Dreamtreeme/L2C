@@ -10,17 +10,17 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import ValidationError
 
-from agent.utils.job_fields import (
-    DETAIL_JOB_FIELDS,
-    IDENTITY_JOB_FIELDS,
-    normalize_job_collection_fields,
+from agent.utils.job_fields import normalize_job_collection_fields
+from shared.schema.jd_schema import (
+    JOB_DETAIL_FIELDS,
+    JOB_FIELDS,
+    JOB_IDENTITY_FIELDS,
+    JobPosting,
 )
-from shared.schema.jd_schema import JOB_FIELDS
-from shared.schema.jd_schema import JobPosting
 
 
-REQUIRED_FIELDS = IDENTITY_JOB_FIELDS
-CONTENT_FIELDS = DETAIL_JOB_FIELDS
+REQUIRED_FIELDS = tuple(field.value for field in JOB_IDENTITY_FIELDS)
+CONTENT_FIELDS = tuple(field.value for field in JOB_DETAIL_FIELDS)
 
 
 def _normalized_text(value: Any) -> str:
@@ -34,7 +34,9 @@ def _normalized_url(value: Any) -> str:
     parts = urlsplit(raw)
     if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
         return ""
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
+    return urlunsplit(
+        (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", "")
+    )
 
 
 def normalize_job_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -88,10 +90,7 @@ def evaluate_job_records(
     if not resolved_required_fields:
         resolved_required_fields = list(REQUIRED_FIELDS)
     raw_actual_records = extract_job_records(actual)
-    actual_records = [
-        normalize_job_record(item)
-        for item in raw_actual_records
-    ]
+    actual_records = [normalize_job_record(item) for item in raw_actual_records]
     count = len(actual_records)
     valid_count = 0
     required_present = 0
@@ -123,7 +122,9 @@ def evaluate_job_records(
             elif field in unavailable:
                 required_present += 1
                 unavailable_required += 1
-        content_present += sum(_is_present(record.get(field)) for field in CONTENT_FIELDS)
+        content_present += sum(
+            _is_present(record.get(field)) for field in CONTENT_FIELDS
+        )
         normalized_url = _normalized_url(record.get("url"))
         if normalized_url:
             urls.append(normalized_url)
@@ -136,13 +137,19 @@ def evaluate_job_records(
         "required_fields": resolved_required_fields,
         "unavailable_required_field_count": unavailable_required,
         "schema_valid_rate": round(valid_count / count, 6) if count else 0.0,
-        "required_field_coverage": round(required_present / required_slots, 6) if required_slots else 0.0,
-        "content_field_coverage": round(content_present / content_slots, 6) if content_slots else 0.0,
+        "required_field_coverage": round(required_present / required_slots, 6)
+        if required_slots
+        else 0.0,
+        "content_field_coverage": round(content_present / content_slots, 6)
+        if content_slots
+        else 0.0,
         "valid_url_count": len(urls),
         "unique_url_rate": round(unique_url_rate, 6),
     }
 
-    reference_records = [normalize_job_record(item) for item in extract_job_records(reference)]
+    reference_records = [
+        normalize_job_record(item) for item in extract_job_records(reference)
+    ]
     if reference is None:
         return result
 
@@ -175,8 +182,12 @@ def evaluate_job_records(
 
     result["reference"] = {
         "record_count": len(reference_records),
-        "url_recall": round(matched / len(reference_records), 6) if reference_records else 0.0,
-        "identity_exact_rate": round(exact_identity_fields / (matched * 2), 6) if matched else 0.0,
+        "url_recall": round(matched / len(reference_records), 6)
+        if reference_records
+        else 0.0,
+        "identity_exact_rate": round(exact_identity_fields / (matched * 2), 6)
+        if matched
+        else 0.0,
         "content_exact_rate": round(exact_content_fields / compared_content_fields, 6)
         if compared_content_fields
         else None,
@@ -185,16 +196,17 @@ def evaluate_job_records(
 
 
 def evaluate_collection_summary(result: Any) -> dict[str, Any]:
-    from agent.runtime.site_context import looks_like_job_detail_url, site_profile_for_url
+    from agent.runtime.site_context import (
+        looks_like_job_detail_url,
+        site_profile_for_url,
+    )
 
     payload = result if isinstance(result, dict) else {}
     target = max(0, int(payload.get("target_count") or 0))
     collected = max(0, int(payload.get("collected_count") or 0))
     persisted = max(0, int(payload.get("persisted_count") or 0))
     persisted_items = [
-        item
-        for item in payload.get("persisted_items", [])
-        if isinstance(item, dict)
+        item for item in payload.get("persisted_items", []) if isinstance(item, dict)
     ]
     detail_url_items = persisted_items
     valid_detail_urls = 0
@@ -208,9 +220,7 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
                 parsed.scheme in {"http", "https"} and bool(parsed.netloc)
             )
     source_url_integrity = (
-        valid_detail_urls / len(detail_url_items)
-        if detail_url_items
-        else 1.0
+        valid_detail_urls / len(detail_url_items) if detail_url_items else 1.0
     )
     observed_ids = {
         int(job_id)
@@ -227,7 +237,9 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
         "observed_existing_count": len(observed_ids),
         "resolved_count": resolved,
         "target_fulfillment": round(min(1.0, resolved / target), 6) if target else None,
-        "persistence_rate": round(min(1.0, persisted / collected), 6) if collected else 0.0,
+        "persistence_rate": round(min(1.0, persisted / collected), 6)
+        if collected
+        else 0.0,
         "detail_url_checked_count": len(detail_url_items),
         "detail_url_valid_count": valid_detail_urls,
         "source_url_integrity": round(source_url_integrity, 6),
@@ -238,7 +250,9 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Evaluate deterministic collection quality metrics.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate deterministic collection quality metrics."
+    )
     parser.add_argument("actual", type=Path)
     parser.add_argument("--reference", type=Path)
     args = parser.parse_args()
@@ -248,7 +262,11 @@ def main() -> int:
         if args.reference
         else None
     )
-    print(json.dumps(evaluate_job_records(actual, reference), ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            evaluate_job_records(actual, reference), ensure_ascii=False, indent=2
+        )
+    )
     return 0
 
 

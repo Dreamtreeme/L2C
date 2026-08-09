@@ -128,15 +128,15 @@ GNB(Global Navigation Bar) 바의 '돋보기(검색)' 아이콘이나 '로그인
 * 초기 연동 시 Windows 환경의 PIL 이미지 오픈 시점의 **파일 락(File Lock) 및 라이브러리 DLL 충돌**로 멀티프로세싱 안정성이 떨어지는 현상이 식별됨.
 
 ### [해결 조치]
-1. **인메모리 디코딩 적용**: 디스크 입출력 없이 mss 캡처의 raw BGRA 데이터를 메모리 레벨에서 직접 `BGRX` 디코더를 활용하여 PIL 이미지로 초고속 고정밀 변환 (`wait_stable.py`, `som_engine.py`).
+1. **인메모리 디코딩 적용**: 디스크 입출력 없이 mss 캡처의 raw BGRA 데이터를 메모리 프레임으로 변환 (`loading_wait.py`, `ocr_engine.py`).
 2. **OmniParser YOLO & PaddleOCR 통합**:
-   - `som_engine.py`에서 로컬 GPU(CUDA)를 바인딩하여 1.2s 수준으로 탐지 속도 가속화.
+   - `omni_parser.py`에서 로컬 GPU(CUDA)를 바인딩해 아이콘을 검출.
    - **IoU 기반 텍스트-아이콘 중복 필터링 (NMS)** 알고리즘을 적용하여 UI 마커 숫자가 겹치거나 지저분해지는 중복 마킹 현상을 말끔히 제거.
 3. **듀얼 모니터 좌표 매핑 교정**: 감지된 오프셋 좌표를 브라우저 윈도우 시작점에 매핑하여, 서브 모니터에서도 오차 없이 정밀하게 요소를 타격하는 스케일 보정 코드 적용 완료.
 
 ### [관련 참조 리소스]
-* **로컬 SoM 엔진**: [som_engine.py](file:///c:/Users/psg/Desktop/L2C/agent/tools/som_engine.py)
-* **이미지 메모리 변환 모듈**: [wait_stable.py](file:///c:/Users/psg/Desktop/L2C/agent/utils/wait_stable.py)
+* **OCR 합성 엔진**: `agent/tools/ocr_engine.py`
+* **로딩 대기 모듈**: `agent/vision/loading_wait.py`
 
 ---
 
@@ -178,14 +178,14 @@ Windows에서는 `paddle`을 먼저 import하면 `torch`가 `shm.dll` 로딩 중
    - `COMMANDER_SYSTEM_PROMPT`를 자율 멀티모달 특성에 맞춰 Concise하게 군더더기를 깎아내 전송 토큰 부하를 대폭 경량화함.
    - 결과: **Gemini 의사결정 반응속도가 평균 5.8초 ➡️ 2.6초 수준으로 단축**.
 2. **대기 정밀도 및 루프 튜닝**:
-   - 클릭 액션 후 화면 안정화를 감지하는 `WaitStable` 체크 주기를 **200ms ➡️ 50ms**로 좁혀 화면 안정 즉시 반응하도록 가속화.
+   - 클릭 액션 후 화면 안정화를 감지하는 `LoadingWait` 체크 주기를 **200ms ➡️ 50ms**로 좁혀 화면 안정 즉시 반응하도록 가속화.
 3. **백그라운드 타이머 제거**:
    - 기존에 백그라운드 태스크 진행 상태 확인을 위해 무의식적으로 걸어두던 `schedule` 수동 타이머(12~15초 강제 대기)가 전체 체감 속도를 갉아먹고 있었음을 사용자 피드백으로 인지.
    - 강제 타이머를 배제하고 시스템의 비동기 반응 완료 이벤트(Reactive Wakeup)가 올 때 즉시 리스폰하도록 설계 변경.
 * **결과**: 마침내 **전체 E2E 4단계 완주 총 소요 시간 단 `19.3초`** 돌파에 성공함!
 
 ### [관련 참조 리소스]
-* **대기 정밀도 변경 모듈**: [wait_stable.py](file:///c:/Users/psg/Desktop/L2C/agent/utils/wait_stable.py)
+* **대기 정밀도 변경 모듈**: `agent/vision/loading_wait.py`
 * **현재 프롬프트 추론 모듈**: `agent/graph/worker_reasoning.py`
 * **지휘자 프롬프트**: [commander.py](file:///c:/Users/psg/Desktop/L2C/agent/prompts/commander.py)
 
@@ -257,7 +257,7 @@ Phase 3 이후 성능 최적화를 위해 도구와 LLM 클라이언트를 모�
 
 ### [시도한 방향]
 1. **성능 최적화**
-   - VLM 캡셔닝 경로 제거, WaitStable 대기 단축, OCR 입력 리사이즈로 perception 병목을 줄였다.
+   - VLM 캡셔닝 경로 제거, LoadingWait 대기 단축, OCR 입력 리사이즈로 perception 병목을 줄였다.
    - 이후 병목은 주로 reasoning 호출 시간과 반복 판단 비용으로 이동했다.
 
 2. **저수준 Reflex Recipe**
@@ -554,7 +554,7 @@ cu126은 시작 시간이 0.054초 짧고 p50은 같았지만, cu118보다 p95�
 - 당시 `venv/paddle3`를 cu126 비교 재현용으로 남겼지만, Python 3.13 런타임 전환 후에는 측정 결과만 보존하고 구 가상환경은 제거했다.
 - `requirements.txt`에 `paddlepaddle-gpu==3.0.0`을 고정했다.
 - OCR worker 시작 시 설치 버전이 3.0.0인지 검사해 오래된 환경을 즉시 실패시킨다.
-- `SOM_OCR_MAX_DIM` 기본값을 `1152`로 낮췄다.
+- `PADDLE_OCR_MAX_DIM` 기본값을 `1152`로 낮췄다.
 - GPU와 IR 끔을 기본 경로로 유지한다.
 - OCR worker는 한 번 시작하면 작업 종료까지 재사용하며 요청 수 기준 재시작을 하지 않는다.
 - 20초 timeout과 실패 시 재시작은 실제 hang/crash 복구용으로만 유지한다.
@@ -564,9 +564,9 @@ cu126은 시작 시간이 0.054초 짧고 p50은 같았지만, cu118보다 p95�
 
 관련 환경 변수는 다음과 같다.
 
-- `SOM_OCR_MAX_DIM`: OCR 입력 최대 변, 기본값 `1152`
-- `SOM_OCR_REQUEST_TIMEOUT_SEC`: worker 단일 요청 timeout, 기본값 `20`
-- `SOM_OCR_WORKER_MAX_ATTEMPTS`: 요청 실패 시 재시도 횟수, 기본값 `2`
+- `PADDLE_OCR_MAX_DIM`: OCR 입력 최대 변, 기본값 `1152`
+- `PADDLE_OCR_REQUEST_TIMEOUT_SEC`: worker 단일 요청 timeout, 기본값 `20`
+- `PADDLE_OCR_WORKER_MAX_ATTEMPTS`: 요청 실패 시 재시도 횟수, 기본값 `2`
 - `PADDLEOCR_IR_OPTIM`: Paddle IR 최적화 사용 여부, 기본값 `0`
 
 ### [결론]

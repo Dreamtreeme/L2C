@@ -12,9 +12,13 @@ from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
 )
-from agent.recipe.task_category import task_category_from_candidate
-from agent.utils.model_conversion import dump_model
-from shared.schema.feedback_schema import RecipeCandidateReview
+from agent.recipe.task_category import normalize_task_category
+from shared.schema.feedback_schema import (
+    RecipeCandidate,
+    RecipeCandidateReview,
+    RecordedRecipeStep,
+    WorkerSubmission,
+)
 
 
 CriticFn = Callable[[dict[str, Any]], dict[str, Any] | RecipeCandidateReview]
@@ -25,52 +29,40 @@ def _critic_evidence_text_limit() -> int:
 
 
 def _reviewable_action_specs(
-    steps: list[dict[str, Any]],
+    steps: list[RecordedRecipeStep],
 ) -> list[dict[str, Any]]:
     """자율탐색이 재사용 후보로 명시한 단계만 Critic 검토 대상으로 삼는다."""
 
     specs: list[dict[str, Any]] = []
-    for step in steps or []:
+    for step in steps:
         if (
-            not isinstance(step, dict)
-            or step.get("action") not in REVIEWABLE_REPLAY_ACTIONS
-            or step.get("replay_mode") not in {"fixed", "parameterized"}
+            step.action not in REVIEWABLE_REPLAY_ACTIONS
+            or step.replay_mode not in {"fixed", "parameterized"}
+            or step.seq is None
         ):
             continue
-        try:
-            seq = int(step.get("seq"))
-        except (TypeError, ValueError):
-            continue
-        specs.append({"seq": seq, "action": str(step.get("action") or "")})
+        specs.append({"seq": step.seq, "action": step.action})
     return specs
 
 
 def _feedback_evidence_seqs(
-    worker_submission: dict[str, Any],
-    steps: list[dict[str, Any]],
+    worker_submission: WorkerSubmission,
+    steps: list[RecordedRecipeStep],
     reviewable_seqs: set[int],
 ) -> set[int]:
     """후속 행동에는 바로 앞 행동의 성공 문맥도 Critic 증거로 포함한다."""
 
     contextual_seqs = {
-        int(step["seq"])
+        int(step.seq)
         for step in steps
         if (
-            isinstance(step, dict)
-            and step.get("action") in CONTEXTUAL_REPLAY_ACTIONS
-            and str(step.get("seq", "")).lstrip("-").isdigit()
-            and int(step["seq"]) in reviewable_seqs
+            step.action in CONTEXTUAL_REPLAY_ACTIONS
+            and step.seq is not None
+            and step.seq in reviewable_seqs
         )
     }
     episode_seqs = sorted(
-        {
-            int(episode["seq"])
-            for episode in worker_submission.get("feedback_episodes", []) or []
-            if (
-                isinstance(episode, dict)
-                and str(episode.get("seq", "")).lstrip("-").isdigit()
-            )
-        }
+        {episode.seq for episode in worker_submission.feedback_episodes}
     )
     out = set(reviewable_seqs)
     for seq in contextual_seqs:
@@ -81,7 +73,7 @@ def _feedback_evidence_seqs(
 
 
 def _compact_transition_records(
-    worker_submission: dict[str, Any],
+    worker_submission: WorkerSubmission,
     target_seqs: set[int],
 ) -> list[dict[str, Any]]:
     """승격 가능한 대상 행동의 전환 결과만 제한된 OCR 증거와 함께 남긴다."""
@@ -102,26 +94,24 @@ def _compact_transition_records(
         "ocr_skipped",
         "marker_count",
     )
-    for observation in worker_submission.get("transition_records", []) or []:
-        if not isinstance(observation, dict):
-            continue
-        try:
-            seq = int(observation.get("action_seq"))
-        except (TypeError, ValueError):
+    for observation in worker_submission.transition_records:
+        seq = observation.action_seq
+        if seq is None:
             continue
         if seq not in target_seqs:
             continue
+        observation_data = observation.model_dump(mode="json")
         item = {
-            key: observation.get(key)
+            key: observation_data.get(key)
             for key in keys
-            if observation.get(key) not in (None, "", [], {})
+            if observation_data.get(key) not in (None, "", [], {})
         }
-        item["marker_texts"] = list(observation.get("marker_texts", []) or [])[:text_limit]
+        item["marker_texts"] = observation.marker_texts[:text_limit]
         evidence.append(item)
     return evidence
 
 
-def _compact_worker_execution(worker_submission: dict[str, Any]) -> dict[str, Any]:
+def _compact_worker_execution(worker_submission: WorkerSubmission) -> dict[str, Any]:
     """Critic에 필요한 실행 결과만 남겨 반복된 전체 상태를 제거한다."""
 
     keys = (
@@ -132,69 +122,71 @@ def _compact_worker_execution(worker_submission: dict[str, Any]) -> dict[str, An
         "persisted_count",
     )
     execution = {
-        key: worker_submission.get(key)
+        key: getattr(worker_submission, key)
         for key in keys
-        if worker_submission.get(key) not in (None, "", [], {})
+        if getattr(worker_submission, key) not in (None, "", [], {})
     }
-    execution["extracted_summary"] = dict(worker_submission.get("extracted_summary", {}) or {})
+    execution["extracted_summary"] = dict(worker_submission.extracted_summary)
     return execution
 
 
 def _compact_feedback_evidence(
-    worker_submission: dict[str, Any],
+    worker_submission: WorkerSubmission,
     target_seqs: set[int],
 ) -> list[dict[str, Any]]:
     """행동별 이전 화면과 실행 결과를 Critic이 비교할 수 있게 축약한다."""
 
     text_limit = _critic_evidence_text_limit()
     evidence: list[dict[str, Any]] = []
-    for episode in worker_submission.get("feedback_episodes", []) or []:
-        if not isinstance(episode, dict):
-            continue
-        try:
-            seq = int(episode.get("seq"))
-        except (TypeError, ValueError):
-            continue
+    for episode in worker_submission.feedback_episodes:
+        seq = episode.seq
         if seq not in target_seqs:
             continue
-        proposal = episode.get("proposal") if isinstance(episode.get("proposal"), dict) else {}
-        observation = episode.get("observation") if isinstance(episode.get("observation"), dict) else {}
-        before = observation.get("before") if isinstance(observation.get("before"), dict) else {}
-        after = observation.get("after") if isinstance(observation.get("after"), dict) else {}
-        result = observation.get("result") if isinstance(observation.get("result"), dict) else {}
-        feedback = episode.get("feedback") if isinstance(episode.get("feedback"), dict) else {}
+        proposal = episode.proposal
+        observation = episode.observation
+        before = observation.before
+        after = observation.after
+        result = observation.result
+        feedback = episode.feedback
         item = {
             "seq": seq,
-            "action": proposal.get("action") or result.get("action") or "",
-            "expected_after": proposal.get("expected_after") or "",
+            "action": proposal.action or result.get("action") or "",
+            "expected_after": proposal.expected_after,
             "before_url": before.get("url") or "",
             "after_url": after.get("url") or "",
             "screen_changed": bool(after.get("screen_changed", False)),
-            "before_marker_texts": list(before.get("marker_texts", []) or [])[:text_limit],
+            "before_marker_texts": list(before.get("marker_texts", []) or [])[
+                :text_limit
+            ],
             "result_status": result.get("status") or "",
             "result_reason": result.get("reason") or "",
-            "feedback_label": feedback.get("label") or "",
-            "feedback_reason": feedback.get("reason") or "",
+            "feedback_label": feedback.label,
+            "feedback_reason": feedback.reason,
         }
-        evidence.append({key: value for key, value in item.items() if value not in (None, "", [], {})})
+        evidence.append(
+            {
+                key: value
+                for key, value in item.items()
+                if value not in (None, "", [], {})
+            }
+        )
     return evidence
 
 
 def _coerce_review(raw: dict[str, Any] | RecipeCandidateReview) -> dict[str, Any]:
-    if isinstance(raw, RecipeCandidateReview):
-        return dump_model(raw)
-    return dump_model(RecipeCandidateReview(**(raw or {})))
+    review = (
+        raw if isinstance(raw, RecipeCandidateReview) else RecipeCandidateReview(**raw)
+    )
+    return review.model_dump(mode="json")
 
 
 def _fallback_review(reason: str) -> dict[str, Any]:
-    return dump_model(
-        RecipeCandidateReview(
-            decision="revise",
-            reasons=[reason],
-            feedback_to_worker="Candidate review could not be completed. Re-submit with clearer worker evidence.",
-            confidence=0.0,
-        )
-    )
+    return RecipeCandidateReview(
+        decision="revise",
+        reasons=[reason],
+        feedback_to_worker="Candidate review could not be completed. Re-submit with clearer worker evidence.",
+        confidence=0.0,
+    ).model_dump(mode="json")
 
 
 def _serialize_candidate_review_payload(payload: dict[str, Any]) -> str:
@@ -204,29 +196,29 @@ def _serialize_candidate_review_payload(payload: dict[str, Any]) -> str:
 
 
 def build_candidate_review_payload(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
 ) -> dict[str, Any]:
     """후보 증거(candidate evidence)를 의미 판단 없이 비평가(Critic)에게 전달한다."""
-    worker_submission = dict(candidate.get("payload", {}) or {})
-    steps = [step for step in candidate.get("steps", []) or [] if isinstance(step, dict)]
-    reviewable_seqs = {
-        item["seq"] for item in _reviewable_action_specs(steps)
-    }
+    worker_submission = candidate.submission
+    steps = candidate.steps
+    reviewable_seqs = {item["seq"] for item in _reviewable_action_specs(steps)}
     evidence_seqs = _feedback_evidence_seqs(
         worker_submission,
         steps,
         reviewable_seqs,
     )
     required_step_verdicts = _reviewable_action_specs(steps)
-    task_category = task_category_from_candidate(candidate)
+    task_category = normalize_task_category(
+        candidate.submission.collection_intent.task_category
+    )
     return {
-        "candidate_id": candidate.get("candidate_id", "") or "",
-        "status": candidate.get("status", "") or "",
-        "site": candidate.get("site", "") or "",
+        "candidate_id": candidate.candidate_id,
+        "status": candidate.status,
+        "site": candidate.site,
         "task_category": task_category,
-        "goal": candidate.get("goal", "") or "",
-        "keyword": candidate.get("keyword", "") or "",
-        "steps": steps,
+        "goal": candidate.goal,
+        "keyword": candidate.keyword,
+        "steps": [step.model_dump(mode="json") for step in steps],
         "transition_records": _compact_transition_records(
             worker_submission,
             reviewable_seqs,
@@ -247,10 +239,7 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
     from agent.llm.policy import commander_model_name
     from agent.prompts.trust_boundary import external_content_contract_en
 
-    model_name = (
-        get_settings().models.recipe_critic_model
-        or commander_model_name()
-    )
+    model_name = get_settings().models.recipe_critic_model or commander_model_name()
     from agent.llm.clients import get_structured_google_model
 
     llm = get_structured_google_model(
@@ -311,16 +300,13 @@ def _step_verdict_contract_errors(
 
     errors: list[str] = []
     required_seqs = {
-        int(required["seq"])
-        for required in payload.get("required_step_verdicts") or []
+        int(required["seq"]) for required in payload.get("required_step_verdicts") or []
     }
     for required in payload.get("required_step_verdicts") or []:
         seq = int(required["seq"])
         matches = by_seq.get(seq, [])
         if not matches:
-            errors.append(
-                f"missing seq={seq} action={required.get('action') or ''}"
-            )
+            errors.append(f"missing seq={seq} action={required.get('action') or ''}")
             continue
         if len(matches) != 1:
             errors.append(f"duplicate seq={seq} count={len(matches)}")
@@ -330,22 +316,20 @@ def _step_verdict_contract_errors(
 
 
 def review_candidate(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
     critic: CriticFn | None = None,
     raise_on_error: bool = False,
 ) -> dict[str, Any]:
     payload = build_candidate_review_payload(candidate)
     if not payload.get("required_step_verdicts"):
-        return dump_model(
-            RecipeCandidateReview(
-                decision="reject",
-                reasons=["autonomous_replay_candidate_missing"],
-                feedback_to_worker=(
-                    "자율탐색 단계에 fixed 또는 parameterized 재사용 후보가 없습니다."
-                ),
-                confidence=1.0,
-            )
-        )
+        return RecipeCandidateReview(
+            decision="reject",
+            reasons=["autonomous_replay_candidate_missing"],
+            feedback_to_worker=(
+                "자율탐색 단계에 fixed 또는 parameterized 재사용 후보가 없습니다."
+            ),
+            confidence=1.0,
+        ).model_dump(mode="json")
     try:
         invoke_critic = critic or _llm_review_candidate
         review = _coerce_review(invoke_critic(payload))
@@ -428,7 +412,9 @@ def review_and_apply_candidate(
         "review": review,
         "promotion": promotion,
     }
-    candidate_store.update_status(candidate_id, _status_for_review(review), validation=validation)
+    candidate_store.update_status(
+        candidate_id, _status_for_review(review), validation=validation
+    )
     out = dict(review)
     out["candidate_id"] = candidate_id
     out["promotion"] = promotion

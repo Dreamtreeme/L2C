@@ -142,7 +142,9 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
   → 답변 근거 정의 → SQLite 충분성 검사
   → 부족한 근거의 수집 행동계획
   → collect 노드에서 비전 작업자 실행
-  → persist 노드에서 공고·제출물·레시피 후보 저장
+  → postprocess 노드에서 OCR 원문을 공고 스키마로 구조화
+  → persist 노드에서 공고 UPSERT
+  → 작업자 제출물과 레시피 후보를 별도 기록
   → SQLite 근거 재검사 → 최종 답변 및 job_id 인용 검증
     ↓
 [WorkerExecutionService — 단일 로컬 작업자 직렬화]
@@ -187,8 +189,8 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
   - [x] 1. 지표 및 에러 추적 세팅
     - [x] structlog: 소요 시간 등 성능 벤치마크용 JSON 포맷 로깅
   - [x] 2. 백그라운드 엔진 스크립트 (LLM이 직접 호출하지 않는 내부 엔진 계층)
-    - [x] Perception: mss 모듈 활용 브라우저 영역 검출 및 OmniParser + PaddleOCR 기반의 로컬 SoM(Set-of-Marks) 파이프라인 마커 합성 구현
-    - [x] Wait Stable: 무한 대기 버그를 막기 위해 픽셀 오차율 1퍼센트 이하 조건 및 최대 대기 시간 5초를 적용한 시각적 화면 안정화 대기
+    - [x] Perception: mss 브라우저 캡처, CV 로딩 대기, OCR, pHash를 분리한 화면 인식 파이프라인
+    - [x] Loading Wait: 메모리 프레임의 변화·안정성과 회색 저정보 화면을 함께 확인한 뒤 최종 화면만 저장
     - [x] Security: .env 기반 자격증명 관리 시스템
   - [x] 3. 순수 파이썬 좌표 검증 테스트
     - [x] LLM 연동 전 캡처 화면의 마커 좌표와 실제 마우스 클릭 좌표가 어긋나지 않는지 하드코딩으로 1차 확인
@@ -218,7 +220,7 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
 - [x] Phase 3.5: OmniParser(Set-of-Marks) 로컬 파이프라인 실제 구현 및 순수 비전 본문 JSON 추출
   - [x] 1. 종속성 패키지 설치 (`ultralytics`, `paddleocr`) 및 로컬 OCR 연동 확인
   - [x] 2. OmniParser 공식 YOLOv8 모델 가중치 자동 다운로드 유틸 개발
-  - [x] 3. `som_engine.py` 구현 (OmniParser + PaddleOCR을 통한 요소 검출, 중복 제어 NMS, 마크 이미지 합성 및 좌표 매핑)
+  - [x] 3. OCR 경계 분리 (`paddle_ocr.py` 문자 검출, `omni_parser.py` 아이콘 검출, `ocr_engine.py` 마커 합성)
   - [x] 4. `perception.py` 리팩토링 및 SoM 연동 (마킹 이미지 주입 및 마커 ID 좌표 매핑 디코딩)
   - [x] 5. VLM 프롬프트 최적화 (멀티모달 SoM 마크 이미지 주입 및 의사결정 프롬프트 팝업/모달 차단 조치 추가)
   - [x] 6. E2E 본문 추출 통합 테스트 검증 및 벤치마크

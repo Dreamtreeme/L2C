@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.schema.collection_intent import CollectionIntent
 
@@ -64,11 +64,75 @@ class FeedbackEpisode(BaseModel):
     feedback: ActionFeedback
 
 
+class RecordedRecipeStep(BaseModel):
+    """자율탐색 중 재사용 후보로 기록한 물리 행동."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seq: int | None = None
+    url_template: str = ""
+    page_role: str = ""
+    observed_page_role: str = ""
+    declared_page_role: str = ""
+    before_state: Dict[str, Any] = Field(default_factory=dict)
+    action: str = ""
+    target: Optional[Dict[str, Any]] = None
+    roi_signature: Dict[str, Any] = Field(default_factory=dict)
+    screen_context_signature: Dict[str, Any] = Field(default_factory=dict)
+    value: Any = None
+    param: Dict[str, Any] = Field(default_factory=dict)
+    is_param: bool = False
+    expected_after: str = ""
+    intent: str = ""
+    target_role: str = ""
+    component: str = ""
+    slot_refs: List[str] = Field(default_factory=list)
+    risk_level: str = ""
+    needs_user_confirmation: bool = False
+    replay_mode: Literal["fixed", "parameterized", "reasoning"] = "reasoning"
+
+
+class RecordedTransition(BaseModel):
+    """행동 뒤 실제 화면 변화를 확인한 기록."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action_seq: int | None = None
+    action: str = ""
+    before_observation_id: str = ""
+    after_observation_id: str = ""
+    step: Dict[str, Any] = Field(default_factory=dict)
+    expected_after: str = ""
+    source: str = ""
+    recipe_key: str = ""
+    recipe_transition_index: int | None = None
+    recipe_transition_count: int | None = None
+    transition_actions: List[str] = Field(default_factory=list)
+    after_state_match: Dict[str, Any] = Field(default_factory=dict)
+    attempt: int = 0
+    elapsed_sec: float = 0.0
+    status: str = ""
+    outcome: str = ""
+    reason: str = ""
+    phash_distance: int | None = None
+    visual_change_ratio: float | None = None
+    ocr_skipped: bool = False
+    marker_count: int = 0
+    marker_texts: List[str] = Field(default_factory=list)
+    screenshot: str = ""
+    marked_image: str = ""
+    current_url: str = ""
+    page_role: str = ""
+    after_state: Dict[str, Any] = Field(default_factory=dict)
+
+
 ReviewDecision = Literal["accept", "revise", "reject"]
 
 
 class WorkerSubmission(BaseModel):
     """하위 비전 작업자(child vision worker)가 지휘자에게 넘기는 제출물."""
+
+    model_config = ConfigDict(extra="forbid")
 
     run_id: str = ""
     goal: str = ""
@@ -78,11 +142,58 @@ class WorkerSubmission(BaseModel):
     collected_count: int = 0
     observed_job_ids: List[int] = Field(default_factory=list)
     persisted_count: int = 0
-    recorded_steps: List[Dict[str, Any]] = Field(default_factory=list)
-    feedback_episodes: List[Dict[str, Any]] = Field(default_factory=list)
-    transition_records: List[Dict[str, Any]] = Field(default_factory=list)
+    recorded_steps: List[RecordedRecipeStep] = Field(default_factory=list)
+    feedback_episodes: List[FeedbackEpisode] = Field(default_factory=list)
+    transition_records: List[RecordedTransition] = Field(default_factory=list)
     collection_intent: CollectionIntent = Field(default_factory=CollectionIntent)
     extracted_summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StoredWorkerSubmission(BaseModel):
+    """SQLite에 저장된 작업자 제출물과 조회 메타데이터."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    submission_id: str
+    run_id: str
+    source: str
+    payload: WorkerSubmission
+
+
+class RecipeCandidate(BaseModel):
+    """SQLite 검토 큐에서 복원한 자율탐색 레시피 후보."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str
+    submission_id: str
+    status: str
+    validation: Dict[str, Any] = Field(default_factory=dict)
+    review_attempts: int = 0
+    review_started_at: str | None = None
+    next_review_at: str | None = None
+    review_error: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    run_id: str = ""
+    source: str = ""
+    submission: WorkerSubmission
+
+    @property
+    def site(self) -> str:
+        return self.submission.collection_intent.site
+
+    @property
+    def goal(self) -> str:
+        return self.submission.goal
+
+    @property
+    def keyword(self) -> str:
+        return self.submission.collection_intent.search_keyword
+
+    @property
+    def steps(self) -> List[RecordedRecipeStep]:
+        return self.submission.recorded_steps
 
 
 class RecipeStepVerdict(BaseModel):

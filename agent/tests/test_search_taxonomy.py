@@ -8,8 +8,10 @@ import zipfile
 
 from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
+from agent.application.job_taxonomy_linker import JobTaxonomyLinker
 from agent.application.search_taxonomy_import_service import import_onet_archive
 from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
+from agent.application.search_taxonomy_question_builder import TaxonomyQuestionBuilder
 from agent.application.search_taxonomy_review_service import SearchTaxonomyReviewService
 from agent.application.search_taxonomy_service import (
     DEFAULT_LOCAL_SEED,
@@ -56,7 +58,17 @@ def _small_onet_archive(path) -> None:
                 "Hot Technology",
                 "In Demand",
             ],
-            [["15-1252.00", "Software Developers", "Python", "2.E.1", "Development", "Y", "Y"]],
+            [
+                [
+                    "15-1252.00",
+                    "Software Developers",
+                    "Python",
+                    "2.E.1",
+                    "Development",
+                    "Y",
+                    "Y",
+                ]
+            ],
         )
 
 
@@ -71,7 +83,7 @@ def _insert_and_link(
     **data,
 ) -> int:
     job_id = insert_job(db, f"https://example.com/jobs/{suffix}", data)
-    taxonomy.link_job(job_id)
+    JobTaxonomyLinker(taxonomy.db_path).link_job(job_id)
     return job_id
 
 
@@ -93,7 +105,7 @@ class _RecordingFakeModel(_FakeModel):
         return self.value
 
 
-def _unexpected_collection(_intent):
+def _unexpected_collection(*_args):
     raise AssertionError("수집 단계가 실행되면 안 됩니다.")
 
 
@@ -121,9 +133,29 @@ def test_local_domain_families_cover_each_soc_major_group_once():
     ]
 
     assert set(assigned_groups) == {
-        "11", "13", "15", "17", "19", "21", "23", "25",
-        "27", "29", "31", "33", "35", "37", "39", "41",
-        "43", "45", "47", "49", "51", "53", "55",
+        "11",
+        "13",
+        "15",
+        "17",
+        "19",
+        "21",
+        "23",
+        "25",
+        "27",
+        "29",
+        "31",
+        "33",
+        "35",
+        "37",
+        "39",
+        "41",
+        "43",
+        "45",
+        "47",
+        "49",
+        "51",
+        "53",
+        "55",
     }
     assert len(assigned_groups) == len(set(assigned_groups))
 
@@ -208,14 +240,22 @@ def test_onet_occupations_are_imported_under_local_domain_hierarchy(tmp_path):
                 "Hot Technology",
                 "In Demand",
             ],
-            [["15-1252.00", "Software Developers", "Python", "2.E.1", "Development", "Y", "Y"]],
+            [
+                [
+                    "15-1252.00",
+                    "Software Developers",
+                    "Python",
+                    "2.E.1",
+                    "Development",
+                    "Y",
+                    "Y",
+                ]
+            ],
         )
 
     counts = import_onet_archive(db_path, archive_path)
     taxonomy = _prepared_taxonomy(db_path)
-    candidates = taxonomy.occupation_resolution_candidates(
-        ["l2c:domain:it_data"]
-    )
+    candidates = taxonomy.occupation_resolution_candidates(["l2c:domain:it_data"])
 
     assert counts == {
         "occupations": 1,
@@ -226,14 +266,12 @@ def test_onet_occupations_are_imported_under_local_domain_hierarchy(tmp_path):
     assert taxonomy.resolve_occupation_concepts("Software Developers") == [
         "onet:occupation:15-1252.00"
     ]
-    assert "onet:occupation:15-1252.00" in {
-        item["concept_key"] for item in candidates
-    }
+    assert "onet:occupation:15-1252.00" in {item["concept_key"] for item in candidates}
 
 
 def test_generic_job_request_starts_with_all_occupation_domains(tmp_path):
     taxonomy = _prepared_taxonomy(tmp_path / "jobs.db")
-    question = taxonomy.build_next_scope_question(
+    question = TaxonomyQuestionBuilder(taxonomy).build_next_scope_question(
         InvestigationConstraints(occupation_scope_required=True)
     )
 
@@ -253,7 +291,7 @@ def test_generic_job_request_starts_with_all_occupation_domains(tmp_path):
 
 def test_domain_selection_advances_to_family_options_even_without_jobs(tmp_path):
     taxonomy = _prepared_taxonomy(tmp_path / "jobs.db")
-    domain_question = taxonomy.build_next_scope_question(
+    domain_question = TaxonomyQuestionBuilder(taxonomy).build_next_scope_question(
         InvestigationConstraints(occupation_scope_required=True)
     )
     assert domain_question is not None
@@ -276,14 +314,12 @@ def test_domain_selection_advances_to_family_options_even_without_jobs(tmp_path)
             selected_option_id=it_option.option_id,
         ),
     )
-    family_question = taxonomy.build_next_scope_question(
+    family_question = TaxonomyQuestionBuilder(taxonomy).build_next_scope_question(
         updated.constraints,
         answered_question_ids=[domain_question.question_id],
     )
 
-    assert updated.constraints.occupation_domain_concept_keys == [
-        "l2c:domain:it_data"
-    ]
+    assert updated.constraints.occupation_domain_concept_keys == ["l2c:domain:it_data"]
     assert family_question is not None
     assert family_question.facet_type == "occupation_family"
     assert {option.value for option in family_question.options} == {
@@ -307,23 +343,47 @@ def test_explicit_whole_domain_skips_family_question(tmp_path):
     )
 
     assert constraints.occupation_domain_concept_keys == ["l2c:domain:it_data"]
-    assert taxonomy.build_next_scope_question(constraints) is None
+    assert (
+        TaxonomyQuestionBuilder(taxonomy).build_next_scope_question(constraints) is None
+    )
 
 
 def test_cardinality_question_lists_every_nonempty_direct_child(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
     taxonomy = _prepared_taxonomy(db_path)
-    _insert_and_link(db, taxonomy, "backend-1", position="백엔드 개발자", job_category="백엔드 개발")
-    _insert_and_link(db, taxonomy, "backend-2", position="Backend Engineer", job_category="Backend Engineer")
-    _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
-    _insert_and_link(db, taxonomy, "ios", position="iOS 개발자", job_category="모바일 앱 개발")
-    _insert_and_link(db, taxonomy, "android", position="Android 개발자", job_category="Android 개발자")
+    _insert_and_link(
+        db, taxonomy, "backend-1", position="백엔드 개발자", job_category="백엔드 개발"
+    )
+    _insert_and_link(
+        db,
+        taxonomy,
+        "backend-2",
+        position="Backend Engineer",
+        job_category="Backend Engineer",
+    )
+    _insert_and_link(
+        db,
+        taxonomy,
+        "frontend",
+        position="프론트엔드 개발자",
+        job_category="프론트엔드 개발",
+    )
+    _insert_and_link(
+        db, taxonomy, "ios", position="iOS 개발자", job_category="모바일 앱 개발"
+    )
+    _insert_and_link(
+        db,
+        taxonomy,
+        "android",
+        position="Android 개발자",
+        job_category="Android 개발자",
+    )
 
     constraints = taxonomy.enrich_constraints(
         InvestigationConstraints(occupation_query="소프트웨어 개발자")
     )
-    question = taxonomy.build_scope_question(constraints)
+    question = TaxonomyQuestionBuilder(taxonomy).build_scope_question(constraints)
 
     assert constraints.occupation_concept_keys == ["l2c:occupation:software_engineer"]
     assert constraints.collection_search_term == "소프트웨어 개발자"
@@ -345,12 +405,20 @@ def test_child_selection_updates_scope_and_collection_search_term(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
     taxonomy = _prepared_taxonomy(db_path)
-    _insert_and_link(db, taxonomy, "ios", position="iOS 개발자", job_category="모바일 앱 개발")
-    _insert_and_link(db, taxonomy, "android", position="Android 개발자", job_category="Android 개발자")
+    _insert_and_link(
+        db, taxonomy, "ios", position="iOS 개발자", job_category="모바일 앱 개발"
+    )
+    _insert_and_link(
+        db,
+        taxonomy,
+        "android",
+        position="Android 개발자",
+        job_category="Android 개발자",
+    )
     constraints = taxonomy.enrich_constraints(
         InvestigationConstraints(occupation_query="모바일 개발자")
     )
-    question = taxonomy.build_scope_question(constraints)
+    question = TaxonomyQuestionBuilder(taxonomy).build_scope_question(constraints)
     assert question is not None
     ios_option = next(
         option
@@ -372,7 +440,9 @@ def test_child_selection_updates_scope_and_collection_search_term(tmp_path):
         ),
     )
 
-    assert updated.constraints.occupation_concept_keys == ["l2c:occupation:ios_engineer"]
+    assert updated.constraints.occupation_concept_keys == [
+        "l2c:occupation:ios_engineer"
+    ]
     assert updated.constraints.occupation_query == "iOS 개발자"
     assert updated.constraints.collection_search_term == "iOS 개발자"
     assert updated.constraints.occupation_scope_mode == "selected"
@@ -382,13 +452,21 @@ def test_all_selection_preserves_original_collection_search_term(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
     taxonomy = _prepared_taxonomy(db_path)
-    _insert_and_link(db, taxonomy, "backend", position="백엔드 개발자", job_category="백엔드 개발")
-    _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
+    _insert_and_link(
+        db, taxonomy, "backend", position="백엔드 개발자", job_category="백엔드 개발"
+    )
+    _insert_and_link(
+        db,
+        taxonomy,
+        "frontend",
+        position="프론트엔드 개발자",
+        job_category="프론트엔드 개발",
+    )
     _insert_and_link(db, taxonomy, "ai", position="AI 엔지니어", job_category="AI/ML")
     constraints = taxonomy.enrich_constraints(
         InvestigationConstraints(occupation_query="개발자")
     )
-    question = taxonomy.build_scope_question(constraints)
+    question = TaxonomyQuestionBuilder(taxonomy).build_scope_question(constraints)
     assert question is not None
     investigation = InvestigationRequest(
         investigation_id="all-scope",
@@ -556,7 +634,7 @@ def test_reindex_resolves_candidate_that_now_exists_in_active_dictionary(tmp_pat
     connection.commit()
     connection.close()
 
-    totals = taxonomy.relink_all_jobs()
+    totals = JobTaxonomyLinker(taxonomy.db_path).relink_all_jobs()
     accepted = review.list_candidates(status="accepted")
 
     assert totals["resolved_candidates"] == 1
@@ -578,14 +656,14 @@ def test_reindex_is_idempotent_and_does_not_rewrite_source_tech_stack(tmp_path):
         preferred=["Docker 경험"],
     )
 
-    first = taxonomy.relink_all_jobs()
+    first = JobTaxonomyLinker(taxonomy.db_path).relink_all_jobs()
     connection = sqlite3.connect(db_path)
     first_links = connection.execute(
         "SELECT COUNT(*) FROM job_concept_links WHERE job_id = ?",
         (job_id,),
     ).fetchone()[0]
     connection.close()
-    second = taxonomy.relink_all_jobs()
+    second = JobTaxonomyLinker(taxonomy.db_path).relink_all_jobs()
     connection = sqlite3.connect(db_path)
     second_links = connection.execute(
         "SELECT COUNT(*) FROM job_concept_links WHERE job_id = ?",
@@ -625,11 +703,13 @@ def test_failed_taxonomy_index_is_retried_once_before_search(tmp_path):
         )
         connection.commit()
 
-    assert taxonomy.matching_occupation_job_ids(
-        ["l2c:occupation:ai_ml_engineer"]
-    ) == set()
+    assert (
+        taxonomy.matching_occupation_job_ids(["l2c:occupation:ai_ml_engineer"]) == set()
+    )
 
-    retry = taxonomy.relink_pending_jobs(limit=10, max_attempts=2)
+    retry = JobTaxonomyLinker(taxonomy.db_path).relink_pending_jobs(
+        limit=10, max_attempts=2
+    )
 
     with sqlite3.connect(db_path) as connection:
         status = connection.execute(
@@ -643,10 +723,15 @@ def test_failed_taxonomy_index_is_retried_once_before_search(tmp_path):
         ).fetchone()
     assert retry["indexed"] == 1
     assert status == ("indexed", 2, None)
-    assert taxonomy.matching_occupation_job_ids(
-        ["l2c:occupation:ai_ml_engineer"]
-    ) == {job_id}
-    assert taxonomy.relink_pending_jobs(limit=10, max_attempts=2)["jobs"] == 0
+    assert taxonomy.matching_occupation_job_ids(["l2c:occupation:ai_ml_engineer"]) == {
+        job_id
+    }
+    assert (
+        JobTaxonomyLinker(taxonomy.db_path).relink_pending_jobs(
+            limit=10, max_attempts=2
+        )["jobs"]
+        == 0
+    )
 
 
 def test_onet_reimport_preserves_curated_alias_on_existing_concept(tmp_path):
@@ -665,7 +750,17 @@ def test_onet_reimport_preserves_curated_alias_on_existing_concept(tmp_path):
                 "Hot Technology",
                 "In Demand",
             ],
-            [["15-1252.00", "Software Developers", "External Runtime", "2.E.1", "Development", "Y", "Y"]],
+            [
+                [
+                    "15-1252.00",
+                    "Software Developers",
+                    "External Runtime",
+                    "2.E.1",
+                    "Development",
+                    "Y",
+                    "Y",
+                ]
+            ],
         )
     import_onet_archive(db_path, archive_path)
     db = Database(db_path)
@@ -691,7 +786,8 @@ def test_onet_reimport_preserves_curated_alias_on_existing_concept(tmp_path):
     review.accept_as_alias(int(candidate["id"]), str(onet_key))
 
     import_onet_archive(db_path, archive_path)
-    _prepared_taxonomy(db_path).relink_all_jobs()
+    _prepared_taxonomy(db_path)
+    JobTaxonomyLinker(db_path).relink_all_jobs()
 
     assert taxonomy.resolve_skill_concepts(["ER Tool"]) == [onet_key]
     assert taxonomy.matching_skill_job_ids([onet_key]) == {job_id}
@@ -704,12 +800,22 @@ def test_workflow_returns_cardinality_question_before_evidence_planning(
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
     taxonomy = _prepared_taxonomy(db_path)
-    _insert_and_link(db, taxonomy, "backend", position="백엔드 개발자", job_category="백엔드 개발")
-    _insert_and_link(db, taxonomy, "frontend", position="프론트엔드 개발자", job_category="프론트엔드 개발")
+    _insert_and_link(
+        db, taxonomy, "backend", position="백엔드 개발자", job_category="백엔드 개발"
+    )
+    _insert_and_link(
+        db,
+        taxonomy,
+        "frontend",
+        position="프론트엔드 개발자",
+        job_category="프론트엔드 개발",
+    )
     workflow = investigation_workflow_factory(
         db_path=db_path,
         run_collection=_unexpected_collection,
-        persist_collection=_unexpected_collection,
+        postprocess_collection=_unexpected_collection,
+        store_collection=_unexpected_collection,
+        record_experience=_unexpected_collection,
         taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(
@@ -726,12 +832,14 @@ def test_workflow_returns_cardinality_question_before_evidence_planning(
 
     result = workflow.run("소프트웨어 개발자 공고를 보여줘")
 
-    assert result["run_status"] == "waiting_input"
-    assert result["clarification"]["field"] == "occupation_concept_keys"
-    assert result["clarification"]["candidate_count"] == 2
-    assert [
-        option["matching_count"] for option in result["clarification"]["options"]
-    ] == [1, 1, 2]
+    assert result.run_status.value == "waiting_input"
+    assert result.clarification["field"] == "occupation_concept_keys"
+    assert result.clarification["candidate_count"] == 2
+    assert [option["matching_count"] for option in result.clarification["options"]] == [
+        1,
+        1,
+        2,
+    ]
 
 
 def test_workflow_progresses_from_generic_request_to_domain_then_family(
@@ -743,7 +851,9 @@ def test_workflow_progresses_from_generic_request_to_domain_then_family(
     workflow = investigation_workflow_factory(
         db_path=db_path,
         run_collection=_unexpected_collection,
-        persist_collection=_unexpected_collection,
+        postprocess_collection=_unexpected_collection,
+        store_collection=_unexpected_collection,
+        record_experience=_unexpected_collection,
         taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(
@@ -761,23 +871,23 @@ def test_workflow_progresses_from_generic_request_to_domain_then_family(
     first = workflow.run("채용공고 찾아줘")
     it_option = next(
         option
-        for option in first["clarification"]["options"]
+        for option in first.clarification["options"]
         if option["value"] == "l2c:domain:it_data"
     )
     second = workflow.run(
         "",
-        investigation_id=first["clarification"]["investigation_id"],
+        investigation_id=first.investigation.investigation_id,
         clarification_answer=ClarificationAnswer(
-            question_id=first["clarification"]["question_id"],
+            question_id=first.clarification["question_id"],
             selected_option_id=it_option["option_id"],
         ),
     )
 
-    assert first["clarification"]["facet_type"] == "occupation_domain"
-    assert second["run_status"] == "waiting_input"
-    assert second["clarification"]["facet_type"] == "occupation_family"
+    assert first.clarification["facet_type"] == "occupation_domain"
+    assert second.run_status.value == "waiting_input"
+    assert second.clarification["facet_type"] == "occupation_family"
     assert "l2c:occupation:technology" in {
-        option["value"] for option in second["clarification"]["options"]
+        option["value"] for option in second.clarification["options"]
     }
 
 
@@ -797,7 +907,9 @@ def test_semantic_resolution_uses_selected_domain_and_promotes_confirmed_alias(
     workflow = investigation_workflow_factory(
         db_path=db_path,
         run_collection=_unexpected_collection,
-        persist_collection=_unexpected_collection,
+        postprocess_collection=_unexpected_collection,
+        store_collection=_unexpected_collection,
+        record_experience=_unexpected_collection,
         taxonomy_service=taxonomy,
         models=InvestigationModels(
             analysis_model=_FakeModel(
@@ -818,30 +930,28 @@ def test_semantic_resolution_uses_selected_domain_and_promotes_confirmed_alias(
 
     first = workflow.run("프롬프트 엔지니어는 무슨 일을 해?")
 
-    assert first["run_status"] == "waiting_input"
-    assert first["clarification"]["facet_type"] == "semantic_occupation"
-    assert [option["value"] for option in first["clarification"]["options"]] == [
+    assert first.run_status.value == "waiting_input"
+    assert first.clarification["facet_type"] == "semantic_occupation"
+    assert [option["value"] for option in first.clarification["options"]] == [
         "l2c:occupation:llm_engineer"
     ]
     model_payload = taxonomy_model.messages[0][1].content
     assert "l2c:occupation:llm_engineer" in model_payload
     assert "l2c:occupation:legal" not in model_payload
 
-    option = first["clarification"]["options"][0]
+    option = first.clarification["options"][0]
     second = workflow.run(
         "",
-        investigation_id=first["investigation"]["investigation_id"],
+        investigation_id=first.investigation.investigation_id,
         clarification_answer=ClarificationAnswer(
-            question_id=first["clarification"]["question_id"],
+            question_id=first.clarification["question_id"],
             selected_option_id=option["option_id"],
         ),
     )
 
-    assert second["final_answer"] == "프롬프트 엔지니어 직무 설명"
+    assert second.final_answer == "프롬프트 엔지니어 직무 설명"
     assert taxonomy.resolve_occupation_concepts("프롬프트 엔지니어") == [
         "l2c:occupation:llm_engineer"
     ]
-    accepted = SearchTaxonomyReviewService(db_path).list_candidates(
-        status="accepted"
-    )
+    accepted = SearchTaxonomyReviewService(db_path).list_candidates(status="accepted")
     assert accepted[0]["accepted_concept_key"] == "l2c:occupation:llm_engineer"

@@ -10,7 +10,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
 from agent.runtime.worker_actions import is_supported_recipe_action_group
 from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
-from shared.schema.jd_schema import CollectedJob
+from shared.schema.collection_intent import CollectionIntent
+from shared.schema.feedback_schema import (
+    FeedbackEpisode,
+    RecordedRecipeStep,
+    RecordedTransition,
+)
+from shared.schema.jd_schema import JobCapture
 
 
 def _message_text(content: Any) -> str:
@@ -52,6 +58,7 @@ class ActionRequest(BaseModel):
     """현재 화면 캡처를 근거로 실행할 행동 또는 검증된 행동 묶음."""
 
     source: str
+    observation_id: str = ""
     summary: str = ""
     tool_calls: list[ToolCallRequest] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -107,89 +114,86 @@ class ActionEvent(TypedDict, total=False):
     """행동 선택부터 화면 전환 검증까지 한 생명주기로 보관하는 기록."""
 
     seq: int
+    observation_id: str
     result: dict[str, Any]
-    recipe_step: dict[str, Any]
-    feedback_episode: dict[str, Any]
-    transition: dict[str, Any]
+    recipe_step: RecordedRecipeStep
+    feedback_episode: FeedbackEpisode
+    transition: RecordedTransition
 
 
 def build_action_event(
     seq: int,
     result: dict[str, Any],
     *,
-    recipe_step: dict[str, Any] | None = None,
-    feedback_episode: dict[str, Any] | None = None,
+    observation_id: str = "",
+    recipe_step: RecordedRecipeStep | None = None,
+    feedback_episode: FeedbackEpisode | None = None,
 ) -> ActionEvent:
     event: ActionEvent = {
         "seq": int(seq),
         "result": dict(result),
     }
+    if observation_id:
+        event["observation_id"] = observation_id
     if recipe_step:
-        event["recipe_step"] = dict(recipe_step)
+        event["recipe_step"] = recipe_step
     if feedback_episode:
-        event["feedback_episode"] = dict(feedback_episode)
+        event["feedback_episode"] = feedback_episode
     return event
 
 
-def action_event_results(events: Sequence[ActionEvent | dict]) -> list[dict[str, Any]]:
+def action_event_results(events: Sequence[ActionEvent]) -> list[dict[str, Any]]:
     return [
         dict(event.get("result") or {})
         for event in events or []
-        if isinstance(event, Mapping) and isinstance(event.get("result"), Mapping)
+        if event.get("result") is not None
     ]
 
 
 def action_event_recipe_steps(
-    events: Sequence[ActionEvent | dict],
-) -> list[dict[str, Any]]:
+    events: Sequence[ActionEvent],
+) -> list[RecordedRecipeStep]:
     return [
-        dict(event.get("recipe_step") or {})
+        event["recipe_step"]
         for event in events or []
-        if isinstance(event, Mapping) and isinstance(event.get("recipe_step"), Mapping)
+        if event.get("recipe_step") is not None
     ]
 
 
-def action_event_feedback(events: Sequence[ActionEvent | dict]) -> list[dict[str, Any]]:
+def action_event_feedback(events: Sequence[ActionEvent]) -> list[FeedbackEpisode]:
     return [
-        dict(event.get("feedback_episode") or {})
+        event["feedback_episode"]
         for event in events or []
-        if isinstance(event, Mapping)
-        and isinstance(event.get("feedback_episode"), Mapping)
+        if event.get("feedback_episode") is not None
     ]
 
 
 def action_event_transitions(
-    events: Sequence[ActionEvent | dict],
-) -> list[dict[str, Any]]:
+    events: Sequence[ActionEvent],
+) -> list[RecordedTransition]:
     return [
-        dict(event.get("transition") or {})
+        event["transition"]
         for event in events or []
-        if isinstance(event, Mapping) and isinstance(event.get("transition"), Mapping)
+        if event.get("transition") is not None
     ]
 
 
 def attach_action_transition(
-    events: Sequence[ActionEvent | dict],
+    events: Sequence[ActionEvent],
     transition: dict[str, Any],
 ) -> list[ActionEvent]:
     """행동 순번이 같은 이벤트에 화면 전환 검증 결과를 연결한다."""
 
-    try:
-        target_seq = int(transition.get("action_seq"))
-    except (TypeError, ValueError):
-        return [dict(event) for event in events or [] if isinstance(event, Mapping)]
+    recorded_transition = RecordedTransition.model_validate(transition)
+    target_seq = recorded_transition.action_seq
+    if target_seq is None:
+        return list(events or [])
 
     updated: list[ActionEvent] = []
     for raw_event in events or []:
-        if not isinstance(raw_event, Mapping):
-            continue
         event: ActionEvent = dict(raw_event)
-        try:
-            event_seq = int(event.get("seq"))
-        except (TypeError, ValueError):
-            event_seq = -1
-        if event_seq == target_seq:
-            event["transition"] = dict(transition)
+        if event["seq"] == target_seq:
+            event["transition"] = recorded_transition
         updated.append(event)
     return updated
 
@@ -247,7 +251,7 @@ class TransitionRequest(TypedDict, total=False):
 
     action_seq: int
     action: str
-    from_capture_id: str
+    before_observation_id: str
     source: str
     recipe_key: str
     recipe_transition_index: int
@@ -280,22 +284,21 @@ class WorkerRequestState(TypedDict, total=False):
 
     worker_run_id: str
     goal: str
-    recipe_params: dict[str, Any]
-    job_collection_contract: dict[str, Any]
+    collection_intent: CollectionIntent
+    recipe_inputs: dict[str, Any]
 
 
 class ObservationState(TypedDict, total=False):
     """한 캡처에서 얻은 화면, OCR과 브라우저 상태."""
 
-    current_capture_id: str
-    ocr_capture_id: str
-    capture_sequence: int
+    observation_id: str
+    observation_sequence: int
     current_screenshot: str
     capture_quality: dict[str, Any]
     raw_screen_signature: dict[str, Any]
     analysis_mode: str
     ocr_complete: bool
-    previous_screen_observation: dict[str, Any]
+    previous_observation: dict[str, Any]
     ui_context: str
     current_url: str
     current_page_role: str
@@ -334,7 +337,7 @@ class RecipeReplayState(TypedDict, total=False):
 class JobCollectionState(TypedDict, total=False):
     """공고 목록 선택, 상세 판독과 결과 누적 상태."""
 
-    collected_jobs: list[CollectedJob]
+    job_captures: list[JobCapture]
     job_card_queue: list[dict[str, Any]]
     job_results_memory: dict[str, Any]
     job_results_availability: dict[str, Any]
@@ -465,21 +468,20 @@ def create_worker_state(
         "request": {
             "goal": goal,
             "worker_run_id": "",
-            "recipe_params": {},
-            "job_collection_contract": {
-                "required_fields": list(DEFAULT_JOB_COLLECTION_FIELDS),
-            },
+            "collection_intent": CollectionIntent(
+                required_fields=list(DEFAULT_JOB_COLLECTION_FIELDS)
+            ),
+            "recipe_inputs": {},
         },
         "observation": {
-            "current_capture_id": "",
-            "ocr_capture_id": "",
-            "capture_sequence": 0,
+            "observation_id": "",
+            "observation_sequence": 0,
             "current_screenshot": "",
             "capture_quality": {},
             "raw_screen_signature": {},
             "analysis_mode": "",
             "ocr_complete": False,
-            "previous_screen_observation": {},
+            "previous_observation": {},
             "ui_context": "",
             "current_url": "",
             "current_page_role": "",
@@ -509,7 +511,7 @@ def create_worker_state(
             "reflex_blocked_recipe_keys": [],
         },
         "collection": {
-            "collected_jobs": [],
+            "job_captures": [],
             "job_card_queue": [],
             "job_results_memory": {},
             "job_results_availability": {},

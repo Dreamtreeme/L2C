@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from agent.runtime.worker_contracts import WorkerState, apply_worker_state_update
+from agent.runtime.worker_contracts import WorkerState
 from agent.runtime.worker_data_services import WorkerDataServices
-from agent.runtime.detail_runtime import detail_evidence_screenshot
-from agent.runtime.job_collection import store_collected_job
+from agent.runtime.detail_runtime import detail_buffer_text, detail_evidence_screenshot
+from agent.runtime.job_capture import store_job_capture
 from agent.runtime.job_field_contract import (
     detail_coverage_status,
     merge_job_detail_coverage,
@@ -20,8 +20,7 @@ from agent.runtime.job_card_queue import (
     job_detail_key_from_state,
     normalize_job_card_queue,
 )
-from agent.utils.job_fields import missing_job_fields
-from shared.schema.jd_schema import CollectedJob, JobCollectionEvidence, JobPosting
+from shared.schema.jd_schema import JobCapture, JobCollectionEvidence
 
 
 @dataclass(frozen=True)
@@ -41,7 +40,7 @@ class StateActionOutcome:
     """상태 행동의 결과와 작업자 상태 변경."""
 
     result: dict[str, Any]
-    collected_jobs: list[CollectedJob]
+    job_captures: list[JobCapture]
     state_update: StateActionUpdate = field(default_factory=StateActionUpdate)
 
 
@@ -136,32 +135,6 @@ def _detail_followup(
     }
 
 
-def _classify_extraction_missing_fields(
-    extracted_job: JobPosting,
-    required_fields: list[str],
-    coverage_status: dict[str, Any],
-) -> tuple[list[str], list[str], list[str]]:
-    """페이지를 더 읽을 수 있는 경우에만 구조화 누락을 재시도한다."""
-
-    unavailable_fields = list(coverage_status["unavailable_fields"])
-    missing_fields = missing_job_fields(
-        extracted_job,
-        required_fields,
-        unavailable_fields=unavailable_fields,
-    )
-    if not missing_fields or not coverage_status["page_exhausted"]:
-        return unavailable_fields, missing_fields, []
-
-    # 같은 OCR을 다시 정제해도 화면 근거는 늘지 않는다. 원문과 누락 목록을
-    # 보존한 채 부분 결과를 확정해 반복 호출을 막는다.
-    unavailable_fields.extend(
-        field
-        for field in missing_fields
-        if field not in unavailable_fields
-    )
-    return unavailable_fields, [], missing_fields
-
-
 def _assess_detail_reading(
     args: dict[str, Any],
     state: WorkerState,
@@ -206,7 +179,7 @@ def _detail_retry_update(
 
 
 def _incomplete_detail_evidence_outcome(
-    current_jobs: list[CollectedJob],
+    current_captures: list[JobCapture],
     state: WorkerState,
     assessment: DetailReadingAssessment,
     current_url: str,
@@ -224,7 +197,7 @@ def _incomplete_detail_evidence_outcome(
             "required_fields": assessment.required_fields,
             "field_coverage": assessment.coverage_status,
         },
-        collected_jobs=current_jobs,
+        job_captures=current_captures,
         state_update=_detail_retry_update(
             state,
             assessment,
@@ -235,24 +208,8 @@ def _incomplete_detail_evidence_outcome(
     )
 
 
-def _extract_detail_job(
-    state: WorkerState,
-    assessment: DetailReadingAssessment,
-    current_url: str,
-    data_services: WorkerDataServices,
-) -> JobPosting | None:
-    extraction_state = apply_worker_state_update(
-        state,
-        {"collection": {"job_detail_coverage": assessment.coverage}},
-    )
-    return data_services.extract_job_detail(
-        extraction_state,
-        current_url,
-    )
-
-
 def _empty_detail_outcome(
-    current_jobs: list[CollectedJob],
+    current_captures: list[JobCapture],
 ) -> StateActionOutcome:
     return StateActionOutcome(
         result={
@@ -261,7 +218,7 @@ def _empty_detail_outcome(
             "result": "No accumulated detail OCR text to extract.",
             "reason": "empty_job_detail_buffer",
         },
-        collected_jobs=current_jobs,
+        job_captures=current_captures,
         state_update=StateActionUpdate(
             job_detail_buffer={},
             job_detail_coverage={},
@@ -269,53 +226,20 @@ def _empty_detail_outcome(
     )
 
 
-def _incomplete_detail_extraction_outcome(
-    current_jobs: list[CollectedJob],
-    state: WorkerState,
-    assessment: DetailReadingAssessment,
-    current_url: str,
-    missing_fields: list[str],
-) -> StateActionOutcome:
-    return StateActionOutcome(
-        result={
-            "action": "finish_detail_reading",
-            "status": "skipped",
-            "result": (
-                "Final detail extraction did not produce all fields that had "
-                f"visible evidence: {', '.join(missing_fields)}"
-            ),
-            "reason": "required_field_extraction_incomplete",
-            "required_fields": assessment.required_fields,
-            "missing_fields": missing_fields,
-            "field_coverage": assessment.coverage_status,
-        },
-        collected_jobs=current_jobs,
-        state_update=_detail_retry_update(
-            state,
-            assessment,
-            current_url=current_url,
-            reason="required_field_extraction_incomplete",
-            missing_fields=missing_fields,
-        ),
-    )
-
-
-def _prepare_completed_detail_job(
-    extracted_job: JobPosting,
+def _prepare_job_capture(
     state: WorkerState,
     assessment: DetailReadingAssessment,
     *,
     current_url: str,
-    unavailable_fields: list[str],
-    extraction_missing_fields: list[str],
-) -> CollectedJob:
+    raw_ocr_text: str,
+) -> JobCapture:
     buffer = dict(state["collection"].get("job_detail_buffer", {}) or {})
-    return CollectedJob(
-        posting=extracted_job,
+    return JobCapture(
+        url=current_url,
+        raw_ocr_text=raw_ocr_text,
         evidence=JobCollectionEvidence(
             required_fields=assessment.required_fields,
-            unavailable_fields=unavailable_fields,
-            extraction_missing_fields=extraction_missing_fields,
+            unavailable_fields=assessment.coverage_status["unavailable_fields"],
             page_exhausted=bool(assessment.coverage_status["page_exhausted"]),
             field_evidence=dict(assessment.coverage_status["field_evidence"]),
             screenshot_path=detail_evidence_screenshot(buffer),
@@ -325,32 +249,23 @@ def _prepare_completed_detail_job(
 
 
 def _merge_completed_detail(
-    current_jobs: list[CollectedJob],
-    collected_job: CollectedJob,
-    *,
-    extraction_missing_fields: list[str],
+    current_captures: list[JobCapture],
+    capture: JobCapture,
 ) -> StateActionOutcome:
-    merged_jobs = store_collected_job(current_jobs, collected_job)
-    fields = sorted(
-        collected_job.posting.model_dump(
-            exclude_none=True,
-            exclude_defaults=True,
-        )
-    )
+    merged_captures = store_job_capture(current_captures, capture)
     return StateActionOutcome(
         result={
             "action": "finish_detail_reading",
             "status": "success",
             "result": (
-                "Detail OCR buffer extracted and merged "
-                f"(total_jobs={len(merged_jobs)}, fields={fields})"
+                "Detail OCR buffer captured "
+                f"(total_captures={len(merged_captures)})"
             ),
-            "incoming_jobs": 1,
-            "total_jobs": len(merged_jobs),
-            "fields": fields,
-            "extraction_missing_fields": extraction_missing_fields,
+            "incoming_captures": 1,
+            "total_captures": len(merged_captures),
+            "ocr_chars": len(capture.raw_ocr_text),
         },
-        collected_jobs=merged_jobs,
+        job_captures=merged_captures,
         state_update=StateActionUpdate(
             job_detail_buffer={},
             job_detail_coverage={},
@@ -361,59 +276,34 @@ def _merge_completed_detail(
 
 def _finish_detail_reading(
     args: dict[str, Any],
-    current_jobs: list[CollectedJob],
+    current_captures: list[JobCapture],
     *,
     current_url: str,
     state: WorkerState,
-    data_services: WorkerDataServices,
 ) -> StateActionOutcome:
     try:
         assessment = _assess_detail_reading(args, state, current_url)
         if assessment.coverage_status["missing_fields"]:
             return _incomplete_detail_evidence_outcome(
-                current_jobs,
+                current_captures,
                 state,
                 assessment,
                 current_url,
             )
 
-        extracted_job = _extract_detail_job(
-            state,
-            assessment,
-            current_url,
-            data_services,
-        )
-        if not extracted_job:
-            return _empty_detail_outcome(current_jobs)
-
-        unavailable_fields, missing_fields, extraction_missing_fields = (
-            _classify_extraction_missing_fields(
-                extracted_job,
-                assessment.required_fields,
-                assessment.coverage_status,
-            )
-        )
-        if missing_fields:
-            return _incomplete_detail_extraction_outcome(
-                current_jobs,
-                state,
-                assessment,
-                current_url,
-                missing_fields,
-            )
-
-        completed_job = _prepare_completed_detail_job(
-            extracted_job,
+        buffer = dict(state["collection"].get("job_detail_buffer", {}) or {})
+        raw_ocr_text = detail_buffer_text(buffer)
+        if not raw_ocr_text:
+            return _empty_detail_outcome(current_captures)
+        capture = _prepare_job_capture(
             state,
             assessment,
             current_url=current_url,
-            unavailable_fields=unavailable_fields,
-            extraction_missing_fields=extraction_missing_fields,
+            raw_ocr_text=raw_ocr_text,
         )
         return _merge_completed_detail(
-            current_jobs,
-            completed_job,
-            extraction_missing_fields=extraction_missing_fields,
+            current_captures,
+            capture,
         )
     except Exception as exc:
         return StateActionOutcome(
@@ -422,13 +312,13 @@ def _finish_detail_reading(
                 "status": "error",
                 "result": f"Failed to extract detail OCR buffer: {exc}",
             },
-            collected_jobs=current_jobs,
+            job_captures=current_captures,
         )
 
 
 def _set_job_card_queue(
     args: dict[str, Any],
-    current_jobs: list[CollectedJob],
+    current_captures: list[JobCapture],
     *,
     current_url: str,
     state: WorkerState,
@@ -484,7 +374,7 @@ def _set_job_card_queue(
             "existing_card_count": len(existing_cards),
             "existing_cards": existing_cards,
         },
-        collected_jobs=current_jobs,
+        job_captures=current_captures,
         state_update=StateActionUpdate(
             job_card_queue=queue,
             job_results_memory=memory,
@@ -496,7 +386,7 @@ def _set_job_card_queue(
 def dispatch_state_action(
     action_name: str,
     args: dict[str, Any],
-    current_jobs: list[CollectedJob],
+    current_captures: list[JobCapture],
     *,
     current_url: str = "",
     state: WorkerState | None = None,
@@ -508,15 +398,14 @@ def dispatch_state_action(
     if action_name == "finish_detail_reading":
         return _finish_detail_reading(
             args,
-            current_jobs,
+            current_captures,
             current_url=current_url,
             state=state,
-            data_services=data_services,
         )
     if action_name == "set_job_card_queue":
         return _set_job_card_queue(
             args,
-            current_jobs,
+            current_captures,
             current_url=current_url,
             state=state,
             data_services=data_services,

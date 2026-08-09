@@ -7,23 +7,10 @@ from typing import Any
 from agent.utils.text import normalize_text
 
 
-DEFAULT_SEARCH_TASK_CATEGORY = "검색"
-
-
 def normalize_task_category(value: Any) -> str:
     """LLM이 정한 작업 카테고리를 비교 가능한 문자열로만 정규화한다."""
 
     return normalize_text(value).casefold()
-
-
-def task_category_from_candidate(candidate: dict[str, Any]) -> str:
-    """레시피 후보가 기록한 작업 분류를 정규화해 반환한다."""
-
-    worker_submission = dict(candidate.get("payload", {}) or {})
-    intent = dict(worker_submission.get("collection_intent") or {})
-    return normalize_task_category(
-        intent.get("task_category") or ""
-    )
 
 
 def task_category_matches(requested: Any, recorded: Any) -> bool:

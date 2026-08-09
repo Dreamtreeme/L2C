@@ -44,13 +44,14 @@ def investigation_workflow_factory():
         *,
         db_path,
         run_collection,
-        persist_collection,
+        postprocess_collection,
+        store_collection,
+        record_experience,
         models=None,
         capabilities=None,
         taxonomy_service=None,
         now=None,
         conversation_context_loader=None,
-        run_lookup=None,
     ):
         taxonomy = taxonomy_service or prepare_search_taxonomy(db_path)
         checkpoint = InvestigationCheckpointRuntime(db_path)
@@ -59,13 +60,14 @@ def investigation_workflow_factory():
                 db_path,
                 checkpoint_runtime=checkpoint,
                 run_collection=run_collection,
-                persist_collection=persist_collection,
+                postprocess_collection=postprocess_collection,
+                store_collection=store_collection,
+                record_experience=record_experience,
                 taxonomy_service=taxonomy,
                 models=models,
                 capabilities=capabilities,
                 now=now,
                 conversation_context_loader=conversation_context_loader,
-                run_lookup=run_lookup,
             ),
             checkpoint,
         )

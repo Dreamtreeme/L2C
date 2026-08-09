@@ -16,6 +16,7 @@ from agent.vision.screen_signature import (
     compact_screen_context_signature,
     hamming_distance,
 )
+from shared.schema.feedback_schema import RecipeCandidate, RecordedTransition
 
 
 def _sequence(item: dict[str, Any]) -> int | None:
@@ -27,7 +28,7 @@ def _sequence(item: dict[str, Any]) -> int | None:
 
 def _checkpoint(
     *,
-    capture_id: Any = "",
+    observation_id: Any = "",
     url: Any = "",
     page_role: Any = "",
     screen_signature: Any = None,
@@ -36,7 +37,7 @@ def _checkpoint(
         screen_signature if isinstance(screen_signature, dict) else {}
     )
     return {
-        "capture_id": str(capture_id or ""),
+        "observation_id": str(observation_id or ""),
         "url_template": url_template(str(url or "")),
         "page_role": str(page_role or ""),
         "screen_context_signature": context_signature,
@@ -52,7 +53,7 @@ def _checkpoint_from_step(step: dict[str, Any]) -> dict[str, Any]:
     if not stored:
         return {}
     return {
-        "capture_id": str(stored.get("capture_id") or ""),
+        "observation_id": str(stored.get("observation_id") or ""),
         "url_template": str(stored.get("url_template") or ""),
         "page_role": str(stored.get("page_role") or ""),
         "screen_context_signature": dict(stored.get("screen_context_signature") or {}),
@@ -60,17 +61,13 @@ def _checkpoint_from_step(step: dict[str, Any]) -> dict[str, Any]:
 
 
 def _checkpoint_from_transition(
-    record: dict[str, Any],
+    record: RecordedTransition,
 ) -> dict[str, Any]:
-    stored = (
-        dict(record.get("after_state") or {})
-        if isinstance(record.get("after_state"), dict)
-        else {}
-    )
+    stored = record.after_state
     if not stored:
         return {}
     return {
-        "capture_id": str(stored.get("capture_id") or ""),
+        "observation_id": str(stored.get("observation_id") or ""),
         "url_template": str(stored.get("url_template") or ""),
         "page_role": str(stored.get("page_role") or ""),
         "screen_context_signature": dict(stored.get("screen_context_signature") or {}),
@@ -78,28 +75,13 @@ def _checkpoint_from_transition(
 
 
 def _feedback_before_states(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
 ) -> dict[int, dict[str, Any]]:
-    payload = dict(candidate.get("payload", {}) or {})
     states: dict[int, dict[str, Any]] = {}
-    for episode in payload.get("feedback_episodes", []) or []:
-        if not isinstance(episode, dict):
-            continue
-        seq = _sequence(episode)
-        if seq is None:
-            continue
-        observation = (
-            episode.get("observation")
-            if isinstance(episode.get("observation"), dict)
-            else {}
-        )
-        before = (
-            observation.get("before")
-            if isinstance(observation.get("before"), dict)
-            else {}
-        )
-        states[seq] = _checkpoint(
-            capture_id=before.get("capture_id"),
+    for episode in candidate.submission.feedback_episodes:
+        before = episode.observation.before
+        states[episode.seq] = _checkpoint(
+            observation_id=before.get("observation_id"),
             url=before.get("url"),
             page_role=before.get("page_role"),
             screen_signature=before.get("screen_signature"),
@@ -108,18 +90,13 @@ def _feedback_before_states(
 
 
 def _transition_after_states(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
 ) -> dict[int, dict[str, Any]]:
-    payload = dict(candidate.get("payload", {}) or {})
     states: dict[int, dict[str, Any]] = {}
-    for record in payload.get("transition_records", []) or []:
-        if not isinstance(record, dict):
+    for record in candidate.submission.transition_records:
+        if record.action_seq is None:
             continue
-        try:
-            seq = int(record.get("action_seq"))
-        except (TypeError, ValueError):
-            continue
-        states[seq] = _checkpoint_from_transition(record)
+        states[record.action_seq] = _checkpoint_from_transition(record)
     return states
 
 
@@ -176,9 +153,13 @@ def _states_match(
 ) -> bool:
     """Critic이 중간 행동을 삭제해도 같은 화면이 이어지는지 확인한다."""
 
-    left_capture = str(left.get("capture_id") or "")
-    right_capture = str(right.get("capture_id") or "")
-    if left_capture and right_capture and left_capture == right_capture:
+    left_observation = str(left.get("observation_id") or "")
+    right_observation = str(right.get("observation_id") or "")
+    if (
+        left_observation
+        and right_observation
+        and left_observation == right_observation
+    ):
         return True
 
     left_url = str(left.get("url_template") or "")
@@ -280,11 +261,11 @@ def _remove_invalid_path_prefix(
         )
 
 
-def _raw_steps_by_seq(candidate: dict[str, Any]) -> dict[int, dict[str, Any]]:
+def _raw_steps_by_seq(candidate: RecipeCandidate) -> dict[int, dict[str, Any]]:
     return {
-        int(step["seq"]): dict(step)
-        for step in candidate.get("steps", []) or []
-        if isinstance(step, dict) and _sequence(step) is not None
+        int(step.seq): step.model_dump(mode="json")
+        for step in candidate.steps
+        if step.seq is not None
     }
 
 
@@ -333,7 +314,7 @@ def _append_continuity_issues(
 
 
 def _build_atomic_transitions(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
     ordered: list[dict[str, Any]],
     issues: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -406,7 +387,7 @@ def _remove_unverifiable_tail(
 
 
 def build_recipe_path(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
     replay_steps: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """가지치기된 행동을 하나의 연속 상태 전이 경로로 만든다."""

@@ -17,7 +17,7 @@ def source_platform_for_url(url: str | None) -> str | None:
     return value or None
 
 
-def job_content_hash(posting: JobPosting) -> str:
+def _job_content_hash(posting: JobPosting) -> str:
     """회사명, 직무명과 자격요건으로 중복 후보 그룹 키를 만든다."""
 
     def normalized(value: object) -> str:
@@ -46,17 +46,15 @@ def complete_extracted_job(
         update={
             "url": url or None,
             "raw_ocr_text": raw_ocr_text,
-            "source_platform": posting.source_platform
-            or source_platform_for_url(url),
+            "source_platform": posting.source_platform or source_platform_for_url(url),
         }
     )
     return completed.model_copy(
-        update={"content_hash": completed.content_hash or job_content_hash(completed)}
+        update={"content_hash": completed.content_hash or _job_content_hash(completed)}
     )
 
 
 __all__ = [
     "complete_extracted_job",
-    "job_content_hash",
     "source_platform_for_url",
 ]

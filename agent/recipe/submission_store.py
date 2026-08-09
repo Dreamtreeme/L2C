@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-
 from agent.recipe.payload_sanitizer import strip_full_screen_signatures
 from agent.recipe.sqlite_store import SQLiteStore
-from shared.db.reflex_schema import WORKER_SUBMISSIONS_INDEX_SQL, WORKER_SUBMISSIONS_TABLE_SQL
+from shared.db.reflex_schema import (
+    WORKER_SUBMISSIONS_INDEX_SQL,
+    WORKER_SUBMISSIONS_TABLE_SQL,
+)
+from shared.schema.feedback_schema import StoredWorkerSubmission, WorkerSubmission
 
 
 class SubmissionStore(SQLiteStore):
@@ -19,11 +21,13 @@ class SubmissionStore(SQLiteStore):
 
     def commit_submission(
         self,
-        submission: dict[str, Any],
+        submission: WorkerSubmission,
         source: str = "vision_worker",
     ) -> str:
-        clean_submission = strip_full_screen_signatures(submission)
-        run_id = clean_submission.get("run_id") or "run-unknown"
+        clean_submission = strip_full_screen_signatures(
+            submission.model_dump(mode="json")
+        )
+        run_id = submission.run_id or "run-unknown"
         submission_id = run_id
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
@@ -55,7 +59,7 @@ class SubmissionStore(SQLiteStore):
         *,
         submission_id: str = "",
         run_id: str = "",
-    ) -> dict[str, Any] | None:
+    ) -> StoredWorkerSubmission | None:
         if submission_id:
             where, params = "submission_id=?", (submission_id,)
         elif run_id:
@@ -72,5 +76,7 @@ class SubmissionStore(SQLiteStore):
         if row is None:
             return None
         item = dict(row)
-        item["payload"] = self.load_json(item.pop("payload_json"), {})
-        return item
+        item["payload"] = WorkerSubmission.model_validate(
+            strip_full_screen_signatures(self.load_json(item.pop("payload_json"), {}))
+        )
+        return StoredWorkerSubmission.model_validate(item)

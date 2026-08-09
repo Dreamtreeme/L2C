@@ -72,21 +72,20 @@ def _runtime_config() -> dict[str, str]:
         "VISION_DETAIL_FINAL_EXTRACTION_MODEL": DEFAULT_LIGHTWEIGHT_MODEL,
         "VISION_RECIPE_CRITIC_MODEL": DEFAULT_COMMANDER_MODEL,
         "VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS": "1536",
-        "SOM_OCR_MAX_DIM": "1152",
-        "SOM_OCR_REQUEST_TIMEOUT_SEC": "20",
+        "PADDLE_OCR_MAX_DIM": "1152",
+        "PADDLE_OCR_REQUEST_TIMEOUT_SEC": "20",
         "REFLEX_ENABLED": "",
         "VISION_RECIPE_AUTO_PROMOTE": "",
         "VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT": "",
         "VISION_BROWSER_WINDOW_WIDTH": "",
         "VISION_BROWSER_WINDOW_HEIGHT": "",
-        "VISION_PAGE_READY_TIMEOUT_SEC": "15",
-        "VISION_PAGE_BLANK_MAX_STDDEV": "12",
-        "VISION_PAGE_BLANK_MAX_EDGE_MEAN": "3",
-        "VISION_PAGE_BLANK_MIN_DOMINANT_RATIO": "0.97",
-        "VISION_STABLE_MAX_WAIT_SEC": "2",
-        "VISION_STABLE_CHECK_INTERVAL_SEC": "0.04",
-        "VISION_STABLE_THRESHOLD_PERCENT": "1",
-        "VISION_STABLE_REQUIRED_FRAMES": "2",
+        "VISION_LOADING_TIMEOUT_SEC": "15",
+        "VISION_LOADING_BLANK_MAX_STDDEV": "12",
+        "VISION_LOADING_BLANK_MAX_EDGE_MEAN": "3",
+        "VISION_LOADING_BLANK_MIN_DOMINANT_RATIO": "0.97",
+        "VISION_LOADING_CHECK_INTERVAL_SEC": "0.04",
+        "VISION_LOADING_MOTION_THRESHOLD_PERCENT": "1",
+        "VISION_LOADING_STABLE_FRAMES": "2",
     }
     return {
         key: os.getenv(key, "").strip() or default for key, default in defaults.items()
@@ -232,28 +231,35 @@ def main() -> int:
                     ensure_ascii=False,
                 )
             )
-            from agent.observability.run_context import run_context
-            from agent.observability.run_contracts import RunPhase, RunStatus
-            from agent.observability.langsmith_adapter import publish_langsmith_feedback
-            from agent.graph.workflow import build_graph
-            from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
-            from agent.application.collection_persistence import (
-                persist_collection_batch,
+            from agent.application.collection_experience import (
+                record_collection_experience,
+            )
+            from agent.application.collection_postprocessing import (
+                postprocess_collection_batch,
+            )
+            from agent.application.collection_storage import (
+                store_postprocessed_collection,
             )
             from agent.application.collection_worker_runner import run_worker_once
-            from agent.graph.investigation_collection_nodes import (
-                build_collection_result,
-            )
             from agent.application.worker_execution_service import (
                 WorkerExecutionService,
             )
+            from agent.config import get_settings
+            from agent.graph.investigation_collection_nodes import (
+                build_collection_result,
+            )
+            from agent.graph.workflow import build_graph
+            from agent.observability.langsmith_adapter import publish_langsmith_feedback
+            from agent.observability.run_context import run_context
+            from agent.observability.run_contracts import RunPhase
+            from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
             from benchmark.e2e_observability import (
                 build_e2e_observability,
                 build_langsmith_feedback,
             )
             from benchmark.quality_eval import evaluate_collection_summary
-            from agent.config import get_settings
             from shared.db.database import Database
+            from shared.schema.run_schema import RunStatus
 
             Database(get_settings().paths.db_path)
             vision_runtime = VisionWorkerRuntime(graph_factory=build_graph)
@@ -267,6 +273,7 @@ def main() -> int:
             error = ""
             quality = {}
             recipe_promotion = {}
+            parsed_during_run: dict = {}
             started_at = datetime.now(timezone.utc).isoformat()
             with run_context(
                 query=args.original_query or args.search_keyword,
@@ -304,8 +311,14 @@ def main() -> int:
                         original_query=(args.original_query or args.search_keyword),
                     )
                     batch = worker_service.run(intent)
-                    persisted = persist_collection_batch(batch)
-                    result = build_collection_result(intent, batch, persisted)
+                    processed = postprocess_collection_batch(batch)
+                    persistence = store_postprocessed_collection(processed)
+                    experience = record_collection_experience(batch, persistence)
+                    result = build_collection_result(
+                        batch,
+                        persistence,
+                        experience,
+                    )
                     parsed_during_run = result.model_dump(mode="json")
                     quality = evaluate_collection_summary(parsed_during_run)
                     if result.status == "failed":
@@ -348,12 +361,19 @@ def main() -> int:
             if status == "completed" and isinstance(parsed_during_run, dict):
                 candidate_id = str(parsed_during_run.get("submission_id") or "")
                 if candidate_id:
-                    from agent.application.recipe_promotion_service import (
-                        get_recipe_candidate_promotion_status,
-                    )
+                    from agent.recipe.candidate_store import RecipeCandidateStore
 
-                    recipe_promotion = get_recipe_candidate_promotion_status(
-                        candidate_id
+                    candidate = RecipeCandidateStore().get_candidate(candidate_id)
+                    recipe_promotion = (
+                        {
+                            "candidate_id": candidate.candidate_id,
+                            "status": candidate.status,
+                            "review_attempts": candidate.review_attempts,
+                            "review_error": candidate.review_error,
+                            "promotion": candidate.validation.get("promotion", {}),
+                        }
+                        if candidate
+                        else {"candidate_id": candidate_id, "status": "not_found"}
                     )
                     print(
                         "RECIPE_PROMOTION="

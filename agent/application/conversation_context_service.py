@@ -8,7 +8,7 @@ from shared.schema.investigation_schema import ConversationTurn
 
 def load_conversation_context(
     conversation_id: str,
-    resume_run_id: str = "",
+    context_run_id: str = "",
     *,
     registry: RunRegistry | None = None,
     limit: int = 4,
@@ -18,31 +18,19 @@ def load_conversation_context(
     source = registry or get_run_registry()
     items = source.conversation_history(conversation_id, limit=limit)
     known_ids = {str(item.get("run_id") or "") for item in items}
-    if resume_run_id and resume_run_id not in known_ids:
-        resumed = source.get(resume_run_id)
+    if context_run_id and context_run_id not in known_ids:
+        resumed = source.get(context_run_id)
         if resumed:
             items.append(resumed)
     return [
         ConversationTurn(
             run_id=str(item.get("run_id") or ""),
             user_query=str(item.get("user_query") or item.get("query") or ""),
-            assistant_answer=str(
-                (item.get("result") or {}).get("last_action_result") or ""
-            ),
+            assistant_answer=str((item.get("result") or {}).get("text") or ""),
             run_status=str(item.get("status") or ""),
         )
         for item in items[-max(1, int(limit)) :]
     ]
 
 
-def lookup_run(
-    run_id: str,
-    *,
-    registry: RunRegistry | None = None,
-) -> dict | None:
-    """API 실행 ID에 대응하는 저장된 실행 메타데이터를 조회한다."""
-
-    return (registry or get_run_registry()).get(run_id)
-
-
-__all__ = ["load_conversation_context", "lookup_run"]
+__all__ = ["load_conversation_context"]

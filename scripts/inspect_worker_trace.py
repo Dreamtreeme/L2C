@@ -17,6 +17,7 @@ from agent.observability.worker_trace_report import (
     render_worker_trace,
 )
 from agent.recipe.submission_store import SubmissionStore
+from shared.schema.feedback_schema import StoredWorkerSubmission
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -40,7 +41,7 @@ def _load_submission(
     *,
     submission_id: str = "",
     run_id: str = "",
-) -> dict | None:
+) -> StoredWorkerSubmission | None:
     return store.find_submission(
         submission_id=submission_id,
         run_id=run_id,

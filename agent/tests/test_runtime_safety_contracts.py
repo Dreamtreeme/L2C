@@ -35,25 +35,27 @@ def test_sensitive_action_requires_user_approval_before_physical_input(monkeypat
         worker_state(
             observation={
                 "current_markers": [
-                {"id": 7, "text": "가입 신청", "bbox": [0, 0, 100, 20]},
+                    {"id": 7, "text": "가입 신청", "bbox": [0, 0, 100, 20]},
                 ],
                 "current_url": "https://bank.example/product",
                 "current_url_stale": False,
             },
-            decision={"pending_action": _action_request(
-                [
-                    {
-                        "name": "click_marker",
-                        "args": {
-                            "marker_id": 7,
-                            "target_label": "가입 신청",
-                            "risk_level": "sensitive",
-                            "needs_user_confirmation": True,
-                        },
-                        "id": "sensitive-click",
-                    }
-                ]
-            )},
+            decision={
+                "pending_action": _action_request(
+                    [
+                        {
+                            "name": "click_marker",
+                            "args": {
+                                "marker_id": 7,
+                                "target_label": "가입 신청",
+                                "risk_level": "sensitive",
+                                "needs_user_confirmation": True,
+                            },
+                            "id": "sensitive-click",
+                        }
+                    ]
+                )
+            },
         ),
         node_runtime(),
     )
@@ -61,9 +63,7 @@ def test_sensitive_action_requires_user_approval_before_physical_input(monkeypat
     assert result["safety"]["pending_human_approval"] is True
     assert result["safety"]["human_approval_request"]["action"] == "click_marker"
     assert (
-        action_event_results(result["transition"]["action_events"])[0][
-            "status"
-        ]
+        action_event_results(result["transition"]["action_events"])[0]["status"]
         == "skipped"
     )
 
@@ -76,9 +76,7 @@ def test_screen_guard_capture_failure_requires_fresh_observation(monkeypatch):
             raise RuntimeError("capture unavailable")
 
     result = action_guard.check_reasoning_screen_stale(
-        worker_state(
-            observation={"screen_signature": {"phash": "0" * 16}}
-        ),
+        worker_state(observation={"screen_signature": {"phash": "0" * 16}}),
         FailedPerception(),
     )
 
@@ -102,6 +100,7 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
             }
         ]
     )
+
     class FakeRuntime:
         def check_reasoning_screen(self, *_args, **_kwargs):
             return {
@@ -114,9 +113,7 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
     context = WorkerExecutionContext.from_state(
         worker_state(
             observation={
-                "current_markers": [
-                {"id": 7, "text": "검색", "bbox": [0, 0, 100, 20]}
-                ],
+                "current_markers": [{"id": 7, "text": "검색", "bbox": [0, 0, 100, 20]}],
                 "current_url": "https://example.com/jobs",
                 "current_url_stale": False,
             },
@@ -135,12 +132,9 @@ def test_ui_action_is_blocked_when_screen_validation_is_unavailable(
     )
 
     assert blocked is True
-    assert context.result.new_actions[0]["status"] == "skipped"
-    assert (
-        context.result.new_actions[0]["reason"]
-        == "screen_validation_unavailable"
-    )
-    assert context.result.new_actions[0]["observation_required"] is True
+    assert context.new_actions[0]["status"] == "skipped"
+    assert context.new_actions[0]["reason"] == "screen_validation_unavailable"
+    assert context.new_actions[0]["observation_required"] is True
 
 
 def test_local_api_rejects_untrusted_host_and_cross_origin_request():
@@ -177,10 +171,12 @@ def test_external_content_contract_is_shared_by_extraction_and_answer():
 
 def test_task_contract_blocks_external_navigation_and_unknown_input():
     state = worker_state(
-        safety={"action_permission_contract": {
-            "allowed_domains": ["wanted.co.kr"],
-            "allowed_input_values": ["ai 엔지니어"],
-        }}
+        safety={
+            "action_permission_contract": {
+                "allowed_domains": ["wanted.co.kr"],
+                "allowed_input_values": ["ai 엔지니어"],
+            }
+        }
     )
 
     assert (
@@ -213,9 +209,7 @@ def test_task_contract_blocks_external_navigation_and_unknown_input():
 
 
 def test_task_contract_requires_model_risk_declaration():
-    state = worker_state(
-        safety={"action_permission_contract": {"site": "wanted"}}
-    )
+    state = worker_state(safety={"action_permission_contract": {"site": "wanted"}})
 
     assert (
         task_permission_reason(
@@ -231,9 +225,7 @@ def test_task_contract_requires_model_risk_declaration():
 def test_safe_navigation_requires_model_risk_declaration():
     from agent.graph.worker_execution_policy import sensitive_action_reason
 
-    state = worker_state(
-        safety={"action_permission_contract": {"site": "wanted"}}
-    )
+    state = worker_state(safety={"action_permission_contract": {"site": "wanted"}})
 
     assert (
         sensitive_action_reason(
@@ -262,9 +254,7 @@ def test_safe_navigation_requires_model_risk_declaration():
 def test_safe_read_does_not_require_redundant_confirmation_false():
     from agent.graph.worker_execution_policy import sensitive_action_reason
 
-    state = worker_state(
-        safety={"action_permission_contract": {"site": "wanted"}}
-    )
+    state = worker_state(safety={"action_permission_contract": {"site": "wanted"}})
 
     assert (
         sensitive_action_reason(
@@ -297,9 +287,7 @@ def test_scroll_request_defaults_to_safe_read():
     assert args["risk_level"] == "safe_read"
     assert (
         task_permission_reason(
-            worker_state(
-                safety={"action_permission_contract": {"site": "wanted"}}
-            ),
+            worker_state(safety={"action_permission_contract": {"site": "wanted"}}),
             "scroll",
             args,
             source="llm",
@@ -312,9 +300,12 @@ def test_explicit_sensitive_recipe_step_is_not_promotion_eligible():
     from agent.recipe.promotion_policy import (
         evaluate_candidate_step_evidence,
     )
+    from shared.schema.feedback_schema import RecipeCandidate, WorkerSubmission
 
-    candidate = {
-        "steps": [
+    submission = WorkerSubmission(
+        run_id="worker-sensitive",
+        collection_intent={"site": "wanted"},
+        recorded_steps=[
             {
                 "seq": 1,
                 "action": "click_marker",
@@ -322,16 +313,21 @@ def test_explicit_sensitive_recipe_step_is_not_promotion_eligible():
                 "needs_user_confirmation": True,
             }
         ],
-        "payload": {
-            "feedback_episodes": [
-                {
-                    "seq": 1,
-                    "feedback": {"label": "success"},
-                    "observation": {"result": {"status": "success"}},
-                }
-            ]
-        },
-    }
+        feedback_episodes=[
+            {
+                "seq": 1,
+                "proposal": {"action": "click_marker", "args": {}},
+                "feedback": {"label": "success"},
+                "observation": {"result": {"status": "success"}},
+            }
+        ],
+    )
+    candidate = RecipeCandidate(
+        candidate_id="candidate-sensitive",
+        submission_id="worker-sensitive",
+        status="pending_replay",
+        submission=submission,
+    )
 
     verdict = evaluate_candidate_step_evidence(candidate)[1]
 
@@ -443,9 +439,7 @@ def test_web_server_returns_403_before_remote_request_reaches_routes():
     async def fail_if_called(_request):
         raise AssertionError("원격 요청을 라우트로 전달하면 안 됩니다.")
 
-    response = asyncio.run(
-        reject_non_loopback_client(request, fail_if_called)
-    )
+    response = asyncio.run(reject_non_loopback_client(request, fail_if_called))
 
     assert response.status_code == 403
     assert "loopback" in json.loads(response.body)["detail"]
@@ -454,16 +448,21 @@ def test_web_server_returns_403_before_remote_request_reaches_routes():
 def test_chat_deadline_returns_partial_completion():
     from agent.application.chat_service import ChatService
     from agent.observability.run_context import RunDeadlineExceeded
+    from agent.observability.run_contracts import ChatRequest
+    from agent.observability.run_registry import RunRegistry
+    from shared.schema.run_schema import RunStatus
 
     class DeadlineWorkflow:
         def run(self, *args, **kwargs):
             raise RunDeadlineExceeded("deadline")
 
-    result = ChatService(DeadlineWorkflow()).run(
-        "AI 엔지니어 공고를 찾아줘",
+    result = ChatService(
+        DeadlineWorkflow(),
+        run_registry=RunRegistry(),
+    ).execute(
+        ChatRequest(query="AI 엔지니어 공고를 찾아줘"),
         run_id="chat-deadline-test",
     )
 
-    assert result["run_status"] == "partial"
-    assert result["is_finished"] is True
-    assert "부분 완료" in result["last_action_result"]
+    assert result.status == RunStatus.PARTIAL
+    assert "부분 완료" in result.text

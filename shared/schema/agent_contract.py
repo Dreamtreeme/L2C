@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
 from shared.schema.jd_schema import JobField
 
 JOB_COLLECTION_FIELD_LABELS: dict[str, str] = {
@@ -55,22 +53,8 @@ ANSWER_EVIDENCE_FIELDS: tuple[str, ...] = tuple(
     )
 )
 
-class JobCollectionContract(BaseModel):
-    """상세 판독부터 저장까지 공유하는 필수 공고 필드."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    required_fields: list[JobField] = Field(default_factory=list)
-
-    @field_validator("required_fields")
-    @classmethod
-    def unique_required_fields(cls, values: list[JobField]) -> list[JobField]:
-        return list(dict.fromkeys(values))
-
-
 __all__ = [
     "ANSWER_EVIDENCE_FIELDS",
     "DEFAULT_JOB_COLLECTION_FIELDS",
     "JOB_COLLECTION_FIELD_LABELS",
-    "JobCollectionContract",
 ]

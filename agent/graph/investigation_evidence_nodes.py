@@ -18,11 +18,7 @@ from agent.graph.investigation_context import (
     InvestigationState,
     InvestigationModels,
     build_request_prompt_context,
-    capabilities_for_investigation,
-)
-from agent.graph.investigation_ports import (
-    EvidenceInspectorPort,
-    TaxonomyRequirementPort,
+    collection_capabilities_for,
 )
 from agent.graph.investigation_evidence_policy import (
     apply_evidence_validation,
@@ -43,7 +39,7 @@ from shared.schema.investigation_schema import (
     EvidencePolicy,
     EvidenceValidation,
     InvestigationActionPlan,
-    InvestigationStatus,
+    ToolCapability,
 )
 
 
@@ -54,20 +50,27 @@ class InvestigationEvidenceNodes:
         self,
         *,
         models: InvestigationModels,
-        taxonomy_service: TaxonomyRequirementPort,
-        inspect_evidence: EvidenceInspectorPort,
+        taxonomy_service: Any,
+        inspect_evidence: Callable[..., dict[str, Any]],
+        capabilities: list[ToolCapability],
         now: Callable[[], datetime],
     ) -> None:
         self.models = models
         self.taxonomy_service = taxonomy_service
         self.inspect_evidence_data = inspect_evidence
+        self.collection_capabilities = [
+            item.model_dump(mode="json") for item in capabilities
+        ]
         self.now = now
 
     def define_evidence(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
-        request = state["request"]
-        investigation = request["investigation"]
-        emit_run_event("evidence_planning", RunPhase.PLANNING, "답변에 필요한 근거를 정리하고 있습니다.")
+        investigation = state["request"]["investigation"]
+        emit_run_event(
+            "evidence_planning",
+            RunPhase.PLANNING,
+            "답변에 필요한 근거를 정리하고 있습니다.",
+        )
         plan = parse_model_payload(
             invoke_with_metrics(
                 self.models.evidence(),
@@ -75,12 +78,7 @@ class InvestigationEvidenceNodes:
                     SystemMessage(content=evidence_plan_prompt(self.now())),
                     HumanMessage(
                         content=json.dumps(
-                            {
-                                "request": build_request_prompt_context(investigation),
-                                "tool_capabilities": capabilities_for_investigation(
-                                    request["capability_catalog"], investigation
-                                ),
-                            },
+                            {"request": build_request_prompt_context(investigation)},
                             ensure_ascii=False,
                         )
                     ),
@@ -89,35 +87,34 @@ class InvestigationEvidenceNodes:
             ),
             EvidencePlan,
         )
-        updated = investigation.model_copy(
-            update={
-                "evidence_requirements": normalize_evidence_requirements(
-                    plan,
-                    investigation,
-                    self.taxonomy_service,
-                ),
-                "status": InvestigationStatus.CHECKING_EVIDENCE,
-            }
+        requirements = normalize_evidence_requirements(
+            plan,
+            investigation,
+            self.taxonomy_service,
         )
         return {
-            "request": {
-                "investigation": updated
-            }
+            "evidence": {"requirements": requirements},
         }
 
     def inspect_evidence(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
         investigation = state["request"]["investigation"]
-        emit_run_event("database_check", RunPhase.DATABASE, "DB에 필요한 근거가 있는지 확인하고 있습니다.")
+        evidence = state["evidence"]
+        execution = state["execution"]
+        emit_run_event(
+            "database_check",
+            RunPhase.DATABASE,
+            "DB에 필요한 근거가 있는지 확인하고 있습니다.",
+        )
         collected_web_evidence = (
             investigation.evidence_policy == EvidencePolicy.WEB_REQUIRED
-            and bool(investigation.executed_step_ids)
+            and bool(execution.get("executed_step_ids"))
         )
         report = self.inspect_evidence_data(
-            investigation.evidence_requirements,
+            evidence.get("requirements", []),
             investigation.constraints,
             document_scope_ids=(
-                investigation.collection_document_ids
+                execution.get("collection_document_ids", [])
                 if collected_web_evidence
                 else None
             ),
@@ -132,10 +129,12 @@ class InvestigationEvidenceNodes:
                         HumanMessage(
                             content=json.dumps(
                                 {
-                                    "request": build_request_prompt_context(investigation),
+                                    "request": build_request_prompt_context(
+                                        investigation
+                                    ),
                                     "candidate_groups": build_evidence_validation_payload(
                                         report,
-                                        investigation,
+                                        evidence.get("requirements", []),
                                     ),
                                 },
                                 ensure_ascii=False,
@@ -146,59 +145,49 @@ class InvestigationEvidenceNodes:
                 ),
                 EvidenceValidation,
             )
-            report = apply_evidence_validation(report, investigation, validation)
-        evidence_document_ids = list(report.get("document_ids", []))
-        report["document_ids"] = evidence_document_ids
-        updated = investigation.model_copy(
-            update={
-                "evidence_snapshot": report,
-                "missing_evidence": report.get("missing_evidence", []),
-                "evidence_document_ids": evidence_document_ids,
-                "status": (
-                    InvestigationStatus.ANSWERING
-                    if report.get("sufficient")
-                    else InvestigationStatus.PLANNING
-                ),
-            }
-        )
+            report = apply_evidence_validation(
+                report,
+                evidence.get("requirements", []),
+                investigation.constraints,
+                validation,
+            )
+        report["document_ids"] = list(report.get("document_ids", []))
         return {
-            "request": {
-                "investigation": updated
-            },
-            "evidence": {
-                "db_report": report,
-                "valid_ids": evidence_document_ids,
-            },
+            "evidence": {"db_report": report},
         }
 
     @staticmethod
     def route_after_evidence(state: InvestigationState) -> str:
         investigation = state["request"]["investigation"]
+        execution = state["execution"]
         if investigation.evidence_policy == EvidencePolicy.DATABASE_ONLY:
-            return "load_documents"
+            return "answer"
         if (
             investigation.evidence_policy == EvidencePolicy.WEB_REQUIRED
-            and not investigation.executed_step_ids
+            and not execution.get("executed_step_ids")
         ):
             return "plan_actions"
         if state["evidence"].get("db_report", {}).get("sufficient"):
-            return "load_documents"
+            return "answer"
         pending = [
             step
-            for step in investigation.plan
-            if step.step_id not in investigation.executed_step_ids
+            for step in execution.get("plan", [])
+            if step.step_id not in execution.get("executed_step_ids", [])
         ]
         if pending:
             return "collect"
-        if investigation.plan:
-            return "load_documents"
+        if execution.get("plan"):
+            return "answer"
         return "plan_actions"
 
     def plan_actions(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
-        request = state["request"]
-        investigation = request["investigation"]
-        emit_run_event("action_planning", RunPhase.PLANNING, "부족한 자료를 확보할 행동계획을 세우고 있습니다.")
+        investigation = state["request"]["investigation"]
+        emit_run_event(
+            "action_planning",
+            RunPhase.PLANNING,
+            "부족한 자료를 확보할 행동계획을 세우고 있습니다.",
+        )
         plan = parse_model_payload(
             invoke_with_metrics(
                 self.models.action(),
@@ -211,8 +200,8 @@ class InvestigationEvidenceNodes:
                                 "db_report": compact_db_report(
                                     state["evidence"].get("db_report", {})
                                 ),
-                                "tool_capabilities": capabilities_for_investigation(
-                                    request["capability_catalog"], investigation
+                                "tool_capabilities": collection_capabilities_for(
+                                    self.collection_capabilities, investigation
                                 ),
                             },
                             ensure_ascii=False,
@@ -226,30 +215,19 @@ class InvestigationEvidenceNodes:
         allowed_steps = normalize_collection_steps(
             plan,
             investigation,
-            request["capability_catalog"],
-        )
-        updated = investigation.model_copy(
-            update={
-                "plan": allowed_steps,
-                "status": (
-                    InvestigationStatus.COLLECTING
-                    if allowed_steps
-                    else InvestigationStatus.ANSWERING
-                ),
-            }
+            state["evidence"].get("requirements", []),
+            self.collection_capabilities,
         )
         return {
-            "request": {
-                "investigation": updated
-            },
             "execution": {
-                "cannot_proceed_reason": plan.cannot_proceed_reason
+                "plan": allowed_steps,
+                "cannot_proceed_reason": plan.cannot_proceed_reason,
             },
         }
 
     @staticmethod
     def route_after_plan(state: InvestigationState) -> str:
-        investigation = state["request"]["investigation"]
-        return "collect" if investigation.plan else "load_documents"
+        return "collect" if state["execution"].get("plan") else "answer"
+
 
 __all__ = ["InvestigationEvidenceNodes"]

@@ -247,16 +247,13 @@ class VisionSettings(SectionSettings):
     detail_buffer_max_line_chars: int = Field(220, ge=20, le=4000, validation_alias="VISION_JOB_DETAIL_BUFFER_MAX_LINE_CHARS")
     detail_final_ocr_max_chars: int = Field(16000, ge=1000, le=200000, validation_alias="VISION_DETAIL_FINAL_OCR_MAX_CHARS")
     ui_analysis_cache_limit: int = Field(8, ge=0, le=128, validation_alias="VISION_UI_ANALYSIS_CACHE_LIMIT")
-    page_content_top_px: str = Field("auto", validation_alias="VISION_PAGE_CONTENT_TOP_PX")
-    som_crop_top: str = Field("auto", validation_alias="VISION_SOM_CROP_TOP")
+    content_top: str = Field("auto", validation_alias="VISION_CONTENT_TOP")
     capture_initial_wait_sec: float = Field(0.16, ge=0, le=10, validation_alias="VISION_CAPTURE_INITIAL_WAIT_SEC")
-    page_content_bottom_ignore_px: int = Field(80, ge=0, le=2000, validation_alias="VISION_PAGE_CONTENT_BOTTOM_IGNORE_PX")
-    page_quality_sample_width: int = Field(240, ge=32, le=4096, validation_alias="VISION_PAGE_QUALITY_SAMPLE_WIDTH")
-    page_blank_max_stddev: float = Field(12.0, ge=0, le=255, validation_alias="VISION_PAGE_BLANK_MAX_STDDEV")
-    page_blank_max_edge_mean: float = Field(3.0, ge=0, le=255, validation_alias="VISION_PAGE_BLANK_MAX_EDGE_MEAN")
-    page_blank_min_dominant_ratio: float = Field(0.97, ge=0, le=1, validation_alias="VISION_PAGE_BLANK_MIN_DOMINANT_RATIO")
-    page_capture_retry_sec: float = Field(0.4, ge=0, le=30, validation_alias="VISION_PAGE_CAPTURE_RETRY_SEC")
-    page_ready_timeout_sec: float = Field(15.0, gt=0, le=300, validation_alias="VISION_PAGE_READY_TIMEOUT_SEC")
+    content_bottom_ignore_px: int = Field(80, ge=0, le=2000, validation_alias="VISION_CONTENT_BOTTOM_IGNORE_PX")
+    loading_blank_max_stddev: float = Field(12.0, ge=0, le=255, validation_alias="VISION_LOADING_BLANK_MAX_STDDEV")
+    loading_blank_max_edge_mean: float = Field(3.0, ge=0, le=255, validation_alias="VISION_LOADING_BLANK_MAX_EDGE_MEAN")
+    loading_blank_min_dominant_ratio: float = Field(0.97, ge=0, le=1, validation_alias="VISION_LOADING_BLANK_MIN_DOMINANT_RATIO")
+    loading_timeout_sec: float = Field(15.0, gt=0, le=300, validation_alias="VISION_LOADING_TIMEOUT_SEC")
     low_information_max_capture_cycles: int = Field(
         2,
         ge=1,
@@ -267,17 +264,16 @@ class VisionSettings(SectionSettings):
     url_copy_wait_sec: float = Field(0.015, ge=0, le=2, validation_alias="VISION_URL_COPY_WAIT_SEC")
     url_copy_timeout_sec: float = Field(0.25, gt=0, le=10, validation_alias="VISION_URL_COPY_TIMEOUT_SEC")
     url_copy_attempts: int = Field(2, ge=1, le=5, validation_alias="VISION_URL_COPY_ATTEMPTS")
-    som_crop_scan_min_y: int = Field(80, ge=0, le=2000, validation_alias="VISION_SOM_CROP_SCAN_MIN_Y")
-    som_crop_scan_max_y: int = Field(320, ge=1, le=4000, validation_alias="VISION_SOM_CROP_SCAN_MAX_Y")
-    som_crop_sample_width: int = Field(256, ge=32, le=4096, validation_alias="VISION_SOM_CROP_SAMPLE_WIDTH")
-    som_crop_min_row_delta: float = Field(60.0, ge=0, le=765, validation_alias="VISION_SOM_CROP_MIN_ROW_DELTA")
+    content_scan_min_y: int = Field(80, ge=0, le=2000, validation_alias="VISION_CONTENT_SCAN_MIN_Y")
+    content_scan_max_y: int = Field(320, ge=1, le=4000, validation_alias="VISION_CONTENT_SCAN_MAX_Y")
+    content_scan_width: int = Field(256, ge=32, le=4096, validation_alias="VISION_CONTENT_SCAN_WIDTH")
+    content_min_row_delta: float = Field(60.0, ge=0, le=765, validation_alias="VISION_CONTENT_MIN_ROW_DELTA")
     transition_change_max_wait_sec: float = Field(1.2, ge=0, le=30, validation_alias="VISION_TRANSITION_CHANGE_MAX_WAIT_SEC")
     transition_change_check_sec: float = Field(0.08, gt=0, le=5, validation_alias="VISION_TRANSITION_CHANGE_CHECK_SEC")
-    stable_max_wait_sec: float = Field(2.0, ge=0, le=60, validation_alias="VISION_STABLE_MAX_WAIT_SEC")
-    stable_check_interval_sec: float = Field(0.04, gt=0, le=5, validation_alias="VISION_STABLE_CHECK_INTERVAL_SEC")
-    stable_threshold_percent: float = Field(1.0, ge=0, le=100, validation_alias="VISION_STABLE_THRESHOLD_PERCENT")
-    stable_sample_width: int = Field(360, ge=32, le=4096, validation_alias="VISION_STABLE_SAMPLE_WIDTH")
-    stable_required_frames: int = Field(2, ge=1, le=10, validation_alias="VISION_STABLE_REQUIRED_FRAMES")
+    loading_check_interval_sec: float = Field(0.04, gt=0, le=5, validation_alias="VISION_LOADING_CHECK_INTERVAL_SEC")
+    loading_motion_threshold_percent: float = Field(1.0, ge=0, le=100, validation_alias="VISION_LOADING_MOTION_THRESHOLD_PERCENT")
+    loading_sample_width: int = Field(360, ge=32, le=4096, validation_alias="VISION_LOADING_SAMPLE_WIDTH")
+    loading_stable_frames: int = Field(2, ge=1, le=10, validation_alias="VISION_LOADING_STABLE_FRAMES")
 
 
 class OcrSettings(SectionSettings):
@@ -300,26 +296,26 @@ class OcrSettings(SectionSettings):
         45.0,
         ge=1,
         le=300,
-        validation_alias="SOM_OCR_WORKER_START_TIMEOUT_SEC",
+        validation_alias="PADDLE_OCR_WORKER_START_TIMEOUT_SEC",
     )
     request_timeout_sec: float = Field(
         20.0,
         ge=1,
         le=300,
-        validation_alias="SOM_OCR_REQUEST_TIMEOUT_SEC",
+        validation_alias="PADDLE_OCR_REQUEST_TIMEOUT_SEC",
     )
     worker_max_attempts: int = Field(
         2,
         ge=1,
         le=10,
-        validation_alias="SOM_OCR_WORKER_MAX_ATTEMPTS",
+        validation_alias="PADDLE_OCR_WORKER_MAX_ATTEMPTS",
     )
-    max_image_dim: int = Field(1152, ge=0, le=8192, validation_alias="SOM_OCR_MAX_DIM")
+    max_image_dim: int = Field(1152, ge=0, le=8192, validation_alias="PADDLE_OCR_MAX_DIM")
     inference_max_dim: int = Field(
         1024,
         ge=256,
         le=8192,
-        validation_alias="SOM_INFERENCE_MAX_DIM",
+        validation_alias="OMNIPARSER_MAX_DIM",
     )
 
     @model_validator(mode="after")

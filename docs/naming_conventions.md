@@ -54,9 +54,8 @@ tags:
 | `transition_records` | 제출물 생성 시 `action_events`에서 추출한 확정 화면 전환 목록 |
 | `pending_action` | 아직 실행하지 않은 검증된 `ActionRequest` |
 | `tool_call_metadata` | 큐 ID, 전환 출처처럼 물리 도구 인자가 아닌 실행 추적값 |
-| `current_capture_id` | 현재 작업 상태로 채택된 물리 화면 캡처의 실행 내 식별자 |
-| `decision_capture_id` | 행동을 선택할 때 근거로 사용한 캡처 식별자 |
-| `from_capture_id` / `to_capture_id` | 화면 전환의 이전 캡처와 다음 캡처 식별자 |
+| `observation_id` | 화면 파일, OCR, 마커와 화면 서명을 함께 묶는 실행 내 관찰 식별자 |
+| `before_observation_id` / `after_observation_id` | 행동 전환의 이전 관찰과 다음 관찰 식별자 |
 
 ## 함수 동사 규칙
 
@@ -150,10 +149,12 @@ tags:
 |---|---|
 | `collection_request_builder.py` | 수집 의도, 사이트 프로필과 작업자 목표 생성 |
 | `collection_worker_runner.py` | 단일 비전 작업자 실행과 `CollectionBatch` 구성 |
-| `collection_persistence.py` | 제출물 검토, 저장과 레시피 후보 등록 |
+| `collection_postprocessing.py` | OCR 원문 구조화와 요청 조건 판정 |
+| `collection_storage.py` | 검증된 공고의 SQLite UPSERT |
+| `collection_experience.py` | 작업자 제출물과 레시피 후보 기록 |
 | `conversation_context_service.py` | 저장된 실행에서 구조화된 대화 문맥 조회 |
 
-작업 순서는 서비스 이름으로 감추지 않는다. 조사 그래프의 `collect`와 `persist` 노드가 각각 실행과 저장 시점을 소유한다.
+조사 그래프는 `collect`, `postprocess`, `persist` 순서로 실행한다. 각 노드는 이름이 같은 애플리케이션 책임만 호출하며, 경험 기록 실패는 공고 저장 결과를 바꾸지 않는다.
 
 ## 피해야 할 이름
 

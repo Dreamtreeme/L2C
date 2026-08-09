@@ -7,11 +7,11 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agent.application.model_clients import get_structured_google_model
-from agent.application.model_policy import lightweight_model_name
-from agent.application.run_context import invoke_with_metrics
+from agent.llm.clients import get_structured_google_model
+from agent.llm.policy import lightweight_model_name
+from agent.observability.run_context import invoke_with_metrics
 from agent.prompts.detail_extraction import build_detail_extraction_system_prompt
-from agent.utils.model_conversion import dump_model
+from agent.utils.model_conversion import parse_model_payload
 from shared.schema.jd_schema import JobPosting
 
 logger = logging.getLogger(__name__)
@@ -53,4 +53,4 @@ class LLMEngine:
             self.model_name,
             time.perf_counter() - started,
         )
-        return dump_model(response)
+        return parse_model_payload(response, JobPosting).model_dump(mode="json")

@@ -1,4 +1,3 @@
-import asyncio
 import json
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
@@ -14,14 +13,9 @@ from agent.application.retention_service import run_retention
 from agent.bootstrap import ApplicationRuntime
 from agent.config import get_settings
 from agent.observability.run_contracts import (
-    ChatErrorPayload,
-    ChatFinalPayload,
     ChatRequest,
-    RunEvent,
-    new_run_id,
+    ChatStreamFrame,
 )
-from agent.observability.run_registry import get_run_registry
-from agent.utils.logger import logger
 from shared.db.database import Database
 
 
@@ -149,20 +143,20 @@ async def get_job_versions(job_id: int):
 
 
 @app.get("/api/runs/{run_id}")
-async def get_run_status(run_id: str):
+async def get_run_status(run_id: str, request: Request):
     """최근 로컬 요청의 진행 상태와 실행 요약을 반환합니다."""
 
-    item = get_run_registry().get(run_id)
+    item = _chat_service_for_app(request.app).get_run(run_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return item
 
 
 @app.post("/api/runs/{run_id}/cancel")
-async def cancel_run(run_id: str):
+async def cancel_run(run_id: str, request: Request):
     """실행 중인 요청이 다음 안전 지점에서 중단되도록 표시합니다."""
 
-    item = get_run_registry().request_cancel(run_id)
+    item = _chat_service_for_app(request.app).cancel_run(run_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return {
@@ -173,7 +167,7 @@ async def cancel_run(run_id: str):
 
 
 @app.get("/api/operations")
-async def get_operations_summary():
+async def get_operations_summary(request: Request):
     """최근 실행 상태와 보존 만료 후보를 반환합니다."""
     paths = get_settings().paths
     retention = run_retention(
@@ -183,7 +177,7 @@ async def get_operations_summary():
         dry_run=True,
     )
     return {
-        "runs": get_run_registry().list_recent(limit=20),
+        "runs": _chat_service_for_app(request.app).list_runs(limit=20),
         "retention": retention,
     }
 
@@ -215,101 +209,26 @@ async def apply_retention(x_l2c_operation: str = Header(default="")):
     },
 )
 async def chat_endpoint(req: ChatRequest, request: Request):
-    """
-    지휘자 모델(Commander)에 쿼리를 주입하고 SSE 스트리밍 답변을 전달하는 엔드포인트입니다.
-    """
+    """채팅 요청을 애플리케이션 서비스에 전달하고 SSE로 직렬화합니다."""
 
     async def event_generator():
-        query = req.query.strip()
-        if not query and req.clarification_answer is None:
-            yield "data: [ERROR] 질문이 비어있습니다.\n\n"
-            return
-
-        run_id = new_run_id("chat")
-        registry = get_run_registry()
-        investigation_id = str(req.investigation_id or "").strip()
-        clarification_answer = req.clarification_answer
-        registry.start(
-            run_id,
-            query,
-            conversation_id=req.conversation_id,
-            user_query=query,
-        )
-        event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
-        loop = asyncio.get_running_loop()
-
-        def event_sink(event: RunEvent) -> None:
-            registry.apply_event(event)
-            loop.call_soon_threadsafe(event_queue.put_nowait, event)
-
-        logger.info("Received query for commander", query=query, run_id=run_id)
-
-        yield f"data: [PROCESSING] {json.dumps({'run_id': run_id}, ensure_ascii=False)}\n\n"
-
-        task = asyncio.create_task(
-            asyncio.to_thread(
-                _chat_service_for_app(request.app).run,
-                query,
-                run_id=run_id,
-                event_sink=event_sink,
-                conversation_id=req.conversation_id,
-                resume_run_id=str(req.resume_run_id or ""),
-                investigation_id=investigation_id,
-                clarification_answer=(
-                    clarification_answer.model_dump(mode="json")
-                    if clarification_answer is not None
-                    else None
-                ),
-            )
-        )
-        try:
-            while not task.done() or not event_queue.empty():
-                try:
-                    event = await asyncio.wait_for(event_queue.get(), timeout=0.25)
-                except asyncio.TimeoutError:
-                    continue
-                payload = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
-                yield f"data: [EVENT] {payload}\n\n"
-
-            result = await task
-        except asyncio.CancelledError:
-            registry.request_cancel(run_id)
-            raise
-        except Exception as exc:
-            registry.fail(run_id, str(exc))
-            logger.exception(
-                "Commander execution failed", error=str(exc), run_id=run_id
-            )
-            error_payload = json.dumps(
-                ChatErrorPayload(
-                    run_id=run_id,
-                    message=f"지휘자 에이전트 실행 실패: {exc}",
-                ).model_dump(mode="json"),
-                ensure_ascii=False,
-            )
-            yield f"data: [ERROR] {error_payload}\n\n"
-            return
-
-        registry.complete(run_id, result)
-        final_payload = json.dumps(
-            ChatFinalPayload(
-                run_id=run_id,
-                text=str(result.get("last_action_result") or ""),
-                status=result.get("run_status", "completed"),
-                clarification=result.get("clarification"),
-                investigation_id=result.get("investigation_id", investigation_id),
-                resumed_from_run_id=req.resume_run_id,
-                resume_mode=str(result.get("resume_mode") or ""),
-                conversation_id=req.conversation_id,
-                metrics=result.get("metrics", {}),
-            ).model_dump(mode="json"),
-            ensure_ascii=False,
-        )
-        yield f"data: [FINAL] {final_payload}\n\n"
-        yield "data: [DONE]\n\n"
+        service = _chat_service_for_app(request.app)
+        async for frame in service.stream(req):
+            yield _serialize_chat_frame(frame)
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _serialize_chat_frame(frame: ChatStreamFrame) -> str:
+    marker = frame.kind.upper()
+    if frame.payload is None:
+        return f"data: [{marker}]\n\n"
+    payload = json.dumps(
+        frame.payload.model_dump(mode="json"),
+        ensure_ascii=False,
+    )
+    return f"data: [{marker}] {payload}\n\n"

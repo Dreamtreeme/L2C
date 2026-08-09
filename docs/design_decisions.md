@@ -67,7 +67,7 @@ Perception, ActionTools, PaddleOCR subprocess, 컴파일된 작업자 그래프�
 
 `agent/bootstrap.py`의 `ApplicationRuntime`이 조사 체크포인터, 애플리케이션 서비스, 컴파일된 그래프, `VisionWorkerRuntime`과 Reflex 승격 작업자를 조립하고 종료합니다. FastAPI `lifespan`, CLI와 E2E 실행기는 이 런타임의 수명주기만 관리합니다.
 
-Investigation LangGraph는 대화 문맥 조회, 요청 해석, DB 근거 검사, 수집, 저장, DB 재검사, 답변과 체크포인트 중단·재개를 담당합니다. `collect`는 `CollectionBatch`를 상태에 남기고 `persist`는 저장 결과를 확정하므로, 작업자 실패와 저장 실패가 서로 다른 단계로 관측됩니다. 조사 노드는 `agent/graph/investigation_ports.py`에 선언된 계약만 호출하고, DB 경로와 `agent.application` 구현은 `agent/bootstrap.py`에서 결합합니다. Vision Worker LangGraph는 관찰·전환·선택·추론·실행 순서와 상태 병합을 담당합니다. 작업자 노드는 OCR과 물리 도구를 전역에서 찾지 않고 `Runtime[WorkerDependencies]`로 전달받습니다.
+Investigation LangGraph는 대화 문맥 조회, 요청 해석, DB 근거 검사, 수집, 후처리, 저장, DB 재검사, 답변과 체크포인트 중단·재개를 담당합니다. `collect`는 `JobCapture` 원문을 만들고, `postprocess`는 `CollectedJob`을 만들며, `persist`는 DB 저장을 확정합니다. 단계별 실패는 서로 다른 오류 코드와 계측 구간으로 남습니다. 조사 노드는 `agent/bootstrap.py`에서 주입한 함수와 서비스만 호출합니다. Vision Worker LangGraph는 관찰·전환·선택·추론·실행 순서와 상태 병합을 담당합니다. 작업자 노드는 OCR과 물리 도구를 전역에서 찾지 않고 `Runtime[WorkerDependencies]`로 전달받습니다.
 
 전환 검증, 상세 OCR 버퍼, 결과 카드 큐, Reflex 재생은 `agent/runtime/`의 독립 모듈로 분리했습니다. 이 정책들은 DOM selector가 아니라 화면 서명, OCR 마커, 좌표비율만 입력으로 받습니다.
 
@@ -79,7 +79,7 @@ LLM이 반환한 LangChain 메시지는 `reasoning_node` 밖으로 전달하지 
 
 이 검증은 사이트명, 마커 번호, 화면 문구를 사용하지 않습니다. OCR 텍스트 여부, 내부 텍스트 포함 관계, bbox 형태처럼 화면에서 관찰한 물리적 affordance만 사용합니다. 따라서 사이트 의미를 코드로 복제하지 않으면서 닫기 버튼 같은 명백한 도구 계약 위반을 막습니다.
 
-상세 공고 구조화에서도 증거 책임을 분리합니다. 최종 정제 모델의 1차 입력은 상세 페이지 OCR과 현재 URL입니다. 검색 목록에서 만든 카드 메타데이터는 OCR과 충돌할 수 있으므로 모델 입력에 섞지 않고, 모델이 회사명이나 직무명을 비운 경우에만 후처리 폴백으로 사용합니다.
+상세 공고 구조화의 입력은 상세 페이지 OCR, 현재 URL과 화면에서 확인한 필드 근거입니다. 검색 목록에서 만든 카드 메타데이터는 구조화 모델의 사실 입력에 포함하지 않습니다. 작업자는 원문 수집까지만 담당하고 구조화 결과의 필수 필드와 사용자 날짜 조건은 후처리 단계에서 판정합니다.
 
 ## 10. 채용 사이트 공식 주소 선택
 

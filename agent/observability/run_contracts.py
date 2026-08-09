@@ -2,25 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from shared.schema.investigation_schema import ClarificationAnswer
-
-
-class RunStatus(str, Enum):
-    QUEUED = "queued"
-    RUNNING = "running"
-    WAITING_APPROVAL = "waiting_approval"
-    WAITING_INPUT = "waiting_input"
-    COMPLETED = "completed"
-    PARTIAL = "partial"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+from shared.schema.run_schema import RunStatus
 
 
 class RunPhase(str, Enum):
@@ -51,7 +42,7 @@ class RunEvent(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """POST /api/chat 요청 본문."""
+    """사용자 채팅 실행 요청."""
 
     query: str
     resume_run_id: str | None = None
@@ -60,12 +51,12 @@ class ChatRequest(BaseModel):
     clarification_answer: ClarificationAnswer | None = None
 
 
-class ChatFinalPayload(BaseModel):
-    """SSE FINAL 프레임의 JSON 본문."""
+class ChatResult(BaseModel):
+    """실행 저장소와 UI가 그대로 공유하는 채팅 결과."""
 
     run_id: str
+    status: RunStatus
     text: str = ""
-    status: str = RunStatus.COMPLETED.value
     clarification: dict[str, Any] | None = None
     investigation_id: str = ""
     resumed_from_run_id: str | None = None
@@ -74,11 +65,25 @@ class ChatFinalPayload(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChatStartedPayload(BaseModel):
+    """채팅 실행이 등록된 직후 반환하는 식별자."""
+
+    run_id: str
+
+
 class ChatErrorPayload(BaseModel):
     """SSE ERROR 프레임의 JSON 본문."""
 
     run_id: str
     message: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChatStreamFrame:
+    """애플리케이션 서비스가 전송 계층에 넘기는 스트림 프레임."""
+
+    kind: Literal["processing", "event", "final", "error", "done"]
+    payload: ChatStartedPayload | RunEvent | ChatResult | ChatErrorPayload | None = None
 
 
 RunEventSink = Callable[[RunEvent], None]
@@ -93,9 +98,10 @@ __all__ = [
     "RunEvent",
     "RunEventSink",
     "RunPhase",
-    "RunStatus",
     "ChatErrorPayload",
-    "ChatFinalPayload",
     "ChatRequest",
+    "ChatResult",
+    "ChatStartedPayload",
+    "ChatStreamFrame",
     "new_run_id",
 ]

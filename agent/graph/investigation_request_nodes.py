@@ -20,17 +20,13 @@ from agent.graph.investigation_context import (
     InvestigationModels,
     normalize_site_slugs,
 )
-from agent.graph.investigation_ports import (
-    ClarificationAnswerPort,
-    ConversationContextPort,
-    OccupationClarificationPort,
-)
 from agent.prompts.investigation import request_analysis_prompt
 from agent.utils.model_conversion import parse_model_payload
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
+    ConversationTurn,
     EvidencePolicy,
-    InvestigationStatus,
+    InvestigationRequest,
     RequestAnalysis,
 )
 
@@ -42,9 +38,9 @@ class InvestigationRequestNodes:
         self,
         *,
         models: InvestigationModels,
-        occupation_clarification: OccupationClarificationPort,
-        apply_clarification: ClarificationAnswerPort,
-        load_conversation_context: ConversationContextPort,
+        occupation_clarification: Any,
+        apply_clarification: Callable[..., InvestigationRequest],
+        load_conversation_context: Callable[..., list[ConversationTurn]],
         now: Callable[[], datetime],
     ) -> None:
         self.models = models
@@ -53,21 +49,15 @@ class InvestigationRequestNodes:
         self.load_conversation_context = load_conversation_context
         self.now = now
 
-    def load_context(self, state: InvestigationState) -> dict[str, Any]:
-        """현재 대화와 재개 요청의 문맥을 그래프 상태에 적재한다."""
-
-        investigation = state["request"]["investigation"]
-        history = self.load_conversation_context(
-            investigation.conversation_id,
-            state["request"].get("resume_run_id", ""),
-        )
-        return {"request": {"conversation_history": history}}
-
     def understand(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
         existing = state["request"]["investigation"]
         if existing.objective:
             return {}
+        conversation_history = self.load_conversation_context(
+            existing.conversation_id,
+            state["request"].get("context_run_id", ""),
+        )
         emit_run_event(
             "request_understanding",
             RunPhase.PLANNING,
@@ -84,9 +74,7 @@ class InvestigationRequestNodes:
                                 "current_request": existing.original_query,
                                 "recent_conversation": [
                                     turn.model_dump(mode="json")
-                                    for turn in state["request"].get(
-                                        "conversation_history", []
-                                    )
+                                    for turn in conversation_history
                                 ],
                             },
                             ensure_ascii=False,
@@ -121,11 +109,6 @@ class InvestigationRequestNodes:
                 "constraints": constraints,
                 "assumptions": analysis.assumptions,
                 "clarification_questions": questions,
-                "status": (
-                    InvestigationStatus.AWAITING_CLARIFICATION
-                    if questions
-                    else InvestigationStatus.CHECKING_EVIDENCE
-                ),
             }
         )
         return {"request": {"investigation": updated}}
@@ -176,11 +159,6 @@ class InvestigationRequestNodes:
             update={
                 "constraints": constraints,
                 "clarification_questions": remaining_questions,
-                "status": (
-                    InvestigationStatus.AWAITING_CLARIFICATION
-                    if remaining_questions
-                    else InvestigationStatus.CHECKING_EVIDENCE
-                ),
             }
         )
         return {

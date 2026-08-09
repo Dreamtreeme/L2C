@@ -88,7 +88,7 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
 def state_snapshot_for_action(state: WorkerState, current_url: str) -> dict[str, Any]:
     observation = state["observation"]
     return {
-        "capture_id": str(observation.get("current_capture_id") or ""),
+        "observation_id": str(observation.get("observation_id") or ""),
         "url": current_url or observation.get("current_url", "") or "",
         "screenshot": str(observation.get("current_screenshot") or ""),
         "marked_image": observation.get("marked_image", "") or "",

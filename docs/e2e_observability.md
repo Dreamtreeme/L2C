@@ -155,7 +155,7 @@ python -m benchmark.profile_investigation_planner `
 
 ## 작업자 실행 경로 조회
 
-`worker_submissions`에는 행동 순번별 판단 캡처, 실행 피드백, 다음 화면 전환이 함께 저장됩니다. 다음 명령은 가장 최근 제출물을 캡처 → 행동 → 다음 캡처 순서로 출력합니다.
+`worker_submissions`에는 행동 순번별 화면 관찰, 실행 피드백, 다음 화면 전환이 함께 저장됩니다. 다음 명령은 가장 최근 제출물을 관찰 → 행동 → 다음 관찰 순서로 출력합니다.
 
 ```powershell
 python scripts/inspect_worker_trace.py
@@ -168,7 +168,7 @@ python scripts/inspect_worker_trace.py --run-id worker-20260723192058-c0cd94e8
 python scripts/inspect_worker_trace.py --submission-id worker-20260723192058-c0cd94e8 --json
 ```
 
-텍스트 출력은 긴 실행 ID에서 `capture:0001`처럼 캡처 순번만 줄여 보여 줍니다. `--json` 출력은 실행 ID, 전체 캡처 ID, 스크린샷 경로를 그대로 유지하므로 실패 경로 분석이나 별도 시각화 입력으로 사용할 수 있습니다.
+텍스트 출력은 긴 실행 ID에서 `observation:0001`처럼 관찰 순번만 줄여 보여 줍니다. `--json` 출력은 실행 ID, 전체 관찰 ID, 스크린샷 경로를 그대로 유지하므로 실패 경로 분석이나 별도 시각화 입력으로 사용할 수 있습니다.
 
 ## 대시보드
 

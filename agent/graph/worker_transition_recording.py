@@ -16,18 +16,14 @@ def _transition_step(
     args: dict[str, Any],
     tool_call_id: str,
 ) -> dict[str, Any]:
-    state = context.result.state
-    action_request = context.input.action_request
+    state = context.state
+    action_request = context.action_request
     step: dict[str, Any] = {
         "seq": action_sequence,
         "action": action_name,
-        "decision_capture_id": str(
-            action_request.metadata.get("decision_capture_id") or ""
-        ),
         "args": compact_action_args(action_name, args),
         "page_role": (
-            args.get("page_role")
-            or state["observation"].get("current_page_role", "")
+            args.get("page_role") or state["observation"].get("current_page_role", "")
         ),
         "target_role": args.get("target_role") or "",
         "component": args.get("target_component") or "",
@@ -38,9 +34,7 @@ def _transition_step(
     if action_request.source == "reflex":
         trace = dict(state["replay"].get("reflex_trace", {}) or {})
         call_trace = (
-            (trace.get("tool_calls") or {}).get(tool_call_id)
-            if tool_call_id
-            else None
+            (trace.get("tool_calls") or {}).get(tool_call_id) if tool_call_id else None
         )
         if isinstance(call_trace, dict):
             step.update(
@@ -55,9 +49,7 @@ def _transition_step(
                 }
             )
     return {
-        key: value
-        for key, value in step.items()
-        if value not in (None, "", {}, [])
+        key: value for key, value in step.items() if value not in (None, "", {}, [])
     }
 
 
@@ -71,14 +63,13 @@ def set_transition_request(
 ) -> None:
     """다음 캡처가 검증할 화면 전환 기대값을 상태에 저장한다."""
 
-    state = context.result.state
-    action_request = context.input.action_request
+    state = context.state
+    action_request = context.action_request
     observation = state["observation"]
     recipe_key = ""
     if source == "reflex":
         recipe_key = str(
-            (state["replay"].get("reflex_trace", {}) or {}).get("recipe_key")
-            or ""
+            (state["replay"].get("reflex_trace", {}) or {}).get("recipe_key") or ""
         )
     request_metadata = dict(action_request.metadata or {})
     before_state = (
@@ -89,9 +80,9 @@ def set_transition_request(
     state["transition"]["transition_request"] = {
         "action_seq": action_sequence,
         "action": action_name,
-        "from_capture_id": str(
-            action_request.metadata.get("decision_capture_id")
-            or observation.get("current_capture_id")
+        "before_observation_id": str(
+            action_request.observation_id
+            or observation.get("observation_id")
             or ""
         ),
         "source": source,
@@ -102,9 +93,7 @@ def set_transition_request(
             request_metadata.get("expected_after_state") or {}
         ),
         "before_page_role": str(before_state.get("page_role") or ""),
-        "transition_actions": list(
-            request_metadata.get("transition_actions") or []
-        ),
+        "transition_actions": list(request_metadata.get("transition_actions") or []),
         "step": _transition_step(
             context,
             action_sequence,

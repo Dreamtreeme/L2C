@@ -6,7 +6,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_actions import UI_ACTIONS
 from agent.sites.profile import SiteProfile
+from shared.schema.collection_intent import CollectionIntent
 
 
 def _normalized_text(value: Any) -> str:
@@ -30,14 +32,16 @@ def _collect_input_values(value: Any) -> set[str]:
 
 def build_public_collection_permission_contract(
     site_profile: SiteProfile,
-    recipe_params: dict[str, Any],
+    collection_intent: CollectionIntent,
 ) -> dict[str, Any]:
     """사이트 프로필과 확정된 요청 인자로 실행 권한을 만든다."""
 
     return {
         "site": site_profile.slug,
         "allowed_domains": list(site_profile.domains),
-        "allowed_input_values": sorted(_collect_input_values(recipe_params)),
+        "allowed_input_values": sorted(
+            _collect_input_values(collection_intent.model_dump(mode="python"))
+        ),
     }
 
 
@@ -45,10 +49,7 @@ def _url_host_allowed(url: str, domains: set[str]) -> bool:
     host = str(urlsplit(str(url or "")).hostname or "").casefold()
     return bool(
         host
-        and any(
-            host == domain or host.endswith("." + domain)
-            for domain in domains
-        )
+        and any(host == domain or host.endswith("." + domain) for domain in domains)
     )
 
 
@@ -84,26 +85,10 @@ def task_permission_reason(
             for value in contract.get("allowed_input_values", []) or []
             if _normalized_text(value)
         }
-        if (
-            allowed_values
-            and _normalized_text(args.get("text")) not in allowed_values
-        ):
+        if allowed_values and _normalized_text(args.get("text")) not in allowed_values:
             return "task_contract_input_not_authorized"
 
-    if (
-        source == "llm"
-        and action_name
-        in {
-            "click_marker",
-            "type_in_marker",
-            "press_key",
-            "scroll",
-            "open_browser",
-            "go_back",
-            "close_current_tab",
-            "switch_tab",
-        }
-    ):
+    if source == "llm" and action_name in UI_ACTIONS:
         risk_level = str(args.get("risk_level") or "").strip().casefold()
         if risk_level not in {"safe_read", "safe_navigation", "sensitive"}:
             return "task_contract_risk_not_declared"

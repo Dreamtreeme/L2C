@@ -59,16 +59,14 @@ def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
     assert "--execution-mode" in command
     assert command[command.index("--search-keyword") + 1] == "iOS 개발자"
     assert "--query" not in command
-    assert command[command.index("--execution-mode") + 1] == (
-        "experience_guided"
-    )
+    assert command[command.index("--execution-mode") + 1] == ("experience_guided")
     assert "--run-mode" not in command
 
 
 def test_history_audit_normalizes_execution_mode_names() -> None:
-    assert _execution_mode(
-        {"execution_mode": "experience_guided"}
-    ) == "experience_guided"
+    assert (
+        _execution_mode({"execution_mode": "experience_guided"}) == "experience_guided"
+    )
     assert _execution_mode({"run_mode": "cold"}) == "autonomous"
     assert _execution_mode({"run_mode": "warm"}) == "experience_guided"
 
@@ -80,9 +78,21 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
             "quality": {"passed": True},
             "metrics": {
                 "steps": [
-                    {"component": "ocr_startup", "stage": "perception", "duration_sec": 6.0},
-                    {"component": "ocr_request", "stage": "perception", "duration_sec": 1.0},
-                    {"component": "ocr_request", "stage": "perception", "duration_sec": 3.0},
+                    {
+                        "component": "ocr_startup",
+                        "stage": "perception",
+                        "duration_sec": 6.0,
+                    },
+                    {
+                        "component": "ocr_request",
+                        "stage": "perception",
+                        "duration_sec": 1.0,
+                    },
+                    {
+                        "component": "ocr_request",
+                        "stage": "perception",
+                        "duration_sec": 3.0,
+                    },
                     {"stage": "ocr", "duration_sec": 1.0},
                     {"stage": "ocr", "duration_sec": 3.0},
                     {"stage": "reasoning", "duration_sec": 2.5},
@@ -161,14 +171,15 @@ def test_experience_guided_comparison_rejects_existing_jobs() -> None:
 def test_execution_modes_control_reflex_environment(monkeypatch) -> None:
     monkeypatch.setenv("REFLEX_ENABLED", "1")
     _apply_execution_mode_environment("autonomous")
-    assert _scenario_environment(
-        {"execution_mode": "autonomous"}
-    )["REFLEX_ENABLED"] == "0"
+    assert (
+        _scenario_environment({"execution_mode": "autonomous"})["REFLEX_ENABLED"] == "0"
+    )
 
     _apply_execution_mode_environment("experience_guided")
-    assert _scenario_environment(
-        {"execution_mode": "experience_guided"}
-    )["REFLEX_ENABLED"] == "1"
+    assert (
+        _scenario_environment({"execution_mode": "experience_guided"})["REFLEX_ENABLED"]
+        == "1"
+    )
 
 
 def test_scenario_environment_uses_isolated_database(tmp_path) -> None:
@@ -230,9 +241,7 @@ def test_scenario_workload_key_matches_both_execution_modes() -> None:
         autonomous,
         {workload_key: False},
     )
-    assert _scenario_pair_key(
-        {**autonomous, "repeat_index": 2}
-    ).endswith("#repeat=2")
+    assert _scenario_pair_key({**autonomous, "repeat_index": 2}).endswith("#repeat=2")
 
 
 def test_promotion_metrics_are_added_to_collection_metrics() -> None:
@@ -312,6 +321,7 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
     from agent.application import recipe_candidate_review_service
     from agent.recipe.candidate_store import RecipeCandidateStore
     from agent.recipe.submission_store import SubmissionStore
+    from shared.schema.feedback_schema import WorkerSubmission
 
     db_path = tmp_path / "regression.db"
     store = RecipeCandidateStore(db_path)
@@ -325,32 +335,28 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
         )
 
     other_candidate_id = commit_candidate(
-        {
-            "run_id": "other-run",
-            "site": "saramin",
-            "goal": "다른 후보",
-            "keyword": "백엔드",
-            "collection_intent": {
+        WorkerSubmission(
+            run_id="other-run",
+            goal="다른 후보",
+            collection_intent={
                 "site": "saramin",
                 "search_keyword": "백엔드",
                 "task_category": "검색",
             },
-            "recorded_steps": [{"seq": 0, "action": "click_marker"}],
-        },
+            recorded_steps=[{"seq": 0, "action": "click_marker"}],
+        ),
     )
     assert store.enqueue_review(other_candidate_id) is True
     candidate_id = commit_candidate(
-        {
-            "run_id": "autonomous-run",
-            "site": "wanted",
-            "goal": "iOS 개발자 공고 수집",
-            "keyword": "iOS 개발자",
-            "collection_intent": {
+        WorkerSubmission(
+            run_id="autonomous-run",
+            goal="iOS 개발자 공고 수집",
+            collection_intent={
                 "site": "wanted",
                 "search_keyword": "iOS 개발자",
                 "task_category": "검색",
             },
-            "recorded_steps": [
+            recorded_steps=[
                 {
                     "seq": 0,
                     "action": "type_in_marker",
@@ -359,7 +365,7 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
                     "target": {"text": "검색"},
                 }
             ],
-        },
+        ),
     )
     calls = []
 
@@ -405,7 +411,9 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
     assert result["review_status"] == "accepted"
     assert result["review_attempts"] == 2
     assert result["review_metrics"]["attempt_count"] == 2
-    assert candidate["review_attempts"] == 2
-    assert candidate["review_error"] == ""
-    assert other_candidate["status"] == "pending_review"
-    assert other_candidate["review_attempts"] == 0
+    assert candidate is not None
+    assert other_candidate is not None
+    assert candidate.review_attempts == 2
+    assert candidate.review_error == ""
+    assert other_candidate.status == "pending_review"
+    assert other_candidate.review_attempts == 0

@@ -51,14 +51,14 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
     )
 
     marker_id, trace = match_step_by_screen_signature(
-        steps[0],
+        steps[0].model_dump(mode="json"),
         {"phash": "0" * 16, "size": [200, 200]},
         [{"id": 7, "bbox": [150, 20, 170, 40], "text": "검색"}],
         current_image_path=str(current),
     )
 
-    assert steps[0]["page_role"] == "home"
-    assert steps[0]["roi_signature"]["algorithm"] == "roi-phash-dct64-v2"
+    assert steps[0].page_role == "home"
+    assert steps[0].roi_signature["algorithm"] == "roi-phash-dct64-v2"
     assert marker_id == 7
     assert trace["matched"] is True
     assert trace["mode"] == "roi_phash"
@@ -106,7 +106,7 @@ def test_contextual_step_records_and_matches_screen_context():
         2,
     )
 
-    saved = steps[0]["screen_context_signature"]
+    saved = steps[0].screen_context_signature
     matched = screen_context_signature_match(
         saved,
         {"phash": "a" * 16, "size": [1921, 2088]},
@@ -151,8 +151,8 @@ def test_replay_mode_requires_autonomous_declaration():
         2,
     )
 
-    assert steps[0]["replay_mode"] == "reasoning"
-    assert steps[1]["replay_mode"] == "fixed"
+    assert steps[0].replay_mode == "reasoning"
+    assert steps[1].replay_mode == "fixed"
 
 
 def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
@@ -186,8 +186,8 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     working = worker_state(
         request={"worker_run_id": "worker-no-effect"},
         observation={
-            "current_capture_id": "worker-no-effect:capture:0004",
-            "capture_sequence": 4,
+            "observation_id": "worker-no-effect:observation:0004",
+            "observation_sequence": 4,
             "current_screenshot": str(screenshot),
             "current_url": "https://example.com/jobs",
             "current_url_stale": False,
@@ -207,7 +207,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                 "action": "click_marker",
                 "replay_mode": "reasoning",
                 "action_seq": 3,
-                "from_capture_id": "worker-no-effect:capture:0004",
+                "before_observation_id": "worker-no-effect:observation:0004",
                 "source": "reflex",
                 "recipe_key": "roi#search",
                 "before_url": "https://example.com/jobs",
@@ -234,8 +234,8 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     assert working["observation"]["ocr_complete"] is True
     assert working["observation"]["current_markers"][0]["id"] == 1
     assert (
-        working["observation"]["previous_screen_observation"]["capture_id"]
-        == "worker-no-effect:capture:0005"
+        working["observation"]["previous_observation"]["observation_id"]
+        == "worker-no-effect:observation:0005"
     )
 
     monkeypatch.setattr(
@@ -246,7 +246,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     stale = worker_transition.transition_node(
         worker_state(
             observation={
-                "current_capture_id": "worker-test:capture:0003",
+                "observation_id": "worker-test:observation:0003",
                 "current_screenshot": str(screenshot),
                 "current_url": "https://example.com/jobs",
                 "raw_screen_signature": {
@@ -255,8 +255,8 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                 },
                 "ocr_complete": False,
                 "current_markers": [],
-                "previous_screen_observation": {
-                    "capture_id": "worker-test:capture:0001",
+                "previous_observation": {
+                    "observation_id": "worker-test:observation:0001",
                     "screenshot": str(screenshot),
                     "markers": [{"id": 4, "bbox": [10, 20, 30, 40]}],
                 },
@@ -265,7 +265,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                 "transition_request": {
                     "action_seq": 0,
                     "action": "click_marker",
-                    "from_capture_id": "worker-test:capture:0002",
+                    "before_observation_id": "worker-test:observation:0002",
                     "source": "autonomous",
                     "before_url": "https://example.com/jobs",
                     "before_screenshot": str(screenshot),
@@ -287,8 +287,6 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
 
     assert stale.get("observation", {}).get("ocr_complete") is None
     assert (
-        action_event_transitions(stale["transition"]["action_events"])[0][
-            "marker_count"
-        ]
+        action_event_transitions(stale["transition"]["action_events"])[0].marker_count
         == 0
     )

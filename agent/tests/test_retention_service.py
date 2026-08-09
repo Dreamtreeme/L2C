@@ -5,7 +5,10 @@ from datetime import datetime, timedelta
 from agent.tests.job_test_data import insert_job
 from shared.schema.jd_schema import JobCollectionEvidence
 
-def test_operations_api_previews_and_requires_confirmation_header(monkeypatch, tmp_path):
+
+def test_operations_api_previews_and_requires_confirmation_header(
+    monkeypatch, tmp_path
+):
     from fastapi.testclient import TestClient
 
     from agent.config import get_settings
@@ -19,6 +22,15 @@ def test_operations_api_previews_and_requires_confirmation_header(monkeypatch, t
     monkeypatch.setattr(paths, "db_path", tmp_path / "operations.db")
     monkeypatch.setattr(paths, "log_dir", logs_dir)
     monkeypatch.setattr(paths, "screenshot_dir", screenshot_dir)
+
+    class FakeChatService:
+        def list_runs(self, limit=20):
+            return []
+
+    monkeypatch.setattr(
+        "agent.web_server._chat_service_for_app",
+        lambda _application: FakeChatService(),
+    )
 
     client = TestClient(app)
     preview = client.get("/api/operations")
@@ -97,7 +109,9 @@ def test_retention_is_dry_run_by_default_and_preserves_referenced_artifacts(tmp_
             evidence=evidence,
         )
     with sqlite3.connect(db_path) as conn:
-        conn.execute("UPDATE job_versions SET observed_at = ? WHERE job_id = ?", (old, job_id))
+        conn.execute(
+            "UPDATE job_versions SET observed_at = ? WHERE job_id = ?", (old, job_id)
+        )
 
     policy = RetentionPolicy(
         log_days=30,

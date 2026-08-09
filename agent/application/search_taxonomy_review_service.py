@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from agent.application.search_taxonomy_import_service import normalize_term
-from agent.application.search_taxonomy_service import SearchTaxonomyService
+from agent.application.job_taxonomy_linker import JobTaxonomyLinker
 from agent.application.search_taxonomy_utils import CURATED_SOURCE_KEY
 from shared.db.database import Database
 
@@ -136,7 +136,7 @@ class SearchTaxonomyReviewService:
         )
 
     def _relink_observations(self, job_ids: Iterable[int]) -> dict[str, int]:
-        taxonomy = SearchTaxonomyService(self.db_path)
+        taxonomy = JobTaxonomyLinker(self.db_path)
         totals = {
             "jobs": 0,
             "occupations": 0,
@@ -208,7 +208,9 @@ class SearchTaxonomyReviewService:
                 if concept is None:
                     raise ValueError(f"활성 개념을 찾을 수 없습니다: {concept_key}")
                 if str(concept["concept_type"]) != "occupation":
-                    raise ValueError("사용자 확인 별칭은 직무 개념에만 추가할 수 있습니다.")
+                    raise ValueError(
+                        "사용자 확인 별칭은 직무 개념에만 추가할 수 있습니다."
+                    )
                 self._ensure_curated_source(connection)
                 self._insert_alias(
                     connection,
@@ -249,7 +251,7 @@ class SearchTaxonomyReviewService:
             "status": "accepted",
             "concept_key": concept_key,
             "alias": alias.strip(),
-            "relinked": SearchTaxonomyService(self.db_path).relink_all_jobs(),
+            "relinked": JobTaxonomyLinker(self.db_path).relink_all_jobs(),
         }
 
     def accept_as_alias(
@@ -328,7 +330,11 @@ class SearchTaxonomyReviewService:
                 ).hexdigest()[:16]
                 concept_key = f"l2c:curated:{concept_type}:{digest}"
                 now = _now()
-                ko_label = canonical_label.strip() if _language(canonical_label) == "ko" else None
+                ko_label = (
+                    canonical_label.strip()
+                    if _language(canonical_label) == "ko"
+                    else None
+                )
                 en_label = canonical_label.strip() if ko_label is None else None
                 connection.execute(
                     """
@@ -390,8 +396,13 @@ class SearchTaxonomyReviewService:
                         raise ValueError(
                             f"상위 개념을 찾을 수 없습니다: {broader_concept_key}"
                         )
-                    if concept_type != "occupation" or broader["concept_type"] != "occupation":
-                        raise ValueError("상하위 관계는 직무 개념 사이에서만 지정할 수 있습니다.")
+                    if (
+                        concept_type != "occupation"
+                        or broader["concept_type"] != "occupation"
+                    ):
+                        raise ValueError(
+                            "상하위 관계는 직무 개념 사이에서만 지정할 수 있습니다."
+                        )
                     connection.execute(
                         """
                         INSERT INTO search_concept_relations (

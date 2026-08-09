@@ -14,38 +14,36 @@ from agent.llm.policy import commander_model_name
 from agent.sites import list_supported_sites
 from shared.schema.investigation_schema import (
     EvidencePlan,
+    EvidenceRequirement,
     EvidenceValidation,
-    ConversationTurn,
     InvestigationActionPlan,
     InvestigationConstraints,
+    InvestigationPlanStep,
     InvestigationRequest,
     RequestAnalysis,
     TaxonomyResolution,
 )
 from shared.schema.collection_intent import CollectionResult
-from shared.schema.collection_run import CollectionBatch
+from shared.schema.collection_run import CollectionBatch, PostprocessedCollection
 
 
 class InvestigationRequestState(TypedDict, total=False):
     investigation: InvestigationRequest
-    capability_catalog: list[dict[str, Any]]
-    clarification: dict[str, Any]
-    conversation_history: list[ConversationTurn]
-    resume_run_id: str
+    context_run_id: str
 
 
 class InvestigationEvidenceState(TypedDict, total=False):
+    requirements: list[EvidenceRequirement]
     db_report: dict[str, Any]
-    documents: list[dict[str, Any]]
-    valid_ids: list[int]
 
 
 class InvestigationExecutionState(TypedDict, total=False):
-    active_step_id: str
-    pending_collection: CollectionBatch | None
-    collection_error: str
+    plan: list[InvestigationPlanStep]
+    executed_step_ids: list[str]
+    collection_document_ids: list[int]
     collection_results: list[CollectionResult]
-    run_status: str
+    pending_collection: CollectionBatch | None
+    postprocessed_collection: PostprocessedCollection | None
     cannot_proceed_reason: str
 
 
@@ -81,31 +79,27 @@ class InvestigationState(TypedDict):
 
 def create_investigation_state(
     investigation: InvestigationRequest,
-    capabilities: list[dict[str, Any]],
     *,
-    resume_run_id: str = "",
+    context_run_id: str = "",
 ) -> InvestigationState:
     """새 조사 실행에 필요한 네 책임 섹션을 초기화한다."""
 
     return {
         "request": {
             "investigation": investigation,
-            "capability_catalog": list(capabilities),
-            "clarification": {},
-            "conversation_history": [],
-            "resume_run_id": resume_run_id,
+            "context_run_id": context_run_id,
         },
         "evidence": {
+            "requirements": [],
             "db_report": {},
-            "documents": [],
-            "valid_ids": [],
         },
         "execution": {
-            "active_step_id": "",
-            "pending_collection": None,
-            "collection_error": "",
+            "plan": [],
+            "executed_step_ids": [],
+            "collection_document_ids": [],
             "collection_results": [],
-            "run_status": "",
+            "pending_collection": None,
+            "postprocessed_collection": None,
             "cannot_proceed_reason": "",
         },
         "answer": {"final_answer": ""},
@@ -209,7 +203,7 @@ def normalize_site_slugs(
     return constraints.model_copy(update={"sites": list(dict.fromkeys(normalized))})
 
 
-def capabilities_for_investigation(
+def collection_capabilities_for(
     catalog: list[dict[str, Any]],
     investigation: InvestigationRequest,
 ) -> list[dict[str, Any]]:
@@ -221,12 +215,11 @@ def capabilities_for_investigation(
         if str(site).strip()
     }
     if not sites:
-        return catalog
+        return list(catalog)
     return [
         item
         for item in catalog
-        if not str(item.get("tool_name") or "").startswith("realtime_scraping:")
-        or str(item.get("tool_name") or "").split(":", 1)[1] in sites
+        if str(item.get("tool_name") or "").partition(":")[2] in sites
     ]
 
 
@@ -244,12 +237,6 @@ def build_request_prompt_context(
         "evidence_policy": investigation.evidence_policy.value,
         "constraints": investigation.constraints.model_dump(mode="json"),
         "assumptions": list(investigation.assumptions),
-        "evidence_requirements": [
-            item.model_dump(mode="json") for item in investigation.evidence_requirements
-        ],
-        "missing_evidence": list(investigation.missing_evidence),
-        "evidence_document_ids": list(investigation.evidence_document_ids),
-        "collection_document_ids": list(investigation.collection_document_ids),
     }
 
 
@@ -257,7 +244,7 @@ __all__ = [
     "InvestigationState",
     "InvestigationModels",
     "build_request_prompt_context",
-    "capabilities_for_investigation",
+    "collection_capabilities_for",
     "message_text",
     "create_investigation_state",
     "merge_investigation_section",

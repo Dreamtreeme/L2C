@@ -39,10 +39,10 @@ def _record_guard_result(
     observation_required: bool = False,
     details: dict[str, Any] | None = None,
 ) -> None:
-    state = context.result.state
+    state = context.state
     if observation_required:
         state["observation"]["current_url_stale"] = True
-        context.result.screen_changed = True
+        context.screen_changed = True
     result: dict[str, Any] = {
         "status": status,
         "action": action_name,
@@ -75,9 +75,7 @@ def _record_guard_result(
     )
     if increments_error:
         transition = state["transition"]
-        transition["error_count"] = int(
-            transition.get("error_count", 0) or 0
-        ) + 1
+        transition["error_count"] = int(transition.get("error_count", 0) or 0) + 1
     logger.warning(message, action=action_name, reason=reason)
     logger.debug(
         "Action guard completed",
@@ -93,7 +91,7 @@ def _require_human_approval(
     before_snapshot: dict[str, Any],
     step_started: float,
 ) -> None:
-    state = context.result.state
+    state = context.state
     observation = state["observation"]
     state["safety"]["pending_human_approval"] = True
     state["safety"]["human_approval_request"] = {
@@ -103,8 +101,7 @@ def _require_human_approval(
         "args": compact_action_args(action_name, args),
         "current_url": str(observation.get("current_url") or ""),
         "message": (
-            "Autonomous execution stopped before a sensitive or "
-            "irreversible step."
+            "Autonomous execution stopped before a sensitive or irreversible step."
         ),
     }
     _record_guard_result(
@@ -128,7 +125,7 @@ def guard_return_to_results(
 ) -> bool:
     """상세 수집이 끝난 뒤 목록 복귀 외의 추가 탐색을 차단한다."""
 
-    state = context.result.state
+    state = context.state
     current_url = str(state["observation"].get("current_url") or "")
     return_pending = return_to_job_results_for_url(
         state,
@@ -166,8 +163,8 @@ def guard_ui_action(
 ) -> bool:
     """현재 캡처와 목표가 유효하며 안전할 때만 UI 행동을 허용한다."""
 
-    state = context.result.state
-    request = context.input.action_request
+    state = context.state
+    request = context.action_request
     sensitive_reason = sensitive_action_reason(
         state,
         action_name,
@@ -189,7 +186,7 @@ def guard_ui_action(
         action_name in {"click_marker", "type_in_marker"}
         and request.source not in DIRECT_SCREEN_ACTION_SOURCES
     ):
-        guard_result = context.input.worker_runtime.check_reasoning_screen(
+        guard_result = context.worker_runtime.check_reasoning_screen(
             state,
             marker_id=args.get("marker_id"),
         )

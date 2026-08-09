@@ -53,7 +53,6 @@ def apply_update(
 
 def worker_data_services(
     *,
-    extract_job_detail=None,
     mark_existing_job_cards=None,
     find_existing_job_url=None,
     load_site_recipes=None,
@@ -61,9 +60,6 @@ def worker_data_services(
     """노드 단위 테스트에서 외부 DB와 모델 호출을 제거한다."""
 
     return WorkerDataServices(
-        extract_job_detail=(
-            extract_job_detail or (lambda _state, _url: None)
-        ),
         mark_existing_job_cards=(
             mark_existing_job_cards or (lambda queue, _url: (queue, []))
         ),

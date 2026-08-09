@@ -152,8 +152,8 @@ def _queue_return_transition(
             state["observation"].get("current_screenshot") or ""
         ),
         marked_image="",
-        to_capture_id=str(
-            state["observation"].get("current_capture_id") or ""
+        after_observation_id=str(
+            state["observation"].get("observation_id") or ""
         ),
         phash_distance=return_match.get("distance"),
         ocr_skipped=True,
@@ -195,9 +195,6 @@ def _replay_queued_card(
             "current_markers": selected_markers,
             "screen_signature": {**saved_signature, **signature},
             "current_page_role": "search",
-            "ocr_capture_id": str(
-                state["observation"].get("current_capture_id") or ""
-            ),
             "ocr_complete": True,
         },
         "collection": {
@@ -250,7 +247,7 @@ def selection_node(
     if active_card and looks_like_job_detail_url(current_url):
         duplicate_trace = runtime.context.data.find_existing_job_url(
             current_url,
-            list(collection.get("collected_jobs", [])),
+            list(collection.get("job_captures", [])),
         )
         if duplicate_trace.get("matched"):
             logger.info(

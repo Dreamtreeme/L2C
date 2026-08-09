@@ -225,6 +225,7 @@ def test_rocketpunch_selected_job_query_identifies_side_panel_detail():
 def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path):
     from agent.runtime import job_card_selector
     from agent.tests.worker_test_support import worker_state
+    from shared.schema.collection_intent import CollectionIntent
 
     image_path = tmp_path / "screen.png"
     image_path.write_bytes(b"not-used")
@@ -233,11 +234,24 @@ def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path)
         "image_to_base64_jpeg",
         lambda *_args, **_kwargs: "image",
     )
+    expected_guidance = "SITE_GUIDANCE_SENTINEL"
+    monkeypatch.setattr(
+        job_card_selector,
+        "site_runtime_guidance",
+        lambda url, role: (
+            expected_guidance
+            if url == "https://www.rocketpunch.com/jobs" and role == "search"
+            else ""
+        ),
+    )
 
     messages = job_card_selector._selection_messages(
         worker_state(
             request={
-                "recipe_params": {"query": "백엔드 개발자", "target_count": 1},
+                "collection_intent": CollectionIntent(
+                    search_keyword="백엔드 개발자",
+                    target_count=1,
+                ),
             },
             observation={
                 "current_url": "https://www.rocketpunch.com/jobs",
@@ -249,8 +263,7 @@ def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path)
         1,
     )
 
-    assert "기업명, 직무명, 기술 스택, 담당 업무" in messages[0].content
-    assert "관심 주제, 공고, 사람, 기업" in messages[0].content
+    assert expected_guidance in messages[0].content
 
 
 def test_runtime_guidance_contains_only_current_site_and_role():
@@ -271,9 +284,7 @@ def test_job_normalization_uses_registry_source_platform():
     from agent.application.job_normalization_service import source_platform_for_url
 
     assert (
-        source_platform_for_url(
-            "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001"
-        )
+        source_platform_for_url("https://www.jobkorea.co.kr/Recruit/GI_Read/50000001")
         == "JobKorea"
     )
 
@@ -340,17 +351,13 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
     captured = {}
 
     def fake_execute(initial_state, _profile, _recursion_limit, **_kwargs):
-        captured["recipe_params"] = dict(
-            initial_state["request"].get("recipe_params") or {}
-        )
-        captured["job_collection_contract"] = dict(
-            initial_state["request"].get("job_collection_contract") or {}
-        )
+        captured["collection_intent"] = initial_state["request"]["collection_intent"]
+        captured["recipe_inputs"] = initial_state["request"]["recipe_inputs"]
         captured["goal"] = initial_state["request"].get("goal", "")
         final_state = {
             **initial_state,
             "lifecycle": {**initial_state["lifecycle"], "is_finished": True},
-            "collection": {**initial_state["collection"], "collected_jobs": []},
+            "collection": {**initial_state["collection"], "job_captures": []},
         }
         return final_state, False
 
@@ -366,15 +373,17 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
             freshness_required=True,
             task_category="탐색",
             required_fields=["posted_at"],
-        )
+        ),
+        worker_runtime=object(),
     )
 
     assert result.submission.collection_intent.target_count == 2
     assert result.submission.collection_intent.task_category == "탐색"
-    assert captured["recipe_params"]["target_count"] == 2
-    assert captured["recipe_params"]["search_keyword"] == "iOS 개발자"
-    assert captured["recipe_params"]["task_category"] == "탐색"
-    assert captured["job_collection_contract"]["required_fields"] == [
+    intent = captured["collection_intent"]
+    assert intent.target_count == 2
+    assert intent.search_keyword == "iOS 개발자"
+    assert intent.task_category == "탐색"
+    assert [field.value for field in intent.required_fields] == [
         "company_name",
         "position",
         "url",
@@ -384,20 +393,15 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
         "benefits",
         "posted_at",
     ]
-    assert (
-        captured["recipe_params"]["collection_intent"]["required_fields"]
-        == captured["job_collection_contract"]["required_fields"]
-    )
+    assert captured["recipe_inputs"] == {"query": "iOS 개발자"}
     assert "required_record_shape" in captured["goal"]
     assert "Collect up to 2 distinct job postings" in captured["goal"]
     assert result.submission.collection_intent.search_keyword == "iOS 개발자"
-    assert captured["recipe_params"]["collection_intent"]["filters"] == {
+    assert intent.filters.model_dump(mode="json") == {
         "posted_from": "2026-07-01",
         "posted_to": "",
         "experience": "",
         "location": "서울",
         "employment_type": "",
     }
-    assert (
-        "posted_at" in captured["recipe_params"]["collection_intent"]["required_fields"]
-    )
+    assert "posted_at" in [field.value for field in intent.required_fields]

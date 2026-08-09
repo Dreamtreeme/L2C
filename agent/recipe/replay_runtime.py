@@ -16,7 +16,6 @@ from agent.recipe.replay import (
     select_reflex_replay,
 )
 from agent.utils.logger import logger
-from agent.utils.model_conversion import dump_model
 
 
 def _miss_result(
@@ -33,14 +32,10 @@ def _miss_result(
             "reason": reason,
         }
     )
-    active_recipe = dict(
-        state["replay"].get("active_reflex_recipe", {}) or {}
-    )
+    active_recipe = dict(state["replay"].get("active_reflex_recipe", {}) or {})
     blocked_keys = [
         str(key)
-        for key in (
-            state["replay"].get("reflex_blocked_recipe_keys") or []
-        )
+        for key in (state["replay"].get("reflex_blocked_recipe_keys") or [])
         if str(key)
     ]
     active_recipe_key = str(active_recipe.get("recipe_key") or "")
@@ -81,11 +76,10 @@ def _build_request(selection: ReflexSelection):
             "recipe_key": selection.recipe_key,
             "transition_index": selection.transition_index,
             "transition_count": transition_count,
-            "before_state": dump_model(selection.transition.before),
-            "expected_after_state": dump_model(selection.transition.after),
+            "before_state": selection.transition.before.model_dump(mode="json"),
+            "expected_after_state": selection.transition.after.model_dump(mode="json"),
             "transition_actions": [
-                str(action.action)
-                for action in selection.transition.actions
+                str(action.action) for action in selection.transition.actions
             ],
         },
     )
@@ -116,10 +110,7 @@ def _hit_result(
                 "recipe_key": selection.recipe_key,
                 "candidate_count": context.candidate_count,
                 "task_category": context.task_category,
-                "actions": [
-                    call["name"]
-                    for call in selection.tool_calls
-                ],
+                "actions": [call["name"] for call in selection.tool_calls],
                 "tool_calls": selection.tool_call_traces,
                 "recipe_transition_index": selection.transition_index,
                 "recipe_transition_count": transition_count,
@@ -175,8 +166,7 @@ def attempt_reflex_replay(
         recipe_key=selection.recipe_key[:24],
         actions=[call["name"] for call in selection.tool_calls],
         recipe_transition=(
-            f"{selection.transition_index + 1}/"
-            f"{len(selection.recipe.transitions)}"
+            f"{selection.transition_index + 1}/{len(selection.recipe.transitions)}"
             if len(selection.recipe.transitions) > 1
             else ""
         ),

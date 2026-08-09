@@ -12,6 +12,7 @@ from agent.observability.run_context import invoke_with_metrics
 from agent.application.search_taxonomy_review_service import (
     SearchTaxonomyReviewService,
 )
+from agent.application.search_taxonomy_question_builder import TaxonomyQuestionBuilder
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.prompts.investigation import taxonomy_resolution_prompt
 from agent.utils.model_conversion import parse_model_payload
@@ -37,6 +38,7 @@ class OccupationClarificationService:
     ) -> None:
         self.taxonomy_model = taxonomy_model
         self.taxonomy_service = taxonomy_service
+        self.question_builder = TaxonomyQuestionBuilder(taxonomy_service)
         self.taxonomy_review_service = taxonomy_review_service
 
     @staticmethod
@@ -103,9 +105,9 @@ class OccupationClarificationService:
             selected_key,
             *(str(key) for key in resolution.alternative_concept_keys),
         ]
-        valid_keys = list(
-            dict.fromkeys(key for key in ordered_keys if key in by_key)
-        )[:4]
+        valid_keys = list(dict.fromkeys(key for key in ordered_keys if key in by_key))[
+            :4
+        ]
         if resolution.decision == "no_match" or selected_key not in by_key:
             self.taxonomy_service.record_occupation_candidate(
                 constraints.occupation_query,
@@ -128,9 +130,7 @@ class OccupationClarificationService:
                 ClarificationOption(
                     option_id=(
                         "concept-"
-                        + hashlib.sha1(
-                            concept_key.encode("utf-8")
-                        ).hexdigest()[:10]
+                        + hashlib.sha1(concept_key.encode("utf-8")).hexdigest()[:10]
                     ),
                     label=str(item["label"]),
                     value=concept_key,
@@ -142,9 +142,7 @@ class OccupationClarificationService:
                         )
                     ),
                     concept_count=(
-                        self.taxonomy_service.occupation_descendant_count(
-                            concept_key
-                        )
+                        self.taxonomy_service.occupation_descendant_count(concept_key)
                     ),
                     description=str(item["definition"] or ""),
                 )
@@ -160,8 +158,7 @@ class OccupationClarificationService:
             question_id=f"semantic_occupation:{fingerprint}",
             field="occupation_concept_keys",
             question=(
-                f"'{constraints.occupation_query}'의 의미를 어떤 직무로 "
-                "확정할까요?"
+                f"'{constraints.occupation_query}'의 의미를 어떤 직무로 확정할까요?"
             ),
             options=options,
             allow_custom=True,
@@ -192,7 +189,7 @@ class OccupationClarificationService:
         constraints, semantic_question = self._semantic_question(constraints)
         if semantic_question is not None:
             return constraints, [semantic_question]
-        next_question = self.taxonomy_service.build_next_scope_question(
+        next_question = self.question_builder.build_next_scope_question(
             constraints,
             answered_question_ids=answered_question_ids,
         )

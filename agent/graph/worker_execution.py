@@ -63,10 +63,8 @@ def _record_failed_call(
         tool_call_id=tool_call_id,
         tool_call_metadata=call_metadata,
     )
-    transition = context.result.state["transition"]
-    transition["error_count"] = int(
-        transition.get("error_count", 0) or 0
-    ) + 1
+    transition = context.state["transition"]
+    transition["error_count"] = int(transition.get("error_count", 0) or 0) + 1
 
 
 def _observe_job_detail_fields(
@@ -82,14 +80,10 @@ def _observe_job_detail_fields(
         "finish_detail_reading",
     }:
         return
-    state = context.result.state
+    state = context.state
     observation = state["observation"]
     current_url = str(observation.get("current_url") or "")
-    page_role = str(
-        args.get("page_role")
-        or observation.get("current_page_role")
-        or ""
-    )
+    page_role = str(args.get("page_role") or observation.get("current_page_role") or "")
     if not is_job_detail_context(current_url, page_role=page_role):
         return
     collection = state["collection"]
@@ -115,7 +109,7 @@ def _execute_tool_call(
 ) -> tuple[dict[str, Any], bool, ActionRequest | None] | None:
     """가드가 허용한 도구 하나를 유형에 맞는 실행기로 전달한다."""
 
-    state = context.result.state
+    state = context.state
     if guard_return_to_results(
         context,
         action_name,
@@ -157,9 +151,7 @@ def _execute_tool_call(
         )
         return result, False, follow_up
     if action_name in TERMINAL_ACTIONS:
-        result = context.input.worker_runtime.get_action_tools().finish_task(
-            args["result"]
-        )
+        result = context.worker_runtime.get_action_tools().finish_task(args["result"])
         raise_for_action_failure(result)
         state["lifecycle"]["is_finished"] = True
         return result, False, None
@@ -169,8 +161,8 @@ def _execute_tool_call(
 def _execute_action_request(context: WorkerExecutionContext) -> None:
     """요청에 포함된 검증된 도구를 선언된 순서대로 실행한다."""
 
-    state = context.result.state
-    request = context.input.action_request
+    state = context.state
+    request = context.action_request
     for tool_call in request.tool_calls:
         action_name = tool_call.name
         args = dict(tool_call.args)
@@ -222,11 +214,9 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 reason=result.get("reason", ""),
                 duration_sec=round(time.perf_counter() - step_started, 6),
             )
-            is_finished = bool(
-                state["lifecycle"].get("is_finished", False)
-            )
+            is_finished = bool(state["lifecycle"].get("is_finished", False))
             if follow_up is not None and not is_finished:
-                context.result.next_pending_action = follow_up
+                context.next_pending_action = follow_up
                 break
             if is_finished:
                 break
@@ -256,27 +246,15 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
             break
 
 
-def _validated_action_request(state: WorkerState) -> ActionRequest | None:
-    raw_request = state["decision"].get("pending_action")
-    if raw_request is None:
-        return None
-    try:
-        request = (
-            raw_request
-            if isinstance(raw_request, ActionRequest)
-            else ActionRequest.model_validate(raw_request)
-        )
-    except (TypeError, ValueError) as exc:
-        logger.warning("Action request state is invalid", error=str(exc))
+def _action_request_for_execution(state: WorkerState) -> ActionRequest | None:
+    request = state["decision"].get("pending_action")
+    if request is None:
         return None
 
-    metadata = dict(request.metadata or {})
-    capture_id = str(
-        state["observation"].get("current_capture_id") or ""
+    observation_id = str(state["observation"].get("observation_id") or "")
+    return request.model_copy(
+        update={"observation_id": request.observation_id or observation_id}
     )
-    if capture_id:
-        metadata.setdefault("decision_capture_id", capture_id)
-    return request.model_copy(update={"metadata": metadata})
 
 
 def _missing_action_update(
@@ -301,7 +279,13 @@ def _missing_action_update(
         "transition": {
             "action_events": [
                 *prior_events,
-                build_action_event(len(prior_events), result),
+                build_action_event(
+                    len(prior_events),
+                    result,
+                    observation_id=str(
+                        state["observation"].get("observation_id") or ""
+                    ),
+                ),
             ],
         },
     }
@@ -315,7 +299,7 @@ def execution_node(
 
     raise_if_cancelled()
     started = time.perf_counter()
-    request = _validated_action_request(state)
+    request = _action_request_for_execution(state)
     if request is None or not request.tool_calls:
         return _missing_action_update(state, request)
 

@@ -12,7 +12,6 @@ from agent.runtime.worker_contracts import (
 )
 from agent.runtime.target_matching import anchor_overlap, match_target_by_ratio
 from agent.utils.text import normalize_text
-from agent.runtime.job_collection import job_count
 from agent.runtime.site_context import looks_like_job_detail_url
 from agent.runtime.worker_state import target_count_from_state
 from agent.vision.marker_geometry import (
@@ -50,7 +49,7 @@ def _queue_limit(
         return card_count
     collection = state["collection"]
     resolved_count = max(
-        job_count(collection.get("collected_jobs", [])),
+        len(collection.get("job_captures", [])),
         resolved_job_card_count(queue),
     )
     return max(0, target_count - resolved_count)

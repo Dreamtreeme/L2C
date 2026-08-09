@@ -20,7 +20,7 @@ from agent.graph.worker_selection import selection_node
 from agent.graph.worker_transition import transition_node
 from agent.graph.worker_execution import execution_node
 from agent.runtime.worker_state import (
-    current_observation_matches_capture,
+    current_observation_ready,
     return_to_job_results_for_url,
 )
 from agent.observability.graph_events import graph_step
@@ -37,7 +37,7 @@ def route_after_start(state: WorkerState) -> str:
 
     if state["observation"].get("low_information_screen"):
         return "selection"
-    if current_observation_matches_capture(state):
+    if current_observation_ready(state):
         return "selection"
     return "capture"
 
@@ -53,7 +53,7 @@ def route_after_selection(state: WorkerState) -> str:
     transition_result = dict(state["transition"].get("transition_result", {}) or {})
     if transition_result.get("status") == "pending":
         return "capture"
-    if not current_observation_matches_capture(state):
+    if not current_observation_ready(state):
         return "ocr" if transition_result.get("needs_ocr") else "reasoning"
     if return_to_job_results_for_url(state):
         return "reasoning"

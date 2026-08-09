@@ -7,29 +7,82 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.schema.feedback_schema import WorkerSubmission
-from shared.schema.jd_schema import CollectedJob
+from shared.schema.jd_schema import CollectedJob, JobCapture
 
 
 class CollectionBatch(BaseModel):
-    """비전 작업자가 수집했지만 아직 DB에 저장하지 않은 한 실행 결과."""
+    """비전 작업자가 확보한 정제 전 상세 화면 묶음."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    submission: WorkerSubmission
+    job_captures: list[JobCapture] = Field(default_factory=list)
+    site_name: str
+
+
+class PostprocessedCollection(BaseModel):
+    """원문을 구조화하고 요청 조건까지 적용한 저장 입력."""
 
     model_config = ConfigDict(extra="forbid")
 
     submission: WorkerSubmission
     collected_jobs: list[CollectedJob] = Field(default_factory=list)
-    site_slug: str
+    rejected_items: list[dict[str, Any]] = Field(default_factory=list)
     site_name: str
 
 
-class PersistedCollection(BaseModel):
-    """공고와 작업자 제출물을 저장한 결과."""
+class PersistenceReport(BaseModel):
+    """수집 공고를 DB와 검색 사전에 저장한 결과."""
 
     model_config = ConfigDict(extra="forbid")
 
-    submission: WorkerSubmission
+    persisted_items: list[dict[str, Any]] = Field(default_factory=list)
+    rejected_items: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def persisted_count(self) -> int:
+        return len(self.persisted_items)
+
+    @property
+    def created_count(self) -> int:
+        return sum(item.get("operation") == "created" for item in self.persisted_items)
+
+    @property
+    def updated_count(self) -> int:
+        return sum(item.get("operation") == "updated" for item in self.persisted_items)
+
+    @property
+    def rejected_count(self) -> int:
+        return len(self.rejected_items)
+
+    def reject(self, item: dict[str, Any]) -> None:
+        self.rejected_items.append(item)
+
+
+class RecipeLearningResult(BaseModel):
+    """자율탐색 기록을 레시피 후보로 넘긴 결과."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    candidate_id: str = ""
+    reason: str = ""
+    error: str = ""
+
+
+class CollectionExperienceResult(BaseModel):
+    """작업자 실행 기록과 레시피 후보를 별도로 저장한 결과."""
+
+    model_config = ConfigDict(extra="forbid")
+
     submission_id: str
-    persistence: dict[str, Any] = Field(default_factory=dict)
-    recipe_learning: dict[str, Any] = Field(default_factory=dict)
+    recipe_learning: RecipeLearningResult
 
 
-__all__ = ["CollectionBatch", "PersistedCollection"]
+__all__ = [
+    "CollectionBatch",
+    "CollectionExperienceResult",
+    "PostprocessedCollection",
+    "PersistenceReport",
+    "RecipeLearningResult",
+]

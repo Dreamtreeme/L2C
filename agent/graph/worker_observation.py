@@ -103,33 +103,33 @@ def _build_ui_context(
     return "\n".join(parts) if parts else "발견된 UI 마커 없음"
 
 
-def _next_capture_identity(state: WorkerState) -> tuple[int, str]:
-    """작업자 실행 안에서 읽기 쉬운 단조 증가 캡처 ID를 만든다."""
+def _next_observation_identity(state: WorkerState) -> tuple[int, str]:
+    """작업자 실행 안에서 읽기 쉬운 단조 증가 관찰 ID를 만든다."""
 
     try:
         sequence = max(
             0,
-            int(state["observation"].get("capture_sequence", 0)),
+            int(state["observation"].get("observation_sequence", 0)),
         ) + 1
     except (TypeError, ValueError):
         sequence = 1
     run_id = str(state["request"].get("worker_run_id") or "").strip()
     prefix = f"{run_id}:" if run_id else ""
-    return sequence, f"{prefix}capture:{sequence:04d}"
+    return sequence, f"{prefix}observation:{sequence:04d}"
 
 
-def _previous_screen_observation(state: WorkerState) -> dict[str, Any]:
-    """새 캡처 전에 현재 OCR 관찰을 캡처 ID와 함께 보존한다."""
+def _previous_observation(state: WorkerState) -> dict[str, Any]:
+    """새 화면을 관찰하기 전에 현재 OCR 관찰을 보존한다."""
 
     observation = state["observation"]
     if (
         observation.get("ocr_complete")
-        and observation.get("current_capture_id")
+        and observation.get("observation_id")
         and observation.get("current_screenshot")
         and observation.get("current_markers")
     ):
         return {
-            "capture_id": str(observation.get("current_capture_id") or ""),
+            "observation_id": str(observation.get("observation_id") or ""),
             "screenshot": str(observation.get("current_screenshot") or ""),
             "current_url": str(observation.get("current_url") or ""),
             "markers": list(observation.get("current_markers") or []),
@@ -141,7 +141,7 @@ def _previous_screen_observation(state: WorkerState) -> dict[str, Any]:
             "page_role": str(observation.get("current_page_role") or ""),
             "analysis_mode": str(observation.get("analysis_mode") or "full"),
         }
-    return dict(observation.get("previous_screen_observation") or {})
+    return dict(observation.get("previous_observation") or {})
 
 
 def capture_node(
@@ -199,20 +199,19 @@ def capture_node(
         if low_information
         else 0
     )
-    capture_sequence, capture_id = _next_capture_identity(state)
-    previous_observation = _previous_screen_observation(state)
+    observation_sequence, observation_id = _next_observation_identity(state)
+    previous_observation = _previous_observation(state)
     logger.info(
         "Worker screen captured",
-        capture_id=capture_id,
+        observation_id=observation_id,
         low_information=low_information,
         has_transition=bool(transition_request),
     )
     return {"observation": {
-        "current_capture_id": capture_id,
-        "ocr_capture_id": "",
-        "capture_sequence": capture_sequence,
+        "observation_id": observation_id,
+        "observation_sequence": observation_sequence,
         "current_screenshot": str(image_path),
-        "previous_screen_observation": previous_observation,
+        "previous_observation": previous_observation,
         "capture_quality": capture_quality,
         "raw_screen_signature": raw_signature,
         "analysis_mode": "",
@@ -221,7 +220,7 @@ def capture_node(
         "current_url_stale": current_url_stale,
         "low_information_screen": low_information,
         "low_information_capture_count": low_information_capture_count,
-        # 새 캡처의 OCR이 끝나기 전에는 직전 화면 인식을 재사용하지 않는다.
+        # 새 관찰의 OCR이 끝나기 전에는 직전 화면 인식을 재사용하지 않는다.
         "ui_context": "",
         "current_markers": [],
         "marked_image": "",
@@ -292,9 +291,6 @@ def ocr_node(
         "current_page_role": page_role,
         "analysis_mode": analysis_mode,
         "ocr_complete": True,
-        "ocr_capture_id": str(
-            observation_state.get("current_capture_id") or ""
-        ),
         "low_information_screen": False,
     }
     update: WorkerStateUpdate = {"observation": observation}

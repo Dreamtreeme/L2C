@@ -5,39 +5,30 @@ from __future__ import annotations
 from typing import Any
 
 from agent.runtime.worker_contracts import WorkerState
-from agent.runtime.job_collection import job_count
 from agent.runtime.site_context import infer_site_page_role
 
 
-def current_observation_matches_capture(state: WorkerState) -> bool:
-    """OCR 관찰이 현재 캡처에 속하는지 확인한다."""
+def current_observation_ready(state: WorkerState) -> bool:
+    """현재 화면 관찰에 OCR 결과가 준비됐는지 확인한다."""
 
     observation = state["observation"]
-    if not observation.get("ocr_complete"):
-        return False
-    current_capture_id = str(observation.get("current_capture_id") or "")
-    ocr_capture_id = str(observation.get("ocr_capture_id") or "")
     return bool(
-        current_capture_id and ocr_capture_id and current_capture_id == ocr_capture_id
+        observation.get("observation_id")
+        and observation.get("current_screenshot")
+        and observation.get("ocr_complete")
     )
 
 
-def collected_job_count(state: WorkerState) -> int:
-    return job_count(state["collection"].get("collected_jobs", []))
+def job_capture_count(state: WorkerState) -> int:
+    return len(state["collection"].get("job_captures", []))
 
 
 def target_count_from_state(state: WorkerState) -> int:
-    params = state["request"].get("recipe_params", {}) or {}
-    try:
-        return max(0, int(params.get("target_count") or 0))
-    except (TypeError, ValueError):
-        return 0
+    return state["request"]["collection_intent"].target_count
 
 
 def count_mode_from_state(state: WorkerState) -> str:
-    params = state["request"].get("recipe_params", {}) or {}
-    raw = params.get("count_mode") or ""
-    return str(getattr(raw, "value", raw)).strip().lower()
+    return state["request"]["collection_intent"].count_mode.value
 
 
 def infer_current_page_role(
@@ -72,9 +63,9 @@ def return_to_job_results_for_url(
 
 __all__ = [
     "count_mode_from_state",
-    "current_observation_matches_capture",
+    "current_observation_ready",
     "return_to_job_results_for_url",
-    "collected_job_count",
+    "job_capture_count",
     "infer_current_page_role",
     "target_count_from_state",
 ]

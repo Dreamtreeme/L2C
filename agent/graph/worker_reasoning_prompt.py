@@ -11,7 +11,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.config import get_settings
 from agent.runtime.worker_contracts import WorkerState, action_event_results
-from agent.graph.worker_execution_policy import compact_action_args
 from agent.prompts.trust_boundary import external_content_contract_en
 from agent.runtime.worker_state import (
     return_to_job_results_for_url,
@@ -23,14 +22,11 @@ from agent.runtime.job_card_queue import (
     job_detail_key_from_state,
     pending_job_cards,
 )
-from agent.runtime.job_collection import job_count, job_postings
 from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
-from agent.utils.job_fields import job_field_value
 from agent.utils.image_utils import image_to_base64_jpeg
 from agent.utils.logger import logger
-from shared.schema.agent_contract import JOB_COLLECTION_FIELD_LABELS
-from shared.schema.jd_schema import CollectedJob, JobPosting
+from shared.schema.jd_schema import JobCapture
 
 
 def _is_open_browser_noop(action: dict[str, Any]) -> bool:
@@ -120,9 +116,7 @@ def _build_forbidden_action_context(
 
 def _safety_page_role_contract() -> str:
     return (
-        "\n\n"
-        + external_content_contract_en()
-        + "\n[Safety and page-role contract]\n"
+        "\n\n" + external_content_contract_en() + "\n[Safety and page-role contract]\n"
         "- For every UI tool call, include page_role when you can infer it: home, search, list, detail, form, popup, error, or unknown.\n"
         "- Include risk_level: safe_read, safe_navigation, or sensitive.\n"
         "- Set needs_user_confirmation=true before login, password/authentication, personal data, agreement/terms, application/submission, payment, transfer, account, finance, or legal-effect steps. The executor will stop and ask the user.\n"
@@ -144,138 +138,30 @@ def _clip_prompt_text(value: Any, max_chars: int = 160) -> str:
     return text[:max_chars].rstrip() + "..."
 
 
-def _compact_prompt_value(value: Any, max_chars: int = 140) -> Any:
-    if isinstance(value, list):
-        compacted = []
-        for item in value:
-            if item in (None, "", [], {}):
-                continue
-            compacted.append(_compact_prompt_value(item, max_chars=100))
-            if len(compacted) >= 3:
-                break
-        return compacted
-    if isinstance(value, dict):
-        compacted = {}
-        for index, (key, item) in enumerate(value.items()):
-            if index >= 4:
-                break
-            if item in (None, "", [], {}):
-                continue
-            compacted[str(key)] = _compact_prompt_value(
-                item,
-                max_chars=80,
-            )
-        return compacted
-    return _clip_prompt_text(value, max_chars=max_chars)
-
-
-_JOB_SUMMARY_FIELDS: tuple[str, ...] = (
-    "company_name",
-    "position",
-    "url",
-    "main_tasks",
-    "requirements",
-    "preferred",
-    "benefits",
-)
-
-
-def _job_display_label(job: JobPosting) -> str:
-    company = job_field_value(job, "company_name")
-    position = job_field_value(job, "position")
-    if company and position:
-        return _clip_prompt_text(f"{company} - {position}", 120)
-    return _clip_prompt_text(
-        position or company or job.url or "",
-        120,
-    )
-
-
-def _job_summary_for_prompt(job: JobPosting) -> dict[str, Any]:
-    summary: dict[str, Any] = {}
-    present_fields: list[str] = []
-    missing_fields: list[str] = []
-    for field in _JOB_SUMMARY_FIELDS:
-        label = JOB_COLLECTION_FIELD_LABELS.get(field, field)
-        value = job_field_value(job, field)
-        if value in (None, "", [], {}):
-            missing_fields.append(label)
-            continue
-        present_fields.append(label)
-        if field in {"company_name", "position", "url"}:
-            summary[label] = _compact_prompt_value(
-                value,
-                max_chars=140,
-            )
-        elif field in {"main_tasks", "requirements", "preferred", "benefits"}:
-            summary[label] = _compact_prompt_value(
-                value,
-                max_chars=120,
-            )
-    if present_fields:
-        summary["채워진필드"] = present_fields
-    if missing_fields:
-        summary["누락필드"] = missing_fields
-    return summary
-
-
-def _current_job_for_prompt(
-    jobs: list[JobPosting],
-    current_url: str,
-) -> JobPosting | None:
-    current_url = str(current_url or "").strip()
-    if current_url:
-        for job in reversed(jobs):
-            if str(job.url or "").strip() == current_url:
-                return job
-    return jobs[-1] if jobs else None
-
-
-def _compact_collected_context(
-    collected_jobs: list[CollectedJob],
-    current_url: str,
-) -> str:
-    jobs = job_postings(collected_jobs)
-    if not jobs:
+def _compact_capture_context(job_captures: list[JobCapture]) -> str:
+    if not job_captures:
         return "수집 데이터 요약:\n- 수집된 공고 없음\n\n"
 
-    current_job = _current_job_for_prompt(jobs, current_url)
-    recent_labels = [_job_display_label(job) for job in jobs[-3:]]
-    recent_labels = [label for label in recent_labels if label]
+    recent = [
+        {
+            "url": capture.url,
+            "source_card_key": capture.evidence.source_card_key,
+        }
+        for capture in job_captures[-3:]
+    ]
     lines = [
         "수집 데이터 요약:",
-        f"- 수집 공고 수: {len(jobs)}",
+        f"- 수집 원문 수: {len(job_captures)}",
+        "- 최근 원문: "
+        + json.dumps(recent, ensure_ascii=False, separators=(",", ":")),
     ]
-    if recent_labels:
-        lines.append(
-            "- 최근 공고: "
-            + json.dumps(
-                recent_labels,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        )
-    if current_job:
-        summary = _job_summary_for_prompt(current_job)
-        lines.append(
-            "- 현재/최근 공고 핵심 필드: "
-            + json.dumps(
-                summary,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        )
     return "\n".join(lines) + "\n\n"
 
 
 def _compact_recent_action(action: dict[str, Any]) -> dict[str, Any]:
     action_name = str(action.get("action") or "")
     args = action.get("args") or {}
-    compact_args = (
-        compact_action_args(action_name, args)
-        if isinstance(args, dict)
-        else {}
-    )
+    compact_args = args if isinstance(args, dict) else {}
     keep_keys = (
         "marker_id",
         "target_label",
@@ -371,9 +257,7 @@ def _compact_detail_return_context(
 def _compact_job_results_availability_context(
     state: WorkerState,
 ) -> str:
-    availability = dict(
-        state["collection"].get("job_results_availability", {}) or {}
-    )
+    availability = dict(state["collection"].get("job_results_availability", {}) or {})
     if not availability:
         return "검색 결과 개수 힌트: 없음\n\n"
     return (
@@ -417,26 +301,19 @@ def build_reasoning_messages(
         COMMANDER_SYSTEM_PROMPT.format(goal=request.get("goal", ""))
         + _safety_page_role_contract()
     )
-    collected_jobs = list(collection.get("collected_jobs", []))
+    job_captures = list(collection.get("job_captures", []))
     ui_context = observation.get("ui_context", "")
     current_url = observation.get("current_url", "")
-    action_history = action_event_results(
-        transition.get("action_events", []) or []
-    )
-    recipe_params = dict(request.get("recipe_params", {}) or {})
-    target_count = int(recipe_params.get("target_count") or 0)
-    collected_count = job_count(collected_jobs)
+    action_history = action_event_results(transition.get("action_events", []) or [])
+    target_count = request["collection_intent"].target_count
+    collected_count = len(job_captures)
     visited_cards: list[str] = []
     for action in action_history:
         if not isinstance(action, dict) or action.get("status") != "success":
             continue
         args = action.get("args") or {}
         target = action.get("target") or {}
-        component = (
-            args.get("target_component")
-            or target.get("component")
-            or ""
-        )
+        component = args.get("target_component") or target.get("component") or ""
         if component != "job_card_title":
             continue
         label = (
@@ -478,23 +355,19 @@ def build_reasoning_messages(
     job_results_refinement_context = ""
     selector_trace = selector_trace or {}
     if selector_trace.get("reason") == "job_results_refinement_needed":
-        refinement_reason = str(
-            selector_trace.get("refinement_reason") or ""
-        ).strip()
+        refinement_reason = str(selector_trace.get("refinement_reason") or "").strip()
         job_results_refinement_context = (
             "검색 결과 정제 필요:\n"
             "- 현재 화면에서 검색어와 직접 일치하는 공고가 목표 수보다 부족합니다. 비슷한 직무로 개수를 채우지 마십시오.\n"
             "- 검색어를 더 정확하게 표현하는 화면 필터가 있으면 적용하고, 없으면 다음 정확한 후보를 찾도록 스크롤하십시오.\n"
             f"- 카드 선택기 판단: {refinement_reason or '(구체적 이유 없음)'}\n\n"
         )
-    forbidden_action_context = _build_forbidden_action_context(
-        action_history
-    )
+    forbidden_action_context = _build_forbidden_action_context(action_history)
     if forbidden_action_context:
         forbidden_action_context += "\n\n"
 
     human_prompt_text = (
-        f"{_compact_collected_context(collected_jobs, current_url)}"
+        f"{_compact_capture_context(job_captures)}"
         f"현재 브라우저 URL:\n{current_url or '(확인 안 됨)'}\n\n"
         f"{site_runtime_guidance(current_url, observation.get('current_page_role', ''))}"
         f"{collection_context}"
@@ -513,9 +386,7 @@ def build_reasoning_messages(
 
     base64_image = _reasoning_image_base64(state)
     if base64_image:
-        logger.info(
-            "Invoking reasoning node with multimodal SoM marked image..."
-        )
+        logger.info("Invoking reasoning node with multimodal SoM marked image...")
         return [
             SystemMessage(content=system_prompt_text),
             HumanMessage(

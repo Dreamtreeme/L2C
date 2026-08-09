@@ -7,7 +7,12 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
-from agent.observability.run_contracts import RunEvent, RunPhase, RunStatus
+from agent.observability.run_contracts import (
+    ChatResult,
+    RunEvent,
+    RunPhase,
+)
+from shared.schema.run_schema import RunStatus
 
 
 class RunRegistry:
@@ -61,10 +66,12 @@ class RunRegistry:
                 }
             )
 
-    def complete(self, run_id: str, result: dict[str, Any]) -> None:
-        raw_status = str(result.get("run_status") or RunStatus.COMPLETED.value)
-        status = RunStatus(raw_status)
-        self._finish(run_id, status, result=result)
+    def complete(self, run_id: str, result: ChatResult) -> None:
+        self._finish(
+            run_id,
+            result.status,
+            result=result.model_dump(mode="json"),
+        )
 
     def fail(self, run_id: str, error: str) -> None:
         self._finish(run_id, RunStatus.FAILED, error=error)
@@ -108,7 +115,8 @@ class RunRegistry:
                 dict(item)
                 for item in self._items.values()
                 if item.get("conversation_id") == conversation_id
-                and item.get("status") in {
+                and item.get("status")
+                in {
                     RunStatus.COMPLETED.value,
                     RunStatus.PARTIAL.value,
                     RunStatus.WAITING_INPUT.value,

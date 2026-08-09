@@ -7,6 +7,7 @@ import pytest
 
 from agent.application.clarification_service import apply_clarification_answer
 from agent.application.evidence_service import inspect_job_evidence
+from agent.application.job_taxonomy_linker import JobTaxonomyLinker
 from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
 from agent.tests.job_test_data import insert_job
 from agent.graph.investigation_context import (
@@ -20,7 +21,13 @@ from agent.graph.investigation_evidence_policy import (
 )
 from shared.db.database import Database
 from shared.schema.collection_intent import CollectionIntent
-from shared.schema.collection_run import CollectionBatch, PersistedCollection
+from shared.schema.collection_run import (
+    CollectionBatch,
+    CollectionExperienceResult,
+    PersistenceReport,
+    PostprocessedCollection,
+    RecipeLearningResult,
+)
 from shared.schema.feedback_schema import WorkerSubmission
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
@@ -30,7 +37,6 @@ from shared.schema.investigation_schema import (
     EvidencePolicy,
     InvestigationPurpose,
     InvestigationRequest,
-    InvestigationStatus,
     EvidenceRequirement,
     EvidencePlan,
     EvidenceValidation,
@@ -111,7 +117,7 @@ def test_explicit_count_is_required_for_single_evidence_group(tmp_path):
 def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = prepare_search_taxonomy(db_path)
+    prepare_search_taxonomy(db_path)
     expected_ids = {
         insert_job(
             db,
@@ -155,7 +161,7 @@ def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
         },
     )
     for job_id in expected_ids | {other_site_id}:
-        taxonomy.link_job(job_id)
+        JobTaxonomyLinker(db_path).link_job(job_id)
     requirement = EvidenceRequirement(
         requirement_id="ai-engineer",
         description="AI 엔지니어 공고",
@@ -180,7 +186,7 @@ def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):
 def test_evidence_inspection_limits_candidates_to_document_scope(tmp_path):
     db_path = tmp_path / "jobs.db"
     db = Database(db_path)
-    taxonomy = prepare_search_taxonomy(db_path)
+    prepare_search_taxonomy(db_path)
     excluded_id = insert_job(
         db,
         "https://example.com/jobs/old",
@@ -199,8 +205,8 @@ def test_evidence_inspection_limits_candidates_to_document_scope(tmp_path):
             "source_platform": "wanted",
         },
     )
-    taxonomy.link_job(excluded_id)
-    taxonomy.link_job(included_id)
+    JobTaxonomyLinker(db_path).link_job(excluded_id)
+    JobTaxonomyLinker(db_path).link_job(included_id)
 
     report = inspect_job_evidence(
         db_path,
@@ -225,7 +231,6 @@ def test_recent_three_months_resolves_analysis_and_comparison_periods():
         investigation_id="investigation-period",
         original_query="최근 AI 개발자 채용 트렌드를 알려줘",
         purpose=InvestigationPurpose.TREND,
-        status=InvestigationStatus.AWAITING_CLARIFICATION,
         clarification_questions=[
             ClarificationQuestion(
                 question_id="recent_period",
@@ -257,7 +262,7 @@ def test_recent_three_months_resolves_analysis_and_comparison_periods():
     assert updated.constraints.posted_to == "2026-07-14"
     assert updated.constraints.comparison_posted_from == "2026-01-14"
     assert updated.constraints.comparison_posted_to == "2026-04-13"
-    assert updated.status == InvestigationStatus.CHECKING_EVIDENCE
+    assert updated.clarification_questions == []
 
 
 def test_clarification_question_rejects_unknown_constraint_field():
@@ -280,7 +285,6 @@ def test_clarification_answer_revalidates_updated_constraints():
     investigation = InvestigationRequest(
         investigation_id="invalid-count",
         original_query="공고를 찾아줘",
-        status=InvestigationStatus.AWAITING_CLARIFICATION,
         clarification_questions=[
             ClarificationQuestion(
                 question_id="target_count",
@@ -408,42 +412,36 @@ def _collection_batch(intent: CollectionIntent) -> CollectionBatch:
             collected_count=1,
             collection_intent=intent,
         ),
-        site_slug=intent.site,
         site_name=intent.site,
     )
 
 
-def _persisted_collection(
-    batch: CollectionBatch,
-    document_ids: list[int],
-) -> PersistedCollection:
-    submission = batch.submission.model_copy(
-        update={
-            "persisted_count": len(document_ids),
-            "observed_job_ids": document_ids,
-        }
+def _postprocessed_collection(batch: CollectionBatch) -> PostprocessedCollection:
+    return PostprocessedCollection(
+        submission=batch.submission,
+        site_name=batch.site_name,
     )
-    return PersistedCollection(
-        submission=submission,
+
+
+def _persistence_report(
+    document_ids: list[int],
+) -> PersistenceReport:
+    return PersistenceReport(
+        persisted_items=[
+            {"job_id": job_id, "operation": "created"} for job_id in document_ids
+        ],
+    )
+
+
+def _experience_result(*_args) -> CollectionExperienceResult:
+    return CollectionExperienceResult(
         submission_id="submission-test",
-        persistence={
-            "persisted_count": len(document_ids),
-            "created_count": len(document_ids),
-            "updated_count": 0,
-            "rejected_count": 0,
-            "persisted_items": [
-                {"job_id": job_id, "operation": "created"} for job_id in document_ids
-            ],
-        },
+        recipe_learning=RecipeLearningResult(status="not_eligible"),
     )
 
 
 def _test_capabilities():
     return [
-        ToolCapability(
-            tool_name="inspect_job_evidence",
-            purpose="DB 근거 확인",
-        ),
         ToolCapability(
             tool_name="realtime_scraping:wanted",
             purpose="원티드 수집",
@@ -477,15 +475,16 @@ def test_workflow_answers_general_knowledge_without_evidence_or_tools(
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        persist_collection=_FailingTool(),
+        postprocess_collection=_FailingTool(),
+        store_collection=_FailingTool(),
+        record_experience=_FailingTool(),
     )
 
     result = workflow.run("iOS 개발자는 보통 어떤 일을 하고 어떤 기술이 필요해?")
 
-    assert result["run_status"] == "completed"
-    assert result["final_answer"].startswith("iOS 개발자는")
-    assert result["investigation"]["evidence_policy"] == "model_knowledge"
-    assert result["investigation"]["evidence_requirements"] == []
+    assert result.run_status.value == "completed"
+    assert result.final_answer.startswith("iOS 개발자는")
+    assert result.investigation.evidence_policy == EvidencePolicy.MODEL_KNOWLEDGE
     assert analysis_model.calls == 1
     assert evidence_model.calls == 0
     assert action_model.calls == 0
@@ -506,8 +505,8 @@ def test_workflow_loads_structured_conversation_before_request_analysis(
     )
     loaded = []
 
-    def load_context(conversation_id, resume_run_id=""):
-        loaded.append((conversation_id, resume_run_id))
+    def load_context(conversation_id, context_run_id=""):
+        loaded.append((conversation_id, context_run_id))
         return [
             ConversationTurn(
                 run_id="previous-run",
@@ -525,7 +524,9 @@ def test_workflow_loads_structured_conversation_before_request_analysis(
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        persist_collection=_FailingTool(),
+        postprocess_collection=_FailingTool(),
+        store_collection=_FailingTool(),
+        record_experience=_FailingTool(),
         conversation_context_loader=load_context,
     )
 
@@ -610,7 +611,9 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        persist_collection=_FailingTool(),
+        postprocess_collection=_FailingTool(),
+        store_collection=_FailingTool(),
+        record_experience=_FailingTool(),
         now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
     )
     first = workflow.run("최근 AI 개발자 채용 트렌드를 알려줘")
@@ -630,54 +633,38 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        persist_collection=_FailingTool(),
+        postprocess_collection=_FailingTool(),
+        store_collection=_FailingTool(),
+        record_experience=_FailingTool(),
         now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
-        run_lookup=lambda run_id: (
-            {
-                "run_id": run_id,
-                "status": "waiting_input",
-                "result": {
-                    "investigation_id": first["investigation"]["investigation_id"],
-                    "clarification": {"question_id": "analysis_dimensions"},
-                },
-            }
-            if run_id == "previous-clarification-run"
-            else None
-        ),
     )
 
     with pytest.raises(ValueError, match="식별자가 다릅니다"):
         workflow.run(
             "",
-            investigation_id=first["investigation"]["investigation_id"],
-            clarification_answer={
-                "question_id": "different-question",
-                "selected_option_id": "job_count",
-            },
+            investigation_id=first.investigation.investigation_id,
+            clarification_answer=ClarificationAnswer(
+                question_id="different-question",
+                selected_option_id="job_count",
+            ),
         )
 
     resumed = workflow.run(
         "공고 수",
-        resume_run_id="previous-clarification-run",
-        clarification_answer={
-            "question_id": "analysis_dimensions",
-            "selected_option_id": "job_count",
-        },
+        investigation_id=first.investigation.investigation_id,
+        clarification_answer=ClarificationAnswer(
+            question_id="analysis_dimensions",
+            selected_option_id="job_count",
+        ),
     )
 
-    assert resumed["run_status"] == "completed"
-    assert resumed["investigation"]["constraints"]["posted_from"] == "2026-04-14"
-    assert (
-        resumed["investigation"]["constraints"]["comparison_posted_to"] == "2026-04-13"
-    )
-    assert resumed["investigation"]["constraints"]["analysis_dimensions"] == ["공고 수"]
-    assert [
-        item["requirement_id"]
-        for item in resumed["investigation"]["evidence_requirements"]
-    ] == ["current", "previous"]
+    assert resumed.run_status.value == "completed"
+    assert resumed.investigation.constraints.posted_from == "2026-04-14"
+    assert resumed.investigation.constraints.comparison_posted_to == "2026-04-13"
+    assert resumed.investigation.constraints.analysis_dimensions == ["공고 수"]
     assert analysis_model.calls == 1
     assert evidence_model.calls == 1
-    assert resumed["resume_mode"] == "checkpoint_resume"
+    assert resumed.resume_mode == "checkpoint_resume"
     workflow.close()
 
 
@@ -702,7 +689,11 @@ def test_workflow_executes_only_registered_collection_plan(
             self.calls.append(intent)
             return _collection_batch(intent)
 
-        def persist(self, batch):
+        def postprocess(self, batch):
+            self.events.append("postprocess")
+            return _postprocessed_collection(batch)
+
+        def store(self, _processed):
             self.events.append("persist")
             job_id = insert_job(
                 db,
@@ -715,8 +706,12 @@ def test_workflow_executes_only_registered_collection_plan(
                     "raw_ocr_text": "AI 개발자 모델 운영",
                 },
             )
-            taxonomy.link_job(job_id)
-            return _persisted_collection(batch, [job_id])
+            JobTaxonomyLinker(db_path).link_job(job_id)
+            return _persistence_report([job_id])
+
+        def experience(self, batch, persistence):
+            self.events.append("experience")
+            return _experience_result(batch, persistence)
 
     collection_flow = CollectionFlow()
     workflow = investigation_workflow_factory(
@@ -773,7 +768,9 @@ def test_workflow_executes_only_registered_collection_plan(
         ),
         capabilities=_test_capabilities(),
         run_collection=collection_flow.run,
-        persist_collection=collection_flow.persist,
+        postprocess_collection=collection_flow.postprocess,
+        store_collection=collection_flow.store,
+        record_experience=collection_flow.experience,
         taxonomy_service=taxonomy,
     )
 
@@ -785,7 +782,7 @@ def test_workflow_executes_only_registered_collection_plan(
     ):
         result = workflow.run("최근 AI 개발자 공고 찾아줘")
 
-    assert result["run_status"] == "completed"
+    assert result.run_status.value == "completed"
     assert len(collection_flow.calls) == 1
     intent = collection_flow.calls[0]
     assert intent.search_keyword == "AI 개발자"
@@ -794,10 +791,13 @@ def test_workflow_executes_only_registered_collection_plan(
     assert intent.filters.posted_to == "2026-07-14"
     assert intent.original_query == "최근 AI 개발자 공고 찾아줘"
     assert intent.freshness_required is True
-    assert result["valid_ids"] == [1]
-    assert result["final_answer"] == "공고를 확인했습니다 [job_id:1]"
-    assert result["investigation"]["collection_document_ids"] == [1]
-    assert collection_flow.events == ["collect", "persist"]
+    assert result.final_answer == "공고를 확인했습니다 [job_id:1]"
+    assert collection_flow.events == [
+        "collect",
+        "postprocess",
+        "persist",
+        "experience",
+    ]
     collection_event = next(
         item for item in events if item.event == "collection_completed"
     )
@@ -818,7 +818,10 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(
         def run(self, intent):
             return _collection_batch(intent)
 
-        def persist(self, batch):
+        def postprocess(self, batch):
+            return _postprocessed_collection(batch)
+
+        def store(self, _processed):
             job_id = insert_job(
                 db,
                 "https://example.com/jobs/llm-1",
@@ -831,8 +834,8 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(
                     "raw_ocr_text": "Vector DB와 RAG 서비스 설계",
                 },
             )
-            taxonomy.link_job(job_id)
-            return _persisted_collection(batch, [job_id])
+            JobTaxonomyLinker(db_path).link_job(job_id)
+            return _persistence_report([job_id])
 
     collection_flow = CollectionFlow()
 
@@ -846,6 +849,7 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(
             ]
         )
     )
+    answer_model = _FakeModel(AIMessage(content="RAG가 확인됩니다 [job_id:1]"))
     workflow = investigation_workflow_factory(
         db_path=db_path,
         models=InvestigationModels(
@@ -890,19 +894,22 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(
                     ]
                 )
             ),
-            answer_model=_FakeModel(AIMessage(content="RAG가 확인됩니다 [job_id:1]")),
+            answer_model=answer_model,
         ),
         capabilities=_test_capabilities(),
         run_collection=collection_flow.run,
-        persist_collection=collection_flow.persist,
+        postprocess_collection=collection_flow.postprocess,
+        store_collection=collection_flow.store,
+        record_experience=_experience_result,
         taxonomy_service=taxonomy,
     )
 
     result = workflow.run("원티드 AI 엔지니어 공고를 수집하고 기술을 정리해줘")
 
-    assert result["valid_ids"] == [1]
-    assert result["investigation"]["collection_document_ids"] == [1]
-    assert result["documents"][0]["position"] == "AI 엔지니어"
+    answer_payload = json.loads(answer_model.messages[0][-1].content)
+    assert answer_payload["db_report"]["document_ids"] == [1]
+    assert answer_payload["documents"][0]["position"] == "AI 엔지니어"
+    assert result.final_answer == "RAG가 확인됩니다 [job_id:1]"
     assert validation_model.calls == 1
 
 
@@ -924,13 +931,16 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
             "source_platform": "wanted",
         },
     )
-    taxonomy.link_job(stale_id)
+    JobTaxonomyLinker(db_path).link_job(stale_id)
 
     class CollectionFlow:
         def run(self, intent):
             return _collection_batch(intent)
 
-        def persist(self, batch):
+        def postprocess(self, batch):
+            return _postprocessed_collection(batch)
+
+        def store(self, _processed):
             collected_id = insert_job(
                 db,
                 "https://example.com/jobs/current-qa-lead",
@@ -940,8 +950,8 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
                     "source_platform": "wanted",
                 },
             )
-            taxonomy.link_job(collected_id)
-            return _persisted_collection(batch, [collected_id])
+            JobTaxonomyLinker(db_path).link_job(collected_id)
+            return _persistence_report([collected_id])
 
     collection_flow = CollectionFlow()
 
@@ -955,6 +965,9 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
                 )
             ]
         )
+    )
+    answer_model = _FakeModel(
+        AIMessage(content="현재 수집 결과에서 정확히 일치하는 공고를 찾지 못했습니다.")
     )
     workflow = investigation_workflow_factory(
         db_path=db_path,
@@ -996,29 +1009,43 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
                     ]
                 )
             ),
-            answer_model=_FakeModel(
-                AIMessage(
-                    content="현재 수집 결과에서 정확히 일치하는 공고를 찾지 못했습니다."
-                )
-            ),
+            answer_model=answer_model,
         ),
         capabilities=_test_capabilities(),
         run_collection=collection_flow.run,
-        persist_collection=collection_flow.persist,
+        postprocess_collection=collection_flow.postprocess,
+        store_collection=collection_flow.store,
+        record_experience=_experience_result,
         taxonomy_service=taxonomy,
     )
 
     result = workflow.run("원티드에서 QA 자동화 엔지니어 공고를 직접 확인해줘")
 
     assert validation_model.calls == 1
-    assert result["valid_ids"] == []
-    assert result["documents"] == []
-    assert stale_id not in result["investigation"]["evidence_document_ids"]
-    assert result["investigation"]["collection_document_ids"] != [stale_id]
+    answer_payload = json.loads(answer_model.messages[0][-1].content)
+    assert answer_payload["db_report"]["document_ids"] == []
+    assert answer_payload["documents"] == []
+    persisted_ids = {
+        item["job_id"]
+        for collection in answer_payload["collection_results"]
+        for item in collection["persisted_items"]
+    }
+    assert stale_id not in persisted_ids
+    assert result.final_answer.startswith("현재 수집 결과에서")
 
 
 def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
 
+    evidence_requirements = [
+        EvidenceRequirement(
+            requirement_id="current",
+            description="최근 기간",
+            occupation_query="AI 개발자",
+            posted_from="2026-04-14",
+            posted_to="2026-07-14",
+            required_fields=["posted_at", "requirements"],
+        )
+    ]
     investigation = InvestigationRequest(
         investigation_id="plan-normalization",
         original_query="최근 3개월 서울 AI 개발자 트렌드",
@@ -1030,16 +1057,6 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
             count_mode="visible_all",
             location="서울",
         ),
-        evidence_requirements=[
-            EvidenceRequirement(
-                requirement_id="current",
-                description="최근 기간",
-                occupation_query="AI 개발자",
-                posted_from="2026-04-14",
-                posted_to="2026-07-14",
-                required_fields=["posted_at", "requirements"],
-            )
-        ],
     )
     plan = InvestigationActionPlan(
         steps=[
@@ -1055,6 +1072,7 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
     steps = normalize_collection_steps(
         plan,
         investigation,
+        evidence_requirements,
         [
             {
                 "tool_name": "realtime_scraping:wanted",
@@ -1087,18 +1105,18 @@ def test_collection_plan_inherits_confirmed_request_and_cohort_constraints():
 
 def test_semantic_evidence_validation_keeps_only_matching_candidate():
 
+    evidence_requirements = [
+        EvidenceRequirement(
+            requirement_id="seoul_ai",
+            description="서울 AI 개발자 공고",
+            occupation_query="AI 개발자",
+            minimum_count=1,
+        )
+    ]
     investigation = InvestigationRequest(
         investigation_id="semantic-validation",
         original_query="서울 AI 개발자 공고",
         constraints=InvestigationConstraints(location="서울"),
-        evidence_requirements=[
-            EvidenceRequirement(
-                requirement_id="seoul_ai",
-                description="서울 AI 개발자 공고",
-                occupation_query="AI 개발자",
-                minimum_count=1,
-            )
-        ],
     )
     report = {
         "total_db_rows": 2,
@@ -1123,7 +1141,8 @@ def test_semantic_evidence_validation_keeps_only_matching_candidate():
 
     validated = apply_evidence_validation(
         report,
-        investigation,
+        evidence_requirements,
+        investigation.constraints,
         EvidenceValidation(
             decisions=[
                 RequirementEvidenceDecision(
@@ -1141,17 +1160,13 @@ def test_semantic_evidence_validation_keeps_only_matching_candidate():
 
 def test_evidence_validation_payload_excludes_full_document_text():
 
-    investigation = InvestigationRequest(
-        investigation_id="compact-validation",
-        original_query="AI 엔지니어 공고",
-        evidence_requirements=[
-            EvidenceRequirement(
-                requirement_id="ai",
-                description="AI 엔지니어 공고",
-                occupation_query="AI 엔지니어",
-            )
-        ],
-    )
+    evidence_requirements = [
+        EvidenceRequirement(
+            requirement_id="ai",
+            description="AI 엔지니어 공고",
+            occupation_query="AI 엔지니어",
+        )
+    ]
     payload = build_evidence_validation_payload(
         {
             "requirements": [
@@ -1170,7 +1185,7 @@ def test_evidence_validation_payload_excludes_full_document_text():
                 }
             ]
         },
-        investigation,
+        evidence_requirements,
     )
 
     candidate = payload[0]["candidates"][0]

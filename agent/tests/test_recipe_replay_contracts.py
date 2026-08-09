@@ -9,6 +9,7 @@ from agent.tests.worker_test_support import (
     worker_data_services,
     worker_state,
 )
+from shared.schema.collection_intent import CollectionIntent
 
 
 def test_reflex_replays_one_parameterized_roi_step(tmp_path):
@@ -97,14 +98,17 @@ def test_reflex_replays_one_parameterized_roi_step(tmp_path):
                 "screen_signature": {"size": [200, 120]},
                 "current_screenshot": str(screenshot),
                 "current_markers": [
-                {"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"},
+                    {"id": 7, "bbox": [10, 10, 70, 40], "text": "검색"},
                 ],
             },
-            request={"recipe_params": {
-                "site": "wanted",
-                "task_category": "검색",
-                "query": "AI 엔지니어",
-            }},
+            request={
+                "collection_intent": CollectionIntent(
+                    site="wanted",
+                    task_category="검색",
+                    search_keyword="AI 엔지니어",
+                ),
+                "recipe_inputs": {"query": "AI 엔지니어"},
+            },
         ),
         node_runtime(
             data=worker_data_services(
@@ -253,42 +257,36 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 "screen_signature": input_context,
                 "current_screenshot": str(input_screen),
                 "current_markers": [
-                {
-                    "id": 7,
-                    "bbox": [10, 10, 130, 40],
-                    "text": "검색어",
-                },
+                    {
+                        "id": 7,
+                        "bbox": [10, 10, 130, 40],
+                        "text": "검색어",
+                    },
                 ],
             },
-            request={"recipe_params": {
-                "site": "saramin",
-                "task_category": "검색",
-                "query": "AI 엔지니어",
-            }},
+            request={
+                "collection_intent": CollectionIntent(
+                    site="saramin",
+                    task_category="검색",
+                    search_keyword="AI 엔지니어",
+                ),
+                "recipe_inputs": {"query": "AI 엔지니어"},
+            },
         ),
         replay_runtime,
     )
 
     assert first["replay"]["reflex_trace"]["hit"] is True
+    assert first["decision"]["pending_action"].summary == "cached recipe transition"
+    assert [call.name for call in first["decision"]["pending_action"].tool_calls] == [
+        "type_in_marker",
+        "press_key",
+    ]
     assert (
-        first["decision"]["pending_action"].summary
-        == "cached recipe transition"
+        first["decision"]["pending_action"].tool_calls[0].args["text"] == "AI 엔지니어"
     )
-    assert [
-        call.name for call in first["decision"]["pending_action"].tool_calls
-    ] == ["type_in_marker", "press_key"]
-    assert (
-        first["decision"]["pending_action"].tool_calls[0].args["text"]
-        == "AI 엔지니어"
-    )
-    assert (
-        first["replay"]["active_reflex_recipe"]["current_transition_index"]
-        == 0
-    )
-    assert (
-        first["replay"]["active_reflex_recipe"]["pending_transition_index"]
-        == 0
-    )
+    assert first["replay"]["active_reflex_recipe"]["current_transition_index"] == 0
+    assert first["replay"]["active_reflex_recipe"]["pending_transition_index"] == 0
 
     verified = worker_transition.transition_node(
         worker_state(
@@ -296,47 +294,37 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 "ocr_complete": True,
                 "current_url": "https://www.saramin.co.kr/zf_user/",
                 "current_screenshot": str(result_screen),
-                "current_capture_id": "capture:0002",
+                "observation_id": "observation:0002",
                 "current_markers": [
-                {
-                    "id": 8,
-                    "bbox": [160, 10, 220, 40],
-                    "text": "검색",
-                },
+                    {
+                        "id": 8,
+                        "bbox": [160, 10, 220, 40],
+                        "text": "검색",
+                    },
                 ],
                 "screen_signature": result_context,
             },
-            transition={"transition_request": {
-                "action": "press_key",
-                "source": "reflex",
-                "recipe_key": "recipe-search-set",
-                "before_url": "https://www.saramin.co.kr/zf_user/",
-                "before_screenshot": str(input_screen),
-                "expected_after_state": result_state.model_dump(),
-                "recipe_transition_index": 0,
-                "recipe_transition_count": 2,
-                "started_at": time.time(),
-            }},
-            replay={
-                "active_reflex_recipe": first["replay"][
-                    "active_reflex_recipe"
-                ]
+            transition={
+                "transition_request": {
+                    "action": "press_key",
+                    "source": "reflex",
+                    "recipe_key": "recipe-search-set",
+                    "before_url": "https://www.saramin.co.kr/zf_user/",
+                    "before_screenshot": str(input_screen),
+                    "expected_after_state": result_state.model_dump(),
+                    "recipe_transition_index": 0,
+                    "recipe_transition_count": 2,
+                    "started_at": time.time(),
+                }
             },
+            replay={"active_reflex_recipe": first["replay"]["active_reflex_recipe"]},
         ),
         replay_runtime,
     )
 
     assert verified["transition"]["transition_result"]["status"] == "ready"
-    assert (
-        verified["replay"]["active_reflex_recipe"][
-            "current_transition_index"
-        ]
-        == 1
-    )
-    assert (
-        "pending_transition_index"
-        not in verified["replay"]["active_reflex_recipe"]
-    )
+    assert verified["replay"]["active_reflex_recipe"]["current_transition_index"] == 1
+    assert "pending_transition_index" not in verified["replay"]["active_reflex_recipe"]
 
     second = reflex_node(
         worker_state(
@@ -347,41 +335,31 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 "screen_signature": result_context,
                 "current_screenshot": str(result_screen),
                 "current_markers": [
-                {
-                    "id": 8,
-                    "bbox": [160, 10, 220, 40],
-                    "text": "검색",
-                },
+                    {
+                        "id": 8,
+                        "bbox": [160, 10, 220, 40],
+                        "text": "검색",
+                    },
                 ],
             },
-            request={"recipe_params": {
-                "site": "saramin",
-                "task_category": "검색",
-                "query": "AI 엔지니어",
-            }},
-            replay={
-                "active_reflex_recipe": verified["replay"][
-                    "active_reflex_recipe"
-                ]
+            request={
+                "collection_intent": CollectionIntent(
+                    site="saramin",
+                    task_category="검색",
+                    search_keyword="AI 엔지니어",
+                ),
+                "recipe_inputs": {"query": "AI 엔지니어"},
             },
+            replay={"active_reflex_recipe": verified["replay"]["active_reflex_recipe"]},
         ),
         replay_runtime,
     )
 
     assert second["replay"]["reflex_trace"]["hit"] is True
     assert len(second["decision"]["pending_action"].tool_calls) == 1
-    assert (
-        second["decision"]["pending_action"].tool_calls[0].name
-        == "click_marker"
-    )
-    assert (
-        second["decision"]["pending_action"].tool_calls[0].args["marker_id"]
-        == 8
-    )
-    assert (
-        second["replay"]["active_reflex_recipe"]["current_transition_index"]
-        == 1
-    )
+    assert second["decision"]["pending_action"].tool_calls[0].name == "click_marker"
+    assert second["decision"]["pending_action"].tool_calls[0].args["marker_id"] == 8
+    assert second["replay"]["active_reflex_recipe"]["current_transition_index"] == 1
 
 
 def test_active_reflex_recipe_is_cleared_only_after_final_transition():
@@ -389,7 +367,7 @@ def test_active_reflex_recipe_is_cleared_only_after_final_transition():
         "ocr_complete": True,
         "current_url": "https://www.saramin.co.kr/zf_user/search",
         "current_screenshot": "",
-        "current_capture_id": "capture:0002",
+        "observation_id": "observation:0002",
         "current_markers": [
             {"id": 1, "bbox": [0, 0, 20, 20], "text": "검색 결과"},
         ],
@@ -399,31 +377,33 @@ def test_active_reflex_recipe_is_cleared_only_after_final_transition():
         },
     }
     transition_request = {
-            "action": "click_marker",
-            "source": "reflex",
-            "recipe_key": "recipe-search-set",
-            "before_url": "https://www.saramin.co.kr/zf_user/",
-            "expected_after_state": {
-                "url_template": "saramin.co.kr/zf_user/search",
-                "page_role": "search_results",
-                "screen_context_signature": {
-                    "phash": "a" * 16,
-                    "size": [1920, 1080],
-                },
+        "action": "click_marker",
+        "source": "reflex",
+        "recipe_key": "recipe-search-set",
+        "before_url": "https://www.saramin.co.kr/zf_user/",
+        "expected_after_state": {
+            "url_template": "saramin.co.kr/zf_user/search",
+            "page_role": "search_results",
+            "screen_context_signature": {
+                "phash": "a" * 16,
+                "size": [1920, 1080],
             },
-            "started_at": time.time(),
+        },
+        "started_at": time.time(),
     }
 
     intermediate = worker_transition.transition_node(
         worker_state(
             observation=observation,
             transition={"transition_request": transition_request},
-            replay={"active_reflex_recipe": {
-                "recipe_key": "recipe-search-set",
-                "current_transition_index": 1,
-                "pending_transition_index": 1,
-                "transition_count": 3,
-            }},
+            replay={
+                "active_reflex_recipe": {
+                    "recipe_key": "recipe-search-set",
+                    "current_transition_index": 1,
+                    "pending_transition_index": 1,
+                    "transition_count": 3,
+                }
+            },
         ),
         node_runtime(),
     )
@@ -431,22 +411,21 @@ def test_active_reflex_recipe_is_cleared_only_after_final_transition():
         worker_state(
             observation=observation,
             transition={"transition_request": transition_request},
-            replay={"active_reflex_recipe": {
-                "recipe_key": "recipe-search-set",
-                "current_transition_index": 2,
-                "pending_transition_index": 2,
-                "transition_count": 3,
-            }},
+            replay={
+                "active_reflex_recipe": {
+                    "recipe_key": "recipe-search-set",
+                    "current_transition_index": 2,
+                    "pending_transition_index": 2,
+                    "transition_count": 3,
+                }
+            },
         ),
         node_runtime(),
     )
 
     assert intermediate["transition"]["transition_result"]["status"] == "ready"
     assert (
-        intermediate["replay"]["active_reflex_recipe"][
-            "current_transition_index"
-        ]
-        == 2
+        intermediate["replay"]["active_reflex_recipe"]["current_transition_index"] == 2
     )
     assert completed["transition"]["transition_result"]["status"] == "ready"
     assert completed["replay"]["active_reflex_recipe"] == {}

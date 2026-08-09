@@ -19,6 +19,7 @@ from agent.vision.screen_signature import (
     compute_target_roi_signature,
 )
 from agent.vision.target_snapshot import build_marker_target_snapshot, marker_by_id
+from shared.schema.feedback_schema import RecordedRecipeStep
 
 
 def _has_letter(text: str) -> bool:
@@ -54,8 +55,6 @@ def _recorded_replay_mode(
             else "reasoning"
         )
     return "fixed" if mode == "fixed" else "reasoning"
-
-
 
 
 def _collect_evidence_candidates(
@@ -136,13 +135,12 @@ def _new_recorded_step(
     page_role = observed_page_role or declared_page_role
     return {
         "seq": seq,
-        "decision_capture_id": str(state.get("current_capture_id") or ""),
         "url_template": url_template(url),
         "page_role": page_role,
         "observed_page_role": observed_page_role,
         "declared_page_role": declared_page_role,
         "before_state": {
-            "capture_id": str(state.get("current_capture_id") or ""),
+            "observation_id": str(state.get("observation_id") or ""),
             "url_template": url_template(url),
             "page_role": page_role,
             "screen_context_signature": context_signature,
@@ -169,11 +167,14 @@ def _target_descriptor(
     args: dict,
     screen_signature: dict,
 ) -> dict:
-    snapshot = build_marker_target_snapshot(
-        markers,
-        args.get("marker_id"),
-        screen_signature=screen_signature,
-    ) or {}
+    snapshot = (
+        build_marker_target_snapshot(
+            markers,
+            args.get("marker_id"),
+            screen_signature=screen_signature,
+        )
+        or {}
+    )
     target = {
         "text": normalize_text(marker.get("text")),
         "region": marker_region(marker, markers),
@@ -279,16 +280,20 @@ def _record_contextual_parameters(
         step["param"]["amount"] = args.get("amount", "page")
 
 
-def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
+def record_ui_step(
+    recorded_steps: list[RecordedRecipeStep],
+    state: dict,
+    action_name: str,
+    args: dict,
+    seq: int,
+) -> None:
     """UI 액션 디스패치 직후 재생 후보 단계를 기록한다."""
 
     if action_name not in RECORDED_REPLAY_ACTIONS:
         return
     slot_name = normalize_text(args.get("slot_name"))
     screen_signature = dict(state.get("screen_signature", {}) or {})
-    context_signature = compact_screen_context_signature(
-        screen_signature
-    )
+    context_signature = compact_screen_context_signature(screen_signature)
     step = _new_recorded_step(
         state,
         action_name,
@@ -314,4 +319,4 @@ def record_ui_step(recorded_steps, state, action_name, args, seq) -> None:
         _record_contextual_parameters(step, action_name, args)
     if action_name in CONTEXTUAL_REPLAY_ACTIONS and context_signature:
         step["screen_context_signature"] = context_signature
-    recorded_steps.append(step)
+    recorded_steps.append(RecordedRecipeStep.model_validate(step))

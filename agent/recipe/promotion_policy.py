@@ -10,6 +10,12 @@ from agent.runtime.worker_actions import (
     REVIEWABLE_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
 )
+from shared.schema.feedback_schema import (
+    FeedbackEpisode,
+    RecipeCandidate,
+    RecordedRecipeStep,
+    RecordedTransition,
+)
 
 _BLOCKING_FEEDBACK_LABELS = {"wrong_target", "no_effect", "loop_risk", "error"}
 _BLOCKING_RESULT_STATUSES = {"error", "skipped"}
@@ -30,69 +36,54 @@ _DEFERRED_GROUP_EFFECT_REASONS = {
 }
 
 
-def _seq(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+def _step_before_observation_id(step: RecordedRecipeStep) -> str:
+    return str(step.before_state.get("observation_id") or "")
 
 
-def _step_before_capture_id(step: dict[str, Any]) -> str:
-    before_state = (
-        step.get("before_state") if isinstance(step.get("before_state"), dict) else {}
-    )
-    return str(before_state.get("capture_id") or "")
-
-
-def _transition_after_capture_id(
-    observations: list[dict[str, Any]],
+def _transition_after_observation_id(
+    observations: list[RecordedTransition],
 ) -> str:
     for observation in reversed(observations):
-        after_state = (
-            observation.get("after_state")
-            if isinstance(observation.get("after_state"), dict)
-            else {}
+        observation_id = str(
+            observation.after_state.get("observation_id") or ""
         )
-        capture_id = str(after_state.get("capture_id") or "")
-        if capture_id:
-            return capture_id
+        if observation_id:
+            return observation_id
     return ""
 
 
 def _apply_verified_action_groups(
-    candidate: dict[str, Any],
-    transitions_by_seq: dict[int, list[dict[str, Any]]],
+    candidate: RecipeCandidate,
+    transitions_by_seq: dict[int, list[RecordedTransition]],
     verdicts: dict[int, dict[str, Any]],
 ) -> None:
     """최종 행동이 전환을 검증한 연속 행동 묶음의 선행 무변화를 허용한다."""
 
     reviewable_steps = [
         step
-        for step in candidate.get("steps", []) or []
-        if (
-            isinstance(step, dict)
-            and step.get("action") in REVIEWABLE_REPLAY_ACTIONS
-            and _seq(step.get("seq")) is not None
-        )
+        for step in candidate.steps
+        if (step.action in REVIEWABLE_REPLAY_ACTIONS and step.seq is not None)
     ]
     for first, second in zip(reviewable_steps, reviewable_steps[1:]):
-        if not is_supported_recipe_action_group([first, second]):
+        if not is_supported_recipe_action_group(
+            [first.model_dump(mode="json"), second.model_dump(mode="json")]
+        ):
             continue
-        first_seq = int(first["seq"])
-        second_seq = int(second["seq"])
+        first_seq = int(first.seq)
+        second_seq = int(second.seq)
         first_verdict = verdicts.get(first_seq)
         second_verdict = verdicts.get(second_seq)
         if not first_verdict or not second_verdict or not second_verdict["eligible"]:
             continue
 
-        first_after_capture = _transition_after_capture_id(
+        first_after_observation = _transition_after_observation_id(
             transitions_by_seq.get(first_seq, [])
         )
-        second_before_capture = _step_before_capture_id(second)
+        second_before_observation = _step_before_observation_id(second)
         if (
-            not first_after_capture
-            or not second_before_capture
-            or first_after_capture != second_before_capture
+            not first_after_observation
+            or not second_before_observation
+            or first_after_observation != second_before_observation
         ):
             continue
 
@@ -124,40 +115,14 @@ def _apply_verified_action_groups(
         )
 
 
-def _records_by_seq(
-    records: list[Any],
-    seq_field: str,
-) -> dict[int, list[dict[str, Any]]]:
-    indexed: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        seq = _seq(record.get(seq_field))
-        if seq is not None:
-            indexed[seq].append(record)
-    return indexed
-
-
 def _feedback_evidence(
-    feedback_items: list[dict[str, Any]],
+    feedback_items: list[FeedbackEpisode],
 ) -> tuple[list[str], list[str]]:
     labels: list[str] = []
     reasons: list[str] = []
     for episode in feedback_items:
-        feedback = (
-            episode.get("feedback") if isinstance(episode.get("feedback"), dict) else {}
-        )
-        observation = (
-            episode.get("observation")
-            if isinstance(episode.get("observation"), dict)
-            else {}
-        )
-        result = (
-            observation.get("result")
-            if isinstance(observation.get("result"), dict)
-            else {}
-        )
-        label = str(feedback.get("label") or "").strip()
+        result = episode.observation.result
+        label = episode.feedback.label
         result_status = str(result.get("status") or "").strip()
         if label:
             labels.append(label)
@@ -169,15 +134,15 @@ def _feedback_evidence(
 
 
 def _transition_evidence(
-    transition_items: list[dict[str, Any]],
+    transition_items: list[RecordedTransition],
 ) -> tuple[list[str], list[str], list[str]]:
     sources: list[str] = []
     statuses: list[str] = []
     reasons: list[str] = []
     for observation in transition_items:
-        source = str(observation.get("source") or "").strip()
-        status = str(observation.get("status") or "").strip()
-        reason = str(observation.get("reason") or "").strip()
+        source = observation.source.strip()
+        status = observation.status.strip()
+        reason = observation.reason.strip()
         if source:
             sources.append(source)
         if status:
@@ -190,19 +155,19 @@ def _transition_evidence(
     return sources, statuses, reasons
 
 
-def _step_policy_reasons(step: dict[str, Any]) -> list[str]:
+def _step_policy_reasons(step: RecordedRecipeStep) -> list[str]:
     reasons = []
-    if str(step.get("risk_level") or "").strip().casefold() == "sensitive":
+    if step.risk_level.strip().casefold() == "sensitive":
         reasons.append("sensitive_action")
-    if step.get("needs_user_confirmation") is True:
+    if step.needs_user_confirmation:
         reasons.append("user_confirmation_required")
     return reasons
 
 
 def _missing_evidence_reasons(
     action: str,
-    feedback_items: list[dict[str, Any]],
-    transition_items: list[dict[str, Any]],
+    feedback_items: list[FeedbackEpisode],
+    transition_items: list[RecordedTransition],
     transition_statuses: list[str],
 ) -> list[str]:
     if action not in CONTEXTUAL_REPLAY_ACTIONS:
@@ -222,12 +187,12 @@ def _missing_evidence_reasons(
 
 
 def _step_evidence_verdict(
-    step: dict[str, Any],
+    step: RecordedRecipeStep,
     seq: int,
-    feedback_items: list[dict[str, Any]],
-    transition_items: list[dict[str, Any]],
+    feedback_items: list[FeedbackEpisode],
+    transition_items: list[RecordedTransition],
 ) -> dict[str, Any]:
-    action = str(step.get("action") or "")
+    action = step.action
     feedback_labels, feedback_reasons = _feedback_evidence(feedback_items)
     transition_sources, transition_statuses, transition_reasons = _transition_evidence(
         transition_items
@@ -255,27 +220,23 @@ def _step_evidence_verdict(
 
 
 def evaluate_candidate_step_evidence(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
 ) -> dict[int, dict[str, Any]]:
     """재사용 가능한 행동별 증거를 검사해 명백한 차단 사유를 반환한다."""
 
-    payload = dict(candidate.get("payload", {}) or {})
-    feedback_by_seq = _records_by_seq(
-        list(payload.get("feedback_episodes", []) or []),
-        "seq",
-    )
-    transitions_by_seq = _records_by_seq(
-        list(payload.get("transition_records", []) or []),
-        "action_seq",
-    )
+    feedback_by_seq: dict[int, list[FeedbackEpisode]] = defaultdict(list)
+    for episode in candidate.submission.feedback_episodes:
+        feedback_by_seq[episode.seq].append(episode)
+    transitions_by_seq: dict[int, list[RecordedTransition]] = defaultdict(list)
+    for transition in candidate.submission.transition_records:
+        if transition.action_seq is not None:
+            transitions_by_seq[transition.action_seq].append(transition)
     verdicts: dict[int, dict[str, Any]] = {}
     reviewable_steps = (
-        step
-        for step in candidate.get("steps", []) or []
-        if isinstance(step, dict) and step.get("action") in REVIEWABLE_REPLAY_ACTIONS
+        step for step in candidate.steps if step.action in REVIEWABLE_REPLAY_ACTIONS
     )
     for step in reviewable_steps:
-        seq = _seq(step.get("seq"))
+        seq = step.seq
         if seq is None:
             continue
         verdicts[seq] = _step_evidence_verdict(
@@ -292,7 +253,7 @@ def evaluate_candidate_step_evidence(
     return verdicts
 
 
-def compact_step_evidence_verdicts(candidate: dict[str, Any]) -> list[dict[str, Any]]:
+def compact_step_evidence_verdicts(candidate: RecipeCandidate) -> list[dict[str, Any]]:
     """Critic 입력과 검증 로그에 사용할 정렬된 판정 목록을 만든다."""
 
     verdicts = evaluate_candidate_step_evidence(candidate)

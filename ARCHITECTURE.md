@@ -20,12 +20,13 @@ flowchart TD
     COLLECTION --> LOCK[WorkerExecutionService 실행 세션]
     LOCK --> WG[Vision Worker LangGraph]
     WG --> WEB[브라우저 화면과 물리 입력]
-    WG --> BATCH[CollectionBatch]
-    BATCH --> PERSIST[persist 노드]
-    PERSIST --> ADAPTER[collection_persistence 어댑터]
-    ADAPTER --> DB
+    WG --> BATCH[CollectionBatch: JobCapture 원문]
+    BATCH --> POSTPROCESS[postprocess 노드: CollectedJob 구조화]
+    POSTPROCESS --> STORE[persist 노드: 공고 UPSERT]
+    STORE --> DB
     DB[(SQLite)] --> DBQ
-    ADAPTER --> CANDIDATE[승격 후보 pending_replay 또는 pending_review]
+    STORE --> EXPERIENCE[실행 기록과 레시피 후보 저장]
+    EXPERIENCE --> CANDIDATE[승격 후보 pending_replay 또는 pending_review]
     CANDIDATE --> PROMOTION[별도 승격 작업자]
     PROMOTION --> RECIPE[활성 Reflex Recipe]
     ANSWER --> U
@@ -41,7 +42,7 @@ FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫�
 4. UI는 문자 단위 가짜 스트리밍 대신 진행 이벤트와 최종 응답을 구분해 표시합니다.
 5. `GET /api/runs/{run_id}`로 최근 실행 상태와 최종 계측값을 다시 조회할 수 있습니다.
 
-실행 레지스트리는 단일 사용자 로컬 앱을 위한 메모리 저장소입니다. Investigation LangGraph의 `load_context` 노드는 포트를 통해 최근 대화와 명시된 재개 실행을 구조화된 문맥으로 읽습니다. 실행 진행 이벤트는 프로세스 재시작 후 복구하지 않지만, 확인 질문과 확정 조건을 포함한 조사 상태는 업무 DB와 분리된 LangGraph SQLite 체크포인트에 저장합니다. `investigation_id`가 체크포인트의 `thread_id`이며 확인 답변은 같은 스레드를 재개합니다.
+실행 레지스트리는 단일 사용자 로컬 앱을 위한 메모리 저장소입니다. Investigation LangGraph의 `understand` 노드는 최근 대화와 명시된 재개 실행을 읽고 현재 요청을 해석합니다. 실행 진행 이벤트는 프로세스 재시작 후 복구하지 않지만, 확인 질문과 확정 조건을 포함한 조사 상태는 업무 DB와 분리된 LangGraph SQLite 체크포인트에 저장합니다. `investigation_id`가 체크포인트의 `thread_id`이며 확인 답변은 같은 스레드를 재개합니다.
 
 ## Vision Worker
 
@@ -68,9 +69,11 @@ flowchart TD
     EXECUTION -->|완료 또는 승인 필요| END[종료]
 ```
 
-- `Perception`: 브라우저 화면을 캡처하고 PaddleOCR·OmniParser 마커와 화면 서명을 만듭니다.
+- `Loading Wait`: 저해상도 OpenCV 프레임을 메모리에서 비교해 화면 변화 시작, 렌더링 안정화와 회색 저정보 화면 해소를 기다립니다. 준비된 최종 화면만 파일로 저장합니다.
+- `OCR`: `OcrEngine`이 `PaddleOcr` 문자 검출과 `OmniParser` 아이콘 검출 결과를 합쳐 마커를 만듭니다. Paddle 작업자는 작업 동안 재사용합니다.
+- `pHash`: 저장된 전체 화면·ROI 서명과 현재 화면을 비교해 카드 큐 복귀, Reflex 대상과 행동 직전 마커 동일성을 검증합니다.
 - `Job Card Queue`: 검색 결과에서 LLM이 한 번 고른 공고 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
-- `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 반복 스크롤은 결정론적으로 처리하고 마지막에 한 번만 구조화합니다. 펼치기 자동 클릭은 사이트 설명서에 선언된 라벨의 정확 일치만 허용하며, 나머지 컨트롤 의미는 LLM이 판단합니다. 최종 정제 모델에는 상세 OCR과 URL만 전달하고, 검색 목록의 카드 메타데이터는 모델이 필드를 비운 경우의 폴백으로만 사용합니다.
+- `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 작업자는 URL, OCR 원문과 화면 근거만 `JobCapture`로 반환합니다. 조사 그래프의 후처리 노드가 수집 종료 후 한 번 구조화하며 검색 목록의 카드 메타데이터는 사실 근거로 사용하지 않습니다.
 - `Reflex Runtime`: `site + task_category + page_role`로 활성 레시피를 조회하고 ROI pHash와 현재 마커 좌표비율이 맞을 때만 재생합니다.
 - `Reasoning`: 큐, 상세 정책, Reflex로 고정할 수 없는 현재 화면의 의미 판단만 수행합니다.
 - `Execution`: `click_marker`, `type_in_marker`, `scroll`, `press_key`, `go_back`을 물리 입력으로 실행합니다.
@@ -84,22 +87,25 @@ flowchart TD
 | 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py`, `conversation_context_service.py` | 실행 계측·응답 변환과 그래프가 호출하는 DB·대화 어댑터 |
 | 수집 요청 | `agent/application/collection_request_builder.py` | 사이트 프로필 선택, 확정된 수집 의도로 작업자 목표 생성 |
 | 수집 작업자 | `agent/application/collection_worker_runner.py` | 확정된 `CollectionIntent`로 단일 비전 작업자 실행과 제출물 생성 |
-| 수집 저장 | `agent/application/collection_persistence.py` | 그래프의 persist 노드가 넘긴 공고·제출물 저장과 레시피 후보 등록 |
+| 수집 후처리 | `agent/application/collection_postprocessing.py` | `JobCapture`를 `CollectedJob`으로 구조화하고 필수 필드·날짜 조건 판정 |
+| 공고 저장 | `agent/application/collection_storage.py` | 후처리된 공고 UPSERT와 검색 사전 연결 결과 기록 |
+| 경험 기록 | `agent/application/collection_experience.py` | 작업자 제출물 저장과 레시피 후보 등록 |
 | 구성·수명주기 | `agent/bootstrap.py` | 체크포인터·서비스·그래프·비전 런타임·승격 작업자의 생성과 종료 |
 | 비전 런타임 | `agent/runtime/vision_worker_runtime.py` | OCR·Perception·ActionTools·판단 모델·작업자 그래프의 지연 생성과 실행 잠금 |
 | 작업자 실행 | `agent/application/worker_execution_service.py` | 화면 잠금, 시작 화면 준비, 그래프 실행, 브라우저 정리 |
-| 저장·정제 | `agent/application/job_persistence_service.py`, `detail_extraction_service.py` | 상세 OCR의 `JobPosting` 구조화, 정규 공고 UPSERT |
-| 비동기 승격 | `agent/application/recipe_promotion_service.py`, `recipe_promotion_worker.py`, `recipe_candidate_review_service.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
+| 비동기 승격 | `agent/application/recipe_promotion_worker.py`, `recipe_candidate_review_service.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
 | 지휘자 그래프 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 주입된 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
-| 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 문맥 적재, 요청 해석, 근거 판정, 수집, 저장, 재검사와 답변 |
-| 지휘자 경계 포트 | `agent/graph/investigation_ports.py` | 그래프가 호출할 대화·수집·저장·근거 조회·문서 로드 계약 |
+| 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 문맥을 반영한 요청 해석, 근거 판정, 수집·저장, 재검사와 답변 |
 | 직무 확인 | `agent/application/occupation_clarification_service.py` | 직무 사전 후보 질문 생성과 사용자 승인 별칭 기록 |
 | 작업자 그래프 | `agent/graph/workflow.py`, `agent/runtime/worker_contracts.py` | Vision LangGraph 연결, 런타임 문맥과 WorkerState 계약 |
 | 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 선택, 추론과 원자 실행 |
 | 행동 실행 세부 | `agent/graph/worker_action_guard.py`, `worker_execution_dispatch.py`, `worker_action_effects.py` | 실행 전 안전 검증, 물리·상태 도구 전달, 실행 후 상태 반영 |
 | 추론 문맥 | `agent/graph/worker_reasoning_prompt.py` | 화면·수집·전환 정보를 모델 메시지로 압축 |
 | 런타임 정책 | `agent/runtime/` | 전환 검증, 상세 버퍼, 카드 큐, Reflex 재생 |
-| 화면·입력 | `agent/tools/perception.py`, `som_engine.py`, `actions.py` | 화면/OCR/마커 생성과 물리 입력 |
+| 로딩 대기 | `agent/vision/loading_wait.py` | CV 프레임 변화·안정화·저정보 화면 판정 |
+| OCR | `agent/tools/ocr_engine.py`, `paddle_ocr.py`, `omni_parser.py` | 문자·아이콘 검출과 마커 합성 |
+| pHash | `agent/vision/screen_signature.py` | 저장 화면·ROI 서명 생성과 유사도 비교 |
+| 화면·입력 | `agent/tools/perception.py`, `actions.py` | 화면 캡처 진입점과 물리 입력 |
 | 경험 메모리 | `agent/recipe/` | 행동 기록, 결정론적 승격 정책, 경로 생성, 활성 레시피 저장·매칭·재생 |
 
 ## 상태와 행동 계약
@@ -110,7 +116,7 @@ flowchart TD
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `decision.pending_action: ActionRequest`, 실행 결과는 `transition.action_events`에 순서대로 기록합니다.
 - `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
-- `WorkerExecutionContext`는 불변 `ActionExecutionInput`과 가변 `ActionExecutionResult`를 구분합니다. 실행 결과는 같은 `WorkerState` 사본을 갱신하고 최초 입력과 달라진 구역만 반환합니다.
+- `WorkerExecutionContext`는 최초 상태, 검증된 행동, 런타임 의존성, 작업 상태 사본과 후속 행동을 직접 보관합니다. 실행 후 최초 상태와 달라진 구역만 반환합니다.
 - 실행기는 안전 검증, 도구 전달, 상태 효과를 순서대로 조립하며 행동 종류는 `agent/runtime/worker_actions.py`에서 한 번만 정의합니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
@@ -121,7 +127,7 @@ flowchart TD
 
 - `ApplicationRuntime`이 구체 서비스와 장기 실행 자원을 생성합니다.
 - `build_investigation_workflow()`는 준비된 수집 함수, 모델 묶음, 검색 사전 서비스와 체크포인터 `saver`를 조사 노드에 주입합니다. DB 경로가 필요한 근거 조회와 문서 로드는 이 구성 루트에서 결합합니다.
-- 조사 노드는 `investigation_ports.py`의 계약만 사용합니다. `agent/graph`는 `agent/application`을 import하지 않으며 DB 경로, 서비스 생성과 저장 구현을 알지 못합니다.
+- 조사 노드는 구성 루트에서 주입한 함수와 서비스만 호출합니다. `agent/graph`는 `agent/application`을 import하지 않으며 DB 경로, 서비스 생성과 저장 구현을 알지 못합니다.
 - 상세 추출은 `JobPosting`을 한 번 생성하고 화면 근거는 `JobCollectionEvidence`에 분리합니다. 작업 상태와 저장 서비스는 `CollectedJob`을 그대로 전달하며, SQLite의 목록 JSON 직렬화와 역직렬화는 `shared/db/database.py`만 담당합니다.
 - `VisionWorkerRuntime`은 컴파일된 작업자 그래프를 캐시합니다. `WorkerExecutionService`가 실행할 때 LangGraph `context`에 `WorkerDependencies(vision=...)`를 전달합니다.
 - 캡처, OCR, 추론과 실행 노드는 `Runtime[WorkerDependencies]`에서 비전 의존성을 받습니다. 전역 변수나 `ContextVar`로 현재 작업자를 조회하지 않습니다.

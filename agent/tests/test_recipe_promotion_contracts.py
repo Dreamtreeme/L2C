@@ -7,11 +7,12 @@ from agent.recipe.candidate_store import RecipeCandidateStore
 from agent.recipe.promotion_policy import evaluate_candidate_step_evidence
 from agent.recipe.store import RecipeStore
 from agent.recipe.submission_store import SubmissionStore
+from shared.schema.feedback_schema import RecipeCandidate, WorkerSubmission
 
 
-def _state(capture_id, role, phash, url="wanted.co.kr/search"):
+def _state(observation_id, role, phash, url="wanted.co.kr/search"):
     return {
-        "capture_id": capture_id,
+        "observation_id": observation_id,
         "url_template": url,
         "page_role": role,
         "screen_context_signature": {"phash": phash, "size": [1920, 1080]},
@@ -33,13 +34,13 @@ def _feedback(seq, action, label="partial", *, marker_texts=None):
     }
 
 
-def _transition(seq, capture_id, role, phash, *, status="ready"):
+def _transition(seq, observation_id, role, phash, *, status="ready"):
     return {
         "action_seq": seq,
         "source": "autonomous",
         "status": status,
         "reason": "screen_change_pixels_matched",
-        "after_state": _state(capture_id, role, phash),
+        "after_state": _state(observation_id, role, phash),
     }
 
 
@@ -55,11 +56,10 @@ def _candidate_submission():
         "recorded_steps": [
             {
                 "seq": 0,
-                "decision_capture_id": "capture:0001",
                 "url_template": "wanted.co.kr/",
                 "page_role": "home",
                 "before_state": _state(
-                    "capture:0001", "home", "1" * 16, "wanted.co.kr/"
+                    "observation:0001", "home", "1" * 16, "wanted.co.kr/"
                 ),
                 "action": "click_marker",
                 "replay_mode": "fixed",
@@ -78,7 +78,7 @@ def _candidate_submission():
             }
         ],
         "transition_records": [
-            _transition(0, "capture:0002", "search_overlay", "2" * 16)
+            _transition(0, "observation:0002", "search_overlay", "2" * 16)
         ],
         "feedback_episodes": [
             _feedback(0, "click_marker", "success", marker_texts=["채용", "검색"])
@@ -87,6 +87,7 @@ def _candidate_submission():
 
 
 def _store_candidate(db_path, submission):
+    submission = WorkerSubmission.model_validate(submission)
     submission_id = SubmissionStore(db_path).commit_submission(
         submission,
         source="test",
@@ -203,7 +204,9 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
         [
             {
                 "seq": 1,
-                "before_state": _state("capture:0002", "search_overlay", "2" * 16),
+                "before_state": _state(
+                    "observation:0002", "search_overlay", "2" * 16
+                ),
                 "page_role": "search_overlay",
                 "action": "type_in_marker",
                 "replay_mode": "parameterized",
@@ -218,7 +221,9 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
             },
             {
                 "seq": 2,
-                "before_state": _state("capture:0003", "search_overlay", "3" * 16),
+                "before_state": _state(
+                    "observation:0003", "search_overlay", "3" * 16
+                ),
                 "page_role": "search_overlay",
                 "action": "press_key",
                 "replay_mode": "fixed",
@@ -235,8 +240,8 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
     )
     submission["transition_records"].extend(
         [
-            _transition(1, "capture:0003", "search_overlay", "3" * 16),
-            _transition(2, "capture:0004", "search_results", "4" * 16),
+            _transition(1, "observation:0003", "search_overlay", "3" * 16),
+            _transition(2, "observation:0004", "search_results", "4" * 16),
         ]
     )
     db_path = tmp_path / "grouped-path.db"
@@ -260,28 +265,35 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("enter_capture", "eligible"),
-    [("capture:0003", True), ("capture:0099", False)],
+    ("enter_observation", "eligible"),
+    [("observation:0003", True), ("observation:0099", False)],
 )
-def test_type_and_enter_require_state_continuity(enter_capture, eligible):
-    candidate = {
-        "steps": [
-            {
-                "seq": 2,
-                "action": "type_in_marker",
-                "replay_mode": "parameterized",
-                "param": {"slot_name": "query", "text": "iOS 개발자"},
-                "before_state": {"capture_id": "capture:0002"},
-            },
-            {
-                "seq": 4,
-                "action": "press_key",
-                "replay_mode": "fixed",
-                "param": {"key": "enter"},
-                "before_state": {"capture_id": enter_capture},
-            },
-        ],
-        "payload": {
+def test_type_and_enter_require_state_continuity(enter_observation, eligible):
+    submission = WorkerSubmission.model_validate(
+        {
+            "run_id": "worker-continuity",
+            "goal": "검색",
+            "collection_intent": {"site": "wanted"},
+            "recorded_steps": [
+                {
+                    "seq": 2,
+                    "action": "type_in_marker",
+                    "replay_mode": "parameterized",
+                    "param": {"slot_name": "query", "text": "iOS 개발자"},
+                    "before_state": {
+                        "observation_id": "observation:0002"
+                    },
+                },
+                {
+                    "seq": 4,
+                    "action": "press_key",
+                    "replay_mode": "fixed",
+                    "param": {"key": "enter"},
+                    "before_state": {
+                        "observation_id": enter_observation
+                    },
+                },
+            ],
             "feedback_episodes": [
                 _feedback(2, "type_in_marker"),
                 _feedback(4, "press_key"),
@@ -292,18 +304,28 @@ def test_type_and_enter_require_state_continuity(enter_capture, eligible):
                     "source": "autonomous",
                     "status": "unknown",
                     "reason": "no_screen_change",
-                    "after_state": {"capture_id": "capture:0003"},
+                    "after_state": {
+                        "observation_id": "observation:0003"
+                    },
                 },
                 {
                     "action_seq": 4,
                     "source": "autonomous",
                     "status": "ready",
                     "reason": "screen_change_pixels_matched",
-                    "after_state": {"capture_id": "capture:0004"},
+                    "after_state": {
+                        "observation_id": "observation:0004"
+                    },
                 },
             ],
-        },
-    }
+        }
+    )
+    candidate = RecipeCandidate(
+        candidate_id="candidate-continuity",
+        submission_id="worker-continuity",
+        status="pending_replay",
+        submission=submission,
+    )
 
     verdict = evaluate_candidate_step_evidence(candidate)[2]
 

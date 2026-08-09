@@ -4,7 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agent.graph import worker_reasoning
+from agent.graph.worker_reasoning_prompt import build_reasoning_messages
+from agent.runtime.worker_contracts import build_action_event
 from agent.tests.worker_test_support import node_runtime, worker_state
+from shared.schema.collection_intent import CollectionIntent
 
 
 def _state(image_path: Path) -> dict:
@@ -28,7 +31,12 @@ def _state(image_path: Path) -> dict:
                 },
             ],
         },
-        request={"recipe_params": {"query": "iOS 개발자", "target_count": 2}},
+        request={
+            "collection_intent": CollectionIntent(
+                search_keyword="iOS 개발자",
+                target_count=2,
+            )
+        },
     )
 
 
@@ -184,6 +192,32 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
 
     assert result["decision"]["pending_action"].tool_calls[0].name == "scroll"
     assert result["replay"]["reflex_trace"]["source"] == "reasoning"
+
+
+def test_reasoning_prompt_reuses_already_compacted_queue_action_args():
+    state = worker_state(
+        observation={
+            "current_page_role": "detail",
+            "current_url": "https://www.wanted.co.kr/wd/370091",
+        },
+        transition={
+            "action_events": [
+                build_action_event(
+                    0,
+                    {
+                        "action": "set_job_card_queue",
+                        "status": "success",
+                        "args": {"cards": 1, "titles": ["SRE"]},
+                    },
+                )
+            ]
+        },
+    )
+
+    messages = build_reasoning_messages(state, "")
+
+    assert len(messages) == 2
+    assert "최근 행동 요약" in str(messages[1].content)
 
 
 def test_resolved_card_count_only_includes_collected_or_database_confirmed():

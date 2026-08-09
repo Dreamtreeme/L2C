@@ -8,14 +8,14 @@ from agent.recipe.candidate_store import RecipeCandidateStore
 from agent.recipe.path_builder import build_recipe_path
 from agent.recipe.promotion_policy import evaluate_candidate_step_evidence
 from agent.recipe.store import RecipeStore
-from agent.recipe.task_category import task_category_from_candidate
+from agent.recipe.task_category import normalize_task_category
 from agent.runtime.site_context import infer_site_page_role, normalize_page_role
 from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
-from agent.utils.model_conversion import dump_model
+from shared.schema.feedback_schema import RecipeCandidate
 from shared.schema.skill_schema import RecipeSkillMetadata
 
 
@@ -39,42 +39,14 @@ def _kept_step_seqs(review: dict[str, Any]) -> set[int]:
     return kept
 
 
-def _page_roles_from_evidence(candidate: dict[str, Any]) -> dict[int, str]:
+def _page_roles_from_evidence(candidate: RecipeCandidate) -> dict[int, str]:
     """행동 직전 실제 관찰 화면에서 단계별 화면 역할을 복원한다."""
 
-    payload = dict(candidate.get("payload", {}) or {})
     roles: dict[int, str] = {}
-    for episode in payload.get("feedback_episodes") or []:
-        if not isinstance(episode, dict):
-            continue
-        seq = _step_seq(episode)
-        if seq is None:
-            continue
-        proposal = (
-            episode.get("proposal")
-            if isinstance(episode.get("proposal"), dict)
-            else {}
-        )
-        args = (
-            proposal.get("args")
-            if isinstance(proposal.get("args"), dict)
-            else {}
-        )
-        observation = (
-            episode.get("observation")
-            if isinstance(episode.get("observation"), dict)
-            else {}
-        )
-        before = (
-            observation.get("before")
-            if isinstance(observation.get("before"), dict)
-            else {}
-        )
-        marker_texts = (
-            before.get("marker_texts")
-            if isinstance(before.get("marker_texts"), list)
-            else []
-        )
+    for episode in candidate.submission.feedback_episodes:
+        args = episode.proposal.args
+        before = episode.observation.before
+        marker_texts = list(before.get("marker_texts") or [])
         role = normalize_page_role(
             args.get("page_role")
             or infer_site_page_role(
@@ -83,38 +55,35 @@ def _page_roles_from_evidence(candidate: dict[str, Any]) -> dict[int, str]:
             )
         )
         if role:
-            roles[seq] = role
+            roles[episode.seq] = role
     return roles
 
 
 def _candidate_skill_metadata(
-    candidate: dict[str, Any],
-) -> dict[str, Any]:
+    candidate: RecipeCandidate,
+) -> RecipeSkillMetadata:
     """재생에 필요한 입력 슬롯을 자율탐색 행동에서 직접 만든다."""
 
     slots: dict[str, dict[str, Any]] = {}
-    for step in candidate.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        param = step.get("param") if isinstance(step.get("param"), dict) else {}
-        for raw_name in step.get("slot_refs") or []:
+    for step in candidate.steps:
+        for raw_name in step.slot_refs:
             name = str(raw_name or "").strip()
             if not name or name in slots:
                 continue
             slots[name] = {
                 "name": name,
-                "description": str(step.get("intent") or "").strip(),
-                "observed_value": param.get("text"),
+                "description": step.intent.strip(),
+                "observed_value": step.param.get("text"),
                 "required": True,
                 "source": "recorded_step",
             }
-    return dump_model(
-        RecipeSkillMetadata(
-            when_to_use=str(candidate.get("goal") or ""),
-            site=str(candidate.get("site") or ""),
-            task_category=task_category_from_candidate(candidate),
-            inputs=list(slots.values()),
-        )
+    return RecipeSkillMetadata(
+        when_to_use=candidate.goal,
+        site=candidate.site,
+        task_category=normalize_task_category(
+            candidate.submission.collection_intent.task_category
+        ),
+        inputs=list(slots.values()),
     )
 
 
@@ -142,18 +111,10 @@ def _parameter_contract_valid(
     if step.get("action") != "type_in_marker":
         return False
     slot_refs = [
-        str(item).strip()
-        for item in (step.get("slot_refs") or [])
-        if str(item).strip()
+        str(item).strip() for item in (step.get("slot_refs") or []) if str(item).strip()
     ]
-    param = (
-        step.get("param")
-        if isinstance(step.get("param"), dict)
-        else {}
-    )
-    param_slot = str(
-        param.get("slot_name") or param.get("slot") or ""
-    ).strip()
+    param = step.get("param") if isinstance(step.get("param"), dict) else {}
+    param_slot = str(param.get("slot_name") or param.get("slot") or "").strip()
     return bool(
         len(slot_refs) == 1
         and param_slot
@@ -162,12 +123,8 @@ def _parameter_contract_valid(
     )
 
 
-def _declared_input_names(metadata: dict[str, Any]) -> set[str]:
-    return {
-        str(item.get("name") or "").strip()
-        for item in metadata.get("inputs") or []
-        if isinstance(item, dict) and str(item.get("name") or "").strip()
-    }
+def _declared_input_names(metadata: RecipeSkillMetadata) -> set[str]:
+    return {item.name.strip() for item in metadata.inputs if item.name.strip()}
 
 
 def _base_promotion_rejection(
@@ -227,9 +184,9 @@ def _contextual_promotion_rejection(
 
 
 def _promotable_steps(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
     review: dict[str, Any],
-    metadata: dict[str, Any],
+    metadata: RecipeSkillMetadata,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """원본 단계 중 세 개의 독립 게이트를 모두 통과한 것만 남긴다."""
 
@@ -240,10 +197,8 @@ def _promotable_steps(
     promoted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
 
-    for raw_step in candidate.get("steps") or []:
-        if not isinstance(raw_step, dict):
-            continue
-        step = dict(raw_step)
+    for raw_step in candidate.steps:
+        step = raw_step.model_dump(mode="json")
         seq = _step_seq(step)
         action = str(step.get("action") or "")
         mode = str(step.get("replay_mode") or "reasoning")
@@ -291,7 +246,7 @@ def _promotable_steps(
 
 
 def apply_candidate_promotion(
-    candidate: dict[str, Any],
+    candidate: RecipeCandidate,
     review: dict[str, Any],
     db_path=None,
 ) -> dict[str, Any]:
@@ -310,11 +265,11 @@ def apply_candidate_promotion(
     skipped_steps.extend(path_issues)
     recipe_paths = [recipe_path] if recipe_path else []
     saved_count = RecipeStore(db_path).replace_recipe_paths(
-        str(candidate.get("site") or ""),
-        str(candidate.get("goal") or ""),
+        candidate.site,
+        candidate.goal,
         recipe_paths,
         metadata=metadata,
-        candidate_id=str(candidate.get("candidate_id") or ""),
+        candidate_id=candidate.candidate_id,
     )
     return {
         "enabled": True,
@@ -326,8 +281,7 @@ def apply_candidate_promotion(
             for transition in path.get("transitions", []) or []
         ),
         "promoted_transition_count": sum(
-            len(path.get("transitions", []) or [])
-            for path in recipe_paths
+            len(path.get("transitions", []) or []) for path in recipe_paths
         ),
         "promoted_path_count": saved_count,
         "skipped_steps": skipped_steps,
@@ -347,14 +301,11 @@ def reapply_reviewed_candidate_promotion(
             "promoted": False,
             "reason": "candidate_not_found",
         }
-    validation = dict(candidate.get("validation", {}) or {})
+    validation = dict(candidate.validation)
     review = dict(validation.get("review", {}) or {})
-    if (
-        review.get("decision") != "accept"
-        or not any(
-            isinstance(item, dict) and item.get("keep")
-            for item in review.get("step_verdicts") or []
-        )
+    if review.get("decision") != "accept" or not any(
+        isinstance(item, dict) and item.get("keep")
+        for item in review.get("step_verdicts") or []
     ):
         return {
             "candidate_id": candidate_id,

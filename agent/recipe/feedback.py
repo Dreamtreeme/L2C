@@ -15,7 +15,6 @@ from agent.runtime.worker_actions import (
     TERMINAL_ACTIONS,
     UI_ACTIONS,
 )
-from agent.utils.model_conversion import dump_model
 from agent.vision.target_snapshot import build_action_target_snapshot
 from shared.schema.feedback_schema import (
     ActionFeedback,
@@ -23,6 +22,7 @@ from shared.schema.feedback_schema import (
     ActionProposal,
     FeedbackEpisode,
 )
+
 
 def _message_text(content: Any) -> str:
     if isinstance(content, str):
@@ -38,31 +38,59 @@ def _message_text(content: Any) -> str:
     return "" if content is None else str(content).strip()
 
 
-def _feedback_label(action_name: str, result: dict[str, Any], after: dict[str, Any]) -> ActionFeedback:
+def _feedback_label(
+    action_name: str, result: dict[str, Any], after: dict[str, Any]
+) -> ActionFeedback:
     status = result.get("status", "")
     reason = result.get("reason", "") or ""
     if status == "skipped":
         if reason == "same_state_repeat_blocked":
             return ActionFeedback(label="loop_risk", reason=reason, confidence=0.85)
-        return ActionFeedback(label="no_effect", reason=reason or "skipped", confidence=0.7)
+        return ActionFeedback(
+            label="no_effect", reason=reason or "skipped", confidence=0.7
+        )
     if status == "error":
-        return ActionFeedback(label="error", reason=str(result.get("error") or "action_error"), confidence=0.9)
+        return ActionFeedback(
+            label="error",
+            reason=str(result.get("error") or "action_error"),
+            confidence=0.9,
+        )
 
     if action_name == "finish_task":
         return ActionFeedback(label="success", reason="task finished", confidence=0.8)
-    if action_name == "open_browser" and isinstance(result.get("result"), dict) and result["result"].get("opened") is False:
-        return ActionFeedback(label="no_effect", reason=result["result"].get("reason", "browser already at target"), confidence=0.75)
+    if (
+        action_name == "open_browser"
+        and isinstance(result.get("result"), dict)
+        and result["result"].get("opened") is False
+    ):
+        return ActionFeedback(
+            label="no_effect",
+            reason=result["result"].get("reason", "browser already at target"),
+            confidence=0.75,
+        )
     if action_name in UI_ACTIONS:
         if after.get("screen_changed"):
-            return ActionFeedback(label="partial", reason="screen-changing action executed; next perception must validate", confidence=0.45)
-        return ActionFeedback(label="no_effect", reason="no screen change expected or observed in action result", confidence=0.45)
+            return ActionFeedback(
+                label="partial",
+                reason="screen-changing action executed; next perception must validate",
+                confidence=0.45,
+            )
+        return ActionFeedback(
+            label="no_effect",
+            reason="no screen change expected or observed in action result",
+            confidence=0.45,
+        )
     if action_name in STATE_UPDATE_ACTIONS | TERMINAL_ACTIONS:
-        return ActionFeedback(label="success", reason="state action executed", confidence=0.5)
-    return ActionFeedback(label="partial", reason="unclassified successful action", confidence=0.2)
+        return ActionFeedback(
+            label="success", reason="state action executed", confidence=0.5
+        )
+    return ActionFeedback(
+        label="partial", reason="unclassified successful action", confidence=0.2
+    )
 
 
 def record_action_episode(
-    episodes: list[dict[str, Any]],
+    episodes: list[FeedbackEpisode],
     state: dict,
     action_request: ActionRequest,
     action_name: str,
@@ -92,7 +120,7 @@ def record_action_episode(
         expected_after=str(args.get("expected_after") or ""),
     )
     before = {
-        "capture_id": str(before_snapshot.get("capture_id") or ""),
+        "observation_id": str(before_snapshot.get("observation_id") or ""),
         "url": before_snapshot.get("url", ""),
         "screenshot": before_snapshot.get("screenshot", ""),
         "marked_image": before_snapshot.get("marked_image", ""),
@@ -109,7 +137,7 @@ def record_action_episode(
         "current_url_stale": bool(after_context.get("current_url_stale", True)),
         "screen_changed": bool(after_context.get("screen_changed", False)),
         "is_finished": bool(after_context.get("is_finished", False)),
-        "collected_job_count": int(after_context.get("collected_job_count") or 0),
+        "job_capture_count": int(after_context.get("job_capture_count") or 0),
     }
     observation = ActionObservation(
         before=before,
@@ -125,4 +153,4 @@ def record_action_episode(
         observation=observation,
         feedback=feedback,
     )
-    episodes.append(dump_model(episode))
+    episodes.append(episode)

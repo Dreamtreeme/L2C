@@ -37,7 +37,9 @@ def _aggregate_review_metrics(attempts: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     return {
         "attempt_count": len(attempts),
-        "duration_sec": round(sum(float(item.get("duration_sec") or 0.0) for item in metrics), 6),
+        "duration_sec": round(
+            sum(float(item.get("duration_sec") or 0.0) for item in metrics), 6
+        ),
         "input_tokens": sum(int(item.get("input_tokens") or 0) for item in metrics),
         "output_tokens": sum(int(item.get("output_tokens") or 0) for item in metrics),
         "total_tokens": sum(int(item.get("total_tokens") or 0) for item in metrics),
@@ -109,17 +111,17 @@ class RecipePromotionWorker:
         candidate = store.claim_review(candidate_id)
         if candidate is None:
             return None
-        candidate_id = str(candidate.get("candidate_id") or "")
-        attempts = int(candidate.get("review_attempts") or 0)
+        candidate_id = candidate.candidate_id
+        attempts = candidate.review_attempts
         review_context = None
         try:
             from agent.application.recipe_candidate_review_service import (
                 review_and_apply_candidate,
             )
             from agent.observability.run_context import run_context
-            from agent.observability.run_contracts import RunStatus
+            from shared.schema.run_schema import RunStatus
 
-            site = str(candidate.get("site") or "")
+            site = candidate.site
             with run_context(
                 query=f"recipe candidate {candidate_id}",
                 prefix="recipe-promotion",
@@ -149,7 +151,9 @@ class RecipePromotionWorker:
                 candidate_id=candidate_id,
                 decision=result.get("decision", ""),
                 promoted=bool((result.get("promotion") or {}).get("promoted")),
-                saved_count=int((result.get("promotion") or {}).get("saved_count") or 0),
+                saved_count=int(
+                    (result.get("promotion") or {}).get("saved_count") or 0
+                ),
                 duration_sec=review_metrics["duration_sec"],
                 total_tokens=review_metrics["total_tokens"],
                 estimated_cost=review_metrics["estimated_cost"],
@@ -167,7 +171,9 @@ class RecipePromotionWorker:
                 terminal=terminal,
             )
             logger.exception(
-                "Recipe candidate promotion deferred" if not terminal else "Recipe candidate promotion failed",
+                "Recipe candidate promotion deferred"
+                if not terminal
+                else "Recipe candidate promotion failed",
                 candidate_id=candidate_id,
                 attempt=attempts,
                 terminal=terminal,
@@ -205,11 +211,13 @@ class RecipePromotionWorker:
                 "review_metrics": _aggregate_review_metrics([]),
             }
 
-        status = str(candidate.get("status") or "")
+        status = candidate.status
         if status == "pending_replay" and enqueue:
             store.enqueue_review(candidate_id)
-            candidate = store.get_candidate(candidate_id) or candidate
-            status = str(candidate.get("status") or "")
+            refreshed_candidate = store.get_candidate(candidate_id)
+            if refreshed_candidate is not None:
+                candidate = refreshed_candidate
+            status = candidate.status
 
         attempt_results: list[dict[str, Any]] = []
         if status in {"pending_review", "reviewing"}:
@@ -226,18 +234,31 @@ class RecipePromotionWorker:
                         "review_metrics": dict(result.get("review_metrics") or {}),
                     }
                 )
-                candidate = store.get_candidate(candidate_id) or {}
-                status = str(candidate.get("status") or "")
+                refreshed_candidate = store.get_candidate(candidate_id)
+                if refreshed_candidate is None:
+                    break
+                candidate = refreshed_candidate
+                status = candidate.status
                 if status not in {"pending_review", "reviewing"}:
                     break
 
-        candidate = store.get_candidate(candidate_id) or {}
+        candidate = store.get_candidate(candidate_id)
+        if candidate is None:
+            return {
+                "candidate_id": candidate_id,
+                "review_status": "not_found",
+                "review_attempts": 0,
+                "review_error": "",
+                "validation": {},
+                "attempts": attempt_results,
+                "review_metrics": _aggregate_review_metrics(attempt_results),
+            }
         return {
             "candidate_id": candidate_id,
-            "review_status": str(candidate.get("status") or ""),
-            "review_attempts": int(candidate.get("review_attempts") or 0),
-            "review_error": str(candidate.get("review_error") or ""),
-            "validation": dict(candidate.get("validation") or {}),
+            "review_status": candidate.status,
+            "review_attempts": candidate.review_attempts,
+            "review_error": candidate.review_error,
+            "validation": candidate.validation,
             "attempts": attempt_results,
             "review_metrics": _aggregate_review_metrics(attempt_results),
         }

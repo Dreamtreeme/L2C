@@ -3,96 +3,82 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import uuid
+from datetime import datetime
 
 from agent.application.collection_request_builder import (
     build_site_goal,
-)
-from agent.application.worker_submission_builder import (
-    build_worker_submission,
-    new_worker_run_id,
 )
 from agent.application.worker_execution_service import (
     execute_worker_graph,
 )
 from agent.config import get_settings
-from agent.runtime.worker_contracts import create_worker_state
-from agent.recipe.task_category import (
-    DEFAULT_SEARCH_TASK_CATEGORY,
-    normalize_task_category,
+from agent.runtime.worker_contracts import (
+    action_event_feedback,
+    action_event_recipe_steps,
+    action_event_results,
+    action_event_transitions,
+    create_worker_state,
 )
-from agent.runtime.job_field_contract import (
-    build_job_collection_contract,
+from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+from agent.recipe.task_category import (
+    normalize_task_category,
 )
 from agent.runtime.action_permissions import (
     build_public_collection_permission_contract,
 )
 from agent.sites import load_site_profile
-from agent.utils.model_conversion import dump_model
-from shared.schema.collection_intent import (
-    CollectionCountMode,
-    CollectionIntent,
-)
+from agent.utils.job_fields import required_job_fields
+from shared.schema.collection_intent import CollectionIntent
 from shared.schema.collection_run import CollectionBatch
+from shared.schema.feedback_schema import WorkerSubmission
 
 logger = logging.getLogger(__name__)
 
 
 def run_worker_once(
     collection_intent: CollectionIntent,
-    task_category: str | None = None,
     run_id: str | None = None,
-    worker_runtime: Any = None,
+    *,
+    worker_runtime: VisionWorkerRuntime,
 ) -> CollectionBatch:
     """비전 작업자 한 번을 실행하고 검토 전 제출물을 반환한다."""
 
     site_profile = load_site_profile(collection_intent.site)
-    site_slug = site_profile.slug or collection_intent.site or "unknown"
-    site_name = site_profile.display_name or site_slug
-    run_id = run_id or new_worker_run_id()
-    task_category = normalize_task_category(
-        task_category or collection_intent.task_category or DEFAULT_SEARCH_TASK_CATEGORY
+    site_slug = site_profile.slug
+    site_name = site_profile.display_name
+    run_id = (
+        run_id
+        or f"worker-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
     )
     resolved_intent = collection_intent.model_copy(
-        update={"site": site_slug, "task_category": task_category},
+        update={
+            "site": site_slug,
+            "task_category": normalize_task_category(collection_intent.task_category),
+        },
     )
-    intent_payload = dump_model(resolved_intent)
+    resolved_intent = resolved_intent.model_copy(
+        update={
+            "required_fields": required_job_fields(
+                resolved_intent,
+                profile_fields=site_profile.collection_policy.required_fields,
+            )
+        }
+    )
     search_keyword = resolved_intent.search_keyword
-    target_count = resolved_intent.target_count
-    job_collection_contract = build_job_collection_contract(
-        intent_payload,
-        profile_fields=site_profile.collection_policy.required_fields,
-    )
-    intent_payload["required_fields"] = list(job_collection_contract["required_fields"])
-    goal = build_site_goal(
-        resolved_intent,
-        site_profile,
-        job_collection_contract=job_collection_contract,
-    )
+    goal = build_site_goal(resolved_intent, site_profile)
     initial_state = create_worker_state(
         goal,
         request={
             "worker_run_id": run_id,
-            "job_collection_contract": job_collection_contract,
-            "recipe_params": {
-                "query": search_keyword,
-                "keyword": search_keyword,
-                "search_keyword": search_keyword,
-                "target_count": target_count,
-                "site": site_slug,
-                "task_category": task_category,
-                "count_mode": intent_payload.get(
-                    "count_mode",
-                    CollectionCountMode.UNSPECIFIED.value,
-                ),
-                "collection_intent": intent_payload,
-            },
+            "collection_intent": resolved_intent,
+            "recipe_inputs": {"query": search_keyword},
         },
     )
     initial_state["safety"]["action_permission_contract"] = (
         build_public_collection_permission_contract(
             site_profile,
-            initial_state["request"]["recipe_params"],
+            resolved_intent,
         )
     )
 
@@ -107,25 +93,55 @@ def run_worker_once(
         recursion_limit,
         worker_runtime=worker_runtime,
     )
-    collected_jobs = list(final_state["collection"].get("collected_jobs", []))
+    job_captures = list(final_state["collection"].get("job_captures", []))
     is_finished = bool(final_state["lifecycle"].get("is_finished", False))
     run_status = "stopped"
     if is_finished:
         run_status = "finished"
     elif hit_recursion_limit:
         run_status = "recursion_limit"
-    submission = build_worker_submission(
-        final_state,
-        run_status=run_status,
-        hit_recursion_limit=hit_recursion_limit,
-        persisted_count=0,
+    observation = final_state["observation"]
+    transition = final_state["transition"]
+    collection = final_state["collection"]
+    action_events = list(transition.get("action_events", []) or [])
+    observed_job_ids = sorted(
+        {
+            int(item["job_id"])
+            for item in (collection.get("job_card_queue", []) or [])
+            if isinstance(item, dict)
+            and item.get("status") == "skipped"
+            and str(item.get("job_id") or "").isdigit()
+            and int(item["job_id"]) > 0
+        }
+    )
+    submission = WorkerSubmission(
         run_id=run_id,
+        goal=final_state["request"].get("goal", "") or "",
+        run_status=run_status,
+        is_finished=is_finished,
+        hit_recursion_limit=hit_recursion_limit,
+        collected_count=len(job_captures),
+        observed_job_ids=observed_job_ids,
+        persisted_count=0,
+        recorded_steps=action_event_recipe_steps(action_events),
+        feedback_episodes=action_event_feedback(action_events),
+        transition_records=action_event_transitions(action_events),
+        collection_intent=resolved_intent,
+        extracted_summary={
+            "has_data": bool(job_captures),
+            "job_count": len(job_captures),
+            "observed_job_count": len(observed_job_ids),
+            "current_url": observation.get("current_url", "") or "",
+            "action_count": len(action_event_results(action_events)),
+            "job_results_availability": dict(
+                collection.get("job_results_availability", {}) or {}
+            ),
+        },
     )
 
     return CollectionBatch(
         submission=submission,
-        collected_jobs=collected_jobs,
-        site_slug=site_slug,
+        job_captures=job_captures,
         site_name=site_name,
     )
 

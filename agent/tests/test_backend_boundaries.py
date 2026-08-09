@@ -1,9 +1,39 @@
 """FastAPI 전송 경계와 장기 실행 자원의 수명주기를 검증한다."""
 
+import asyncio
 import threading
 from contextlib import contextmanager
 
 import pytest
+
+
+def _execution_result(run_id, *, status="completed", answer=""):
+    from agent.observability.run_contracts import ChatResult
+    from shared.schema.run_schema import RunStatus
+
+    return ChatResult(
+        run_id=run_id,
+        status=RunStatus(status),
+        text=answer,
+    )
+
+
+def test_investigation_outcome_requires_explicit_graph_status():
+    from pydantic import ValidationError
+
+    from shared.schema.investigation_schema import (
+        InvestigationOutcome,
+        InvestigationRequest,
+    )
+
+    with pytest.raises(ValidationError):
+        InvestigationOutcome(
+            investigation=InvestigationRequest(
+                investigation_id="investigation-status-contract",
+                original_query="질문",
+            ),
+            final_answer="상태 없는 답변",
+        )
 
 
 def test_citation_validation_normalizes_grouped_ids_before_validation():
@@ -16,10 +46,19 @@ def test_citation_validation_normalizes_grouped_ids_before_validation():
     )
 
 
-def test_chat_service_returns_run_contract_and_progress_events():
+def test_chat_service_preserves_typed_graph_outcome_and_graph_events():
     from agent.application.chat_service import ChatService
     from agent.observability.run_context import emit_run_event
-    from agent.observability.run_contracts import RunPhase, RunStatus
+    from agent.observability.run_contracts import (
+        ChatRequest,
+        RunPhase,
+    )
+    from agent.observability.run_registry import RunRegistry
+    from shared.schema.investigation_schema import (
+        InvestigationOutcome,
+        InvestigationRequest,
+    )
+    from shared.schema.run_schema import RunStatus
 
     class FakeWorkflow:
         def run(self, query, **kwargs):
@@ -29,26 +68,31 @@ def test_chat_service_returns_run_contract_and_progress_events():
                 "답변을 완료했습니다.",
                 status=RunStatus.COMPLETED,
             )
-            return {
-                "investigation": {"investigation_id": "investigation-contract"},
-                "run_status": "completed",
-                "final_answer": "DB 근거 답변",
-                "valid_ids": [],
-            }
+            return InvestigationOutcome(
+                investigation=InvestigationRequest(
+                    investigation_id="investigation-contract",
+                    original_query=query,
+                ),
+                run_status=RunStatus.COMPLETED,
+                final_answer="DB 근거 답변",
+            )
 
     events = []
-    result = ChatService(investigation_workflow=FakeWorkflow()).run(
-        "질문",
+    result = ChatService(
+        investigation_workflow=FakeWorkflow(),
+        run_registry=RunRegistry(),
+    ).execute(
+        ChatRequest(query="질문"),
         run_id="chat-contract-1",
         event_sink=events.append,
     )
 
-    assert result["run_id"] == "chat-contract-1"
-    assert result["run_status"] == "completed"
-    assert result["last_action_result"] == "DB 근거 답변"
-    assert result["metrics"]["run_id"] == "chat-contract-1"
-    assert result["duration_sec"] >= 0
-    assert events[-1].event == "run_completed"
+    assert result.run_id == "chat-contract-1"
+    assert result.status == RunStatus.COMPLETED
+    assert result.text == "DB 근거 답변"
+    assert result.metrics["run_id"] == "chat-contract-1"
+    assert result.metrics["duration_sec"] >= 0
+    assert [event.event for event in events] == ["run_started", "run_completed"]
 
 
 def test_run_registry_tracks_cancellation_and_conversation_history():
@@ -63,7 +107,10 @@ def test_run_registry_tracks_cancellation_and_conversation_history():
     )
     registry.complete(
         "conversation-run-1",
-        {"run_status": "completed", "last_action_result": "첫 답변"},
+        _execution_result(
+            "conversation-run-1",
+            answer="첫 답변",
+        ),
     )
     registry.start(
         "conversation-run-2", "두 번째 질문", conversation_id="conversation-1"
@@ -79,152 +126,201 @@ def test_run_registry_tracks_cancellation_and_conversation_history():
 
 def test_chat_service_stops_before_llm_when_cancel_is_requested():
     from agent.application.chat_service import ChatService
-    from agent.observability.run_registry import get_run_registry
+    from agent.observability.run_contracts import ChatRequest
+    from agent.observability.run_registry import RunRegistry
+    from shared.schema.run_schema import RunStatus
 
     class FailingWorkflow:
         def run(self, query, **kwargs):
             raise AssertionError("취소된 실행이 조사 그래프를 호출함")
 
-    registry = get_run_registry()
+    registry = RunRegistry()
     registry.start("cancel-before-llm", "취소할 질문")
     registry.request_cancel("cancel-before-llm")
 
-    result = ChatService(investigation_workflow=FailingWorkflow()).run(
-        "취소할 질문",
+    result = ChatService(
+        investigation_workflow=FailingWorkflow(),
+        run_registry=registry,
+    ).execute(
+        ChatRequest(query="취소할 질문"),
         run_id="cancel-before-llm",
     )
 
-    assert result["run_status"] == "cancelled"
-    assert result["is_finished"] is False
-    assert result["last_action_result"] == "실행을 취소했습니다."
+    assert result.status == RunStatus.CANCELLED
+    assert result.text == "실행을 취소했습니다."
 
 
-def test_chat_api_streams_structured_progress_without_character_delay(monkeypatch):
-    from fastapi.testclient import TestClient
-
-    from agent.observability.run_contracts import RunEvent, RunPhase
-    from agent.web_server import app
-
-    class FakeChatService:
-        def run(self, query, *, run_id=None, event_sink=None, **kwargs):
-            assert query == "테스트 질문"
-            assert run_id
-            event_sink(
-                RunEvent(
-                    run_id=run_id,
-                    event="collection_started",
-                    phase=RunPhase.COLLECTION,
-                    message="수집 중",
-                )
-            )
-            return {
-                "run_id": run_id,
-                "run_status": "completed",
-                "last_action_result": "최종 답변",
-                "metrics": {"duration_sec": 0.01},
-            }
-
-    monkeypatch.setattr(
-        "agent.web_server._chat_service_for_app",
-        lambda _application: FakeChatService(),
+def test_chat_service_stream_owns_run_lifecycle_and_request_forwarding():
+    from agent.application.chat_service import ChatService
+    from agent.observability.run_context import emit_run_event
+    from agent.observability.run_contracts import (
+        ChatRequest,
+        RunPhase,
     )
-    response = TestClient(app).post("/api/chat", json={"query": "테스트 질문"})
+    from agent.observability.run_registry import RunRegistry
+    from shared.schema.investigation_schema import (
+        InvestigationOutcome,
+        InvestigationRequest,
+    )
+    from shared.schema.run_schema import RunStatus
 
-    assert response.status_code == 200
-    assert "[PROCESSING]" in response.text
-    assert "[EVENT]" in response.text
-    assert '"text": "최종 답변"' in response.text
-    assert "data: 최" not in response.text
+    calls = []
 
+    class FakeWorkflow:
+        def run(self, query, **kwargs):
+            calls.append((query, kwargs))
+            emit_run_event(
+                "collection_started",
+                RunPhase.COLLECTION,
+                "수집 중",
+            )
+            return InvestigationOutcome(
+                investigation=InvestigationRequest(
+                    investigation_id="investigation-clarification",
+                    original_query=query,
+                ),
+                run_status=RunStatus.COMPLETED,
+                final_answer="개발 공고를 찾았습니다.",
+                resume_mode="checkpoint_resume",
+            )
 
-def test_chat_api_resumes_from_structured_clarification(monkeypatch):
-    from fastapi.testclient import TestClient
-
-    from agent.observability.run_contracts import RunEvent, RunPhase, RunStatus
-    from agent.observability.run_registry import get_run_registry
-    from agent.web_server import app
-
-    registry = get_run_registry()
-    registry.start("previous-clarification", "AI 쪽 채용공고 찾아줘")
-    registry.apply_event(
-        RunEvent(
-            run_id="previous-clarification",
-            event="clarification_required",
-            phase=RunPhase.CLARIFICATION,
-            status=RunStatus.WAITING_INPUT,
-            message="개발과 기획 중 어느 쪽인가요?",
-        )
+    registry = RunRegistry()
+    registry.start(
+        "previous-clarification",
+        "개발 공고에서 어떤 범위를 볼까요?",
+        conversation_id="conversation-context",
     )
     registry.complete(
         "previous-clarification",
-        {
-            "run_status": "waiting_input",
-            "investigation_id": "investigation-clarification",
-            "clarification": {
-                "question_id": "job_scope",
-                "question": "개발과 기획 중 어느 쪽인가요?",
-            },
-        },
-    )
-
-    class FakeChatService:
-        def run(self, query, *, run_id=None, event_sink=None, **kwargs):
-            assert query == "개발"
-            assert kwargs["resume_run_id"] == "previous-clarification"
-            assert kwargs["investigation_id"] == ""
-            assert kwargs["clarification_answer"] is None
-            return {
-                "run_id": run_id,
-                "run_status": "completed",
-                "last_action_result": "개발 공고를 찾았습니다.",
+        _execution_result(
+            "previous-clarification",
+            status="waiting_input",
+            answer="어떤 범위를 볼까요?",
+        ).model_copy(
+            update={
+                "clarification": {"question_id": "occupation-scope"},
                 "investigation_id": "investigation-clarification",
-                "resume_mode": "checkpoint_resume",
-                "metrics": {},
             }
-
-    monkeypatch.setattr(
-        "agent.web_server._chat_service_for_app",
-        lambda _application: FakeChatService(),
+        ),
     )
-    response = TestClient(app).post(
-        "/api/chat",
-        json={"query": "개발", "resume_run_id": "previous-clarification"},
+    service = ChatService(FakeWorkflow(), run_registry=registry)
+    request = ChatRequest(
+        query="개발",
+        resume_run_id="previous-clarification",
+        conversation_id="conversation-context",
     )
 
-    assert response.status_code == 200
-    assert "개발 공고를 찾았습니다." in response.text
-    assert '"resumed_from_run_id": "previous-clarification"' in response.text
-    assert '"resume_mode": "checkpoint_resume"' in response.text
+    async def collect_frames():
+        return [frame async for frame in service.stream(request)]
+
+    frames = asyncio.run(collect_frames())
+    run_id = frames[0].payload.run_id
+    final = next(frame.payload for frame in frames if frame.kind == "final")
+    registered = registry.get(run_id)
+
+    assert frames[0].kind == "processing"
+    assert frames[-1].kind == "done"
+    assert any(frame.kind == "event" for frame in frames)
+    assert calls[0][0] == "개발"
+    assert "resume_run_id" not in calls[0][1]
+    assert calls[0][1]["investigation_id"] == "investigation-clarification"
+    assert calls[0][1]["clarification_answer"].question_id == "occupation-scope"
+    assert calls[0][1]["clarification_answer"].custom_value == "개발"
+    assert calls[0][1]["conversation_id"] == "conversation-context"
+    assert final.text == "개발 공고를 찾았습니다."
+    assert final.resume_mode == "checkpoint_resume"
+    assert registered["status"] == "completed"
+    assert registered["result"]["text"] == "개발 공고를 찾았습니다."
 
 
-def test_chat_api_passes_conversation_id_without_rewriting_query(monkeypatch):
+def test_chat_service_uses_completed_run_as_new_graph_context():
+    from agent.application.chat_service import ChatService
+    from agent.observability.run_contracts import ChatRequest
+    from agent.observability.run_registry import RunRegistry
+    from shared.schema.investigation_schema import (
+        InvestigationOutcome,
+        InvestigationRequest,
+    )
+    from shared.schema.run_schema import RunStatus
+
+    calls = []
+
+    class FakeWorkflow:
+        def run(self, query, **kwargs):
+            calls.append((query, kwargs))
+            return InvestigationOutcome(
+                investigation=InvestigationRequest(
+                    investigation_id="investigation-follow-up",
+                    original_query=query,
+                ),
+                run_status=RunStatus.COMPLETED,
+                final_answer="이전 결과를 기준으로 비교했습니다.",
+                resume_mode="restart_from_request",
+            )
+
+    registry = RunRegistry()
+    registry.start("completed-run", "AI 공고를 찾아줘")
+    registry.complete(
+        "completed-run",
+        _execution_result(
+            "completed-run",
+            answer="AI 공고를 찾았습니다.",
+        ),
+    )
+
+    result = ChatService(FakeWorkflow(), run_registry=registry).execute(
+        ChatRequest(
+            query="그중 경력 조건을 비교해줘",
+            resume_run_id="completed-run",
+        ),
+        run_id="follow-up-run",
+    )
+
+    assert calls[0][1]["context_run_id"] == "completed-run"
+    assert calls[0][1]["investigation_id"] == ""
+    assert result.resume_mode == "restart_from_request"
+
+
+def test_chat_api_only_serializes_service_stream(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from agent.observability.run_registry import get_run_registry
+    from agent.observability.run_contracts import (
+        ChatResult,
+        ChatStartedPayload,
+        ChatStreamFrame,
+        RunEvent,
+        RunPhase,
+    )
     from agent.web_server import app
 
-    registry = get_run_registry()
-    registry.start(
-        "conversation-context-1",
-        "iOS 공고 두 개 찾아줘",
-        conversation_id="conversation-context",
-        user_query="iOS 공고 두 개 찾아줘",
-    )
-    registry.complete(
-        "conversation-context-1",
-        {"run_status": "completed", "last_action_result": "두 건을 찾았습니다."},
-    )
+    requests = []
 
     class FakeChatService:
-        def run(self, query, *, run_id=None, event_sink=None, **kwargs):
-            assert query == "그중 경력 조건만 비교해줘"
-            assert kwargs["conversation_id"] == "conversation-context"
-            return {
-                "run_id": run_id,
-                "run_status": "completed",
-                "last_action_result": "비교했습니다.",
-                "metrics": {},
-            }
+        async def stream(self, request):
+            requests.append(request)
+            yield ChatStreamFrame(
+                "processing",
+                ChatStartedPayload(run_id="chat-transport"),
+            )
+            yield ChatStreamFrame(
+                "event",
+                RunEvent(
+                    run_id="chat-transport",
+                    event="collection_started",
+                    phase=RunPhase.COLLECTION,
+                    message="수집 중",
+                ),
+            )
+            yield ChatStreamFrame(
+                "final",
+                ChatResult(
+                    run_id="chat-transport",
+                    status="completed",
+                    text="최종 답변",
+                    conversation_id=request.conversation_id,
+                ),
+            )
+            yield ChatStreamFrame("done")
 
     monkeypatch.setattr(
         "agent.web_server._chat_service_for_app",
@@ -233,29 +329,45 @@ def test_chat_api_passes_conversation_id_without_rewriting_query(monkeypatch):
     response = TestClient(app).post(
         "/api/chat",
         json={
-            "query": "그중 경력 조건만 비교해줘",
-            "conversation_id": "conversation-context",
+            "query": "테스트 질문",
+            "conversation_id": "conversation-transport",
         },
     )
 
     assert response.status_code == 200
-    assert "비교했습니다." in response.text
+    assert requests[0].query == "테스트 질문"
+    assert requests[0].conversation_id == "conversation-transport"
+    assert "[PROCESSING]" in response.text
+    assert "[EVENT]" in response.text
+    assert '"text": "최종 답변"' in response.text
+    assert response.text.rstrip().endswith("data: [DONE]")
 
 
-def test_cancel_run_api_marks_active_run():
+def test_cancel_run_api_marks_active_run(monkeypatch):
     from fastapi.testclient import TestClient
 
-    from agent.observability.run_registry import get_run_registry
     from agent.web_server import app
 
-    registry = get_run_registry()
-    registry.start("cancel-api-run", "중단할 요청")
+    calls = []
 
+    class FakeChatService:
+        def cancel_run(self, run_id):
+            calls.append(run_id)
+            return {
+                "run_id": run_id,
+                "cancel_requested": True,
+                "status": "running",
+            }
+
+    monkeypatch.setattr(
+        "agent.web_server._chat_service_for_app",
+        lambda _application: FakeChatService(),
+    )
     response = TestClient(app).post("/api/runs/cancel-api-run/cancel")
 
     assert response.status_code == 200
     assert response.json()["cancel_requested"] is True
-    assert registry.is_cancel_requested("cancel-api-run") is True
+    assert calls == ["cancel-api-run"]
 
 
 def test_cancelled_run_is_loaded_as_structured_graph_context():
@@ -272,7 +384,11 @@ def test_cancelled_run_is_loaded_as_structured_graph_context():
     )
     registry.complete(
         "cancelled-resume-run",
-        {"run_status": "cancelled", "last_action_result": "실행을 취소했습니다."},
+        _execution_result(
+            "cancelled-resume-run",
+            status="cancelled",
+            answer="실행을 취소했습니다.",
+        ),
     )
 
     context = load_conversation_context(
@@ -383,6 +499,7 @@ def test_browser_closes_by_default(monkeypatch):
         WorkerExecutionService,
     )
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+    from shared.schema.collection_intent import CollectionIntent
 
     closed = []
 
@@ -402,9 +519,9 @@ def test_browser_closes_by_default(monkeypatch):
 
     service = WorkerExecutionService(
         runtime,
-        lambda *, worker_runtime: {"runtime": worker_runtime},
+        lambda _intent, *, worker_runtime: {"runtime": worker_runtime},
     )
-    result = service.run()
+    result = service.run(CollectionIntent())
 
     assert closed == [True]
     assert result["runtime"] is runtime
@@ -439,6 +556,7 @@ def test_worker_execution_service_closes_browser_after_worker_failure():
     from agent.application.worker_execution_service import (
         WorkerExecutionService,
     )
+    from shared.schema.collection_intent import CollectionIntent
 
     events = []
 
@@ -461,7 +579,7 @@ def test_worker_execution_service_closes_browser_after_worker_failure():
     service = WorkerExecutionService(FakeRuntime(), fail_worker)
 
     with pytest.raises(RuntimeError, match="worker failed"):
-        service.run()
+        service.run(CollectionIntent())
 
     assert events == [
         "lock_entered",
@@ -535,5 +653,29 @@ def test_application_runtime_keeps_vision_lazy_until_collection(monkeypatch, tmp
     runtime.start()
 
     assert runtime.vision_runtime.is_initialized is False
+
+    runtime.close()
+
+
+def test_application_runtime_wires_collection_stages_once(monkeypatch, tmp_path):
+    from functools import partial
+
+    from agent.application.collection_experience import record_collection_experience
+    from agent.application.collection_postprocessing import (
+        postprocess_collection_batch,
+    )
+    from agent.application.collection_storage import store_postprocessed_collection
+    from agent.bootstrap import ApplicationRuntime
+
+    monkeypatch.setenv("VISION_RECIPE_AUTO_PROMOTE", "0")
+    runtime = ApplicationRuntime(tmp_path / "runtime.db")
+    nodes = runtime.investigation_workflow.collection_nodes
+
+    assert nodes.run_collection == runtime.worker_execution_service.run
+    assert nodes.postprocess_collection is postprocess_collection_batch
+    assert isinstance(nodes.store_collection, partial)
+    assert nodes.store_collection.func is store_postprocessed_collection
+    assert nodes.store_collection.keywords == {"db_path": runtime.db_path}
+    assert nodes.record_experience is record_collection_experience
 
     runtime.close()

@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from agent.runtime.job_field_contract import (
-    build_job_collection_contract,
     field_contract_items,
 )
 from agent.sites.profile import SiteProfile
-from agent.utils.model_conversion import dump_model
 from shared.schema.collection_intent import (
     CollectionCountMode,
     CollectionIntent,
@@ -20,31 +17,18 @@ from shared.schema.collection_intent import (
 def build_site_goal(
     intent: CollectionIntent,
     profile: SiteProfile,
-    *,
-    job_collection_contract: dict[str, Any] | None = None,
 ) -> str:
     """확정된 요청과 사이트 프로필로 작업자 목표문을 만든다."""
 
-    site_name = profile.display_name or profile.slug
-    start_url = profile.base_url.strip()
-    if start_url:
-        navigation_section = (
-            "[Navigation start]\n"
-            f"Open only the site home page with open_browser: {start_url}\n"
-            "Do not construct or open a search/query URL yourself. "
-            "Find the visible search input, type the user query, and submit from the page.\n\n"
-        )
-    else:
-        navigation_section = ""
-    resolved_contract = (
-        job_collection_contract
-        or build_job_collection_contract(
-            dump_model(intent),
-            profile_fields=profile.collection_policy.required_fields,
-        )
+    site_name = profile.display_name
+    navigation_section = (
+        "[Navigation start]\n"
+        f"Open only the site home page with open_browser: {profile.base_url}\n"
+        "Do not construct or open a search/query URL yourself. "
+        "Find the visible search input, type the user query, and submit from the page.\n\n"
     )
     required_field_items = field_contract_items(
-        resolved_contract["required_fields"]
+        [field.value for field in intent.required_fields]
     )
     list_fields = {
         "tech_stack",
@@ -54,11 +38,7 @@ def build_site_goal(
         "benefits",
     }
     required_record_shape = {
-        item["field"]: (
-            []
-            if item["field"] in list_fields
-            else ""
-        )
+        item["field"]: ([] if item["field"] in list_fields else "")
         for item in required_field_items
     }
     if intent.target_count > 0:
@@ -77,7 +57,7 @@ def build_site_goal(
         )
     else:
         target_section = ""
-    confirmed_request = dump_model(intent)
+    confirmed_request = intent.model_dump(mode="json")
     confirmed_request["filters"] = {
         key: value
         for key, value in confirmed_request["filters"].items()

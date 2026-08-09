@@ -5,13 +5,10 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable
 
 from langgraph.errors import GraphRecursionError
 
-from agent.application.detail_extraction_service import (
-    extract_job_from_job_detail_buffer,
-)
 from agent.application.duplicate_job_service import (
     existing_job_url_trace,
     mark_existing_job_cards,
@@ -34,6 +31,8 @@ from agent.recipe.store import RecipeStore
 from agent.sites import get_official_site_url
 from agent.sites.profile import SiteProfile
 from agent.utils.logger import logger
+from shared.schema.collection_intent import CollectionIntent
+from shared.schema.collection_run import CollectionBatch
 
 
 class OcrWorkerReadinessError(RuntimeError):
@@ -44,15 +43,11 @@ class WorkerStartScreenError(RuntimeError):
     """브라우저 첫 화면을 유효한 작업자 상태로 준비하지 못한 경우."""
 
 
-WorkerResult = TypeVar("WorkerResult")
-
-
 def _worker_data_services() -> WorkerDataServices:
     """작업자 그래프의 데이터 포트를 애플리케이션 구현에 연결한다."""
 
     recipe_store = RecipeStore()
     return WorkerDataServices(
-        extract_job_detail=extract_job_from_job_detail_buffer,
         mark_existing_job_cards=mark_existing_job_cards,
         find_existing_job_url=existing_job_url_trace,
         load_site_recipes=recipe_store.get_site_recipes,
@@ -65,19 +60,18 @@ class WorkerExecutionService:
     def __init__(
         self,
         worker_runtime: VisionWorkerRuntime,
-        worker_runner: Callable[..., WorkerResult],
+        worker_runner: Callable[..., CollectionBatch],
     ) -> None:
         self.worker_runtime = worker_runtime
         self.worker_runner = worker_runner
 
-    def run(self, *args: Any, **kwargs: Any) -> WorkerResult:
+    def run(self, collection_intent: CollectionIntent) -> CollectionBatch:
         """로컬 화면을 잠근 동안 작업자를 실행하고 브라우저를 정리한다."""
 
         with self.worker_runtime.execution_session():
             try:
                 return self.worker_runner(
-                    *args,
-                    **kwargs,
+                    collection_intent,
                     worker_runtime=self.worker_runtime,
                 )
             finally:

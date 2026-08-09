@@ -12,6 +12,7 @@ from shared.db.reflex_schema import (
     RECIPE_CANDIDATES_QUEUE_INDEX_SQL,
     RECIPE_CANDIDATES_TABLE_SQL,
 )
+from shared.schema.feedback_schema import RecipeCandidate, WorkerSubmission
 
 
 _CANDIDATE_SELECT = """
@@ -25,17 +26,20 @@ class RecipeCandidateStore(SQLiteStore):
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
             conn.execute(RECIPE_CANDIDATES_TABLE_SQL)
-            for sql in (*RECIPE_CANDIDATES_INDEX_SQL, *RECIPE_CANDIDATES_QUEUE_INDEX_SQL):
+            for sql in (
+                *RECIPE_CANDIDATES_INDEX_SQL,
+                *RECIPE_CANDIDATES_QUEUE_INDEX_SQL,
+            ):
                 conn.execute(sql)
 
     def commit_candidate(
         self,
-        submission: dict[str, Any],
+        submission: WorkerSubmission,
         *,
         submission_id: str,
         status: str = "pending_replay",
     ) -> str:
-        if not submission_id or not submission.get("recorded_steps"):
+        if not submission_id or not submission.recorded_steps:
             return ""
         candidate_id = submission_id
         now = datetime.now().isoformat(timespec="seconds")
@@ -62,7 +66,7 @@ class RecipeCandidateStore(SQLiteStore):
             (candidate_id,),
         ).fetchone()
 
-    def get_candidate(self, candidate_id: str) -> dict[str, Any] | None:
+    def get_candidate(self, candidate_id: str) -> RecipeCandidate | None:
         with self._conn() as conn:
             row = self._load(conn, candidate_id)
         return self._row_to_item(row) if row else None
@@ -115,7 +119,7 @@ class RecipeCandidateStore(SQLiteStore):
             )
             return result.rowcount
 
-    def claim_review(self, candidate_id: str | None = None) -> dict[str, Any] | None:
+    def claim_review(self, candidate_id: str | None = None) -> RecipeCandidate | None:
         now = datetime.now().isoformat(timespec="seconds")
         candidate_filter = "AND candidate_id=?" if candidate_id else ""
         params: tuple[Any, ...] = (now, candidate_id) if candidate_id else (now,)
@@ -144,7 +148,9 @@ class RecipeCandidateStore(SQLiteStore):
                 """,
                 (now, now, resolved_id),
             )
-            claimed_row = self._load(conn, resolved_id) if claimed.rowcount == 1 else None
+            claimed_row = (
+                self._load(conn, resolved_id) if claimed.rowcount == 1 else None
+            )
         return self._row_to_item(claimed_row) if claimed_row else None
 
     def defer_review(
@@ -186,7 +192,7 @@ class RecipeCandidateStore(SQLiteStore):
         self,
         limit: int = 20,
         status: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[RecipeCandidate]:
         where = " WHERE c.status=?" if status else ""
         params: tuple[Any, ...] = (status, limit) if status else (limit,)
         with self._conn() as conn:
@@ -198,16 +204,14 @@ class RecipeCandidateStore(SQLiteStore):
             ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
-    def _row_to_item(self, row) -> dict[str, Any]:
+    def _row_to_item(self, row) -> RecipeCandidate:
         item = dict(row)
-        payload = strip_full_screen_signatures(
-            self.load_json(item.pop("payload_json", ""), {})
+        submission = WorkerSubmission.model_validate(
+            strip_full_screen_signatures(
+                self.load_json(item.pop("payload_json", ""), {})
+            )
         )
-        intent = dict(payload.get("collection_intent") or {})
-        item["site"] = str(intent.get("site") or "")
-        item["goal"] = str(payload.get("goal") or "")
-        item["keyword"] = str(intent.get("search_keyword") or "")
-        item["payload"] = payload
-        item["steps"] = list(payload.get("recorded_steps") or [])
         item["validation"] = self.load_json(item.pop("validation_json", ""), {})
-        return item
+        item["review_error"] = str(item.get("review_error") or "")
+        item["submission"] = submission
+        return RecipeCandidate.model_validate(item)

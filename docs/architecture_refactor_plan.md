@@ -280,10 +280,11 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 ### 수집 실행과 애플리케이션 책임 분리
 
 - `InvestigationCollectionNodes.collect`가 작업자를 실행해 `CollectionBatch`를 조사 상태에 기록한다.
-- `InvestigationCollectionNodes.persist`가 그 배치를 저장하고 `CollectionResult`를 만든 뒤 DB 근거 재검사로 넘긴다.
+- `InvestigationCollectionNodes.postprocess`가 OCR 원문을 `CollectedJob`으로 구조화하고 요청 조건을 판정한다.
+- `InvestigationCollectionNodes.persist`가 후처리 결과를 저장하고 `CollectionResult`를 만든 뒤 DB 근거 재검사로 넘긴다.
 - 검색 의도·사이트 프로필·작업자 목표 생성은 `collection_request_builder.py`가 담당한다.
 - 화면 준비부터 단일 Worker 실행, 제출물 생성과 재귀 한도 보고는 `collection_worker_runner.py`가 담당한다.
-- Critic 검토, 승인 데이터 저장, 완결된 실행의 레시피 후보 등록은 `collection_persistence.py`가 담당한다.
+- 작업자 제출물과 완결된 실행의 레시피 후보 등록은 `collection_experience.py`가 담당한다. Critic 검토와 승격은 비동기 승격 작업자가 담당한다.
 - 구조화 인자를 다시 조립하던 미사용 LangChain 도구 래퍼는 삭제했다.
 
 ### 레시피 검토와 승격 책임 분리

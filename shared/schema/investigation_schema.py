@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from shared.schema.jd_schema import JobField
 from shared.schema.collection_intent import CollectionIntent
+from shared.schema.run_schema import RunStatus
 
 
 class InvestigationPurpose(str, Enum):
@@ -27,21 +28,6 @@ class EvidencePolicy(str, Enum):
     DATABASE_FIRST = "database_first"
     WEB_REQUIRED = "web_required"
     DATABASE_ONLY = "database_only"
-
-
-class InvestigationStatus(str, Enum):
-    """조사 진행 상태."""
-
-    UNDERSTANDING = "understanding"
-    AWAITING_CLARIFICATION = "awaiting_clarification"
-    CHECKING_EVIDENCE = "checking_evidence"
-    PLANNING = "planning"
-    COLLECTING = "collecting"
-    PERSISTING = "persisting"
-    VALIDATING = "validating"
-    ANSWERING = "answering"
-    COMPLETED = "completed"
-    FAILED = "failed"
 
 
 class ConversationTurn(BaseModel):
@@ -306,7 +292,9 @@ class InvestigationPlanStep(BaseModel):
 
 
 class InvestigationRequest(BaseModel):
-    """지휘자가 유지하는 사용자 요청의 전체 조사 상태."""
+    """사용자와의 대화를 거쳐 확정한 조사 요청."""
+
+    model_config = ConfigDict(extra="forbid")
 
     investigation_id: str = Field(min_length=1)
     conversation_id: str = ""
@@ -315,21 +303,31 @@ class InvestigationRequest(BaseModel):
     deliverable: str = ""
     purpose: InvestigationPurpose = InvestigationPurpose.LOOKUP
     evidence_policy: EvidencePolicy = EvidencePolicy.DATABASE_FIRST
-    status: InvestigationStatus = InvestigationStatus.UNDERSTANDING
     constraints: InvestigationConstraints = Field(
         default_factory=InvestigationConstraints
     )
     assumptions: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
     clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
-    evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
-    evidence_snapshot: dict[str, Any] = Field(default_factory=dict)
-    missing_evidence: list[str] = Field(default_factory=list)
-    plan: list[InvestigationPlanStep] = Field(default_factory=list)
-    executed_step_ids: list[str] = Field(default_factory=list)
-    evidence_document_ids: list[int] = Field(default_factory=list)
-    collection_document_ids: list[int] = Field(default_factory=list)
+
+
+InvestigationResumeMode = Literal[
+    "",
+    "checkpoint_resume",
+    "restart_from_request",
+]
+
+
+class InvestigationOutcome(BaseModel):
+    """조사 그래프가 실행 계층에 반환하는 최종 계약."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    investigation: InvestigationRequest
+    run_status: RunStatus
     final_answer: str = ""
+    clarification: dict[str, Any] | None = None
+    resume_mode: InvestigationResumeMode = ""
 
 
 class RequestAnalysis(BaseModel):
@@ -398,7 +396,8 @@ __all__ = [
     "InvestigationPlanStep",
     "InvestigationPurpose",
     "InvestigationRequest",
-    "InvestigationStatus",
+    "InvestigationOutcome",
+    "InvestigationResumeMode",
     "InvestigationActionPlan",
     "EvidencePlan",
     "RequestAnalysis",

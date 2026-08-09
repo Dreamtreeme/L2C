@@ -7,11 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
-from agent.application.job_taxonomy_linker import JobTaxonomyLinker
 from agent.application.search_taxonomy_import_service import normalize_term
-from agent.application.search_taxonomy_question_builder import (
-    TaxonomyQuestionBuilder,
-)
 from agent.application.search_taxonomy_utils import (
     CORE_SOURCE_KEY,
     CURATED_SOURCE_KEY,
@@ -19,13 +15,10 @@ from agent.application.search_taxonomy_utils import (
     taxonomy_timestamp,
 )
 from shared.schema.investigation_schema import (
-    ClarificationQuestion,
     EvidenceRequirement,
     InvestigationConstraints,
 )
 
-
-LOCAL_SOURCE_KEY = CORE_SOURCE_KEY
 DEFAULT_LOCAL_SEED = (
     Path(__file__).resolve().parents[2] / "data" / "samples" / "search_taxonomy_ko.json"
 )
@@ -36,8 +29,6 @@ class SearchTaxonomyService:
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
-        self._question_builder = TaxonomyQuestionBuilder(self)
-        self._job_linker = JobTaxonomyLinker(self.db_path)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
@@ -47,7 +38,9 @@ class SearchTaxonomyService:
 
     @staticmethod
     def _concept_label(row: sqlite3.Row) -> str:
-        return str(row["preferred_label_ko"] or row["preferred_label_en"] or row["concept_key"])
+        return str(
+            row["preferred_label_ko"] or row["preferred_label_en"] or row["concept_key"]
+        )
 
     def resolve_occupation_concepts(self, occupation_query: str) -> list[str]:
         """사용자 직무 표현과 가장 구체적으로 일치하는 검토된 직무를 찾는다."""
@@ -120,11 +113,7 @@ class SearchTaxonomyService:
     def resolve_skill_concepts(self, skill_queries: Iterable[str]) -> list[str]:
         """명시된 기술 표현을 정확한 활성 별칭으로 해석한다."""
 
-        terms = {
-            normalize_term(item)
-            for item in skill_queries
-            if normalize_term(item)
-        }
+        terms = {normalize_term(item) for item in skill_queries if normalize_term(item)}
         if not terms:
             return []
         placeholders = ",".join("?" for _ in terms)
@@ -159,7 +148,9 @@ class SearchTaxonomyService:
             resolved.extend(str(row["concept_key"]) for row in selected)
         return list(dict.fromkeys(resolved))
 
-    def _concept_ids(self, connection: sqlite3.Connection, concept_keys: Iterable[str]) -> list[int]:
+    def _concept_ids(
+        self, connection: sqlite3.Connection, concept_keys: Iterable[str]
+    ) -> list[int]:
         keys = list(dict.fromkeys(str(key) for key in concept_keys if str(key)))
         if not keys:
             return []
@@ -180,7 +171,9 @@ class SearchTaxonomyService:
         params: list[Any] = []
         if constraints.sites:
             placeholders = ",".join("?" for _ in constraints.sites)
-            where.append(f"LOWER(COALESCE(jobs.source_platform, '')) IN ({placeholders})")
+            where.append(
+                f"LOWER(COALESCE(jobs.source_platform, '')) IN ({placeholders})"
+            )
             params.extend(str(site).casefold() for site in constraints.sites)
         if constraints.posted_from:
             where.append("date(jobs.posted_at) >= date(?)")
@@ -228,7 +221,7 @@ class SearchTaxonomyService:
                 FROM jobs
                 JOIN job_concept_links AS links ON links.job_id = jobs.id
                 JOIN selected_concepts ON selected_concepts.id = links.concept_id
-                WHERE {' AND '.join(where)}
+                WHERE {" AND ".join(where)}
                 """,
                 params,
             ).fetchall()
@@ -273,7 +266,7 @@ class SearchTaxonomyService:
                 SELECT jobs.id
                 FROM jobs
                 JOIN job_concept_links AS links ON links.job_id = jobs.id
-                WHERE {' AND '.join(where)}
+                WHERE {" AND ".join(where)}
                 GROUP BY jobs.id
                 {having}
                 """,
@@ -460,7 +453,9 @@ class SearchTaxonomyService:
         finally:
             connection.close()
 
-    def enrich_constraints(self, constraints: InvestigationConstraints) -> InvestigationConstraints:
+    def enrich_constraints(
+        self, constraints: InvestigationConstraints
+    ) -> InvestigationConstraints:
         """사용자 표현을 직무·기술 개념으로 해석하고 수집 검색어를 확정한다."""
 
         updates: dict[str, Any] = {}
@@ -500,8 +495,7 @@ class SearchTaxonomyService:
         """근거 집단을 확정된 조사 조건과 같은 사전 기준으로 정규화한다."""
 
         domain_query = (
-            requirement.occupation_domain_query
-            or constraints.occupation_domain_query
+            requirement.occupation_domain_query or constraints.occupation_domain_query
         )
         domain_keys = list(requirement.occupation_domain_concept_keys)
         if not domain_keys:
@@ -547,72 +541,8 @@ class SearchTaxonomyService:
             }
         )
 
-    def build_domain_question(
-        self,
-        constraints: InvestigationConstraints,
-        *,
-        answered_question_ids: Iterable[str] = (),
-    ) -> ClarificationQuestion | None:
-        return self._question_builder.build_domain_question(
-            constraints,
-            answered_question_ids=answered_question_ids,
-        )
-
-    def build_family_question(
-        self,
-        constraints: InvestigationConstraints,
-        *,
-        answered_question_ids: Iterable[str] = (),
-    ) -> ClarificationQuestion | None:
-        return self._question_builder.build_family_question(
-            constraints,
-            answered_question_ids=answered_question_ids,
-        )
-
-    def build_next_scope_question(
-        self,
-        constraints: InvestigationConstraints,
-        *,
-        answered_question_ids: Iterable[str] = (),
-    ) -> ClarificationQuestion | None:
-        return self._question_builder.build_next_scope_question(
-            constraints,
-            answered_question_ids=answered_question_ids,
-        )
-
-    def build_scope_question(
-        self,
-        constraints: InvestigationConstraints,
-        *,
-        answered_question_ids: Iterable[str] = (),
-    ) -> ClarificationQuestion | None:
-        return self._question_builder.build_scope_question(
-            constraints,
-            answered_question_ids=answered_question_ids,
-        )
-
-    def link_job(self, job_id: int) -> dict[str, int]:
-        return self._job_linker.link_job(job_id)
-
-    def relink_all_jobs(self) -> dict[str, int]:
-        return self._job_linker.relink_all_jobs()
-
-    def relink_pending_jobs(
-        self,
-        *,
-        limit: int = 100,
-        max_attempts: int = 2,
-    ) -> dict[str, int]:
-        return self._job_linker.relink_pending_jobs(
-            limit=limit,
-            max_attempts=max_attempts,
-        )
-
-    def reconcile_candidates(self) -> int:
-        return self._job_linker.reconcile_candidates()
 
 __all__ = [
     "DEFAULT_LOCAL_SEED",
-    "LOCAL_SOURCE_KEY",
     "SearchTaxonomyService",
 ]

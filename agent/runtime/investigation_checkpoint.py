@@ -13,7 +13,6 @@ CHECKPOINT_MODEL_ALLOWLIST = [
     ("shared.schema.investigation_schema", "InvestigationRequest"),
     ("shared.schema.investigation_schema", "InvestigationPurpose"),
     ("shared.schema.investigation_schema", "EvidencePolicy"),
-    ("shared.schema.investigation_schema", "InvestigationStatus"),
     ("shared.schema.collection_intent", "CollectionCountMode"),
     ("shared.schema.collection_intent", "CollectionPurpose"),
     ("shared.schema.jd_schema", "JobField"),

@@ -161,11 +161,11 @@ def _reused_observation(
     """변화가 없을 때 직전 캡처의 OCR만 동일 화면에 다시 연결한다."""
 
     observation = state["observation"]
-    previous = dict(observation.get("previous_screen_observation") or {})
+    previous = dict(observation.get("previous_observation") or {})
     if not previous:
         return {}
-    if str(request.get("from_capture_id") or "") != str(
-        previous.get("capture_id") or ""
+    if str(request.get("before_observation_id") or "") != str(
+        previous.get("observation_id") or ""
     ):
         return {}
     if str(request.get("before_screenshot") or "") != str(
@@ -191,7 +191,7 @@ def _reused_observation(
             signature[key] = raw_signature[key]
     current_observation = {
         **previous,
-        "capture_id": str(observation.get("current_capture_id") or ""),
+        "observation_id": str(observation.get("observation_id") or ""),
         "screenshot": str(observation.get("current_screenshot") or ""),
         "current_url": str(observation.get("current_url") or previous_url),
         "markers": markers,
@@ -205,8 +205,7 @@ def _reused_observation(
         "current_page_role": str(previous.get("page_role") or ""),
         "analysis_mode": str(previous.get("analysis_mode") or "full"),
         "ocr_complete": True,
-        "ocr_capture_id": str(observation.get("current_capture_id") or ""),
-        "previous_screen_observation": current_observation,
+        "previous_observation": current_observation,
     }
 
 
@@ -234,7 +233,7 @@ def _transition_record(
         markers=list(observation.get("current_markers", []) or []),
         screenshot=str(observation.get("current_screenshot") or ""),
         marked_image=str(observation.get("marked_image") or ""),
-        to_capture_id=str(observation.get("current_capture_id") or ""),
+        after_observation_id=str(observation.get("observation_id") or ""),
         current_url=str(observation.get("current_url") or ""),
         page_role=str(observation.get("current_page_role") or ""),
         screen_signature=dict(observation.get("screen_signature") or {}),

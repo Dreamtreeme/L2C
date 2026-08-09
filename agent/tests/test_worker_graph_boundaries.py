@@ -16,7 +16,7 @@ from agent.graph.workflow import (
     route_after_reflex,
     route_after_selection,
 )
-from agent.runtime.worker_state import current_observation_matches_capture
+from agent.runtime.worker_state import current_observation_ready
 from agent.graph.worker_execution_dispatch import (
     StateActionOutcome,
     StateActionUpdate,
@@ -26,7 +26,8 @@ from agent.tests.worker_test_support import (
     node_runtime,
     worker_state,
 )
-from shared.schema.jd_schema import CollectedJob, JobPosting
+from shared.schema.collection_intent import CollectionIntent
+from shared.schema.jd_schema import JobCapture
 
 
 def _request(source: str, tool_calls: list[dict]):
@@ -59,17 +60,17 @@ def _execution_state(
     current_url="https://example.com/jobs",
     reflex_trace=None,
     return_to_job_results=None,
-    collected_jobs=None,
-    recipe_params=None,
+    job_captures=None,
+    collection_intent: CollectionIntent | None = None,
 ):
     return worker_state(
         goal="테스트",
-        request={"recipe_params": dict(recipe_params or {})},
+        request={"collection_intent": collection_intent or CollectionIntent()},
         observation={
             "current_markers": list(current_markers or []),
             "current_url": current_url,
             "current_url_stale": False,
-            "current_capture_id": "worker-test:capture:0003",
+            "observation_id": "worker-test:observation:0003",
             "screen_signature": {},
             "current_screenshot": "",
         },
@@ -77,7 +78,7 @@ def _execution_state(
         replay={"reflex_trace": dict(reflex_trace or {})},
         collection={
             "return_to_job_results": dict(return_to_job_results or {}),
-            "collected_jobs": list(collected_jobs or []),
+            "job_captures": list(job_captures or []),
         },
     )
 
@@ -93,8 +94,7 @@ def _run_execution(state):
 def _observed_state(**observation):
     return worker_state(
         observation={
-            "current_capture_id": "capture:0001",
-            "ocr_capture_id": "capture:0001",
+            "observation_id": "observation:0001",
             "current_screenshot": "screen.png",
             "ocr_complete": True,
             **observation,
@@ -263,8 +263,7 @@ def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
 
     state = worker_state(
         observation={
-            "current_capture_id": "capture:0001",
-            "ocr_capture_id": "capture:0001",
+            "observation_id": "observation:0001",
             "current_screenshot": "screen.png",
             "ocr_complete": True,
         },
@@ -290,33 +289,26 @@ def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
     assert route_after_selection(result) == "reflex"
 
 
-def test_worker_observation_contract_rejects_mixed_capture_state():
-    valid = {
+def test_worker_observation_is_ready_only_after_ocr():
+    ready = {
         "ocr_complete": True,
-        "current_capture_id": "capture:2",
-        "ocr_capture_id": "capture:2",
+        "observation_id": "observation:2",
         "current_screenshot": "screen.png",
     }
-    mixed = {
-        **valid,
-        "ocr_capture_id": "capture:1",
-    }
-
-    assert current_observation_matches_capture(worker_state(observation=valid)) is True
-    assert current_observation_matches_capture(worker_state(observation=mixed)) is False
+    assert current_observation_ready(worker_state(observation=ready)) is True
     assert (
-        current_observation_matches_capture(
-            worker_state(observation={"ocr_complete": True})
+        current_observation_ready(
+            worker_state(observation={**ready, "ocr_complete": False})
         )
         is False
     )
+    assert current_observation_ready(worker_state(observation={})) is False
 
 
-def test_worker_start_does_not_reuse_ocr_from_another_capture():
-    stale_observation = {
-        "ocr_complete": True,
-        "current_capture_id": "capture:2",
-        "ocr_capture_id": "capture:1",
+def test_worker_start_reuses_only_completed_observation():
+    observation = {
+        "ocr_complete": False,
+        "observation_id": "observation:2",
         "current_markers": [
             {"id": 1, "bbox": [0, 0, 10, 10], "text": "검색"},
         ],
@@ -324,13 +316,13 @@ def test_worker_start_does_not_reuse_ocr_from_another_capture():
         "current_screenshot": "screen.png",
     }
 
-    assert route_after_start(worker_state(observation=stale_observation)) == "capture"
+    assert route_after_start(worker_state(observation=observation)) == "capture"
     assert (
         route_after_start(
             worker_state(
                 observation={
-                    **stale_observation,
-                    "ocr_capture_id": "capture:2",
+                    **observation,
+                    "ocr_complete": True,
                 }
             )
         )
@@ -369,8 +361,7 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
 
     state = worker_state(
         observation={
-            "current_capture_id": "capture:0001",
-            "ocr_capture_id": "capture:0001",
+            "observation_id": "observation:0001",
             "ocr_complete": True,
         },
         transition={
@@ -395,7 +386,6 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
     ]
     assert result["observation"]["current_screenshot"] == str(after)
     assert result["observation"]["ocr_complete"] is False
-    assert result["observation"]["ocr_capture_id"] == ""
 
 
 def test_screen_changing_action_always_routes_to_capture():
@@ -423,7 +413,7 @@ def test_loading_card_screen_routes_from_reasoning_to_recapture():
     )
 
 
-def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
+def test_capture_screen_assigns_run_scoped_incrementing_observation_id(monkeypatch):
     captures = iter(["screen-1.png", "screen-2.png", "screen-retry-1.png"])
 
     class FakePerception:
@@ -435,7 +425,7 @@ def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
     state = worker_state(
         request={"worker_run_id": "worker-test"},
         observation={
-            "capture_sequence": 0,
+            "observation_sequence": 0,
             "current_url": "https://example.com",
             "current_url_stale": False,
         },
@@ -459,13 +449,19 @@ def test_capture_screen_assigns_run_scoped_incrementing_id(monkeypatch):
         worker_observation.capture_node(next_run_state, runtime),
     )
 
-    assert first["observation"]["current_capture_id"] == "worker-test:capture:0001"
-    assert first["observation"]["capture_sequence"] == 1
-    assert second["observation"]["current_capture_id"] == "worker-test:capture:0002"
-    assert second["observation"]["capture_sequence"] == 2
     assert (
-        next_run_first["observation"]["current_capture_id"]
-        == "worker-test-retry:capture:0001"
+        first["observation"]["observation_id"]
+        == "worker-test:observation:0001"
+    )
+    assert first["observation"]["observation_sequence"] == 1
+    assert (
+        second["observation"]["observation_id"]
+        == "worker-test:observation:0002"
+    )
+    assert second["observation"]["observation_sequence"] == 2
+    assert (
+        next_run_first["observation"]["observation_id"]
+        == "worker-test-retry:observation:0001"
     )
 
 
@@ -511,16 +507,19 @@ def test_execution_records_one_complete_action_event(monkeypatch):
     assert [item["status"] for item in action_results] == ["success"]
     assert result["transition"]["transition_request"]["action"] == "click_marker"
     assert (
-        result["transition"]["transition_request"]["from_capture_id"]
-        == "worker-test:capture:0003"
+        result["transition"]["transition_request"]["before_observation_id"]
+        == "worker-test:observation:0003"
     )
-    assert action_results[0]["decision_capture_id"] == "worker-test:capture:0003"
     event = result["transition"]["action_events"][0]
-    assert event["recipe_step"]["action"] == "click_marker"
-    assert event["recipe_step"]["decision_capture_id"] == "worker-test:capture:0003"
+    assert event["observation_id"] == "worker-test:observation:0003"
+    assert event["recipe_step"].action == "click_marker"
     assert (
-        event["feedback_episode"]["observation"]["before"]["capture_id"]
-        == "worker-test:capture:0003"
+        event["recipe_step"].before_state["observation_id"]
+        == "worker-test:observation:0003"
+    )
+    assert (
+        event["feedback_episode"].observation.before["observation_id"]
+        == "worker-test:observation:0003"
     )
 
 
@@ -777,7 +776,7 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
                 "status": "error",
                 "result": "invalid payload",
             },
-            collected_jobs=[],
+            job_captures=[],
         ),
     )
     request = _request(
@@ -794,13 +793,10 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
     result = _run_execution(
         _execution_state(
             request,
-            collected_jobs=[
-                CollectedJob(
-                    posting=JobPosting(
-                        company_name="원래 회사",
-                        position="개발자",
-                        url="https://example.com/jobs/original",
-                    )
+            job_captures=[
+                JobCapture(
+                    url="https://example.com/jobs/original",
+                    raw_ocr_text="원래 회사 개발자",
                 )
             ],
         )
@@ -810,9 +806,7 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
     assert action_result["status"] == "error"
     assert action_result["error"] == "invalid payload"
     assert result["transition"]["error_count"] == 1
-    assert result["collection"]["collected_jobs"][0].posting.company_name == (
-        "원래 회사"
-    )
+    assert result["collection"]["job_captures"][0].raw_ocr_text == "원래 회사 개발자"
 
 
 def test_stored_job_card_queue_schedules_first_card(monkeypatch):
@@ -830,7 +824,7 @@ def test_stored_job_card_queue_schedules_first_card(monkeypatch):
                 "status": "success",
                 "result": "stored",
             },
-            collected_jobs=[],
+            job_captures=[],
             state_update=StateActionUpdate(
                 job_card_queue=[queued_card],
                 job_results_memory={"url": "https://example.com/jobs"},
@@ -889,7 +883,7 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
                 "status": "success",
                 "result": "stored",
             },
-            collected_jobs=[],
+            job_captures=[],
             state_update=StateActionUpdate(
                 job_card_queue=existing_cards,
                 job_results_memory={"url": "https://example.com/jobs"},
@@ -915,10 +909,7 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
     result = _run_execution(
         _execution_state(
             request,
-            recipe_params={
-                "count_mode": "explicit",
-                "target_count": 2,
-            },
+            collection_intent=CollectionIntent(target_count=2),
         )
     )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -13,8 +14,7 @@ from agent.observability.run_context import (
     invoke_with_metrics,
     raise_if_cancelled,
 )
-from agent.graph.investigation_ports import StoredJobLoaderPort
-from agent.observability.run_contracts import RunPhase, RunStatus
+from agent.observability.run_contracts import RunPhase
 from agent.graph.investigation_context import (
     InvestigationState,
     InvestigationModels,
@@ -23,17 +23,15 @@ from agent.graph.investigation_context import (
 )
 from agent.graph.investigation_evidence_policy import compact_db_report
 from agent.prompts.investigation import answer_prompt
-from agent.utils.job_fields import DETAIL_JOB_FIELDS
 from shared.schema.collection_intent import CollectionResult
-from shared.schema.investigation_schema import (
-    InvestigationStatus,
-)
+from shared.schema.jd_schema import JOB_DETAIL_FIELDS, StoredJob
+from shared.schema.run_schema import RunStatus
 
 
-def validate_citations(answer: str, valid_ids: list[int]) -> str:
+def validate_citations(answer: str, allowed_document_ids: list[int]) -> str:
     """답변의 job_id 인용이 실제 근거 문서에 포함됐는지 검증한다."""
 
-    valid = {str(job_id) for job_id in valid_ids}
+    valid = {str(job_id) for job_id in allowed_document_ids}
 
     def expand_group(match: re.Match[str]) -> str:
         citation_ids = re.findall(r"\d+", match.group(1))
@@ -98,7 +96,7 @@ def build_answer_evidence_documents(
         if not isinstance(document, dict):
             continue
         item = dict(document)
-        if all(str(item.get(field) or "").strip() for field in DETAIL_JOB_FIELDS):
+        if all(str(item.get(field.value) or "").strip() for field in JOB_DETAIL_FIELDS):
             item.pop("raw_ocr_text", None)
         projected.append(item)
     return projected
@@ -111,31 +109,32 @@ class InvestigationAnswerNodes:
         self,
         *,
         models: InvestigationModels,
-        load_documents: StoredJobLoaderPort,
+        load_documents: Callable[[list[int]], Sequence[StoredJob]],
     ) -> None:
         self.models = models
         self.load_evidence_documents = load_documents
 
-    def load_documents(self, state: InvestigationState) -> dict[str, Any]:
-        investigation = state["request"]["investigation"]
-        ids = sorted(set(investigation.evidence_document_ids))
-        if not ids:
-            return {"evidence": {"documents": [], "valid_ids": []}}
-        documents = self.load_evidence_documents(ids)
-        return {
-            "evidence": {
-                "documents": [
-                    document.model_dump(mode="json") for document in documents
-                ],
-                "valid_ids": [document.id for document in documents],
+    def _load_documents(self, state: InvestigationState) -> list[dict[str, Any]]:
+        ids = sorted(
+            {
+                int(document_id)
+                for document_id in state["evidence"]
+                .get("db_report", {})
+                .get("document_ids", [])
+                if int(document_id) > 0
             }
-        }
+        )
+        if not ids:
+            return []
+        documents = self.load_evidence_documents(ids)
+        return [document.model_dump(mode="json") for document in documents]
 
     def answer(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
         investigation = state["request"]["investigation"]
         evidence = state["evidence"]
         execution = state["execution"]
+        documents = self._load_documents(state)
         emit_run_event(
             "answering_started",
             RunPhase.ANSWERING,
@@ -159,9 +158,7 @@ class InvestigationAnswerNodes:
                                 "cannot_proceed_reason",
                                 "",
                             ),
-                            "documents": build_answer_evidence_documents(
-                                evidence.get("documents", [])
-                            ),
+                            "documents": build_answer_evidence_documents(documents),
                         },
                         ensure_ascii=False,
                     )
@@ -171,13 +168,7 @@ class InvestigationAnswerNodes:
         )
         answer = validate_citations(
             message_text(response),
-            [int(item) for item in evidence.get("valid_ids", [])],
-        )
-        updated = investigation.model_copy(
-            update={
-                "final_answer": answer,
-                "status": InvestigationStatus.COMPLETED,
-            }
+            [int(document["id"]) for document in documents],
         )
         emit_run_event(
             "run_completed",
@@ -185,11 +176,7 @@ class InvestigationAnswerNodes:
             "답변을 완료했습니다.",
             status=RunStatus.COMPLETED,
         )
-        return {
-            "request": {"investigation": updated},
-            "answer": {"final_answer": answer},
-            "execution": {"run_status": RunStatus.COMPLETED.value},
-        }
+        return {"answer": {"final_answer": answer}}
 
 
 __all__ = ["InvestigationAnswerNodes", "validate_citations"]

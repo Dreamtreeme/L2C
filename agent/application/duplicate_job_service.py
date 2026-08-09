@@ -11,7 +11,7 @@ from agent.application.job_lookup_service import (
     find_job_ids_by_card_identities,
     find_job_id_by_url,
 )
-from shared.schema.jd_schema import CollectedJob
+from shared.schema.jd_schema import JobCapture
 
 
 def _url_key(value: Any) -> str:
@@ -19,19 +19,19 @@ def _url_key(value: Any) -> str:
 
 
 def _current_run_contains_url(
-    collected_jobs: Sequence[CollectedJob],
+    job_captures: Sequence[JobCapture],
     url: str,
 ) -> bool:
     target = _url_key(url)
     return any(
-        _url_key(item.posting.url) == target
-        for item in collected_jobs
+        _url_key(item.url) == target
+        for item in job_captures
     )
 
 
 def existing_job_url_trace(
     url: str,
-    collected_jobs: Sequence[CollectedJob],
+    job_captures: Sequence[JobCapture],
     *,
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -40,7 +40,7 @@ def existing_job_url_trace(
     target = _url_key(url)
     if not target:
         return {"matched": False, "reason": "url_missing"}
-    if _current_run_contains_url(collected_jobs, target):
+    if _current_run_contains_url(job_captures, target):
         return {"matched": True, "source": "current_run", "url": target}
 
     if db_path is None:

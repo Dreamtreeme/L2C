@@ -80,8 +80,6 @@ def check_reasoning_screen_stale(
         image_path = Path(
             perception.capture_screen(
                 filename=filename,
-                initial_wait_sec=0,
-                wait_for_stable=False,
             )
         )
         crop_rect_ratio = target_signature.get("crop_rect_ratio") or []

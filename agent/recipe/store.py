@@ -21,7 +21,6 @@ from agent.runtime.worker_actions import (
 from agent.recipe.sqlite_store import SQLiteStore
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.utils.text import normalize_text
-from agent.utils.model_conversion import dump_model
 from shared.schema.recipe_schema import RecipePath, SiteRecipe
 from shared.schema.skill_schema import RecipeSkillMetadata
 
@@ -71,10 +70,7 @@ class RecipeStore(SQLiteStore):
     ) -> bool:
         action = str(action_item.get("action") or "")
         if action in TARGET_REPLAY_ACTIONS:
-            return bool(
-                action_item.get("target")
-                and action_item.get("roi_signature")
-            )
+            return bool(action_item.get("target") and action_item.get("roi_signature"))
         if action in CONTEXTUAL_REPLAY_ACTIONS:
             param = (
                 action_item.get("param")
@@ -102,10 +98,7 @@ class RecipeStore(SQLiteStore):
         ]
         if not actions or not is_supported_recipe_action_group(actions):
             return False
-        if not all(
-            cls._action_has_required_replay_fields(item)
-            for item in actions
-        ):
+        if not all(cls._action_has_required_replay_fields(item) for item in actions):
             return False
         before = (
             transition.get("before")
@@ -113,15 +106,11 @@ class RecipeStore(SQLiteStore):
             else {}
         )
         after = (
-            transition.get("after")
-            if isinstance(transition.get("after"), dict)
-            else {}
+            transition.get("after") if isinstance(transition.get("after"), dict) else {}
         )
         if not before or not after:
             return False
-        if after.get("anchor_target") and after.get(
-            "anchor_roi_signature"
-        ):
+        if after.get("anchor_target") and after.get("anchor_roi_signature"):
             return True
         before_role = normalize_page_role(before.get("page_role"))
         after_role = normalize_page_role(after.get("page_role"))
@@ -133,21 +122,6 @@ class RecipeStore(SQLiteStore):
             after.get("url_template")
             and after.get("url_template") != before.get("url_template")
         )
-
-    @staticmethod
-    def _metadata_dict(metadata: dict[str, Any] | RecipeSkillMetadata | None) -> dict[str, Any]:
-        return dump_model(metadata)
-
-    @staticmethod
-    def _metadata_task_category(metadata: dict[str, Any] | RecipeSkillMetadata | None) -> str:
-        return normalize_task_category(RecipeStore._metadata_dict(metadata).get("task_category"))
-
-    @staticmethod
-    def _metadata_matches_task_category(
-        metadata: dict[str, Any] | RecipeSkillMetadata | None,
-        task_category: str | None,
-    ) -> bool:
-        return task_category_matches(task_category, RecipeStore._metadata_task_category(metadata))
 
     @staticmethod
     def _action_path_identity(
@@ -176,18 +150,13 @@ class RecipeStore(SQLiteStore):
             elif action == "press_key":
                 fixed_param["key"] = str(param.get("key") or "")
             elif action == "switch_tab":
-                fixed_param["direction"] = str(
-                    param.get("direction") or ""
-                )
+                fixed_param["direction"] = str(param.get("direction") or "")
         return {
             "action": action,
             "component": action_item.get("component") or "",
             "target_role": action_item.get("target_role") or "",
             "slot_refs": (
-                sorted(
-                    str(item)
-                    for item in action_item.get("slot_refs") or []
-                )
+                sorted(str(item) for item in action_item.get("slot_refs") or [])
                 if replay_mode == "parameterized"
                 else []
             ),
@@ -202,29 +171,23 @@ class RecipeStore(SQLiteStore):
     def _recipe_key_for_path(
         site: str,
         path: dict[str, Any],
-        metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
+        metadata: RecipeSkillMetadata | None = None,
     ) -> str:
         """전체 상태 전이 순서와 의미를 포함한 안정 경로 키를 만든다."""
 
-        meta = RecipeStore._metadata_dict(metadata)
         transitions = [
-            item
-            for item in path.get("transitions", []) or []
-            if isinstance(item, dict)
+            item for item in path.get("transitions", []) or [] if isinstance(item, dict)
         ]
         payload = {
             "key_version": _RECIPE_KEY_VERSION,
             "site": site or "",
             "task_category": normalize_task_category(
-                meta.get("task_category")
+                metadata.task_category if metadata else ""
             ),
             "path": [
                 {
                     "before_url": str(
-                        (transition.get("before") or {}).get(
-                            "url_template"
-                        )
-                        or ""
+                        (transition.get("before") or {}).get("url_template") or ""
                     ),
                     "before_role": normalize_page_role(
                         (transition.get("before") or {}).get("page_role")
@@ -235,10 +198,7 @@ class RecipeStore(SQLiteStore):
                         if isinstance(action_item, dict)
                     ],
                     "after_url": str(
-                        (transition.get("after") or {}).get(
-                            "url_template"
-                        )
-                        or ""
+                        (transition.get("after") or {}).get("url_template") or ""
                     ),
                 }
                 for transition in transitions
@@ -258,7 +218,7 @@ class RecipeStore(SQLiteStore):
         site: str,
         goal: str,
         path: dict[str, Any],
-        metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
+        metadata: RecipeSkillMetadata | None = None,
         candidate_id: str = "",
     ) -> bool:
         """같은 의미의 전체 안정 경로를 저장하거나 갱신한다."""
@@ -266,11 +226,9 @@ class RecipeStore(SQLiteStore):
         if not isinstance(path, dict):
             return False
         try:
-            replay_path = dump_model(
-                RecipePath.model_validate(
-                    strip_replay_runtime_fields(path)
-                )
-            )
+            replay_path = RecipePath.model_validate(
+                strip_replay_runtime_fields(path)
+            ).model_dump(mode="json")
         except (TypeError, ValueError):
             return False
         transitions = [
@@ -281,8 +239,7 @@ class RecipeStore(SQLiteStore):
         if (
             not replay_path.get("start_state")
             or not replay_path.get("completion_state")
-            or len(transitions)
-            != len(replay_path.get("transitions", []) or [])
+            or len(transitions) != len(replay_path.get("transitions", []) or [])
             or not all(
                 self._transition_has_required_replay_fields(transition)
                 for transition in transitions
@@ -292,8 +249,7 @@ class RecipeStore(SQLiteStore):
         first_actions = transitions[0].get("actions", []) or []
         if (
             not first_actions
-            or str(first_actions[0].get("action") or "")
-            not in TARGET_REPLAY_ACTIONS
+            or str(first_actions[0].get("action") or "") not in TARGET_REPLAY_ACTIONS
         ):
             return False
         recipe_key = self._recipe_key_for_path(
@@ -304,9 +260,13 @@ class RecipeStore(SQLiteStore):
 
         now = datetime.now().isoformat(timespec="seconds")
         path_payload = json.dumps(replay_path, ensure_ascii=False)
-        metadata_payload = self.dump_json(self._metadata_dict(metadata))
+        metadata_payload = self.dump_json(
+            metadata.model_dump(mode="json") if metadata else {}
+        )
         with self._conn() as conn:
-            row = conn.execute("SELECT 1 FROM recipes WHERE recipe_key=?", (recipe_key,)).fetchone()
+            row = conn.execute(
+                "SELECT 1 FROM recipes WHERE recipe_key=?", (recipe_key,)
+            ).fetchone()
             source_exists = bool(
                 candidate_id
                 and conn.execute(
@@ -360,7 +320,7 @@ class RecipeStore(SQLiteStore):
         site: str,
         goal: str,
         path: dict[str, Any],
-        metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
+        metadata: RecipeSkillMetadata | None = None,
         candidate_id: str = "",
     ) -> int:
         """성공 후보의 상태 전이 경로 하나를 저장한다."""
@@ -380,14 +340,11 @@ class RecipeStore(SQLiteStore):
 
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT recipe_key FROM recipe_sources "
-                "WHERE candidate_id=?",
+                "SELECT recipe_key FROM recipe_sources WHERE candidate_id=?",
                 (candidate_id,),
             ).fetchall()
             previous_keys = [
-                str(row["recipe_key"])
-                for row in rows
-                if str(row["recipe_key"])
+                str(row["recipe_key"]) for row in rows if str(row["recipe_key"])
             ]
             conn.execute(
                 "DELETE FROM recipe_sources WHERE candidate_id=?",
@@ -431,7 +388,7 @@ class RecipeStore(SQLiteStore):
         site: str,
         goal: str,
         recipe_paths: list[dict[str, Any]],
-        metadata: dict[str, Any] | RecipeSkillMetadata | None = None,
+        metadata: RecipeSkillMetadata | None = None,
         candidate_id: str = "",
     ) -> int:
         """한 후보가 소유한 기존 경로만 지우고 새 안정 경로로 교체한다."""
@@ -491,7 +448,9 @@ class RecipeStore(SQLiteStore):
             "total": recipe_count,
         }
 
-    def get_site_recipes(self, site: str, *, task_category: str | None = None) -> list[tuple[str, SiteRecipe]]:
+    def get_site_recipes(
+        self, site: str, *, task_category: str | None = None
+    ) -> list[tuple[str, SiteRecipe]]:
         """같은 사이트의 활성 레시피를 성공 횟수 순으로 반환한다."""
         candidates: list[tuple[str, SiteRecipe]] = []
         for item in self.get_by_site(site):
@@ -499,7 +458,7 @@ class RecipeStore(SQLiteStore):
             if not transitions:
                 continue
             metadata = RecipeSkillMetadata(**(item.get("skill_metadata") or {}))
-            if not self._metadata_matches_task_category(metadata, task_category):
+            if not task_category_matches(task_category, metadata.task_category):
                 continue
             recipe = SiteRecipe(
                 site=item.get("site") or site,

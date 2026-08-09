@@ -8,7 +8,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.callbacks.usage import get_usage_metadata_callback
@@ -17,12 +17,10 @@ from structlog.contextvars import bound_contextvars
 
 from agent.config import get_settings
 from agent.llm.cost import estimate_llm_cost
-from agent.observability.run_registry import get_run_registry
 from agent.observability.run_contracts import (
     RunEvent,
     RunEventSink,
     RunPhase,
-    RunStatus,
     new_run_id,
 )
 from agent.observability.langsmith_adapter import (
@@ -33,6 +31,7 @@ from agent.observability.langsmith_adapter import (
 )
 from agent.observability.stages import stage_for_component
 from agent.utils.logger import logger
+from shared.schema.run_schema import RunStatus
 
 
 class RunCancelled(RuntimeError):
@@ -80,8 +79,12 @@ def _usage_details(usage: dict[str, Any], key: str) -> dict[str, int]:
 
 
 def normalize_usage(usage: dict[str, Any]) -> dict[str, Any]:
-    input_tokens = _usage_value(usage, "input_tokens") or _usage_value(usage, "prompt_tokens")
-    output_tokens = _usage_value(usage, "output_tokens") or _usage_value(usage, "completion_tokens")
+    input_tokens = _usage_value(usage, "input_tokens") or _usage_value(
+        usage, "prompt_tokens"
+    )
+    output_tokens = _usage_value(usage, "output_tokens") or _usage_value(
+        usage, "completion_tokens"
+    )
     total_tokens = _usage_value(usage, "total_tokens") or input_tokens + output_tokens
     return {
         "input_tokens": input_tokens,
@@ -107,6 +110,7 @@ class RunContext:
     run_id: str
     query: str = ""
     event_sink: RunEventSink | None = None
+    cancel_requested: Callable[[str], bool] | None = None
     started_at: float = field(default_factory=time.perf_counter)
     deadline_monotonic: float | None = None
     usage_callback: UsageMetadataCallbackHandler | None = None
@@ -135,7 +139,9 @@ class RunContext:
             self.outcome_status = status.value
         if status == RunStatus.FAILED:
             self.failure_stage = phase.value
-            self.failure_code = str((data or {}).get("failure_code") or event or "run_failed")
+            self.failure_code = str(
+                (data or {}).get("failure_code") or event or "run_failed"
+            )
         item = RunEvent(
             run_id=self.run_id,
             event=event,
@@ -240,7 +246,9 @@ class RunContext:
         for call in calls:
             if call.get("provider") == "langchain":
                 _merge_usage(
-                    call_langchain_by_model.setdefault(call.get("model") or "unknown", {}),
+                    call_langchain_by_model.setdefault(
+                        call.get("model") or "unknown", {}
+                    ),
                     call,
                 )
                 continue
@@ -249,11 +257,17 @@ class RunContext:
 
         totals: dict[str, Any] = {}
         billable_by_model: dict[str, dict[str, Any]] = {}
-        observed_langchain_models = set(langchain_by_model) | set(call_langchain_by_model)
+        observed_langchain_models = set(langchain_by_model) | set(
+            call_langchain_by_model
+        )
         for model in observed_langchain_models:
             outer_usage = langchain_by_model.get(model, {})
             local_usage = call_langchain_by_model.get(model, {})
-            usage = outer_usage if normalize_usage(outer_usage)["total_tokens"] else local_usage
+            usage = (
+                outer_usage
+                if normalize_usage(outer_usage)["total_tokens"]
+                else local_usage
+            )
             if not normalize_usage(usage)["total_tokens"]:
                 continue
             _merge_usage(billable_by_model.setdefault(model, {}), usage)
@@ -311,15 +325,13 @@ def raise_if_cancelled() -> None:
     context = current_run_context()
     if context is None:
         return
-    if get_run_registry().is_cancel_requested(context.run_id):
+    if context.cancel_requested and context.cancel_requested(context.run_id):
         raise RunCancelled(f"run cancelled: {context.run_id}")
     if (
         context.deadline_monotonic is not None
         and time.perf_counter() >= context.deadline_monotonic
     ):
-        raise RunDeadlineExceeded(
-            f"run deadline exceeded: {context.run_id}"
-        )
+        raise RunDeadlineExceeded(f"run deadline exceeded: {context.run_id}")
 
 
 @contextmanager
@@ -328,6 +340,7 @@ def run_context(
     run_id: str | None = None,
     query: str = "",
     event_sink: RunEventSink | None = None,
+    cancel_requested: Callable[[str], bool] | None = None,
     prefix: str = "run",
     metadata: dict[str, Any] | None = None,
     tags: list[str] | None = None,
@@ -353,6 +366,7 @@ def run_context(
             run_id=resolved_run_id,
             query=query,
             event_sink=event_sink,
+            cancel_requested=cancel_requested,
             usage_callback=usage_callback,
             deadline_monotonic=(
                 time.perf_counter() + resolved_deadline_sec
@@ -392,7 +406,9 @@ def run_context(
                     yield context, True
                 except BaseException as exc:
                     context.set_outcome(
-                        RunStatus.CANCELLED if isinstance(exc, RunCancelled) else RunStatus.FAILED,
+                        RunStatus.CANCELLED
+                        if isinstance(exc, RunCancelled)
+                        else RunStatus.FAILED,
                         failure_stage=context.failure_stage or context.last_phase,
                         failure_code=context.failure_code or _failure_code(exc),
                     )
@@ -407,7 +423,9 @@ def run_context(
                             "status": context.outcome_status,
                             "duration_sec": snapshot.get("duration_sec", 0.0),
                             "step_count": len(snapshot.get("steps") or []),
-                            "llm_call_count": len((snapshot.get("llm") or {}).get("calls") or []),
+                            "llm_call_count": len(
+                                (snapshot.get("llm") or {}).get("calls") or []
+                            ),
                             "total_tokens": int(totals.get("total_tokens") or 0),
                         },
                         metadata={
@@ -469,7 +487,10 @@ def observe_step(component: str, **data: Any) -> Iterator[StepObservation]:
                 )
             finish_langsmith_trace(
                 step_trace,
-                outputs={"success": metric_data.get("success") is not False, **observation.data},
+                outputs={
+                    "success": metric_data.get("success") is not False,
+                    **observation.data,
+                },
                 metadata=metric_data,
                 error=str(metric_data.get("error") or "")
                 if metric_data.get("success") is False
@@ -509,10 +530,7 @@ def _supports_invoke_config(runnable: Any) -> bool:
 
 
 def _is_timeout_exception(exc: BaseException) -> bool:
-    names = {
-        type(item).__name__.casefold()
-        for item in type(exc).mro()
-    }
+    names = {type(item).__name__.casefold() for item in type(exc).mro()}
     if any("timeout" in name for name in names):
         return True
     text = str(exc).casefold()
@@ -591,9 +609,7 @@ def invoke_with_metrics(
                 error=str(exc),
             )
         if _is_timeout_exception(exc):
-            raise ModelRequestTimeout(
-                f"{component} model request timed out"
-            ) from exc
+            raise ModelRequestTimeout(f"{component} model request timed out") from exc
         raise
 
     duration = time.perf_counter() - started

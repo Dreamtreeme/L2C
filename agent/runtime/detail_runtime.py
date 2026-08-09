@@ -158,34 +158,14 @@ def group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
     return sorted(compacted, key=lambda item: (item["bbox"][1], item["bbox"][0]))
 
 
-def is_probable_detail_noise_line(line: dict) -> bool:
-    """내용이 없는 줄만 제거하고 의미상 중요도는 추출 모델에 맡긴다."""
-
-    text = str(line.get("text") or "").strip()
-    return not text
-
-
-def append_limited_ocr_line(
-    parts: list[str], index: int, line: dict, max_line_chars: int
-) -> None:
-    text = str(line.get("text") or "").strip()
-    if len(text) > max_line_chars:
-        text = text[: max_line_chars - 1].rstrip() + "…"
-    parts.append(f"{index}. {text}")
-
-
 def detail_action_marker_candidates(
     markers: list[dict],
     limit: int,
-    allowed_labels: list[str] | None = None,
+    allowed_labels: list[str],
 ) -> list[dict]:
     """본문 펼치기라고 명확히 선언된 마커만 결정론적 클릭 후보로 고른다."""
 
-    labels = (
-        [str(label) for label in allowed_labels if str(label).strip()]
-        if allowed_labels is not None
-        else []
-    )
+    labels = [str(label) for label in allowed_labels if str(label).strip()]
     normalized_labels = {re.sub(r"\s+", "", label).casefold() for label in labels}
     if not normalized_labels:
         return []
@@ -301,11 +281,7 @@ def build_detail_section_context(markers: list[dict]) -> str:
     if text_marker_count < min_text_markers:
         return ""
 
-    lines = [
-        line
-        for line in group_text_markers_into_lines(markers)
-        if not is_probable_detail_noise_line(line)
-    ]
+    lines = group_text_markers_into_lines(markers)
     if not lines:
         return ""
 
@@ -314,7 +290,10 @@ def build_detail_section_context(markers: list[dict]) -> str:
     ]
     shown_lines = lines[:max_lines]
     for index, line in enumerate(shown_lines, start=1):
-        append_limited_ocr_line(parts, index, line, max_line_chars)
+        text = str(line["text"]).strip()
+        if len(text) > max_line_chars:
+            text = text[: max_line_chars - 1].rstrip() + "…"
+        parts.append(f"{index}. {text}")
     omitted_lines = max(0, len(lines) - len(shown_lines))
     if omitted_lines:
         parts.append(f"본문 압축으로 생략된 줄: {omitted_lines}개")
@@ -340,18 +319,6 @@ def detail_context_matches(
     return bool(current_url and value.get("url") == current_url)
 
 
-def detail_buffer_line_key(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip().lower()
-
-
-def detail_lines_for_buffer(markers: list[dict]) -> list[dict]:
-    return [
-        line
-        for line in group_text_markers_into_lines(markers)
-        if not is_probable_detail_noise_line(line)
-    ]
-
-
 def new_job_detail_buffer(current_url: str, detail_key: str = "") -> dict[str, Any]:
     return {
         "url": current_url,
@@ -369,13 +336,6 @@ def new_job_detail_buffer(current_url: str, detail_key: str = "") -> dict[str, A
     }
 
 
-def _detail_screen_path(image_path: Any) -> tuple[str, str]:
-    return (
-        Path(image_path).name if image_path else "",
-        str(Path(image_path).resolve()) if image_path else "",
-    )
-
-
 def _append_detail_buffer_lines(
     buffer: dict[str, Any],
     markers: list[dict],
@@ -391,13 +351,13 @@ def _append_detail_buffer_lines(
     seen = set(seen_keys)
     added = 0
     duplicate = 0
-    for line in detail_lines_for_buffer(markers):
+    for line in group_text_markers_into_lines(markers):
         text = str(line.get("text") or "").strip()
         if len(text) < 2:
             continue
         if len(text) > max_line_chars:
             text = text[: max_line_chars - 1].rstrip() + "…"
-        key = detail_buffer_line_key(text)
+        key = re.sub(r"\s+", " ", text).strip().lower()
         if not key:
             continue
         if key in seen:
@@ -474,7 +434,8 @@ def update_job_detail_buffer(
     buffer = dict(existing or {})
     if not detail_context_matches(buffer, current_url, detail_key):
         buffer = new_job_detail_buffer(current_url, detail_key)
-    screen_name, screen_path = _detail_screen_path(image_path)
+    screen_name = Path(image_path).name if image_path else ""
+    screen_path = str(Path(image_path).resolve()) if image_path else ""
     lines, seen_keys, added, duplicate = _append_detail_buffer_lines(
         buffer,
         markers,
@@ -650,20 +611,10 @@ __all__ = [
     "build_detail_lightweight_marked_image",
     "build_detail_section_context",
     "compact_job_detail_buffer_context",
-    "detail_action_marker_candidates",
     "detail_buffer_text",
     "detail_evidence_screenshot",
-    "detail_buffer_line_key",
     "detail_context_matches",
-    "detail_lines_for_buffer",
-    "detail_reveal_controls",
-    "draw_detail_lightweight_marker",
-    "group_text_markers_into_lines",
     "is_icon_marker",
-    "is_probable_detail_noise_line",
-    "join_line_marker_text",
-    "line_bbox",
     "marker_prompt_rank",
-    "new_job_detail_buffer",
     "update_job_detail_buffer",
 ]

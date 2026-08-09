@@ -21,7 +21,7 @@ _WINDOWS_WHEEL_DELTA = 120
 class ActionTools:
     """
     물리적인 마우스/키보드 조작을 담당하는 Action 도구 모음입니다.
-    화면 안정화 대기는 PerceptionEngine.capture_screen()이 담당합니다.
+    화면 안정화 대기는 다음 관찰의 capture_usable_screen()이 담당합니다.
     """
 
     def __init__(self, perception_engine: PerceptionEngine):
@@ -229,7 +229,7 @@ class ActionTools:
     def _execute(self, action_name: str, func, *args, **kwargs) -> Dict[str, Any]:
         """
         액션을 실행하고 결과를 반환합니다.
-        화면 안정화 대기는 다음 perception_node의 capture_screen()이 처리합니다.
+        화면 안정화 대기는 다음 관찰의 capture_usable_screen()이 처리합니다.
         """
         logger.info(f"Executing action: {action_name}")
         try:
