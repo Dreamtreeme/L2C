@@ -73,12 +73,15 @@ def request_analysis_prompt(now: datetime) -> str:
 - sites에는 현재 활성화된 다음 slug만 사용하십시오: {supported_sites}. 표시명은 넣지 마십시오.
 - 사용자가 말하지 않은 지역, 경력, 고용형태를 한국·무관 같은 값으로 채우지 말고 빈 값으로 두십시오.
 - 사용자가 명시한 직무는 constraints.occupation_query에 원문 표현으로 보존하십시오.
+- 사용자가 여러 직무 중 하나를 허용하면 occupation_query에 모든 직무와 그 대안 관계를 보존하십시오. 대표 직무 하나로 축소하지 마십시오.
 - 사용자가 IT, 제조, 의료처럼 업무 기능 기준의 넓은 직무 영역을 명시한 경우에만 occupation_domain_query에 원문 표현을 보존하십시오.
 - occupation_domain_query는 회사가 속한 산업이 아니라 사용자가 수행할 업무 영역입니다. 예를 들어 제조 회사의 소프트웨어 개발자는 제조가 아니라 IT·데이터 직무 영역입니다.
 - 사이트 검색에는 constraints.collection_search_term을 사용하십시오. 기본값은 사용자의 직무 표현이며 동의어나 상위 직무명으로 바꾸지 마십시오.
 - 사용자가 직무의 전체·모두·전 범위를 명시하면 occupation_scope_mode=all로 설정하십시오. 그 외에는 unspecified로 두고, 사전 카디널리티가 필요한 경우 후속 단계가 선택지를 만듭니다.
 - occupation_domain_concept_keys, occupation_concept_keys와 skill_concept_keys는 검색 사전이 확정하므로 직접 채우지 마십시오.
 - 사용자가 기술을 명시하면 skill_queries에 기술명만 각각 분리해 넣으십시오. 동의어나 번역어는 추가하지 마십시오.
+- 직무와 기술이 결합된 표현에서는 직무 전체를 occupation_query에, 기술명만 skill_queries에 넣으십시오.
+- 사용자가 나열한 기술 중 하나라도 만족하면 되는 요청은 skill_match_mode=any로, 모든 기술을 동시에 요구한 요청만 all로 설정하십시오.
 - 사용자가 특정 문구가 문자 그대로 포함되어야 한다고 요구한 경우에만 exact_text_groups를 사용하십시오. 직무·기술 동의어를 만드는 용도가 아닙니다.
 - 단순 조사 수식어, 기간, 지역은 occupation_query나 skill_queries에 넣지 마십시오.
 - 선택지로 표현하기 어려운 경우 직접 입력을 허용하십시오.
@@ -102,10 +105,11 @@ def evidence_plan_prompt(now: datetime) -> str:
 - minimum_count는 결론에 필요한 최소 표본이며 무조건 큰 값을 만들지 마십시오.
 - count_mode=visible_all이면 실제 개수는 첫 안정 결과 화면에서 결정되므로 minimum_count=1로 두고 임의의 고정 개수를 만들지 마십시오.
 - 사용자가 구체적 직무를 확정한 집단에만 occupation_query를 설정하십시오. 업무 영역 전체를 요청했다면 새 직무명을 만들지 말고 occupation_query를 비워 두십시오. occupation_concept_keys는 코드가 사전에서 채우므로 비워 두십시오.
+- 요청이 여러 대안 직무를 포함하면 해당 근거 집단의 occupation_query에도 대안을 모두 유지하십시오. 하나의 직무로 좁히지 마십시오.
 - 요청에 확정된 occupation_domain_query가 있으면 근거 집단에도 그대로 계승하십시오. occupation_domain_concept_keys는 코드가 채우므로 비워 두십시오.
 - 웹 수집이 필요할 때 사용할 자연스러운 검색어를 collection_search_term에 넣되, 사용자의 직무 표현을 임의로 넓히지 마십시오.
 - 기술 조건은 skill_queries에 사용자가 명시한 기술명만 넣으십시오. 필수·우대 조건은 skill_requirement_type으로 구분하십시오.
-- 여러 기술을 모두 요구하면 skill_match_mode=all, 하나라도 만족하면 any를 사용하십시오.
+- 'A나 B', 'A·B 등', 'A/B 관련'처럼 대안을 나열하면 skill_match_mode=any를 사용하십시오. 모든 기술을 각각 갖춰야 한다고 명시한 경우만 all을 사용하십시오.
 - 문자열 자체가 조건인 고유 문구만 exact_text_groups에 넣으십시오.
 """
 
@@ -144,7 +148,7 @@ def evidence_validation_prompt() -> str:
         + """
 당신은 DB 공고 후보가 조사에서 정의한 근거 집단에 실제로 속하는지 판정합니다.
 - 이 단계에는 사전으로 확정할 수 없었던 직무·기술 또는 비정형 조건만 들어옵니다.
-- 공고의 직무명, 직군, 기술, 자격요건, 우대사항, 지역, 경력, 고용형태와 게시일만 사용하십시오.
+- 공고의 직무명, 직군, 주요 업무, 기술, 자격요건, 우대사항, 학력, 지역, 경력, 고용형태와 게시일만 사용하십시오.
 - occupation_query가 있으면 직무의 본질적인 역할을 판단하고 단어 포함 여부만으로 판정하지 마십시오.
 - skill_queries가 있으면 요구된 기술과 필수·우대 조건을 자격요건 근거에서 확인하십시오.
 - matching_document_ids에는 요청 조건을 실제로 만족하는 모든 공고를 넣으십시오.

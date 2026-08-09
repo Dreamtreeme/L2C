@@ -1,9 +1,9 @@
 {
-  "version": "2.0.0",
+  "version": "2.0.1",
   "source": {
     "source_key": "l2c_ko_core",
     "name": "L2C 검토 검색 사전",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "source_url": "data/samples/search_taxonomy_ko.json",
     "license": "L2C 내부 검토 데이터"
   },

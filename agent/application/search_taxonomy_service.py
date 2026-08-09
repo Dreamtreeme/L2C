@@ -37,13 +37,32 @@ class SearchTaxonomyService:
         return connection
 
     @staticmethod
+    def _specific_alias_concept_keys(
+        matches: Iterable[tuple[str, str]],
+    ) -> list[str]:
+        """더 긴 별칭에 포함된 일반 별칭을 제외하고 독립 개념을 남긴다."""
+
+        candidates = list(matches)
+        return list(
+            dict.fromkeys(
+                concept_key
+                for alias, concept_key in candidates
+                if not any(
+                    alias != other_alias
+                    and contains_taxonomy_alias(other_alias, alias)
+                    for other_alias, _other_key in candidates
+                )
+            )
+        )
+
+    @staticmethod
     def _concept_label(row: sqlite3.Row) -> str:
         return str(
             row["preferred_label_ko"] or row["preferred_label_en"] or row["concept_key"]
         )
 
     def resolve_occupation_concepts(self, occupation_query: str) -> list[str]:
-        """사용자 직무 표현과 가장 구체적으로 일치하는 검토된 직무를 찾는다."""
+        """사용자 표현에서 서로 독립적인 구체 직무를 모두 찾는다."""
 
         text = normalize_term(occupation_query)
         if not text:
@@ -73,17 +92,16 @@ class SearchTaxonomyService:
             selected = local_matches or exact_matches
             return list(dict.fromkeys(str(row["concept_key"]) for row in selected))
 
-        matches: list[tuple[int, str]] = []
+        matches: list[tuple[str, str]] = []
         for row in rows:
             if str(row["source_key"]) not in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}:
                 continue
             alias = str(row["normalized_alias"])
             if contains_taxonomy_alias(text, alias):
-                matches.append((len(alias), str(row["concept_key"])))
+                matches.append((alias, str(row["concept_key"])))
         if not matches:
             return []
-        longest = max(length for length, _key in matches)
-        return list(dict.fromkeys(key for length, key in matches if length == longest))
+        return self._specific_alias_concept_keys(matches)
 
     def resolve_domain_concepts(self, domain_query: str) -> list[str]:
         """명시된 업무 영역 표현을 검토된 정확 별칭으로 해석한다."""
@@ -111,41 +129,46 @@ class SearchTaxonomyService:
             connection.close()
 
     def resolve_skill_concepts(self, skill_queries: Iterable[str]) -> list[str]:
-        """명시된 기술 표현을 정확한 활성 별칭으로 해석한다."""
+        """기술 표현 안의 구체적인 활성 별칭을 해석한다."""
 
         terms = {normalize_term(item) for item in skill_queries if normalize_term(item)}
         if not terms:
             return []
-        placeholders = ",".join("?" for _ in terms)
         connection = self._connect()
         try:
             rows = connection.execute(
-                f"""
+                """
                 SELECT c.concept_key, c.source_key, a.normalized_alias
                 FROM search_concepts AS c
                 JOIN search_aliases AS a ON a.concept_id = c.id
                 WHERE c.concept_type = 'skill'
                   AND c.status = 'active'
                   AND a.active = 1
-                  AND a.normalized_alias IN ({placeholders})
-                """,
-                sorted(terms),
+                """
             ).fetchall()
         finally:
             connection.close()
-        by_term: dict[str, list[sqlite3.Row]] = {}
-        for row in rows:
-            by_term.setdefault(str(row["normalized_alias"]), []).append(row)
         resolved: list[str] = []
         for term in sorted(terms):
-            candidates = by_term.get(term, [])
+            candidates = [
+                row for row in rows if str(row["normalized_alias"]) == term
+            ]
             local = [
                 row
                 for row in candidates
                 if row["source_key"] in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
             ]
             selected = local or candidates
-            resolved.extend(str(row["concept_key"]) for row in selected)
+            if selected:
+                resolved.extend(str(row["concept_key"]) for row in selected)
+                continue
+            contained = [
+                (str(row["normalized_alias"]), str(row["concept_key"]))
+                for row in rows
+                if row["source_key"] in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
+                and contains_taxonomy_alias(term, str(row["normalized_alias"]))
+            ]
+            resolved.extend(self._specific_alias_concept_keys(contained))
         return list(dict.fromkeys(resolved))
 
     def _concept_ids(
@@ -193,6 +216,8 @@ class SearchTaxonomyService:
         self,
         concept_keys: Iterable[str],
         constraints: InvestigationConstraints | None = None,
+        *,
+        evidence_fields: Iterable[str] | None = None,
     ) -> set[int]:
         """선택한 직무와 모든 하위 직무에 연결된 공고 ID를 반환한다."""
 
@@ -204,8 +229,21 @@ class SearchTaxonomyService:
             placeholders = ",".join("?" for _ in concept_ids)
             constraints = constraints or InvestigationConstraints()
             filters, filter_params = self._job_filter_clauses(constraints)
-            where = ["links.link_type = 'occupation'", *filters]
-            params: list[Any] = [*concept_ids, *filter_params]
+            where = ["links.link_type = 'occupation'"]
+            params: list[Any] = [*concept_ids]
+            fields = list(
+                dict.fromkeys(
+                    str(field).strip()
+                    for field in (evidence_fields or [])
+                    if str(field).strip()
+                )
+            )
+            if fields:
+                field_placeholders = ",".join("?" for _ in fields)
+                where.append(f"links.evidence_field IN ({field_placeholders})")
+                params.extend(fields)
+            where.extend(filters)
+            params.extend(filter_params)
             rows = connection.execute(
                 f"""
                 WITH RECURSIVE selected_concepts(id) AS (

@@ -29,6 +29,7 @@ from shared.schema.collection_run import (
     RecipeLearningResult,
 )
 from shared.schema.feedback_schema import WorkerSubmission
+from shared.schema.jd_schema import JobField
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
     ClarificationOption,
@@ -1158,7 +1159,7 @@ def test_semantic_evidence_validation_keeps_only_matching_candidate():
     assert validated["requirements"][0]["document_ids"] == [1]
 
 
-def test_evidence_validation_payload_excludes_full_document_text():
+def test_evidence_validation_payload_keeps_structured_semantic_fields():
 
     evidence_requirements = [
         EvidenceRequirement(
@@ -1178,6 +1179,8 @@ def test_evidence_validation_payload_excludes_full_document_text():
                             "document_id": 1,
                             "position": "LLM 서비스 아키텍트",
                             "job_category": "AI",
+                            "education": "학력 무관",
+                            "main_tasks": ["AI Agent 서비스 개발"],
                             "raw_ocr_text": "매우 긴 공고 본문",
                             "company_name": "예시회사",
                         }
@@ -1191,6 +1194,47 @@ def test_evidence_validation_payload_excludes_full_document_text():
     candidate = payload[0]["candidates"][0]
     assert candidate == {
         "document_id": 1,
+        "company_name": "예시회사",
         "position": "LLM 서비스 아키텍트",
         "job_category": "AI",
+        "education": "학력 무관",
+        "main_tasks": ["AI Agent 서비스 개발"],
     }
+
+
+def test_evidence_report_counts_education_and_url(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    db = Database(db_path)
+    prepare_search_taxonomy(db_path)
+    job_id = insert_job(
+        db,
+        "https://example.com/jobs/backend",
+        {
+            "company_name": "예시회사",
+            "position": "백엔드 개발자",
+            "education": "학력 무관",
+            "source_platform": "wanted",
+        },
+    )
+    JobTaxonomyLinker(db_path).link_job(job_id)
+    requirement = EvidenceRequirement(
+        requirement_id="backend",
+        description="학력과 출처가 확인된 백엔드 공고",
+        occupation_query="백엔드 개발자",
+        occupation_concept_keys=["l2c:occupation:backend_engineer"],
+        required_fields=[JobField.EDUCATION, JobField.URL],
+    )
+
+    report = inspect_job_evidence(
+        db_path,
+        [requirement],
+        InvestigationConstraints(),
+    )
+
+    requirement_report = report["requirements"][0]
+    assert requirement_report["document_ids"] == [job_id]
+    assert requirement_report["field_coverage"] == {
+        JobField.EDUCATION: 1,
+        JobField.URL: 1,
+    }
+    assert requirement_report["missing"] == []

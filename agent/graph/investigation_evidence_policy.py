@@ -46,16 +46,23 @@ def build_evidence_validation_payload(
     requirements = {item.requirement_id: item for item in evidence_requirements}
     candidate_fields = (
         "document_id",
+        "company_name",
         "position",
+        "url",
         "job_category",
         "experience",
+        "education",
         "employment_type",
         "location",
         "posted_at",
+        "deadline",
         "source_platform",
         "tech_stack",
+        "main_tasks",
         "requirements",
         "preferred",
+        "benefits",
+        "salary",
         "field_presence",
     )
     groups = []

@@ -38,17 +38,21 @@ ANSWER_EVIDENCE_FIELDS: tuple[str, ...] = tuple(
     for field in (
         JobField.COMPANY_NAME,
         JobField.POSITION,
+        JobField.URL,
         JobField.JOB_CATEGORY,
         JobField.EXPERIENCE_TEXT,
+        JobField.EDUCATION,
         JobField.EMPLOYMENT_TYPE,
         JobField.LOCATION,
         JobField.POSTED_AT,
         JobField.POSTED_AT_TEXT,
+        JobField.DEADLINE,
         JobField.TECH_STACK,
         JobField.MAIN_TASKS,
         JobField.REQUIREMENTS,
         JobField.PREFERRED,
         JobField.BENEFITS,
+        JobField.SALARY,
         JobField.RAW_OCR_TEXT,
     )
 )

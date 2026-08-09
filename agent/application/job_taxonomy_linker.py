@@ -230,6 +230,7 @@ class JobTaxonomyLinker:
         }
         position_text = str(job["position"] or "")
         position = normalize_term(position_text)
+        main_task_texts = self._json_text_list(job["main_tasks"])
 
         for alias_row in self._occupation_alias_rows(connection):
             concept_id = int(alias_row["id"])
@@ -267,6 +268,21 @@ class JobTaxonomyLinker:
                         position_text,
                         confidence,
                     )
+            if is_reviewed_local:
+                for main_task_text in main_task_texts:
+                    if not contains_taxonomy_alias(
+                        normalize_term(main_task_text),
+                        alias,
+                    ):
+                        continue
+                    current = matches.get(concept_id)
+                    if current is None or current[2] < 0.75:
+                        matches[concept_id] = (
+                            "main_tasks",
+                            main_task_text,
+                            0.75,
+                        )
+                    break
         return matches
 
     def _save_occupation_links(

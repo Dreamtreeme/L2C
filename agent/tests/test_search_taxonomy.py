@@ -171,6 +171,32 @@ def test_common_short_job_terms_resolve_to_specific_local_occupations(tmp_path):
     ]
 
 
+def test_compound_occupation_query_preserves_independent_roles(tmp_path):
+    taxonomy = _prepared_taxonomy(tmp_path / "jobs.db")
+
+    assert set(
+        taxonomy.resolve_occupation_concepts(
+            "AI Agent 개발이나 Python 백엔드"
+        )
+    ) == {
+        "l2c:occupation:ai_agent_engineer",
+        "l2c:occupation:backend_engineer",
+    }
+
+
+def test_skill_queries_resolve_aliases_inside_role_phrases(tmp_path):
+    taxonomy = _prepared_taxonomy(tmp_path / "jobs.db")
+
+    assert set(
+        taxonomy.resolve_skill_concepts(
+            ["LLM 애플리케이션", "Python 백엔드"]
+        )
+    ) == {
+        "l2c:skill:llm",
+        "l2c:skill:python",
+    }
+
+
 def test_search_taxonomy_constructor_does_not_initialize_storage(tmp_path):
     db_path = tmp_path / "jobs.db"
 
@@ -553,6 +579,40 @@ def test_skill_links_preserve_required_and_preferred_sections(tmp_path):
         requirement_type="required",
     )
     assert swiftui_jobs == {job_id}
+
+
+def test_main_tasks_create_semantic_occupation_candidate(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    db = Database(db_path)
+    taxonomy = _prepared_taxonomy(db_path)
+    job_id = _insert_and_link(
+        db,
+        taxonomy,
+        "product-agent",
+        company_name="제품회사",
+        position="Product Engineer",
+        main_tasks=["AI Agent 기반 브라우저 자동화 기능 개발"],
+    )
+    requirement = EvidenceRequirement(
+        requirement_id="agent-role",
+        description="AI Agent 개발 공고",
+        occupation_query="AI Agent 개발",
+        occupation_concept_keys=["l2c:occupation:ai_agent_engineer"],
+    )
+
+    report = inspect_job_evidence(
+        db_path,
+        [requirement],
+        InvestigationConstraints(),
+    )
+
+    assert taxonomy.matching_occupation_job_ids(
+        ["l2c:occupation:ai_agent_engineer"]
+    ) == {job_id}
+    requirement_report = report["requirements"][0]
+    assert requirement_report["document_ids"] == [job_id]
+    assert requirement_report["semantic_review_required"] is True
+    assert "AI Agent" in requirement_report["candidates"][0]["main_tasks"]
 
 
 def test_candidate_can_be_accepted_as_existing_concept_alias(tmp_path):

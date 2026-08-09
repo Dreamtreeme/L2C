@@ -147,6 +147,7 @@ def _match_requirement_evidence(
     """분류 사전과 명시 조건을 적용해 요구사항 후보를 고른다."""
 
     candidate_sets: list[set[int]] = []
+    semantic_occupation_ids: set[int] = set()
     occupation_keys = list(
         requirement.occupation_concept_keys
         or constraints.occupation_concept_keys
@@ -161,11 +162,18 @@ def _match_requirement_evidence(
         or constraints.occupation_domain_concept_keys
     )
     if occupation_filter_keys:
-        candidate_sets.append(
+        occupation_job_ids = taxonomy.matching_occupation_job_ids(
+            occupation_filter_keys,
+            taxonomy_constraints,
+        )
+        candidate_sets.append(occupation_job_ids)
+        semantic_occupation_ids = (
             taxonomy.matching_occupation_job_ids(
                 occupation_filter_keys,
                 taxonomy_constraints,
+                evidence_fields=("main_tasks",),
             )
+            & occupation_job_ids
         )
     skill_keys = list(
         requirement.skill_concept_keys or constraints.skill_concept_keys
@@ -192,8 +200,10 @@ def _match_requirement_evidence(
         constraints,
         allowed_job_ids,
     )
+    matched_row_ids = {int(row["id"]) for row in matched_rows}
     semantic_review_required = bool(
         force_semantic_review
+        or semantic_occupation_ids & matched_row_ids
         or (requirement.occupation_query and not occupation_keys)
         or (
             requirement.occupation_domain_query
@@ -264,15 +274,21 @@ def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
                 "document_id": int(row["id"]),
                 "company_name": str(row["company_name"] or ""),
                 "position": str(row["position"] or ""),
+                "url": str(row["url"] or ""),
                 "job_category": str(row["job_category"] or ""),
                 "experience": str(row["experience_text"] or ""),
+                "education": str(row["education"] or ""),
                 "employment_type": str(row["employment_type"] or ""),
                 "location": str(row["location"] or ""),
                 "posted_at": str(row["posted_at"] or ""),
+                "deadline": str(row["deadline"] or ""),
                 "source_platform": str(row["source_platform"] or ""),
                 "tech_stack": str(row["tech_stack"] or ""),
+                "main_tasks": str(row["main_tasks"] or ""),
                 "requirements": str(row["requirements"] or ""),
                 "preferred": str(row["preferred"] or ""),
+                "benefits": str(row["benefits"] or ""),
+                "salary": str(row["salary"] or ""),
                 "field_presence": {
                     field: bool(str(row[field] or "").strip())
                     for field in requirement.required_fields
