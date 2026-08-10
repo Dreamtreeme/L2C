@@ -12,7 +12,7 @@
     "search_overlay": {
       "visible_cues": ["검색어를 입력", "추천 검색어"],
       "minimum_visible_cues": 1,
-      "instructions": ["검색 입력창에 사용자 검색어를 입력하고 Enter로 제출한다."]
+      "instructions": ["검색어를 입력한 뒤 같은 검색어의 직무 검색 결과를 클릭해 공고 목록으로 이동한다. Enter는 검색 오버레이를 닫으므로 사용하지 않는다."]
     },
     "search": {
       "url_patterns": ["/search"],
