@@ -63,7 +63,9 @@ python -m benchmark.run_realtime_e2e `
 `experience_guided_preconditions.performance_comparable=true`인 실행만 경험 기반
 탐색 성능 표본으로 사용합니다. `active_roi_recipe_missing`처럼 사전조건이 실패한
 실행은 수집에 성공해도 자율 탐색 폴백으로 분류합니다. Reflex와 작업 목록 재생이
-모두 0회인 기록도 같은 기준으로 비교 대상에서 제외합니다.
+모두 0회인 기록도 같은 기준으로 비교 대상에서 제외합니다. 기존 DB 공고를 화면에서
+확인하고 상세 수집을 생략한 실행은 `existing_jobs_observed`로 표시하며 신규 수집
+성능과 분리합니다.
 
 성능 비교의 단일 원본은 `.summary.json`입니다. 텍스트 로그는 화면·행동 원인을 조사할 때만 사용하며, 정규식으로 OCR·추론·Reflex 횟수나 시간을 다시 계산하지 않습니다.
 
