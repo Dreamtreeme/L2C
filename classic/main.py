@@ -186,7 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="l2c-classic",
         description=(
-            "L2C Classic — 5개 채용 사이트(원티드·잡코리아·사람인·워크넷·로켓펀치)"
+            "L2C Classic — 3개 채용 사이트(원티드·잡코리아·로켓펀치)"
             "에서 공고를 Playwright로 추출하고 LLM으로 정형화"
         ),
         parents=[common],
@@ -199,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
         "url",
         help=(
             "채용공고 URL "
-            "(지원: 원티드 · 잡코리아 · 사람인 · 워크넷/고용24 · 로켓펀치)"
+            "(지원: 원티드 · 잡코리아 · 로켓펀치)"
         ),
     )
     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")

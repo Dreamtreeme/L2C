@@ -8,8 +8,6 @@ URL 매칭과 페이지에서 본문을 추출하는 책임만 가집니다.
 from .base import SiteAdapter
 from .wanted import WantedAdapter
 from .jobkorea import JobKoreaAdapter
-from .saramin import SaraminAdapter
-from .worknet import WorknetAdapter
 from .rocketpunch import RocketpunchAdapter
 
 # 디스패처가 순서대로 matches()를 호출하므로,
@@ -17,8 +15,6 @@ from .rocketpunch import RocketpunchAdapter
 ADAPTERS: list[SiteAdapter] = [
     WantedAdapter(),
     JobKoreaAdapter(),
-    SaraminAdapter(),
-    WorknetAdapter(),
     RocketpunchAdapter(),
 ]
 
@@ -38,8 +34,6 @@ __all__ = [
     "SiteAdapter",
     "WantedAdapter",
     "JobKoreaAdapter",
-    "SaraminAdapter",
-    "WorknetAdapter",
     "RocketpunchAdapter",
     "ADAPTERS",
     "resolve_adapter",
