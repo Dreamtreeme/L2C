@@ -68,60 +68,56 @@ def _strict_value(value: Any, *, url: bool = False) -> Any:
     return _normalized_url(value) if url else _normalized_text(value)
 
 
-def evaluate_job_records(
+def _required_fields_for_payload(
     actual: Any,
-    reference: Any | None = None,
-    *,
-    required_fields: list[str] | tuple[str, ...] | None = None,
-) -> dict[str, Any]:
-    """필수 필드와 URL을 중심으로 수집 결과를 평가한다."""
-
+    required_fields: list[str] | tuple[str, ...] | None,
+) -> list[str]:
     payload_intent = (
         actual.get("collection_intent")
         if isinstance(actual, dict)
         and isinstance(actual.get("collection_intent"), dict)
         else {}
     )
-    resolved_required_fields = normalize_job_collection_fields(
+    resolved = normalize_job_collection_fields(
         required_fields
         if required_fields is not None
         else payload_intent.get("required_fields")
     )
-    if not resolved_required_fields:
-        resolved_required_fields = list(REQUIRED_FIELDS)
-    raw_actual_records = extract_job_records(actual)
-    actual_records = [normalize_job_record(item) for item in raw_actual_records]
-    count = len(actual_records)
+    return resolved or list(REQUIRED_FIELDS)
+
+
+def _unavailable_fields(raw_record: dict[str, Any]) -> set[str]:
+    if raw_record.get("_collection_page_exhausted") is not True:
+        return set()
+    return set(
+        normalize_job_collection_fields(
+            raw_record.get("_collection_unavailable_fields")
+        )
+    )
+
+
+def _record_coverage(
+    raw_records: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+    required_fields: list[str],
+) -> dict[str, Any]:
     valid_count = 0
     required_present = 0
     unavailable_required = 0
     content_present = 0
-    urls = []
-    for raw_record, record in zip(
-        raw_actual_records,
-        actual_records,
-        strict=True,
-    ):
+    urls: list[str] = []
+    for raw_record, record in zip(raw_records, records, strict=True):
         try:
             JobPosting.model_validate(record)
             valid_count += 1
         except ValidationError:
             pass
-        unavailable = (
-            set(
-                normalize_job_collection_fields(
-                    raw_record.get("_collection_unavailable_fields")
-                )
-            )
-            if raw_record.get("_collection_page_exhausted") is True
-            else set()
-        )
-        for field in resolved_required_fields:
-            if _is_present(record.get(field)):
-                required_present += 1
-            elif field in unavailable:
-                required_present += 1
-                unavailable_required += 1
+        unavailable = _unavailable_fields(raw_record)
+        for field in required_fields:
+            present = _is_present(record.get(field))
+            declared_unavailable = field in unavailable
+            required_present += int(present or declared_unavailable)
+            unavailable_required += int(not present and declared_unavailable)
         content_present += sum(
             _is_present(record.get(field)) for field in CONTENT_FIELDS
         )
@@ -129,30 +125,29 @@ def evaluate_job_records(
         if normalized_url:
             urls.append(normalized_url)
 
-    required_slots = count * len(resolved_required_fields)
+    count = len(records)
+    required_slots = count * len(required_fields)
     content_slots = count * len(CONTENT_FIELDS)
-    unique_url_rate = len(set(urls)) / len(urls) if urls else 0.0
-    result: dict[str, Any] = {
+    return {
         "record_count": count,
-        "required_fields": resolved_required_fields,
+        "required_fields": required_fields,
         "unavailable_required_field_count": unavailable_required,
         "schema_valid_rate": round(valid_count / count, 6) if count else 0.0,
-        "required_field_coverage": round(required_present / required_slots, 6)
-        if required_slots
-        else 0.0,
-        "content_field_coverage": round(content_present / content_slots, 6)
-        if content_slots
-        else 0.0,
+        "required_field_coverage": (
+            round(required_present / required_slots, 6) if required_slots else 0.0
+        ),
+        "content_field_coverage": (
+            round(content_present / content_slots, 6) if content_slots else 0.0
+        ),
         "valid_url_count": len(urls),
-        "unique_url_rate": round(unique_url_rate, 6),
+        "unique_url_rate": round(len(set(urls)) / len(urls), 6) if urls else 0.0,
     }
 
-    reference_records = [
-        normalize_job_record(item) for item in extract_job_records(reference)
-    ]
-    if reference is None:
-        return result
 
+def _reference_quality(
+    actual_records: list[dict[str, Any]],
+    reference_records: list[dict[str, Any]],
+) -> dict[str, Any]:
     actual_by_url = {
         _normalized_url(item.get("url")): item
         for item in actual_records
@@ -163,35 +158,59 @@ def evaluate_job_records(
     exact_content_fields = 0
     compared_content_fields = 0
     for expected in reference_records:
-        expected_url = _normalized_url(expected.get("url"))
-        observed = actual_by_url.get(expected_url)
+        observed = actual_by_url.get(_normalized_url(expected.get("url")))
         if observed is None:
             continue
         matched += 1
-        for field in ("company_name", "position"):
-            exact_identity_fields += int(
-                _strict_value(observed.get(field)) == _strict_value(expected.get(field))
-            )
-        for field in CONTENT_FIELDS:
-            if not _is_present(expected.get(field)):
-                continue
-            compared_content_fields += 1
-            exact_content_fields += int(
-                _strict_value(observed.get(field)) == _strict_value(expected.get(field))
-            )
-
-    result["reference"] = {
+        exact_identity_fields += sum(
+            _strict_value(observed.get(field)) == _strict_value(expected.get(field))
+            for field in ("company_name", "position")
+        )
+        comparable_fields = [
+            field for field in CONTENT_FIELDS if _is_present(expected.get(field))
+        ]
+        compared_content_fields += len(comparable_fields)
+        exact_content_fields += sum(
+            _strict_value(observed.get(field)) == _strict_value(expected.get(field))
+            for field in comparable_fields
+        )
+    return {
         "record_count": len(reference_records),
-        "url_recall": round(matched / len(reference_records), 6)
-        if reference_records
-        else 0.0,
-        "identity_exact_rate": round(exact_identity_fields / (matched * 2), 6)
-        if matched
-        else 0.0,
-        "content_exact_rate": round(exact_content_fields / compared_content_fields, 6)
-        if compared_content_fields
-        else None,
+        "url_recall": (
+            round(matched / len(reference_records), 6) if reference_records else 0.0
+        ),
+        "identity_exact_rate": (
+            round(exact_identity_fields / (matched * 2), 6) if matched else 0.0
+        ),
+        "content_exact_rate": (
+            round(exact_content_fields / compared_content_fields, 6)
+            if compared_content_fields
+            else None
+        ),
     }
+
+
+def evaluate_job_records(
+    actual: Any,
+    reference: Any | None = None,
+    *,
+    required_fields: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """필수 필드와 URL을 중심으로 수집 결과를 평가한다."""
+
+    raw_actual_records = extract_job_records(actual)
+    actual_records = [normalize_job_record(item) for item in raw_actual_records]
+    result = _record_coverage(
+        raw_actual_records,
+        actual_records,
+        _required_fields_for_payload(actual, required_fields),
+    )
+    if reference is None:
+        return result
+    reference_records = [
+        normalize_job_record(item) for item in extract_job_records(reference)
+    ]
+    result["reference"] = _reference_quality(actual_records, reference_records)
     return result
 
 

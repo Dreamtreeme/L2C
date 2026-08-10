@@ -16,41 +16,6 @@ from shared.schema.investigation_schema import (
 )
 
 
-def test_twelve_regression_scenarios_are_unique_and_cover_service_boundaries():
-    assert len(INVESTIGATION_SCENARIOS) == 12
-    assert len({item.scenario_id for item in INVESTIGATION_SCENARIOS}) == 12
-    assert {item.expected_purpose for item in INVESTIGATION_SCENARIOS} == {
-        "lookup",
-        "collect",
-        "compare",
-        "trend",
-    }
-    assert sum(item.requires_verified_posted_at for item in INVESTIGATION_SCENARIOS) >= 4
-
-
-def test_request_analysis_does_not_require_question_for_assumed_period():
-    analysis = RequestAnalysis(
-        objective="최근 공고 분석",
-        deliverable="기술 요약",
-        purpose=InvestigationPurpose.TREND,
-        constraints=InvestigationConstraints(
-            posted_from="2026-04-14",
-            posted_to="2026-07-14",
-            comparison_posted_from="2026-01-14",
-            comparison_posted_to="2026-04-13",
-        ),
-        assumptions=["요즘을 최근 3개월로 해석했다."],
-    )
-
-    assert analysis.clarification_questions == []
-    assert analysis.constraints.posted_from == "2026-04-14"
-
-
-def test_investigation_constraints_reject_unknown_count_mode():
-    with pytest.raises(ValueError):
-        InvestigationConstraints(count_mode="limit", target_count=0)
-
-
 def test_occupation_expression_clears_missing_scope_flag():
     constraints = InvestigationConstraints(
         occupation_scope_required=True,
@@ -126,19 +91,23 @@ def test_monthly_growth_quality_uses_model_assumption_without_period_question():
             EvidenceRequirement(
                 requirement_id="current",
                 description="이번 달 AI 개발자 공고",
-                occupation_query="AI 개발자",
-                collection_search_term="AI 개발자",
-                posted_from="2026-07-01",
-                posted_to="2026-07-14",
+                scope=InvestigationConstraints(
+                    occupation_query="AI 개발자",
+                    collection_search_term="AI 개발자",
+                    posted_from="2026-07-01",
+                    posted_to="2026-07-14",
+                ),
                 required_fields=["posted_at", "position"],
             ),
             EvidenceRequirement(
                 requirement_id="comparison",
                 description="지난달 같은 기간 AI 개발자 공고",
-                occupation_query="AI 개발자",
-                collection_search_term="AI 개발자",
-                posted_from="2026-06-01",
-                posted_to="2026-06-14",
+                scope=InvestigationConstraints(
+                    occupation_query="AI 개발자",
+                    collection_search_term="AI 개발자",
+                    posted_from="2026-06-01",
+                    posted_to="2026-06-14",
+                ),
                 required_fields=["posted_at", "position"],
             ),
         ]

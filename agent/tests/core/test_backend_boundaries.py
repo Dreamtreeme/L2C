@@ -18,31 +18,87 @@ def _execution_result(run_id, *, status="completed", answer=""):
     )
 
 
-def test_investigation_outcome_requires_explicit_graph_status():
-    from pydantic import ValidationError
-
+def test_answer_keeps_valid_field_evidence_and_multiple_documents():
+    from agent.graph.investigation_answer_nodes import (
+        render_grounded_answer,
+        validate_grounded_answer,
+    )
+    from shared.schema.jd_schema import JobField
     from shared.schema.investigation_schema import (
-        InvestigationOutcome,
-        InvestigationRequest,
+        AnswerEvidencePointer,
+        GroundedAnswerDraft,
+        GroundedAnswerDraftLine,
     )
 
-    with pytest.raises(ValidationError):
-        InvestigationOutcome(
-            investigation=InvestigationRequest(
-                investigation_id="investigation-status-contract",
-                original_query="질문",
+    answer = GroundedAnswerDraft(
+        lines=[
+            GroundedAnswerDraftLine(
+                kind="overview",
+                text="LangGraph 워크플로를 개발합니다.",
+                evidence=[
+                    AnswerEvidencePointer(
+                        document_id=64,
+                        field=JobField.MAIN_TASKS,
+                        item_index=0,
+                    )
+                ],
             ),
-            final_answer="상태 없는 답변",
-        )
+            GroundedAnswerDraftLine(
+                kind="overview",
+                text="존재하지 않는 항목입니다.",
+                evidence=[
+                    AnswerEvidencePointer(
+                        document_id=64,
+                        field=JobField.MAIN_TASKS,
+                        item_index=9,
+                    )
+                ],
+            ),
+            GroundedAnswerDraftLine(
+                kind="overview",
+                text="두 공고 모두 에이전트 워크플로 경험을 요구합니다.",
+                evidence=[
+                    AnswerEvidencePointer(
+                        document_id=64,
+                        field=JobField.MAIN_TASKS,
+                        item_index=0,
+                    ),
+                    AnswerEvidencePointer(
+                        document_id=65,
+                        field=JobField.TECH_STACK,
+                        item_index=0,
+                    ),
+                ],
+            ),
+        ]
+    )
+    documents = [
+        {
+            "id": 64,
+            "company_name": "예시회사",
+            "position": "AI 에이전트 개발자",
+            "main_tasks": ["LangGraph 워크플로 개발"],
+        },
+        {
+            "id": 65,
+            "company_name": "둘째회사",
+            "position": "LLM 엔지니어",
+            "tech_stack": ["LangGraph"],
+        },
+    ]
 
+    validated = validate_grounded_answer(answer, documents)
 
-def test_citation_validation_normalizes_grouped_ids_before_validation():
-    from agent.graph.investigation_answer_nodes import validate_citations
-
-    answer = "공통 기술입니다 [job_id:64, 85, 999]."
-
-    assert validate_citations(answer, [64, 85]) == (
-        "공통 기술입니다 [job_id:64] [job_id:85] [출처 확인 불가]."
+    assert len(validated.lines) == 2
+    assert validated.lines[1].citation_ids == [1, 2]
+    assert [reference.evidence_text for reference in validated.citations] == [
+        "LangGraph 워크플로 개발",
+        "LangGraph",
+    ]
+    assert render_grounded_answer(validated, documents) == (
+        "LangGraph 워크플로를 개발합니다. [job_id:64]\n\n"
+        "두 공고 모두 에이전트 워크플로 경험을 요구합니다. "
+        "[job_id:64] [job_id:65]"
     )
 
 
@@ -96,6 +152,9 @@ def test_chat_service_preserves_typed_graph_outcome_and_graph_events():
 
 
 def test_run_registry_tracks_cancellation_and_conversation_history():
+    from agent.application.conversation_context_service import (
+        load_conversation_context,
+    )
     from agent.observability.run_registry import RunRegistry
 
     registry = RunRegistry(limit=10)
@@ -103,7 +162,6 @@ def test_run_registry_tracks_cancellation_and_conversation_history():
         "conversation-run-1",
         "첫 질문",
         conversation_id="conversation-1",
-        user_query="첫 질문",
     )
     registry.complete(
         "conversation-run-1",
@@ -117,11 +175,21 @@ def test_run_registry_tracks_cancellation_and_conversation_history():
     )
 
     cancelled = registry.request_cancel("conversation-run-2")
+    registry.complete(
+        "conversation-run-2",
+        _execution_result(
+            "conversation-run-2",
+            status="cancelled",
+            answer="실행을 취소했습니다.",
+        ),
+    )
     history = registry.conversation_history("conversation-1")
+    context = load_conversation_context("conversation-1", registry=registry)
 
     assert cancelled["cancel_requested"] is True
     assert registry.is_cancel_requested("conversation-run-2") is True
     assert [item["run_id"] for item in history] == ["conversation-run-1"]
+    assert [turn.run_id for turn in context] == ["conversation-run-1"]
 
 
 def test_chat_service_stops_before_llm_when_cancel_is_requested():
@@ -159,6 +227,7 @@ def test_chat_service_stream_owns_run_lifecycle_and_request_forwarding():
     )
     from agent.observability.run_registry import RunRegistry
     from shared.schema.investigation_schema import (
+        ClarificationAnswer,
         InvestigationOutcome,
         InvestigationRequest,
     )
@@ -185,29 +254,15 @@ def test_chat_service_stream_owns_run_lifecycle_and_request_forwarding():
             )
 
     registry = RunRegistry()
-    registry.start(
-        "previous-clarification",
-        "개발 공고에서 어떤 범위를 볼까요?",
-        conversation_id="conversation-context",
-    )
-    registry.complete(
-        "previous-clarification",
-        _execution_result(
-            "previous-clarification",
-            status="waiting_input",
-            answer="어떤 범위를 볼까요?",
-        ).model_copy(
-            update={
-                "clarification": {"question_id": "occupation-scope"},
-                "investigation_id": "investigation-clarification",
-            }
-        ),
-    )
     service = ChatService(FakeWorkflow(), run_registry=registry)
     request = ChatRequest(
         query="개발",
-        resume_run_id="previous-clarification",
         conversation_id="conversation-context",
+        investigation_id="investigation-clarification",
+        clarification_answer=ClarificationAnswer(
+            question_id="occupation-scope",
+            custom_value="개발",
+        ),
     )
 
     async def collect_frames():
@@ -233,7 +288,7 @@ def test_chat_service_stream_owns_run_lifecycle_and_request_forwarding():
     assert registered["result"]["text"] == "개발 공고를 찾았습니다."
 
 
-def test_chat_service_uses_completed_run_as_new_graph_context():
+def test_chat_service_forwards_follow_up_as_new_investigation():
     from agent.application.chat_service import ChatService
     from agent.observability.run_contracts import ChatRequest
     from agent.observability.run_registry import RunRegistry
@@ -255,30 +310,20 @@ def test_chat_service_uses_completed_run_as_new_graph_context():
                 ),
                 run_status=RunStatus.COMPLETED,
                 final_answer="이전 결과를 기준으로 비교했습니다.",
-                resume_mode="restart_from_request",
             )
 
     registry = RunRegistry()
-    registry.start("completed-run", "AI 공고를 찾아줘")
-    registry.complete(
-        "completed-run",
-        _execution_result(
-            "completed-run",
-            answer="AI 공고를 찾았습니다.",
-        ),
-    )
-
     result = ChatService(FakeWorkflow(), run_registry=registry).execute(
         ChatRequest(
             query="그중 경력 조건을 비교해줘",
-            resume_run_id="completed-run",
+            conversation_id="conversation-follow-up",
         ),
         run_id="follow-up-run",
     )
 
-    assert calls[0][1]["context_run_id"] == "completed-run"
     assert calls[0][1]["investigation_id"] == ""
-    assert result.resume_mode == "restart_from_request"
+    assert calls[0][1]["conversation_id"] == "conversation-follow-up"
+    assert result.resume_mode == ""
 
 
 def test_chat_api_only_serializes_service_stream(monkeypatch):
@@ -368,38 +413,6 @@ def test_cancel_run_api_marks_active_run(monkeypatch):
     assert response.status_code == 200
     assert response.json()["cancel_requested"] is True
     assert calls == ["cancel-api-run"]
-
-
-def test_cancelled_run_is_loaded_as_structured_graph_context():
-    from agent.application.conversation_context_service import (
-        load_conversation_context,
-    )
-    from agent.observability.run_registry import get_run_registry
-
-    registry = get_run_registry()
-    registry.start(
-        "cancelled-resume-run",
-        "원티드 iOS 공고 두 개",
-        user_query="원티드 iOS 공고 두 개",
-    )
-    registry.complete(
-        "cancelled-resume-run",
-        _execution_result(
-            "cancelled-resume-run",
-            status="cancelled",
-            answer="실행을 취소했습니다.",
-        ),
-    )
-
-    context = load_conversation_context(
-        "",
-        "cancelled-resume-run",
-        registry=registry,
-    )
-
-    assert len(context) == 1
-    assert context[0].user_query == "원티드 iOS 공고 두 개"
-    assert context[0].run_status == "cancelled"
 
 
 # 브라우저·OCR·후처리 작업자의 프로세스 수명주기
@@ -638,7 +651,6 @@ def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch
     assert events == ["browser_closed"]
 
     runtime.close()
-
     assert events == ["browser_closed", "perception_closed", "ocr_closed"]
 
 
@@ -653,29 +665,5 @@ def test_application_runtime_keeps_vision_lazy_until_collection(monkeypatch, tmp
     runtime.start()
 
     assert runtime.vision_runtime.is_initialized is False
-
-    runtime.close()
-
-
-def test_application_runtime_wires_collection_stages_once(monkeypatch, tmp_path):
-    from functools import partial
-
-    from agent.application.collection_experience import record_collection_experience
-    from agent.application.collection_postprocessing import (
-        postprocess_collection_batch,
-    )
-    from agent.application.collection_storage import store_postprocessed_collection
-    from agent.bootstrap import ApplicationRuntime
-
-    monkeypatch.setenv("VISION_RECIPE_AUTO_PROMOTE", "0")
-    runtime = ApplicationRuntime(tmp_path / "runtime.db")
-    nodes = runtime.investigation_workflow.collection_nodes
-
-    assert nodes.run_collection == runtime.worker_execution_service.run
-    assert nodes.postprocess_collection is postprocess_collection_batch
-    assert isinstance(nodes.store_collection, partial)
-    assert nodes.store_collection.func is store_postprocessed_collection
-    assert nodes.store_collection.keywords == {"db_path": runtime.db_path}
-    assert nodes.record_experience is record_collection_experience
 
     runtime.close()

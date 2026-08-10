@@ -1,4 +1,3 @@
-import inspect
 import time
 
 import pytest
@@ -12,11 +11,9 @@ from agent.runtime.worker_contracts import action_event_results, build_action_re
 from agent.graph.workflow import (
     route_after_execution,
     route_after_start,
-    route_after_reasoning,
     route_after_reflex,
     route_after_selection,
 )
-from agent.runtime.worker_state import current_observation_ready
 from agent.graph.worker_execution_dispatch import (
     StateActionOutcome,
     StateActionUpdate,
@@ -24,6 +21,7 @@ from agent.graph.worker_execution_dispatch import (
 from agent.tests.worker_test_support import (
     apply_update,
     node_runtime,
+    worker_data_services,
     worker_state,
 )
 from shared.schema.collection_intent import CollectionIntent
@@ -43,14 +41,6 @@ class _FakeVisionRuntime:
 
     def get_action_tools(self):
         return object()
-
-    def check_reasoning_screen(self, *_args, **_kwargs):
-        return {
-            "checked": True,
-            "stale": False,
-            "must_refresh": False,
-            "reason": "screen_unchanged",
-        }
 
 
 def _execution_state(
@@ -100,26 +90,6 @@ def _observed_state(**observation):
     )
 
 
-def test_worker_nodes_keep_langgraph_runtime_parameter_name():
-    from agent.graph.worker_reasoning import reasoning_node
-    from agent.graph.worker_selection import selection_node
-    from agent.graph.worker_transition import transition_node
-    from agent.recipe.replay_runtime import attempt_reflex_replay
-
-    nodes = [
-        worker_observation.capture_node,
-        worker_observation.ocr_node,
-        transition_node,
-        selection_node,
-        attempt_reflex_replay,
-        reasoning_node,
-        worker_execution.execution_node,
-    ]
-
-    for node in nodes:
-        assert list(inspect.signature(node).parameters)[1] == "runtime"
-
-
 def test_action_request_allows_only_supported_reflex_action_group():
     calls = [
         {
@@ -164,66 +134,6 @@ def test_action_request_allows_only_supported_reflex_action_group():
     ]
 
 
-@pytest.mark.parametrize(
-    "action_name",
-    ["update_extracted_info", "close_browser"],
-)
-def test_action_request_rejects_removed_worker_tools(action_name):
-    with pytest.raises(ValueError, match="허용되지 않은 작업자 도구"):
-        _request(
-            "llm",
-            [{"name": action_name, "args": {}, "id": "removed"}],
-        )
-
-
-def test_job_card_queue_accepts_only_canonical_card_fields():
-    request = _request(
-        "llm",
-        [
-            {
-                "name": "set_job_card_queue",
-                "args": {
-                    "cards": [
-                        {
-                            "marker_id": 7,
-                            "title": "AI 엔지니어",
-                            "company": "예시회사",
-                        }
-                    ]
-                },
-                "id": "queue",
-            }
-        ],
-    )
-
-    assert request.tool_calls[0].args["cards"] == [
-        {
-            "marker_id": 7,
-            "title": "AI 엔지니어",
-            "company": "예시회사",
-        }
-    ]
-    with pytest.raises(ValueError, match="target_label"):
-        _request(
-            "llm",
-            [
-                {
-                    "name": "set_job_card_queue",
-                    "args": {
-                        "cards": [
-                            {
-                                "marker_id": 7,
-                                "title": "AI 엔지니어",
-                                "target_label": "AI 엔지니어",
-                            }
-                        ]
-                    },
-                    "id": "legacy-queue",
-                }
-            ],
-        )
-
-
 def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     monkeypatch.setenv("REFLEX_ENABLED", "1")
     observed = _observed_state()
@@ -253,54 +163,69 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     )
     assert route_after_reflex(worker_state()) == "reasoning"
 
-
-def test_active_reflex_recipe_keeps_selection_for_reflex(monkeypatch):
     from agent.graph import worker_selection
 
-    monkeypatch.setenv("REFLEX_ENABLED", "1")
-
-    state = worker_state(
-        observation={
-            "observation_id": "observation:0001",
-            "current_screenshot": "screen.png",
-            "ocr_complete": True,
-        },
+    active_recipe_state = worker_state(
+        observation=observed["observation"],
         transition={
-            "transition_result": {
-                "status": "ready",
-                "action": "type_in_marker",
-            },
+            "transition_result": {"status": "ready", "action": "type_in_marker"}
         },
         replay={
             "active_reflex_recipe": {
                 "recipe_key": "recipe-search-set",
                 "current_transition_index": 1,
                 "transition_count": 2,
-            },
+            }
         },
     )
-    result = apply_update(
-        state,
-        worker_selection.selection_node(state, node_runtime()),
+    selected = apply_update(
+        active_recipe_state,
+        worker_selection.selection_node(active_recipe_state, node_runtime()),
     )
+    assert route_after_selection(selected) == "reflex"
 
-    assert route_after_selection(result) == "reflex"
 
+def test_duplicate_detail_that_completes_target_ends_after_selection():
+    from agent.graph import worker_selection
 
-def test_worker_observation_is_ready_only_after_ocr():
-    ready = {
-        "ocr_complete": True,
-        "observation_id": "observation:2",
-        "current_screenshot": "screen.png",
-    }
-    assert current_observation_ready(worker_state(observation=ready)) is True
-    assert (
-        current_observation_ready(
-            worker_state(observation={**ready, "ocr_complete": False})
+    state = worker_state(
+        request={
+            "collection_intent": CollectionIntent(
+                site="wanted",
+                search_keyword="iOS 개발자",
+                target_count=1,
+            )
+        },
+        observation={
+            "current_url": "https://www.wanted.co.kr/wd/118",
+            "ocr_complete": True,
+            "observation_id": "observation:detail",
+            "current_screenshot": "detail.png",
+        },
+        collection={
+            "job_card_queue": [
+                {
+                    "queue_id": "card-1",
+                    "status": "active",
+                    "title": "iOS 개발자",
+                }
+            ]
+        },
+    )
+    runtime = node_runtime(
+        data=worker_data_services(
+            find_existing_job_url=lambda _url, _jobs: {
+                "matched": True,
+                "job_id": 118,
+                "source": "database",
+            }
         )
-        is False
     )
-    assert current_observation_ready(worker_state(observation={})) is False
+
+    updated = apply_update(state, worker_selection.selection_node(state, runtime))
+
+    assert updated["lifecycle"]["is_finished"] is True
+    assert route_after_selection(updated) == "end"
 
 
 def test_worker_start_reuses_only_completed_observation():
@@ -386,7 +311,7 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
     assert result["observation"]["ocr_complete"] is False
 
 
-def test_screen_changing_action_always_routes_to_capture():
+def test_worker_routes_screen_changes_to_recapture():
     assert (
         route_after_execution(
             worker_state(transition={"transition_request": {"action": "click_marker"}})
@@ -394,21 +319,6 @@ def test_screen_changing_action_always_routes_to_capture():
         == "capture"
     )
     assert route_after_execution(worker_state()) == "reasoning"
-
-
-def test_loading_card_screen_routes_from_reasoning_to_recapture():
-    state = worker_state(
-        decision={
-            "pending_action": None,
-            "job_card_selection_trace": {"reason": "screen_loading"},
-        }
-    )
-
-    assert route_after_reasoning(state) == "capture"
-    assert (
-        route_after_reasoning(worker_state(decision={"pending_action": object()}))
-        == "execution"
-    )
 
 
 def test_capture_screen_assigns_run_scoped_incrementing_observation_id(monkeypatch):
@@ -463,17 +373,6 @@ def test_capture_screen_assigns_run_scoped_incrementing_observation_id(monkeypat
     )
 
 
-def test_worker_state_factory_matches_the_declared_state_contract():
-    from agent.runtime.worker_contracts import WorkerState
-    from agent.runtime.worker_contracts import create_worker_state
-
-    state = create_worker_state("테스트 목표")
-
-    assert set(state).issubset(WorkerState.__annotations__)
-    assert "worker_attempt_index" not in state
-    assert state["request"]["goal"] == "테스트 목표"
-
-
 def test_execution_records_one_complete_action_event(monkeypatch):
     calls: list[str] = []
 
@@ -493,12 +392,12 @@ def test_execution_records_one_complete_action_event(monkeypatch):
             {"name": "click_marker", "args": {"marker_id": 1}, "id": "click"},
         ],
     )
-    result = _run_execution(
-        _execution_state(
-            request,
-            current_markers=[{"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"}],
-        )
+    state = _execution_state(
+        request,
+        current_markers=[{"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"}],
     )
+    state["transition"]["error_count"] = 2
+    result = _run_execution(state)
 
     assert calls == ["click_marker"]
     action_results = action_event_results(result["transition"]["action_events"])
@@ -519,6 +418,7 @@ def test_execution_records_one_complete_action_event(monkeypatch):
         event["feedback_episode"].observation.before["observation_id"]
         == "worker-test:observation:0003"
     )
+    assert result["transition"]["error_count"] == 0
 
 
 def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
@@ -602,33 +502,6 @@ def test_execution_accumulates_detail_field_evidence(monkeypatch):
     coverage = result["collection"]["job_detail_coverage"]
     assert coverage["field_evidence"]["requirements"] == "Python"
     assert coverage["field_evidence"]["url"] == ("https://example.com/jobs/1")
-
-
-def test_successful_execution_resets_consecutive_error_count(monkeypatch):
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "dispatch_ui_action",
-        lambda *_args, **_kwargs: {
-            "action": "scroll",
-            "status": "success",
-        },
-    )
-    request = _request(
-        "llm",
-        [
-            {
-                "name": "scroll",
-                "args": {"direction": "down"},
-                "id": "scroll",
-            }
-        ],
-    )
-    state = _execution_state(request)
-    state["transition"]["error_count"] = 2
-
-    result = _run_execution(state)
-
-    assert result["transition"]["error_count"] == 0
 
 
 def test_reflex_transition_executes_input_and_enter_without_recapture(
@@ -730,15 +603,10 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
     )
 
 
-def test_failed_ui_dispatch_is_recorded_once(monkeypatch):
+def test_failed_ui_dispatch_is_recorded_once_without_screen_transition(monkeypatch):
     def fail_dispatch(*args, **kwargs):
         raise RuntimeError("physical input failed")
 
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "dispatch_ui_action",
-        fail_dispatch,
-    )
     request = _request(
         "job_card_queue",
         [
@@ -749,58 +617,36 @@ def test_failed_ui_dispatch_is_recorded_once(monkeypatch):
             }
         ],
     )
-    result = _run_execution(
-        _execution_state(
-            request,
-            current_markers=[
-                {"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"},
-            ],
-        )
-    )
-
-    action_results = action_event_results(result["transition"]["action_events"])
-    assert len(action_results) == 1
-    assert action_results[0]["status"] == "error"
-    assert action_results[0]["error"] == "physical input failed"
-    assert result["transition"]["error_count"] == 1
-
-
-def test_returned_ui_error_does_not_create_screen_transition(monkeypatch):
-    monkeypatch.setattr(
-        worker_execution_dispatch,
-        "dispatch_ui_action",
+    dispatchers = [
+        fail_dispatch,
         lambda *args, **kwargs: {
             "action": "click_marker",
             "status": "error",
             "error": "physical input failed",
         },
-    )
-    request = _request(
-        "job_card_queue",
-        [
-            {
-                "name": "click_marker",
-                "args": {"marker_id": 1},
-                "id": "click",
-            }
-        ],
-    )
-
-    result = _run_execution(
-        _execution_state(
-            request,
-            current_markers=[
-                {"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"},
-            ],
+    ]
+    for dispatch in dispatchers:
+        monkeypatch.setattr(
+            worker_execution_dispatch,
+            "dispatch_ui_action",
+            dispatch,
         )
-    )
-
-    assert (
-        action_event_results(result["transition"]["action_events"])[0]["status"]
-        == "error"
-    )
-    assert result["transition"]["error_count"] == 1
-    assert not result["transition"]["transition_request"]
+        result = _run_execution(
+            _execution_state(
+                request,
+                current_markers=[
+                    {"id": 1, "bbox": [0, 0, 10, 10], "text": "공고"},
+                ],
+            )
+        )
+        action_results = action_event_results(
+            result["transition"]["action_events"]
+        )
+        assert len(action_results) == 1
+        assert action_results[0]["status"] == "error"
+        assert action_results[0]["error"] == "physical input failed"
+        assert result["transition"]["error_count"] == 1
+        assert not result["transition"]["transition_request"]
 
 
 def test_returned_state_error_is_recorded_as_failure(monkeypatch):

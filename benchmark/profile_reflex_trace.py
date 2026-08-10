@@ -37,54 +37,85 @@ def _stats(values: list[float]) -> dict[str, float | int]:
     }
 
 
-def profile_summary(path: Path) -> dict[str, Any]:
-    """실행 중 수집된 구조화 지표만 집계한다."""
+def _step_duration(item: dict[str, Any]) -> float | None:
+    try:
+        return float(item.get("duration_sec") or 0.0)
+    except (TypeError, ValueError):
+        return None
 
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    metrics = payload.get("metrics") or {}
-    steps = metrics.get("steps") or []
+
+def _collect_step_metrics(
+    steps: list[Any],
+) -> tuple[
+    dict[str, list[float]],
+    int,
+    int,
+    Counter[str],
+]:
     durations: dict[str, list[float]] = defaultdict(list)
     reflex_hits = 0
     queue_replay_hits = 0
-    perception_modes: Counter[str] = Counter()
     reasoning_modes: Counter[str] = Counter()
-
     for item in steps:
         if not isinstance(item, dict):
             continue
-        component = str(item.get("component") or "unknown")
-        if component.startswith("graph:"):
-            component = component.removeprefix("graph:")
-        try:
-            duration = float(item.get("duration_sec") or 0.0)
-        except (TypeError, ValueError):
+        duration = _step_duration(item)
+        if duration is None:
             continue
+        component = str(item.get("component") or "unknown").removeprefix("graph:")
         durations[component].append(duration)
         if component == "execution":
             for action_name in item.get("action_names") or []:
                 if str(action_name):
                     durations[f"action ({action_name})"].append(duration)
-
         action_source = str(item.get("action_source") or "")
-        if component == "reflex" and action_source == "reflex":
-            reflex_hits += 1
-        if component == "selection" and action_source == "job_card_queue":
-            queue_replay_hits += 1
-        if component == "ocr":
-            perception_modes[str(item.get("analysis_mode") or "full")] += 1
+        reflex_hits += int(component == "reflex" and action_source == "reflex")
+        queue_replay_hits += int(
+            component == "selection" and action_source == "job_card_queue"
+        )
         if component == "reasoning":
             reasoning_modes[str(item.get("reasoning_mode") or "general")] += 1
+    return (
+        durations,
+        reflex_hits,
+        queue_replay_hits,
+        reasoning_modes,
+    )
 
-    llm_durations: dict[str, list[float]] = defaultdict(list)
-    for call in (metrics.get("llm") or {}).get("calls") or []:
+
+def _collect_llm_durations(calls: list[Any]) -> dict[str, list[float]]:
+    durations: dict[str, list[float]] = defaultdict(list)
+    for call in calls:
         if not isinstance(call, dict):
             continue
-        try:
-            llm_durations[str(call.get("component") or "unknown")].append(
-                float(call.get("duration_sec") or 0.0)
-            )
-        except (TypeError, ValueError):
-            continue
+        duration = _step_duration(call)
+        if duration is not None:
+            durations[str(call.get("component") or "unknown")].append(duration)
+    return durations
+
+
+def _action_stats(durations: dict[str, list[float]]) -> dict[str, dict[str, Any]]:
+    return {
+        component.removeprefix("action (").removesuffix(")"): _stats(values)
+        for component, values in sorted(durations.items())
+        if component.startswith("action (")
+    }
+
+
+def profile_summary(path: Path) -> dict[str, Any]:
+    """실행 중 수집된 구조화 지표만 집계한다."""
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    metrics = payload.get("metrics") or {}
+    (
+        durations,
+        reflex_hits,
+        queue_replay_hits,
+        reasoning_modes,
+    ) = _collect_step_metrics(metrics.get("steps") or [])
+    llm_durations = _collect_llm_durations(
+        (metrics.get("llm") or {}).get("calls") or []
+    )
 
     return {
         "path": str(path),
@@ -93,21 +124,13 @@ def profile_summary(path: Path) -> dict[str, Any]:
         "status": payload.get("status", ""),
         "execution_time_sec": payload.get("execution_time_sec"),
         "nodes": {name: _stats(values) for name, values in sorted(durations.items())},
-        "actions": {
-            name.removeprefix("action (").removesuffix(")"): stats
-            for name, stats in (
-                (component, _stats(values))
-                for component, values in sorted(durations.items())
-                if component.startswith("action (")
-            )
-        },
+        "actions": _action_stats(durations),
         "llm_calls": {name: _stats(values) for name, values in sorted(llm_durations.items())},
         "llm_usage": (metrics.get("llm") or {}).get("totals", {}),
         "llm_cost": (metrics.get("llm") or {}).get("cost", {}),
         "quality": payload.get("quality", {}),
         "reflex_hits": reflex_hits,
         "queue_replay_hits": queue_replay_hits,
-        "perception_modes": dict(perception_modes),
         "reasoning_modes": dict(reasoning_modes),
     }
 
@@ -139,7 +162,6 @@ def _print_report(report: dict[str, Any]) -> None:
         _print_stats_group("llm_calls", report["llm_calls"])
     print(f"reflex_hits: {report.get('reflex_hits', 0)}")
     print(f"queue_replay_hits: {report.get('queue_replay_hits', 0)}")
-    print(f"perception_modes: {report.get('perception_modes', {})}")
     print(f"reasoning_modes: {report.get('reasoning_modes', {})}")
 
 

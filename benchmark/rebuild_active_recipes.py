@@ -35,12 +35,13 @@ def main() -> int:
 
     candidates = RecipeCandidateStore(db_path).list_recent(limit=10000, status="accepted")
     if args.site:
-        candidates = [item for item in candidates if item.get("site") == args.site]
+        candidates = [item for item in candidates if item.site == args.site]
     candidates.reverse()
 
     recipe_store = RecipeStore(db_path)
+    candidate_sites = {item.site for item in candidates if item.site}
     before = len(recipe_store.get_by_site(args.site)) if args.site else sum(
-        len(recipe_store.get_by_site(site)) for site in {item.get("site", "") for item in candidates if item.get("site")}
+        len(recipe_store.get_by_site(site)) for site in candidate_sites
     )
     print(f"db={db_path}")
     print(f"site={args.site or '*'} candidates={len(candidates)} active_before={before}")
@@ -52,9 +53,12 @@ def main() -> int:
     backup_path = db_path.with_name(f"{db_path.stem}_before_recipe_rebuild_{stamp}{db_path.suffix}")
     shutil.copy2(db_path, backup_path)
     removed = recipe_store.clear_recipes(args.site or None)
-    results = [reapply_reviewed_candidate_promotion(item["candidate_id"], db_path=db_path) for item in candidates]
+    results = [
+        reapply_reviewed_candidate_promotion(item.run_id, db_path=db_path)
+        for item in candidates
+    ]
     after = len(recipe_store.get_by_site(args.site)) if args.site else sum(
-        len(recipe_store.get_by_site(site)) for site in {item.get("site", "") for item in candidates if item.get("site")}
+        len(recipe_store.get_by_site(site)) for site in candidate_sites
     )
     print(f"backup={backup_path}")
     print(f"removed={removed} active_after={after}")

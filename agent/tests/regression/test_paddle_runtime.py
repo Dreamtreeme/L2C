@@ -16,42 +16,16 @@ from agent.tools.paddle_ocr_runner import (
 )
 
 
-def test_paddle_runtime_accepts_declared_version():
-    class FakePaddle:
-        __version__ = "3.3.1"
-
-    _validate_paddle_version(FakePaddle())
-
-
-def test_paddle_runtime_rejects_undeclared_version():
-    class FakePaddle:
-        __version__ = "2.6.2"
-
-    try:
-        _validate_paddle_version(FakePaddle())
-    except RuntimeError as exc:
-        assert "installed=2.6.2, required=3.3.1" in str(exc)
-    else:
-        raise AssertionError("Undeclared PaddlePaddle runtime must fail")
-
-
-def test_paddleocr_runtime_accepts_declared_version():
-    class FakePaddleOcr:
-        __version__ = "3.7.0"
-
-    _validate_paddleocr_version(FakePaddleOcr())
-
-
-def test_paddleocr_runtime_rejects_legacy_api_version():
-    class FakePaddleOcr:
-        __version__ = "2.10.0"
-
-    try:
-        _validate_paddleocr_version(FakePaddleOcr())
-    except RuntimeError as exc:
-        assert "installed=2.10.0, required=3.7.0" in str(exc)
-    else:
-        raise AssertionError("Legacy PaddleOCR runtime must fail")
+def test_paddle_runtime_versions_match_the_declared_environment():
+    cases = [
+        (_validate_paddle_version, "3.3.1", "2.6.2"),
+        (_validate_paddleocr_version, "3.7.0", "2.10.0"),
+    ]
+    for validator, required, rejected in cases:
+        validator(type("Runtime", (), {"__version__": required})())
+        with pytest.raises(RuntimeError) as exc_info:
+            validator(type("Runtime", (), {"__version__": rejected})())
+        assert f"installed={rejected}, required={required}" in str(exc_info.value)
 
 
 def test_paddleocr_v3_result_is_normalized_to_existing_marker_contract():

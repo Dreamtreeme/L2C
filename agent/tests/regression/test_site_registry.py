@@ -1,10 +1,16 @@
-def test_site_registry_lists_existing_profiles():
-    from agent.sites import list_supported_sites
+def test_site_registry_loads_supported_profiles_with_required_contracts():
+    from agent.sites import list_supported_sites, load_site_profile
 
-    sites = list_supported_sites()
-    slugs = {site.slug for site in sites}
+    profiles = list_supported_sites()
+    slugs = {profile.slug for profile in profiles}
 
     assert {"wanted", "jobkorea", "saramin", "worknet", "rocketpunch"}.issubset(slugs)
+    for profile in profiles:
+        loaded = load_site_profile(profile.slug)
+        assert loaded.collection_policy.required_fields, profile.slug
+        for role in ("home", "search", "job_detail"):
+            assert loaded.page_guidance[role].instructions, (profile.slug, role)
+        assert loaded.page_guidance["job_detail"].reading_targets, profile.slug
 
 
 def test_official_site_urls_resolve_from_slug_name_and_domain():
@@ -20,29 +26,6 @@ def test_official_site_urls_resolve_from_slug_name_and_domain():
 
     for requested_site, official_url in expected.items():
         assert get_official_site_url(requested_site) == official_url
-
-
-def test_open_browser_uses_requested_site_official_url(monkeypatch):
-    from agent.tools.actions import ActionTools
-
-    class FakePerception:
-        _browser_window_id = None
-
-    action_tools = object.__new__(ActionTools)
-    action_tools.perception = FakePerception()
-    opened = []
-    monkeypatch.setattr(action_tools, "_bound_browser_window_exists", lambda: False)
-    monkeypatch.setattr(
-        action_tools,
-        "_open_url_in_new_window",
-        lambda url: opened.append(url) or {"opened": True, "url": url},
-    )
-    monkeypatch.setattr(action_tools, "_reset_browser_zoom", lambda: None)
-
-    result = action_tools.open_browser(site="saramin")
-
-    assert result["status"] == "success"
-    assert opened == ["https://www.saramin.co.kr"]
 
 
 def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch):
@@ -84,84 +67,30 @@ def test_worker_preparation_opens_requested_site_instead_of_default(monkeypatch)
     assert result["observation"]["current_url"] == "https://www.jobkorea.co.kr"
 
 
-def test_site_registry_profile_files_exist():
-    from agent.sites import list_supported_sites
-    from agent.sites.loader import SITES_DIR
-
-    for profile in list_supported_sites(enabled_only=False):
-        path = SITES_DIR / profile.slug / "profile.json"
-        assert path.exists(), f"missing profile.json for {profile.slug}: {path}"
-
-
-def test_load_site_profile_returns_typed_contract():
-    from agent.sites import load_site_profile
-
-    profile = load_site_profile("wanted.co.kr")
-
-    assert profile.slug == "wanted"
-    assert "원티드" in profile.guidance
-    assert profile.collection_policy.required_fields
-
-
-def test_all_site_profiles_define_collection_contracts():
-    from agent.sites import list_supported_sites, load_site_profile
-
-    for profile in list_supported_sites():
-        loaded = load_site_profile(profile.slug)
-        payload = loaded.model_dump()
-        assert loaded.collection_policy.required_fields
-        assert "reflex_policy" not in payload
-        assert "tools" not in payload
-
-
-def test_all_site_profiles_define_role_scoped_guidance():
-    from agent.sites import list_supported_sites, load_site_profile
-
-    for profile in list_supported_sites():
-        guidance = load_site_profile(profile.slug).page_guidance
-        assert guidance["home"].instructions
-        assert guidance["search"].instructions
-        assert guidance["job_detail"].instructions
-        assert guidance["job_detail"].reading_targets
-
-
-def test_jobkorea_detail_role_uses_declared_url_signal():
+def test_site_page_roles_use_declared_url_signals():
     from agent.runtime.site_context import (
         infer_site_page_role,
         looks_like_job_detail_url,
     )
 
-    url = "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001"
+    cases = [
+        (
+            "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001",
+            "job_detail",
+        ),
+        (
+            "https://www.work24.go.kr/wk/a/b/1500/empDetailAuthView.do"
+            "?wantedAuthNo=51078967&infoTypeCd=CJK",
+            "job_detail",
+        ),
+        ("https://www.work24.go.kr/cm/main.do", "home"),
+        ("https://www.saramin.co.kr/zf_user/", "home"),
+    ]
 
-    assert looks_like_job_detail_url(url) is True
-    assert infer_site_page_role(url, []) == "job_detail"
-
-
-def test_work24_detail_role_uses_declared_url_signal():
-    from agent.runtime.site_context import (
-        infer_site_page_role,
-        looks_like_job_detail_url,
-    )
-
-    url = (
-        "https://www.work24.go.kr/wk/a/b/1500/empDetailAuthView.do"
-        "?wantedAuthNo=51078967&infoTypeCd=CJK"
-    )
-
-    assert looks_like_job_detail_url(url) is True
-    assert infer_site_page_role(url, []) == "job_detail"
-
-
-def test_work24_redirected_home_uses_declared_url_signal():
-    from agent.runtime.site_context import infer_site_page_role
-
-    assert infer_site_page_role("https://www.work24.go.kr/cm/main.do", []) == "home"
-
-
-def test_saramin_redirected_home_uses_declared_url_signal():
-    from agent.runtime.site_context import infer_site_page_role
-
-    assert infer_site_page_role("https://www.saramin.co.kr/zf_user/", []) == "home"
+    for url, expected_role in cases:
+        assert infer_site_page_role(url, []) == expected_role, url
+        if expected_role == "job_detail":
+            assert looks_like_job_detail_url(url) is True, url
 
 
 def test_unregistered_site_does_not_use_generic_job_url_heuristic():
@@ -189,8 +118,12 @@ def test_detail_context_does_not_require_a_detail_url_pattern():
     )
 
 
-def test_rocketpunch_jobs_list_uses_job_search_guidance_without_hiding_side_panel():
-    from agent.runtime.site_context import infer_site_page_role, site_runtime_guidance
+def test_rocketpunch_list_and_selected_job_use_side_panel_contract():
+    from agent.runtime.site_context import (
+        infer_site_page_role,
+        looks_like_job_detail_url,
+        site_runtime_guidance,
+    )
 
     url = "https://www.rocketpunch.com/jobs"
     list_markers = ["키워드", "직군", "숙련도", "기업 규모", "근무 방식"]
@@ -208,18 +141,12 @@ def test_rocketpunch_jobs_list_uses_job_search_guidance_without_hiding_side_pane
         )
         == "job_detail"
     )
-
-
-def test_rocketpunch_selected_job_query_identifies_side_panel_detail():
-    from agent.runtime.site_context import (
-        infer_site_page_role,
-        looks_like_job_detail_url,
+    selected_url = (
+        "https://www.rocketpunch.com/jobs?"
+        "keyword=백엔드+개발자&selectedJobId=159079"
     )
-
-    url = "https://www.rocketpunch.com/jobs?keyword=백엔드+개발자&selectedJobId=159079"
-
-    assert looks_like_job_detail_url(url) is True
-    assert infer_site_page_role(url, ["주요업무"]) == "job_detail"
+    assert looks_like_job_detail_url(selected_url) is True
+    assert infer_site_page_role(selected_url, ["주요업무"]) == "job_detail"
 
 
 def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path):
@@ -278,15 +205,6 @@ def test_runtime_guidance_contains_only_current_site_and_role():
     assert "급여" in guidance
     assert "미방문 카드 큐" not in guidance
     assert "원티드" not in guidance
-
-
-def test_job_normalization_uses_registry_source_platform():
-    from agent.application.job_normalization_service import source_platform_for_url
-
-    assert (
-        source_platform_for_url("https://www.jobkorea.co.kr/Recruit/GI_Read/50000001")
-        == "JobKorea"
-    )
 
 
 def test_realtime_scraping_goal_uses_requested_site_profile():

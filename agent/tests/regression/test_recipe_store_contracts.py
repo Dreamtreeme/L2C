@@ -9,15 +9,23 @@ def _recipe_metadata(task_category: str) -> RecipeSkillMetadata:
 
 
 def _recipe_candidate(steps: list[dict], transitions: list[dict]) -> RecipeCandidate:
+    transitions_by_seq = {
+        transition.get("action_seq"): transition for transition in transitions
+    }
     submission = WorkerSubmission(
         run_id="recipe-path-test",
         collection_intent={"site": "example"},
-        recorded_steps=steps,
-        transition_records=transitions,
+        action_events=[
+            {
+                "seq": int(step.get("seq") or 0),
+                "recipe_step": step,
+                "transition": transitions_by_seq.get(step.get("seq")),
+            }
+            for step in steps
+        ],
     )
     return RecipeCandidate(
-        candidate_id="recipe-path-test",
-        submission_id="recipe-path-test",
+        run_id="recipe-path-test",
         status="pending_replay",
         submission=submission,
     )
@@ -161,88 +169,53 @@ def test_recipe_store_scopes_by_site_and_task_category(tmp_path):
     assert store.get_site_recipes("saramin", task_category="검색") == []
 
 
-def test_recipe_store_saves_input_and_submit_as_one_path(tmp_path):
+def test_recipe_store_keeps_actions_in_one_path_across_page_changes(tmp_path):
     from agent.recipe.store import RecipeStore
 
-    store = RecipeStore(tmp_path / "recipe-path.db")
-    saved = store.commit_recipe_path(
-        "saramin",
-        "검색",
-        _active_recipe_path(
-            [
-                {
-                    "seq": 1,
-                    "url_template": "saramin.co.kr/zf_user/",
-                    "page_role": "home",
-                    "action": "type_in_marker",
-                    "replay_mode": "parameterized",
-                    "slot_refs": ["query"],
-                    "param": {"slot_name": "query"},
-                    "target": {"text": "검색어"},
-                    "roi_signature": {"phash": "0" * 16},
-                },
-                {
-                    "seq": 2,
-                    "url_template": "saramin.co.kr/zf_user/",
-                    "page_role": "home",
-                    "action": "click_marker",
-                    "replay_mode": "fixed",
-                    "target": {"text": "검색"},
-                    "roi_signature": {"phash": "1" * 16},
-                },
-            ]
-        ),
-        metadata=_recipe_metadata("검색"),
-    )
+    cases = [
+        ("same-page", "saramin.co.kr/zf_user/", "home"),
+        ("cross-page", "saramin.co.kr/zf_user/search", "search"),
+    ]
+    for case_name, second_url, second_role in cases:
+        store = RecipeStore(tmp_path / f"{case_name}.db")
+        saved = store.commit_recipe_path(
+            "saramin",
+            "검색",
+            _active_recipe_path(
+                [
+                    {
+                        "seq": 1,
+                        "url_template": "saramin.co.kr/zf_user/",
+                        "page_role": "home",
+                        "action": "type_in_marker",
+                        "replay_mode": "parameterized",
+                        "slot_refs": ["query"],
+                        "param": {"slot_name": "query"},
+                        "target": {"text": "검색어"},
+                        "roi_signature": {"phash": "0" * 16},
+                    },
+                    {
+                        "seq": 2,
+                        "url_template": second_url,
+                        "page_role": second_role,
+                        "action": "click_marker",
+                        "replay_mode": "fixed",
+                        "target": {"text": "검색"},
+                        "roi_signature": {"phash": "1" * 16},
+                    },
+                ]
+            ),
+            metadata=_recipe_metadata("검색"),
+        )
 
-    recipes = store.get_by_site("saramin")
-
-    assert saved == 1
-    assert len(recipes) == 1
-    assert [
-        transition["actions"][0]["action"] for transition in recipes[0]["transitions"]
-    ] == ["type_in_marker", "click_marker"]
-
-
-def test_recipe_store_keeps_cross_page_steps_in_one_path(tmp_path):
-    from agent.recipe.store import RecipeStore
-
-    store = RecipeStore(tmp_path / "separate-actions.db")
-    saved = store.commit_recipe_path(
-        "saramin",
-        "검색",
-        _active_recipe_path(
-            [
-                {
-                    "seq": 1,
-                    "url_template": "saramin.co.kr/zf_user/",
-                    "page_role": "home",
-                    "action": "type_in_marker",
-                    "replay_mode": "parameterized",
-                    "slot_refs": ["query"],
-                    "param": {"slot_name": "query"},
-                    "target": {"text": "검색어"},
-                    "roi_signature": {"phash": "0" * 16},
-                },
-                {
-                    "seq": 2,
-                    "url_template": "saramin.co.kr/zf_user/search",
-                    "page_role": "search",
-                    "action": "click_marker",
-                    "replay_mode": "fixed",
-                    "target": {"text": "검색"},
-                    "roi_signature": {"phash": "1" * 16},
-                },
-            ]
-        ),
-        metadata=_recipe_metadata("검색"),
-    )
-
-    recipes = store.get_by_site("saramin")
-
-    assert saved == 1
-    assert len(recipes) == 1
-    assert len(recipes[0]["transitions"]) == 2
+        recipes = store.get_by_site("saramin")
+        actions = [
+            transition["actions"][0]["action"]
+            for transition in recipes[0]["transitions"]
+        ]
+        assert saved == 1, case_name
+        assert len(recipes) == 1, case_name
+        assert actions == ["type_in_marker", "click_marker"], case_name
 
 
 def test_recipe_path_accepts_page_role_change_without_full_screen_hash(
@@ -330,7 +303,7 @@ def test_recipe_store_preserves_two_paths_with_overlapping_steps(tmp_path):
             "탐색",
             [_active_recipe_path(first_path)],
             metadata=_recipe_metadata("사이트 탐색"),
-            candidate_id="candidate-abc",
+            source_run_id="run-abc",
         )
         == 1
     )
@@ -340,7 +313,7 @@ def test_recipe_store_preserves_two_paths_with_overlapping_steps(tmp_path):
             "탐색",
             [_active_recipe_path(second_path)],
             metadata=_recipe_metadata("사이트 탐색"),
-            candidate_id="candidate-adc",
+            source_run_id="run-adc",
         )
         == 1
     )
@@ -374,21 +347,21 @@ def test_replacing_one_candidate_keeps_shared_path_evidence(tmp_path):
         ]
 
     store = RecipeStore(tmp_path / "shared-evidence.db")
-    for candidate_id in ("candidate-one", "candidate-two"):
+    for run_id in ("run-one", "run-two"):
         assert (
             store.replace_recipe_paths(
                 "example",
                 "탐색",
                 [_active_recipe_path(path("B"))],
                 metadata=_recipe_metadata("사이트 탐색"),
-                candidate_id=candidate_id,
+                source_run_id=run_id,
             )
             == 1
         )
 
     shared = store.get_by_site("example")
     assert len(shared) == 1
-    assert shared[0]["success_count"] == 2
+    assert shared[0]["support_count"] == 2
     assert shared[0]["source_count"] == 2
 
     assert (
@@ -397,7 +370,7 @@ def test_replacing_one_candidate_keeps_shared_path_evidence(tmp_path):
             "탐색",
             [_active_recipe_path(path("D"))],
             metadata=_recipe_metadata("사이트 탐색"),
-            candidate_id="candidate-two",
+            source_run_id="run-two",
         )
         == 1
     )
@@ -409,7 +382,7 @@ def test_replacing_one_candidate_keeps_shared_path_evidence(tmp_path):
             transition["actions"][0]["target"]["text"]
             for transition in recipe["transitions"]
         ): (
-            recipe["success_count"],
+            recipe["support_count"],
             recipe["source_count"],
         )
         for recipe in recipes
@@ -419,83 +392,41 @@ def test_replacing_one_candidate_keeps_shared_path_evidence(tmp_path):
     }
 
 
-def test_critic_gap_does_not_create_a_standalone_suffix_path():
-    from agent.recipe.path_builder import build_recipe_path
+def test_recipe_store_separates_candidate_support_from_replay_results(tmp_path):
+    from agent.recipe.store import RecipeStore
 
-    def state(observation_id: str, phash: str) -> dict:
-        return {
-            "observation_id": observation_id,
-            "url_template": "example.com/search",
-            "page_role": "search_results",
-            "screen_context_signature": {
-                "phash": phash,
-                "size": [1920, 1080],
-            },
-        }
-
-    steps = [
-        {
-            "seq": 1,
-            "action": "click_marker",
-            "page_role": "search_results",
-            "replay_mode": "fixed",
-            "target": {"text": "A"},
-            "roi_signature": {"phash": "1" * 16},
-            "before_state": state("observation:0001", "1" * 16),
-        },
-        {
-            "seq": 2,
-            "action": "press_key",
-            "page_role": "search_results",
-            "replay_mode": "fixed",
-            "param": {"key": "tab"},
-            "screen_context_signature": {
-                "phash": "2" * 16,
-                "size": [1920, 1080],
-            },
-            "before_state": state("observation:0002", "2" * 16),
-        },
-        {
-            "seq": 4,
-            "action": "click_marker",
-            "page_role": "search_results",
-            "replay_mode": "fixed",
-            "target": {"text": "B"},
-            "roi_signature": {"phash": "4" * 16},
-            "before_state": state("observation:0004", "4" * 16),
-        },
-    ]
-    candidate = _recipe_candidate(
-        steps,
+    path = _active_recipe_path(
         [
             {
-                "action_seq": 1,
-                "after_state": state("observation:0002", "2" * 16),
-            },
-            {
-                "action_seq": 2,
-                "after_state": state("observation:0003", "3" * 16),
-            },
-            {
-                "action_seq": 4,
-                "after_state": state("observation:0005", "5" * 16),
-            },
-        ],
+                "seq": 1,
+                "action": "click_marker",
+                "replay_mode": "fixed",
+                "target": {"text": "검색"},
+                "roi_signature": {"phash": "1" * 16},
+            }
+        ]
     )
+    store = RecipeStore(tmp_path / "replay-results.db")
+    assert store.replace_recipe_paths(
+        "example",
+        "검색",
+        [path],
+        metadata=_recipe_metadata("검색"),
+        source_run_id="run-one",
+    ) == 1
+    recipe_key = store.get_by_site("example")[0]["recipe_key"]
 
-    path, issues = build_recipe_path(candidate, steps)
+    assert store.record_replay_result(recipe_key, True) is True
+    assert store.record_replay_result(recipe_key, False) is True
 
-    assert path is not None
-    assert [
-        transition["actions"][0]["source_seq"] for transition in path["transitions"]
-    ] == [1, 2]
-    assert any(
-        issue["seq"] == 4 and issue["reason"] == "state_continuity_unproven"
-        for issue in issues
-    )
+    recipe = store.get_by_site("example")[0]
+    assert recipe["support_count"] == 1
+    assert recipe["replay_success_count"] == 1
+    assert recipe["replay_failure_count"] == 1
+    assert recipe["last_replayed_at"]
 
 
-def test_critic_can_remove_action_when_state_continuity_is_proven():
+def test_critic_does_not_join_different_recorded_observations():
     from agent.recipe.path_builder import build_recipe_path
 
     def state(observation_id: str, phash: str) -> dict:
@@ -554,5 +485,11 @@ def test_critic_can_remove_action_when_state_continuity_is_proven():
     assert path is not None
     assert [
         transition["actions"][0]["source_seq"] for transition in path["transitions"]
-    ] == [1, 3]
-    assert not any(issue["reason"] == "state_continuity_unproven" for issue in issues)
+    ] == [1]
+    assert issues == [
+        {
+            "seq": 3,
+            "action": "click_marker",
+            "reason": "state_continuity_unproven",
+        }
+    ]

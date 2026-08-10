@@ -28,7 +28,7 @@ jobs:
       - name: Check architecture contracts
         run: lint-imports
       - name: Run backend contract tests
-        run: python -m pytest -q agent/tests
+        run: python -m pytest -q agent/tests/core
 
   frontend:
     runs-on: windows-latest

@@ -5,7 +5,7 @@ from agent.observability.reflex_paths import (
 )
 
 
-def test_reflex_path_observation_tracks_start_and_completion() -> None:
+def test_reflex_path_observation_tracks_lifecycle_events() -> None:
     selected = reflex_selection_observation(
         {
             "replay": {"reflex_trace": {
@@ -27,12 +27,6 @@ def test_reflex_path_observation_tracks_start_and_completion() -> None:
             }}
         }
     )
-
-    assert selected["reflex_path_event"] == "started"
-    assert completed["reflex_path_event"] == "completed"
-
-
-def test_reflex_path_observation_tracks_mid_path_fallback() -> None:
     failed = reflex_selection_observation(
         {
             "replay": {"reflex_trace": {
@@ -46,6 +40,8 @@ def test_reflex_path_observation_tracks_mid_path_fallback() -> None:
         }
     )
 
+    assert selected["reflex_path_event"] == "started"
+    assert completed["reflex_path_event"] == "completed"
     assert failed["reflex_path_event"] == "failed"
     assert failed["reflex_fallback_required"] is True
     assert failed["reflex_path_failure_reason"] == "roi_phash_distance"

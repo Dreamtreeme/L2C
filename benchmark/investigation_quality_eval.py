@@ -81,14 +81,14 @@ def evaluate_investigation_analysis(
                 for term in scenario.expected_evidence_terms
             )
             occupation_terms = Counter(
-                _normalized_term(requirement.occupation_query)
+                _normalized_term(requirement.scope.occupation_query)
                 for requirement in evidence_plan.requirements
-                if requirement.occupation_query
+                if requirement.scope.occupation_query
             )
             collection_terms = Counter(
-                _normalized_term(requirement.collection_search_term)
+                _normalized_term(requirement.scope.collection_search_term)
                 for requirement in evidence_plan.requirements
-                if requirement.collection_search_term
+                if requirement.scope.collection_search_term
             )
             checks["evidence_occupation_terms"] = not (
                 expected_terms - occupation_terms

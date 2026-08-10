@@ -101,59 +101,63 @@ def test_job_quality_uses_exact_reference_identity():
     assert result["content_exact_rate"] == 1.0
 
 
-def test_collection_quality_tracks_persisted_target():
-    collection = evaluate_collection_summary(
-        {
-            "target_count": 2,
-            "collected_count": 2,
-            "persisted_count": 1,
-            "resolved_count": 1,
-            "status": "partial",
-            "worker_finished": True,
-        }
-    )
-    assert collection["target_fulfillment"] == 0.5
-    assert collection["passed"] is False
+def test_collection_quality_requires_resolved_detail_records():
+    cases = [
+        (
+            {
+                "target_count": 2,
+                "collected_count": 2,
+                "persisted_count": 1,
+                "resolved_count": 1,
+                "status": "partial",
+                "worker_finished": True,
+            },
+            {"target_fulfillment": 0.5, "passed": False},
+        ),
+        (
+            {
+                "target_count": 2,
+                "resolved_count": 2,
+                "observed_job_ids": [7, 8],
+                "status": "completed",
+                "worker_finished": True,
+            },
+            {
+                "observed_existing_count": 2,
+                "target_fulfillment": 1.0,
+                "passed": True,
+            },
+        ),
+        *[
+            (
+                {
+                    "target_count": 1,
+                    "collected_count": 1,
+                    "persisted_count": 1,
+                    "resolved_count": 1,
+                    "status": "completed",
+                    "worker_finished": True,
+                    "persisted_items": [{"job_id": 1, "url": url}],
+                },
+                {
+                    "passed": passed,
+                    "source_url_integrity": float(passed),
+                },
+            )
+            for url, passed in (
+                ("https://www.saramin.co.kr/zf_user/search?searchword=ML", False),
+                (
+                    "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=2",
+                    True,
+                ),
+            )
+        ],
+    ]
 
-
-def test_collection_quality_counts_existing_jobs_as_resolved():
-    result = evaluate_collection_summary(
-        {
-            "target_count": 2,
-            "resolved_count": 2,
-            "observed_job_ids": [7, 8],
-            "status": "completed",
-            "worker_finished": True,
-        }
-    )
-
-    assert result["observed_existing_count"] == 2
-    assert result["target_fulfillment"] == 1.0
-    assert result["passed"] is True
-
-
-@pytest.mark.parametrize(
-    ("url", "passed"),
-    [
-        ("https://www.saramin.co.kr/zf_user/search?searchword=ML", False),
-        ("https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=2", True),
-    ],
-)
-def test_collection_quality_requires_detail_url(url, passed):
-    result = evaluate_collection_summary(
-        {
-            "target_count": 1,
-            "collected_count": 1,
-            "persisted_count": 1,
-            "resolved_count": 1,
-            "status": "completed",
-            "worker_finished": True,
-            "persisted_items": [{"job_id": 1, "url": url}],
-        }
-    )
-
-    assert result["passed"] is passed
-    assert result["source_url_integrity"] == float(passed)
+    for summary, expected in cases:
+        result = evaluate_collection_summary(summary)
+        for field, value in expected.items():
+            assert result[field] == value, (summary, field)
 
 
 @pytest.mark.parametrize(

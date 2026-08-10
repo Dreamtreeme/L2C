@@ -274,7 +274,7 @@ def _snapshot_database(source: Path, target: Path) -> None:
             source_connection.backup(target_connection)
 
 
-def main() -> int:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run natural-language product regression scenarios in one backend lifespan."
     )
@@ -290,8 +290,10 @@ def main() -> int:
     parser.add_argument("--scenario", default="")
     parser.add_argument("--conversation-prefix", default="product-matrix")
     parser.add_argument("--verbose", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def _prepare_run(args: argparse.Namespace) -> tuple[Path, Path, Path, Path, list[dict]]:
     matrix_path = args.matrix.resolve()
     source_db_path = args.source_db.resolve()
     db_path = args.db_path.resolve()
@@ -313,23 +315,63 @@ def main() -> int:
     scenarios = _selected_scenarios(matrix, selected_ids)
     if not scenarios:
         raise SystemExit("실행할 제품 회귀 시나리오가 없습니다.")
+    return matrix_path, source_db_path, db_path, log_path, summary_path, scenarios
 
-    _snapshot_database(source_db_path, db_path)
-    os.environ["DB_PATH"] = str(db_path)
-    os.environ["VISION_RECIPE_AUTO_PROMOTE"] = "0"
 
+def _run_scenario(
+    client: Any,
+    runtime: Any,
+    scenario: dict[str, Any],
+    *,
+    index: int,
+    conversation_prefix: str,
+    db_path: Path,
+) -> dict[str, Any]:
     started = time.perf_counter()
+    jobs_before = _database_jobs(db_path)
+    request_result = _run_chat_request(
+        client,
+        query=str(scenario.get("query") or ""),
+        conversation_id=(
+            f"{conversation_prefix}-{index}-"
+            f"{scenario.get('scenario_id') or 'scenario'}"
+        ),
+    )
+    jobs_after = _database_jobs(db_path)
+    return {
+        "scenario_id": str(scenario.get("scenario_id") or f"scenario-{index}"),
+        "query": str(scenario.get("query") or ""),
+        "execution_time_sec": round(time.perf_counter() - started, 6),
+        "error": str(request_result.get("error") or ""),
+        "quality": _scenario_quality(
+            scenario,
+            request_result,
+            jobs_before,
+            jobs_after,
+        ),
+        "event_names": [
+            str(item.get("event") or "")
+            for item in request_result.get("events", [])
+            if isinstance(item, dict)
+        ],
+        "final": dict(request_result.get("final") or {}),
+        "resource_snapshot": runtime.vision_runtime.resource_snapshot(),
+    }
+
+
+def _run_scenarios(
+    args: argparse.Namespace,
+    scenarios: list[dict[str, Any]],
+    db_path: Path,
+    log_path: Path,
+) -> tuple[list[dict[str, Any]], str]:
     results: list[dict[str, Any]] = []
     error = ""
     with log_path.open("x", encoding="utf-8", buffering=1) as log_file:
         original_stdout = sys.stdout
         original_stderr = sys.stderr
-        if args.verbose:
-            sys.stdout = _Tee(original_stdout, log_file)  # type: ignore[assignment]
-            sys.stderr = _Tee(original_stderr, log_file)  # type: ignore[assignment]
-        else:
-            sys.stdout = log_file  # type: ignore[assignment]
-            sys.stderr = log_file  # type: ignore[assignment]
+        sys.stdout = _Tee(original_stdout, log_file) if args.verbose else log_file  # type: ignore[assignment]
+        sys.stderr = _Tee(original_stderr, log_file) if args.verbose else log_file  # type: ignore[assignment]
         try:
             from fastapi.testclient import TestClient
 
@@ -337,65 +379,46 @@ def main() -> int:
 
             with TestClient(app) as client:
                 runtime = client.app.state.runtime
-                for index, scenario in enumerate(scenarios, start=1):
-                    scenario_started = time.perf_counter()
-                    jobs_before = _database_jobs(db_path)
-                    request_result = _run_chat_request(
+                results = [
+                    _run_scenario(
                         client,
-                        query=str(scenario.get("query") or ""),
-                        conversation_id=(
-                            f"{args.conversation_prefix}-{index}-"
-                            f"{scenario.get('scenario_id') or 'scenario'}"
-                        ),
-                    )
-                    jobs_after = _database_jobs(db_path)
-                    quality = _scenario_quality(
+                        runtime,
                         scenario,
-                        request_result,
-                        jobs_before,
-                        jobs_after,
+                        index=index,
+                        conversation_prefix=args.conversation_prefix,
+                        db_path=db_path,
                     )
-                    results.append(
-                        {
-                            "scenario_id": str(
-                                scenario.get("scenario_id") or f"scenario-{index}"
-                            ),
-                            "query": str(scenario.get("query") or ""),
-                            "execution_time_sec": round(
-                                time.perf_counter() - scenario_started,
-                                6,
-                            ),
-                            "error": str(request_result.get("error") or ""),
-                            "quality": quality,
-                            "event_names": [
-                                str(item.get("event") or "")
-                                for item in request_result.get("events", [])
-                                if isinstance(item, dict)
-                            ],
-                            "final": dict(request_result.get("final") or {}),
-                            "resource_snapshot": (
-                                runtime.vision_runtime.resource_snapshot()
-                            ),
-                        }
-                    )
+                    for index, scenario in enumerate(scenarios, start=1)
+                ]
         except Exception as exc:
             error = str(exc)
             print(f"PRODUCT_MATRIX_ERROR={error}")
         finally:
             sys.stdout = original_stdout
             sys.stderr = original_stderr
+    return results, error
 
+
+def _write_summary(
+    *,
+    matrix_path: Path,
+    source_db_path: Path,
+    db_path: Path,
+    summary_path: Path,
+    log_path: Path,
+    scenarios: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    error: str,
+    execution_time_sec: float,
+) -> bool:
     summary = {
         "schema_version": 1,
         "matrix": str(matrix_path),
         "source_db": str(source_db_path),
         "test_db": str(db_path),
-        "execution_time_sec": round(time.perf_counter() - started, 6),
+        "execution_time_sec": round(execution_time_sec, 6),
         "error": error,
-        "passed": sum(
-            bool((item.get("quality") or {}).get("passed"))
-            for item in results
-        ),
+        "passed": sum(bool((item.get("quality") or {}).get("passed")) for item in results),
         "total": len(scenarios),
         "results": results,
     }
@@ -425,9 +448,38 @@ def main() -> int:
     )
     print(f"LOG_TARGET={log_path}")
     print(f"SUMMARY_TARGET={summary_path}")
-    passed = not error and len(results) == len(scenarios) and all(
-        bool((item.get("quality") or {}).get("passed"))
-        for item in results
+    return not error and len(results) == len(scenarios) and all(
+        bool((item.get("quality") or {}).get("passed")) for item in results
+    )
+
+
+def main() -> int:
+    args = _parse_args()
+    (
+        matrix_path,
+        source_db_path,
+        db_path,
+        log_path,
+        summary_path,
+        scenarios,
+    ) = _prepare_run(args)
+
+    _snapshot_database(source_db_path, db_path)
+    os.environ["DB_PATH"] = str(db_path)
+    os.environ["VISION_RECIPE_AUTO_PROMOTE"] = "0"
+
+    started = time.perf_counter()
+    results, error = _run_scenarios(args, scenarios, db_path, log_path)
+    passed = _write_summary(
+        matrix_path=matrix_path,
+        source_db_path=source_db_path,
+        db_path=db_path,
+        summary_path=summary_path,
+        log_path=log_path,
+        scenarios=scenarios,
+        results=results,
+        error=error,
+        execution_time_sec=time.perf_counter() - started,
     )
     return 0 if passed else 1
 

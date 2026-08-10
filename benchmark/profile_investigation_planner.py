@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.llm.clients import get_structured_google_model
+from agent.llm.policy import commander_model_name
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.prompts.investigation import evidence_plan_prompt, request_analysis_prompt
 from benchmark.investigation_quality_eval import evaluate_investigation_analysis
@@ -131,7 +132,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model",
-        default=os.getenv("COMMANDER_MODEL", "gemini-3.6-flash"),
+        default=os.getenv("COMMANDER_MODEL") or commander_model_name(),
     )
     parser.add_argument("--date", default=datetime.now().date().isoformat())
     parser.add_argument("--scenario", default="")

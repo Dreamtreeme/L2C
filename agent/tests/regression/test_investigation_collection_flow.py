@@ -23,7 +23,7 @@ from shared.schema.investigation_schema import InvestigationPlanStep, Investigat
     ("worker", "persistence", "target", "status", "resolved", "exhausted"),
     [
         (
-            {"observed_job_ids": [], "is_finished": True},
+            {"observed_job_ids": [], "run_status": "finished"},
             {"persisted_count": 1, "persisted_items": [{"job_id": 1}]},
             2,
             "partial",
@@ -31,7 +31,7 @@ from shared.schema.investigation_schema import InvestigationPlanStep, Investigat
             False,
         ),
         (
-            {"observed_job_ids": [7, 8], "is_finished": True},
+            {"observed_job_ids": [7, 8], "run_status": "finished"},
             {"persisted_count": 0, "persisted_items": []},
             2,
             "completed",
@@ -39,7 +39,7 @@ from shared.schema.investigation_schema import InvestigationPlanStep, Investigat
             False,
         ),
         (
-            {"observed_job_ids": [], "is_finished": False},
+            {"observed_job_ids": [], "run_status": "recursion_limit"},
             {"persisted_count": 1, "persisted_items": [{"job_id": 7}]},
             10,
             "completed",
@@ -61,7 +61,6 @@ def test_collection_result_combines_worker_observation_and_persistence(
             "job_results_availability": {
                 "available_job_count": 1,
                 "count_evidence": "포지션 1",
-                "count_confidence": 0.97,
             }
         }
         if exhausted
@@ -74,8 +73,7 @@ def test_collection_result_combines_worker_observation_and_persistence(
     )
     submission = WorkerSubmission(
         run_id="worker-1",
-        is_finished=worker["is_finished"],
-        hit_recursion_limit=not worker["is_finished"],
+        run_status=worker["run_status"],
         collected_count=persistence["persisted_count"],
         observed_job_ids=worker["observed_job_ids"],
         extracted_summary=summary,
@@ -86,7 +84,7 @@ def test_collection_result_combines_worker_observation_and_persistence(
         site_name="Wanted",
     )
     experience = CollectionExperienceResult(
-        submission_id="submission-1",
+        run_id="worker-1",
         recipe_learning=RecipeLearningResult(status="not_eligible"),
     )
     report = PersistenceReport(persisted_items=persistence["persisted_items"])
@@ -113,6 +111,7 @@ def _collection_state():
                 search_keyword="iOS 개발자",
                 target_count=1,
             ),
+            expected_evidence=["jobs"],
         )
     ]
     return state
@@ -203,7 +202,6 @@ def test_collection_node_keeps_saved_result_when_experience_recording_fails():
         submission=WorkerSubmission(
             run_id="worker-1",
             run_status="finished",
-            is_finished=True,
             observed_job_ids=[7],
             collection_intent=state["execution"]["plan"][0].arguments,
         ),
@@ -229,4 +227,4 @@ def test_collection_node_keeps_saved_result_when_experience_recording_fails():
     result = update["execution"]["collection_results"][0]
     assert result.status == "completed"
     assert result.document_ids == [7]
-    assert result.submission_id == ""
+    assert result.worker_run_id == ""

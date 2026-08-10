@@ -3,7 +3,10 @@
 import pytest
 from pydantic import ValidationError
 
-from agent.application.job_normalization_service import complete_extracted_job
+from agent.application.job_normalization_service import (
+    complete_extracted_job,
+    normalize_experience_minimum,
+)
 from shared.db.database import Database
 from shared.schema.jd_schema import CollectedJob, JobCollectionEvidence, JobPosting
 
@@ -100,6 +103,25 @@ def test_job_posting_keeps_only_iso_posted_date():
     assert posting.posted_at_text == "3일 전"
 
 
+def test_experience_minimum_uses_mandatory_text_evidence():
+    strictest = normalize_experience_minimum(
+        JobPosting(
+            experience_min=3,
+            experience_text="경력 3년 이상",
+            requirements=[
+                "3년 이상의 AI 개발 경험",
+                "5년 이상의 SW 개발 경험",
+            ],
+        )
+    )
+    range_start = normalize_experience_minimum(
+        JobPosting(experience_min=0, experience_text="경력5-11년")
+    )
+
+    assert strictest.experience_min == 5
+    assert range_start.experience_min == 5
+
+
 def test_database_records_only_meaningful_job_versions(tmp_path):
     db = Database(tmp_path / "versioned_jobs.db")
     first = JobPosting(
@@ -148,3 +170,25 @@ def test_database_preserves_collection_evidence_outside_posting(tmp_path):
     assert saved["raw_ocr_text"] == "실제 누적 OCR 원문"
     assert saved["screenshot_path"] == "detail.png"
     assert saved["raw_json"].get("field_evidence") is None
+
+
+def test_database_load_jobs_preserves_requested_order(tmp_path):
+    db = Database(tmp_path / "ordered_jobs.db")
+    first_id = db.upsert(
+        JobPosting(
+            url="https://example.com/jobs/first",
+            company_name="첫 번째 회사",
+            position="AI 엔지니어",
+        )
+    )
+    second_id = db.upsert(
+        JobPosting(
+            url="https://example.com/jobs/second",
+            company_name="두 번째 회사",
+            position="AI 에이전트 엔지니어",
+        )
+    )
+
+    documents = db.load_jobs([second_id, first_id, second_id])
+
+    assert [document.id for document in documents] == [second_id, first_id]

@@ -15,6 +15,7 @@ venv/
 data/*
 output/
 logs/
+reports/
 
 # 모델
 *.gguf

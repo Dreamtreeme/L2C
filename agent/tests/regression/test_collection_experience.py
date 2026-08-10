@@ -13,9 +13,12 @@ def _batch(*, finished: bool = True) -> CollectionBatch:
         submission=WorkerSubmission(
             run_id="worker-1",
             run_status="finished" if finished else "recursion_limit",
-            is_finished=finished,
-            hit_recursion_limit=not finished,
-            recorded_steps=[{"seq": 1, "action": "click_marker"}],
+            action_events=[
+                {
+                    "seq": 1,
+                    "recipe_step": {"seq": 1, "action": "click_marker"},
+                }
+            ],
             collection_intent=CollectionIntent(site="wanted"),
         ),
         site_name="Wanted",
@@ -28,7 +31,7 @@ def submission_commit(monkeypatch):
     monkeypatch.setattr(
         "agent.recipe.submission_store.SubmissionStore.commit_submission",
         lambda self, submission, **kwargs: (
-            commits.append((submission, kwargs)) or "submission-1"
+            commits.append((submission, kwargs)) or "worker-1"
         ),
     )
     return commits
@@ -40,11 +43,11 @@ def test_experience_records_submission_and_reusable_candidate(
 ):
     monkeypatch.setattr(
         "agent.recipe.candidate_store.RecipeCandidateStore.commit_candidate",
-        lambda self, *args, **kwargs: "candidate-1",
+        lambda self, *args, **kwargs: "worker-1",
     )
     monkeypatch.setattr(
         "agent.recipe.candidate_store.RecipeCandidateStore.enqueue_review",
-        lambda self, candidate_id: True,
+        lambda self, run_id: True,
     )
     persistence = PersistenceReport(
         persisted_items=[{"job_id": 1, "operation": "created"}]
@@ -52,9 +55,8 @@ def test_experience_records_submission_and_reusable_candidate(
 
     result = service.record_collection_experience(_batch(), persistence)
 
-    assert result.submission_id == "submission-1"
+    assert result.run_id == "worker-1"
     assert submission_commit[0][0].persisted_count == 1
-    assert result.recipe_learning.candidate_id == "candidate-1"
     assert result.recipe_learning.status == "queued"
 
 
@@ -80,7 +82,7 @@ def test_submission_failure_is_returned_without_raising(monkeypatch):
 
     result = service.record_collection_experience(_batch(), PersistenceReport())
 
-    assert result.submission_id == ""
+    assert result.run_id == ""
     assert result.recipe_learning.reason == "submission_registration_failed"
 
 
@@ -98,7 +100,7 @@ def test_candidate_storage_failure_does_not_fail_submission(
         PersistenceReport(persisted_items=[{"job_id": 1}]),
     )
 
-    assert result.submission_id == "submission-1"
+    assert result.run_id == "worker-1"
     assert result.recipe_learning.status == "failed"
     assert result.recipe_learning.reason == "candidate_registration_failed"
     assert "RuntimeError" in result.recipe_learning.error

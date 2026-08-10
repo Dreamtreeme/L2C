@@ -1,7 +1,5 @@
-import json
 import sqlite3
 
-from benchmark.audit_e2e_history import _execution_mode
 from benchmark.run_realtime_e2e import (
     _apply_execution_mode_environment,
     _finalize_experience_guided_preconditions,
@@ -10,7 +8,6 @@ from benchmark.run_regression_matrix import (
     _attach_promotion_metrics,
     _clear_jobs_for_experience_guided_run,
     _command,
-    _expand_scenarios,
     _metric_summary,
     _mode_pair_efficiency,
     _paired_autonomous_failed,
@@ -19,27 +16,6 @@ from benchmark.run_regression_matrix import (
     _scenario_pair_key,
     _scenario_workload_key,
 )
-
-
-def test_matrix_repeat_expands_to_independent_run_ids() -> None:
-    scenarios = _expand_scenarios(
-        [
-            {
-                "id": "wanted-ios",
-                "site": "wanted",
-                "search_keyword": "iOS 개발자",
-                "execution_mode": "autonomous",
-                "repeat": 3,
-            }
-        ]
-    )
-
-    assert [item["id"] for item in scenarios] == [
-        "wanted-ios-r1",
-        "wanted-ios-r2",
-        "wanted-ios-r3",
-    ]
-    assert [item["repeat_index"] for item in scenarios] == [1, 2, 3]
 
 
 def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
@@ -61,14 +37,6 @@ def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
     assert "--query" not in command
     assert command[command.index("--execution-mode") + 1] == ("experience_guided")
     assert "--run-mode" not in command
-
-
-def test_history_audit_normalizes_execution_mode_names() -> None:
-    assert (
-        _execution_mode({"execution_mode": "experience_guided"}) == "experience_guided"
-    )
-    assert _execution_mode({"run_mode": "cold"}) == "autonomous"
-    assert _execution_mode({"run_mode": "warm"}) == "experience_guided"
 
 
 def test_metric_summary_prefers_ocr_request_metrics() -> None:
@@ -121,34 +89,6 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
     assert summary["reflex_count"] == 1
     assert summary["queue_count"] == 1
     assert summary["total_tokens"] == 12
-
-
-def test_profile_summary_reports_execution_actions(tmp_path) -> None:
-    from benchmark.profile_reflex_trace import profile_summary
-
-    summary_path = tmp_path / "execution.summary.json"
-    summary_path.write_text(
-        json.dumps(
-            {
-                "metrics": {
-                    "steps": [
-                        {
-                            "component": "graph:execution",
-                            "duration_sec": 0.25,
-                            "action_source": "job_card_queue",
-                            "action_names": ["click_marker"],
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    report = profile_summary(summary_path)
-
-    assert report["actions"]["click_marker"]["count"] == 1
-    assert report["actions"]["click_marker"]["total"] == 0.25
 
 
 def test_experience_guided_comparison_rejects_existing_jobs() -> None:
@@ -328,13 +268,13 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
     submission_store = SubmissionStore(db_path)
 
     def commit_candidate(submission):
-        submission_id = submission_store.commit_submission(submission)
+        run_id = submission_store.commit_submission(submission)
         return store.commit_candidate(
             submission,
-            submission_id=submission_id,
+            run_id=run_id,
         )
 
-    other_candidate_id = commit_candidate(
+    other_run_id = commit_candidate(
         WorkerSubmission(
             run_id="other-run",
             goal="다른 후보",
@@ -343,11 +283,16 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
                 "search_keyword": "백엔드",
                 "task_category": "검색",
             },
-            recorded_steps=[{"seq": 0, "action": "click_marker"}],
+            action_events=[
+                {
+                    "seq": 0,
+                    "recipe_step": {"seq": 0, "action": "click_marker"},
+                }
+            ],
         ),
     )
-    assert store.enqueue_review(other_candidate_id) is True
-    candidate_id = commit_candidate(
+    assert store.enqueue_review(other_run_id) is True
+    run_id = commit_candidate(
         WorkerSubmission(
             run_id="autonomous-run",
             goal="iOS 개발자 공고 수집",
@@ -356,13 +301,16 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
                 "search_keyword": "iOS 개발자",
                 "task_category": "검색",
             },
-            recorded_steps=[
+            action_events=[
                 {
                     "seq": 0,
-                    "action": "type_in_marker",
-                    "page_role": "home",
-                    "roi_signature": {"phash": "0" * 16},
-                    "target": {"text": "검색"},
+                    "recipe_step": {
+                        "seq": 0,
+                        "action": "type_in_marker",
+                        "page_role": "home",
+                        "roi_signature": {"phash": "0" * 16},
+                        "target": {"text": "검색"},
+                    },
                 }
             ],
         ),
@@ -400,13 +348,13 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
     )
 
     result = _promote_autonomous_candidate(
-        {"result": {"submission_id": candidate_id}},
+        {"result": {"worker_run_id": run_id}},
         db_path=db_path,
     )
-    candidate = store.get_candidate(candidate_id)
-    other_candidate = store.get_candidate(other_candidate_id)
+    candidate = store.get_candidate(run_id)
+    other_candidate = store.get_candidate(other_run_id)
 
-    assert calls == [candidate_id, candidate_id]
+    assert calls == [run_id, run_id]
     assert result["promoted"] is True
     assert result["review_status"] == "accepted"
     assert result["review_attempts"] == 2

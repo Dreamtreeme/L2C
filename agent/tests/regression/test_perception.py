@@ -1,4 +1,6 @@
-from agent.tools.perception import PerceptionEngine
+import pytest
+
+from agent.tools.perception import BrowserWindowNotFoundError, PerceptionEngine
 
 
 class FakeSctImage:
@@ -49,6 +51,21 @@ class FakeKeyboard:
         self.copy_count += 1
         if self.copy_count == self.url_on_copy:
             self.clipboard.value = "https://example.com/jobs/1"
+
+
+class MissingBrowserEngine(PerceptionEngine):
+    def _get_browser_region(self):
+        return None
+
+
+def test_capture_requires_a_bound_or_active_browser_window(tmp_path):
+    engine = object.__new__(MissingBrowserEngine)
+    engine.screenshot_dir = tmp_path
+
+    with pytest.raises(BrowserWindowNotFoundError):
+        engine.capture_screen(filename="must-not-exist.png")
+
+    assert not (tmp_path / "must-not-exist.png").exists()
 
 
 def test_capture_screen_saves_bound_browser_region(monkeypatch, tmp_path):

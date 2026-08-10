@@ -32,16 +32,18 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
     steps: list[dict] = []
     record_ui_step(
         steps,
-        {
-            "goal": "검색",
-            "current_url": "https://www.wanted.co.kr",
-            "current_page_role": "home",
-            "screen_signature": {"phash": "f" * 16, "size": [200, 200]},
-            "current_screenshot": str(saved),
-            "current_markers": [
-                {"id": 1, "bbox": [150, 20, 170, 40], "text": "검색"},
-            ],
-        },
+        worker_state(
+            request={"goal": "검색"},
+            observation={
+                "current_url": "https://www.wanted.co.kr",
+                "current_page_role": "home",
+                "screen_signature": {"phash": "f" * 16, "size": [200, 200]},
+                "current_screenshot": str(saved),
+                "current_markers": [
+                    {"id": 1, "bbox": [150, 20, 170, 40], "text": "검색"},
+                ],
+            },
+        ),
         "click_marker",
         {
             "marker_id": 1,
@@ -92,16 +94,18 @@ def test_contextual_step_records_and_matches_screen_context():
     steps: list[dict] = []
     record_ui_step(
         steps,
-        {
-            "current_url": "https://www.wanted.co.kr",
-            "current_page_role": "search_overlay",
-            "screen_signature": {
-                "algorithm": "phash-dct64-v1",
-                "phash": "a" * 16,
-                "size": [1921, 2088],
+        worker_state(
+            observation={
+                "current_url": "https://www.wanted.co.kr",
+                "current_page_role": "search_overlay",
+                "screen_signature": {
+                    "algorithm": "phash-dct64-v1",
+                    "phash": "a" * 16,
+                    "size": [1921, 2088],
+                },
+                "current_markers": [],
             },
-            "current_markers": [],
-        },
+        ),
         "press_key",
         {"key": "enter", "page_role": "search_overlay"},
         2,
@@ -126,15 +130,17 @@ def test_contextual_step_records_and_matches_screen_context():
 def test_replay_mode_requires_autonomous_declaration():
     from agent.recipe.record import record_ui_step
 
-    state = {
-        "current_url": "https://www.wanted.co.kr/search",
-        "current_page_role": "search_overlay",
-        "screen_signature": {
-            "phash": "a" * 16,
-            "size": [1920, 1080],
+    state = worker_state(
+        observation={
+            "current_url": "https://www.wanted.co.kr/search",
+            "current_page_role": "search_overlay",
+            "screen_signature": {
+                "phash": "a" * 16,
+                "size": [1920, 1080],
+            },
+            "current_markers": [],
         },
-        "current_markers": [],
-    }
+    )
     steps: list[dict] = []
 
     record_ui_step(
@@ -199,7 +205,6 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
             "marked_image": str(screenshot),
             "screen_signature": raw_signature,
             "current_page_role": "search",
-            "analysis_mode": "full",
             "ocr_complete": True,
         },
         replay={"reflex_blocked_recipe_keys": []},

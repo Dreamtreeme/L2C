@@ -362,7 +362,16 @@ def test_reflex_replays_action_group_then_advances_after_verification(
     assert second["replay"]["active_reflex_recipe"]["current_transition_index"] == 1
 
 
-def test_active_reflex_recipe_is_cleared_only_after_final_transition():
+def test_replay_success_is_recorded_only_after_final_transition():
+    replay_results = []
+    runtime = node_runtime(
+        data=worker_data_services(
+            record_recipe_replay=lambda recipe_key, succeeded: replay_results.append(
+                (recipe_key, succeeded)
+            )
+            or True,
+        )
+    )
     observation = {
         "ocr_complete": True,
         "current_url": "https://www.saramin.co.kr/zf_user/search",
@@ -405,7 +414,7 @@ def test_active_reflex_recipe_is_cleared_only_after_final_transition():
                 }
             },
         ),
-        node_runtime(),
+        runtime,
     )
     completed = worker_transition.transition_node(
         worker_state(
@@ -420,7 +429,7 @@ def test_active_reflex_recipe_is_cleared_only_after_final_transition():
                 }
             },
         ),
-        node_runtime(),
+        runtime,
     )
 
     assert intermediate["transition"]["transition_result"]["status"] == "ready"
@@ -429,3 +438,4 @@ def test_active_reflex_recipe_is_cleared_only_after_final_transition():
     )
     assert completed["transition"]["transition_result"]["status"] == "ready"
     assert completed["replay"]["active_reflex_recipe"] == {}
+    assert replay_results == [("recipe-search-set", True)]

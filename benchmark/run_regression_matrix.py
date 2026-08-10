@@ -90,7 +90,7 @@ def _runtime_execution_contract() -> dict[str, Any]:
         "VISION_BROWSER_WINDOW_WIDTH",
         "VISION_BROWSER_WINDOW_HEIGHT",
         "PADDLEOCR_USE_GPU",
-        "VISION_OCR_MAX_DIM",
+        "PADDLE_OCR_MAX_DIM",
     )
     return {
         "python": sys.version,
@@ -297,19 +297,19 @@ def _promote_autonomous_candidate(
     """자율 탐색 시간과 분리해 후보를 검토하고 경험 기반 탐색에 반영한다."""
 
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-    candidate_id = str(result.get("submission_id") or "")
-    if not candidate_id:
-        return {"candidate_id": "", "promoted": False, "reason": "candidate_id_missing"}
+    run_id = str(result.get("worker_run_id") or "")
+    if not run_id:
+        return {"run_id": "", "promoted": False, "reason": "run_id_missing"}
 
     from agent.application.recipe_promotion_worker import RecipePromotionWorker
 
     worker = RecipePromotionWorker(db_path, retry_delay_sec=0)
-    outcome = worker.process_candidate_until_settled(candidate_id, enqueue=True)
+    outcome = worker.process_run_until_settled(run_id, enqueue=True)
     validation = dict(outcome.get("validation") or {})
     review = dict(validation.get("review") or {})
     promotion = dict(validation.get("promotion") or {})
     return {
-        "candidate_id": candidate_id,
+        "run_id": run_id,
         "decision": str(review.get("decision") or ""),
         "review_status": str(outcome.get("review_status") or ""),
         "review_attempts": int(outcome.get("review_attempts") or 0),
@@ -499,7 +499,7 @@ def _mode_pair_efficiency(
     return summaries
 
 
-def main() -> int:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run L2C vision E2E scenarios sequentially.")
     parser.add_argument("--matrix", default=str(DEFAULT_MATRIX))
     parser.add_argument("--output-dir", default="")
@@ -507,43 +507,195 @@ def main() -> int:
     parser.add_argument("--db-path", default="")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def _selected_matrix_scenarios(
+    args: argparse.Namespace,
+) -> tuple[Path, dict[str, Any], list[dict[str, Any]]]:
     matrix_path = Path(args.matrix).resolve()
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
     scenarios = _expand_scenarios(
-        [
-            item
-            for item in matrix.get("scenarios", [])
-            if isinstance(item, dict)
-        ]
+        [item for item in matrix.get("scenarios", []) if isinstance(item, dict)]
     )
     selected = set(args.scenario)
     if selected:
         scenarios = [
             item
             for item in scenarios
-            if (
-                str(item.get("id")) in selected
-                or str(item.get("base_id")) in selected
-            )
+            if str(item.get("id")) in selected or str(item.get("base_id")) in selected
         ]
     if not scenarios:
         raise SystemExit("실행할 E2E 시나리오가 없습니다.")
+    return matrix_path, matrix, scenarios
+
+
+def _scenario_commands(
+    scenarios: list[dict[str, Any]],
+    output_dir: Path,
+) -> list[list[str]]:
+    return [
+        _command(
+            scenario,
+            output_dir / f"{scenario['id']}.log",
+            output_dir / f"{scenario['id']}.summary.json",
+        )
+        for scenario in scenarios
+    ]
+
+
+def _load_process_summary(summary_path: Path, return_code: int) -> dict[str, Any]:
+    if summary_path.exists():
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    return {"status": "missing_summary", "error": f"exit_code={return_code}"}
+
+
+def _promotion_result(
+    scenario: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    return_code: int,
+    db_path: Path,
+) -> dict[str, Any]:
+    if (
+        str(scenario.get("execution_mode") or "") != "autonomous"
+        or return_code != 0
+        or payload.get("status") != "completed"
+    ):
+        return {}
+    try:
+        return _promote_autonomous_candidate(payload, db_path=db_path)
+    except Exception as exc:
+        return {
+            "promoted": False,
+            "reason": "promotion_failed",
+            "error": str(exc)[:300],
+        }
+
+
+def _mode_contract_passed(
+    scenario: dict[str, Any],
+    metrics: dict[str, Any],
+    promotion: dict[str, Any],
+) -> bool:
+    execution_mode = str(scenario["execution_mode"])
+    target_count = max(0, int(scenario.get("target_count") or 0))
+    if execution_mode == "autonomous":
+        return metrics["persisted_count"] >= target_count and bool(
+            promotion.get("promoted")
+        )
+    if execution_mode == "experience_guided":
+        return (
+            metrics["persisted_count"] >= target_count
+            and metrics["reflex_count"] > 0
+            and metrics["observed_existing_count"] == 0
+            and metrics["experience_guided_performance_comparable"]
+        )
+    return True
+
+
+def _run_scenario_process(
+    scenario: dict[str, Any],
+    command: list[str],
+    db_path: Path,
+) -> dict[str, Any]:
+    execution_mode = str(scenario["execution_mode"])
+    reset_count = (
+        _clear_jobs_for_experience_guided_run(db_path)
+        if execution_mode == "experience_guided"
+        else 0
+    )
+    completed = subprocess.run(
+        command,
+        cwd=ROOT_DIR,
+        check=False,
+        env=_scenario_environment(scenario, db_path=db_path),
+    )
+    summary_path = Path(command[-1])
+    payload = _load_process_summary(summary_path, completed.returncode)
+    promotion = _promotion_result(
+        scenario,
+        payload,
+        return_code=completed.returncode,
+        db_path=db_path,
+    )
+    metrics = _attach_promotion_metrics(_metric_summary(payload), promotion)
+    return {
+        "scenario": scenario,
+        "process_exit_code": completed.returncode,
+        "summary_path": str(summary_path),
+        "metrics": metrics,
+        "promotion": promotion,
+        "experience_guided_reset_count": reset_count,
+        "mode_contract_passed": _mode_contract_passed(
+            scenario,
+            metrics,
+            promotion,
+        ),
+        "skipped_reason": "",
+    }
+
+
+def _skipped_experience_guided_result(
+    scenario: dict[str, Any],
+    command: list[str],
+) -> dict[str, Any]:
+    return {
+        "scenario": scenario,
+        "process_exit_code": None,
+        "summary_path": str(Path(command[-1])),
+        "metrics": _attach_promotion_metrics(
+            _metric_summary({"status": "skipped"}),
+            {},
+        ),
+        "promotion": {},
+        "experience_guided_reset_count": 0,
+        "mode_contract_passed": False,
+        "skipped_reason": "paired_autonomous_promotion_failed",
+    }
+
+
+def _result_passed(result: dict[str, Any]) -> bool:
+    return bool(
+        result["process_exit_code"] == 0
+        and result["metrics"]["quality_passed"]
+        and result["mode_contract_passed"]
+    )
+
+
+def _run_scenario_matrix(
+    scenarios: list[dict[str, Any]],
+    commands: list[list[str]],
+    db_path: Path,
+    *,
+    fail_fast: bool,
+) -> tuple[list[dict[str, Any]], int]:
+    results: list[dict[str, Any]] = []
+    autonomous_contracts: dict[str, bool] = {}
+    exit_code = 0
+    for scenario, command in zip(scenarios, commands, strict=True):
+        if _paired_autonomous_failed(scenario, autonomous_contracts):
+            result = _skipped_experience_guided_result(scenario, command)
+        else:
+            result = _run_scenario_process(scenario, command, db_path)
+        results.append(result)
+        if str(scenario["execution_mode"]) == "autonomous":
+            autonomous_contracts[_scenario_pair_key(scenario)] = _result_passed(result)
+        if not _result_passed(result):
+            exit_code = 1
+            if fail_fast:
+                break
+    return results, exit_code
+
+
+def main() -> int:
+    args = _parse_args()
+    matrix_path, matrix, scenarios = _selected_matrix_scenarios(args)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir or ROOT_DIR / "logs" / f"regression_{stamp}").resolve()
     db_path = Path(args.db_path).resolve() if args.db_path else output_dir / "regression.db"
-    commands = []
-    for scenario in scenarios:
-        scenario_id = str(scenario["id"])
-        commands.append(
-            _command(
-                scenario,
-                output_dir / f"{scenario_id}.log",
-                output_dir / f"{scenario_id}.summary.json",
-            )
-        )
+    commands = _scenario_commands(scenarios, output_dir)
     if args.dry_run:
         print(
             json.dumps(
@@ -569,121 +721,12 @@ def main() -> int:
         )
 
     output_dir.mkdir(parents=True, exist_ok=False)
-    results = []
-    exit_code = 0
-    autonomous_contracts: dict[str, bool] = {}
-    for scenario, command in zip(scenarios, commands):
-        execution_mode = str(scenario["execution_mode"])
-        workload_key = _scenario_pair_key(scenario)
-        if _paired_autonomous_failed(
-            scenario,
-            autonomous_contracts,
-        ):
-            skipped_metrics = _attach_promotion_metrics(
-                _metric_summary({"status": "skipped"}),
-                {},
-            )
-            results.append(
-                {
-                    "scenario": scenario,
-                    "process_exit_code": None,
-                    "summary_path": str(Path(command[-1])),
-                    "metrics": skipped_metrics,
-                    "promotion": {},
-                    "experience_guided_reset_count": 0,
-                    "mode_contract_passed": False,
-                    "skipped_reason": (
-                        "paired_autonomous_promotion_failed"
-                    ),
-                }
-            )
-            exit_code = 1
-            if args.fail_fast:
-                break
-            continue
-
-        experience_guided_reset_count = (
-            _clear_jobs_for_experience_guided_run(db_path)
-            if execution_mode == "experience_guided"
-            else 0
-        )
-        completed = subprocess.run(
-            command,
-            cwd=ROOT_DIR,
-            check=False,
-            env=_scenario_environment(scenario, db_path=db_path),
-        )
-        summary_path = Path(command[-1])
-        payload = (
-            json.loads(summary_path.read_text(encoding="utf-8"))
-            if summary_path.exists()
-            else {"status": "missing_summary", "error": f"exit_code={completed.returncode}"}
-        )
-        promotion: dict[str, Any] = {}
-        if (
-            str(scenario.get("execution_mode") or "")
-            == "autonomous"
-            and completed.returncode == 0
-            and payload.get("status") == "completed"
-        ):
-            try:
-                promotion = _promote_autonomous_candidate(
-                    payload,
-                    db_path=db_path,
-                )
-            except Exception as exc:
-                promotion = {
-                    "promoted": False,
-                    "reason": "promotion_failed",
-                    "error": str(exc)[:300],
-                }
-        metric_summary = _attach_promotion_metrics(_metric_summary(payload), promotion)
-        mode_contract_passed = True
-        if execution_mode == "autonomous":
-            target_count = max(0, int(scenario.get("target_count") or 0))
-            mode_contract_passed = (
-                metric_summary["persisted_count"] >= target_count
-                and bool(promotion.get("promoted"))
-            )
-        elif execution_mode == "experience_guided":
-            target_count = max(0, int(scenario.get("target_count") or 0))
-            mode_contract_passed = (
-                metric_summary["persisted_count"] >= target_count
-                and metric_summary["reflex_count"] > 0
-                and metric_summary["observed_existing_count"] == 0
-                and metric_summary[
-                    "experience_guided_performance_comparable"
-                ]
-            )
-        if execution_mode == "autonomous":
-            autonomous_contracts[workload_key] = bool(
-                completed.returncode == 0
-                and metric_summary["quality_passed"]
-                and mode_contract_passed
-            )
-
-        results.append(
-            {
-                "scenario": scenario,
-                "process_exit_code": completed.returncode,
-                "summary_path": str(summary_path),
-                "metrics": metric_summary,
-                "promotion": promotion,
-                "experience_guided_reset_count": (
-                    experience_guided_reset_count
-                ),
-                "mode_contract_passed": mode_contract_passed,
-                "skipped_reason": "",
-            }
-        )
-        if (
-            completed.returncode != 0
-            or not metric_summary["quality_passed"]
-            or not mode_contract_passed
-        ):
-            exit_code = 1
-            if args.fail_fast:
-                break
+    results, exit_code = _run_scenario_matrix(
+        scenarios,
+        commands,
+        db_path,
+        fail_fast=args.fail_fast,
+    )
 
     aggregate = {
         "schema_version": 2,

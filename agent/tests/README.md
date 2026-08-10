@@ -2,22 +2,30 @@
 
 제품 요청 한 건은 다음 순서로 검증한다.
 
-1. `test_backend_boundaries.py`: FastAPI가 질문과 식별자를 바꾸지 않고 조사 그래프에 전달하는지 확인한다.
-2. `test_investigation_graph.py`: 요청 이해, 확인 질문, DB 근거 검사, 수집 계획, 원문 수집, 후처리, 저장, 재검사, 답변 순서를 검증한다.
-3. `test_investigation_collection_flow.py`: 작업자 관찰과 DB 저장 결과가 하나의 `CollectionResult`로 합쳐지는 규칙을 검증한다.
-4. `test_collection_postprocessing.py`, `test_collection_storage.py`, `test_collection_experience.py`: 원문 구조화, 공고 저장, 작업자 제출물과 레시피 후보 기록을 각각 확인한다.
-5. `test_db_persistence.py`: 공고 UPSERT, 근거 저장과 버전 기록을 확인한다.
-6. `test_worker_graph_boundaries.py` 이하 작업자 테스트: 캡처, OCR, Reflex, 추론, 물리 행동과 화면 전환을 검증한다.
+1. `core/test_backend_boundaries.py`: FastAPI가 질문과 식별자를 바꾸지 않고 조사 그래프에 전달하는지 확인한다.
+2. `core/test_investigation_graph.py`: 요청 이해, 확인 질문, DB 근거 검사, 수집 계획, 원문 수집, 후처리, 저장, 재검사, 답변 순서를 검증한다.
+3. `core/test_collection_postprocessing.py`, `core/test_db_persistence.py`: 원문 구조화와 공고·근거 저장을 확인한다.
+4. `core/test_worker_graph_boundaries.py` 이하 작업자 테스트: 캡처, OCR, Reflex, 추론, 물리 행동과 화면 전환을 검증한다.
+5. `regression/`: 과거 장애, 환경 호환성, 검색 사전, 레시피 승격의 세부 회귀를 검증한다.
+6. `evaluation/`: 성공률, 실행 모드 비교, 사용자 연구와 비용 계산을 검증한다.
 
-전체 단위·통합 테스트는 다음 명령으로 실행한다.
+기본 명령은 사용자 요청부터 화면 행동·DB·답변까지 핵심 계약 116개만 실행한다.
 
 ```powershell
+.\scripts\test.cmd
+```
+
+나머지 영역과 전체 테스트는 필요할 때 분리해 실행한다.
+
+```powershell
+.\scripts\test.cmd agent\tests\regression -q
+.\scripts\test.cmd agent\tests\evaluation -q
 .\scripts\test.cmd agent\tests -q
 ```
 
 ## 유지 기준
 
-기본 테스트는 다음 제품 계약만 검증한다.
+`core`는 다음 제품 계약만 검증한다.
 
 - 사용자 요청의 질문 보완, DB 조회, 웹 수집 경로
 - 저장 데이터와 답변 출처의 무결성
@@ -36,5 +44,4 @@
 - 외부 모델의 응답 속도나 실제 화면 성공 여부
 
 현재 `agent/tests`에는 외부 모델이나 실제 브라우저를 실행하는 테스트가 없다.
-`external`, `e2e` 표식은 해당 테스트가 추가될 때 기본 실행에서 제외하기 위해
-예약해 두며, 실제 화면 검증은 `benchmark` 명령으로 실행한다.
+실제 화면 검증은 `benchmark` 명령으로 실행한다.

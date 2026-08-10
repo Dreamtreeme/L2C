@@ -9,6 +9,7 @@ from agent.graph.workflow import route_after_selection
 from agent.tests.worker_test_support import (
     apply_update,
     node_runtime,
+    worker_data_services,
     worker_state,
 )
 
@@ -141,17 +142,16 @@ def test_queue_phash_mismatch_falls_through_to_ocr():
     assert route_after_selection(apply_update(state, result)) == "ocr"
 
 
-def test_queue_click_without_screen_change_refreshes_ocr(monkeypatch):
-    monkeypatch.setattr(
-        worker_transition,
-        "transition_has_visual_change",
-        lambda *_args: (False, 0.0),
-    )
+def test_queue_click_without_screen_change_returns_to_reasoning():
     state = worker_state(
         observation={
             "observation_id": "observation:0010",
             "current_screenshot": "same-list.png",
             "ocr_complete": False,
+            "raw_screen_signature": {
+                "phash": "0" * 16,
+                "size": [1000, 1000],
+            },
         },
         transition={
             "transition_request": {
@@ -167,69 +167,17 @@ def test_queue_click_without_screen_change_refreshes_ocr(monkeypatch):
                     "queue_id": "card-2",
                     "status": "active",
                     "title": "두 번째 공고",
+                    "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
+                    "center_ratio": [0.4, 0.425],
                 }
-            ]
-        },
-    )
-
-    result = worker_transition.transition_node(state, node_runtime())
-    updated = apply_update(state, result)
-
-    assert updated["transition"]["transition_request"]["action"] == "click_marker"
-    assert updated["transition"]["transition_result"]["needs_ocr"] is True
-    assert (
-        updated["transition"]["transition_result"]["reason"]
-        == "queue_click_no_screen_change"
-    )
-    assert updated["collection"]["job_card_queue"][0]["status"] == "pending"
-    assert worker_selection.selection_node(updated, node_runtime()) == {}
-    assert route_after_selection(updated) == "ocr"
-
-
-def test_queue_click_retry_without_change_returns_to_reasoning(monkeypatch):
-    monkeypatch.setattr(
-        worker_transition,
-        "transition_has_visual_change",
-        lambda *_args: (False, 0.0),
-    )
-    state = worker_state(
-        observation={
-            "observation_id": "observation:0012",
-            "current_screenshot": "same-list-again.png",
-            "ocr_complete": False,
-        },
-        transition={
-            "transition_request": {
-                "action": "click_marker",
-                "action_seq": 12,
-                "source": "job_card_queue",
-                "started_at": time.time(),
-            },
-            "action_events": [
-                {
-                    "seq": 11,
-                    "result": {"action": "click_marker", "status": "success"},
-                    "transition": {
-                        "action": "click_marker",
-                        "source": "job_card_queue",
-                        "status": "unknown",
-                        "reason": "no_screen_change",
-                    },
-                },
-                {
-                    "seq": 12,
-                    "result": {"action": "click_marker", "status": "success"},
-                },
             ],
-        },
-        collection={
-            "job_card_queue": [
-                {
-                    "queue_id": "card-2",
-                    "status": "active",
-                    "title": "두 번째 공고",
+            "job_results_memory": {
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
+                    "anchors": ["두 번째 공고"],
                 }
-            ]
+            },
         },
     )
 
@@ -237,16 +185,14 @@ def test_queue_click_retry_without_change_returns_to_reasoning(monkeypatch):
     updated = apply_update(state, result)
 
     assert updated["transition"]["transition_request"] == {}
-    assert (
-        updated["transition"]["transition_result"]["reason"]
-        == "queue_retry_no_screen_change"
-    )
+    assert updated["transition"]["transition_result"]["reason"] == "no_screen_change"
     assert updated["collection"]["job_card_queue"][0]["status"] == "pending"
     assert worker_selection.selection_node(updated, node_runtime()) == {}
     assert route_after_selection(updated) == "reasoning"
 
 
 def test_reflex_transition_rejects_change_without_saved_after_state():
+    replay_results = []
     request = {
         "action": "press_key",
         "action_seq": 2,
@@ -265,8 +211,23 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
                 "screen_signature": {"phash": "f" * 16},
                 "ocr_complete": True,
             },
+            replay={
+                "active_reflex_recipe": {
+                    "recipe_key": "path6#search",
+                    "current_transition_index": 0,
+                    "pending_transition_index": 0,
+                    "transition_count": 1,
+                }
+            },
         ),
-        node_runtime(),
+        node_runtime(
+            data=worker_data_services(
+                record_recipe_replay=lambda recipe_key, succeeded: replay_results.append(
+                    (recipe_key, succeeded)
+                )
+                or True,
+            )
+        ),
     )
     assert transition["transition"]["transition_request"] == {}
     assert transition["transition"]["transition_result"]["status"] == "unknown"
@@ -275,6 +236,7 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
         == "recipe_after_state_missing"
     )
     assert transition["replay"]["reflex_blocked_recipe_keys"] == ["path6#search"]
+    assert replay_results == [("path6#search", False)]
 
 
 def test_reflex_transition_accepts_changed_page_role_with_dynamic_content(

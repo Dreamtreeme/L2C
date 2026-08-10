@@ -79,79 +79,50 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
     assert len(request.tool_calls[0].args["cards"]) == 1
 
 
-def test_selector_rejects_model_label_that_disagrees_with_ocr(tmp_path, monkeypatch):
-    from PIL import Image
-
+def test_selector_does_not_refill_an_existing_queue(tmp_path, monkeypatch):
     from agent.runtime import job_card_selector as selector
 
-    image_path = tmp_path / "marked.jpg"
-    Image.new("RGB", (200, 100), "white").save(image_path)
-    state = _state(image_path)
-    state["observation"]["current_markers"].append(
-        {
-            "id": 54,
-            "type": "text",
-            "text": "shoplive",
-            "bbox": [100, 50, 160, 70],
-        }
-    )
-
-    class FakeModel:
-        def invoke(self, inputs, config=None):
-            return selector.JobCardSelection(
-                is_job_results_page=True,
-                needs_refinement=True,
-                refinement_reason="iOS 기술 옵션을 찾습니다.",
-                refinement_action="type",
-                refinement_marker_id=54,
-                refinement_label="기술스택 검색창",
-                refinement_text="iOS",
-                cards=[],
-            )
-
+    state = _state(tmp_path / "unused.jpg")
+    state["collection"]["job_card_queue"] = [
+        {"queue_id": "card-1", "status": "done", "title": "iOS 개발자"}
+    ]
     monkeypatch.setattr(
         selector,
         "_get_job_card_selector_model",
-        lambda: FakeModel(),
-    )
-    request, trace = selector.select_job_cards(state)
-
-    assert request is None
-    assert trace["reason"] == "job_results_refinement_needed"
-
-
-def test_loading_result_recaptures_without_general_reasoning(tmp_path, monkeypatch):
-    from PIL import Image
-
-    from agent.runtime import job_card_selector as selector
-
-    image_path = tmp_path / "marked.jpg"
-    Image.new("RGB", (200, 100), "white").save(image_path)
-
-    class FakeModel:
-        def invoke(self, inputs, config=None):
-            return selector.JobCardSelection(is_loading=True)
-
-    monkeypatch.setattr(
-        selector,
-        "_get_job_card_selector_model",
-        lambda: FakeModel(),
-    )
-    monkeypatch.setattr(
-        worker_reasoning,
-        "_get_ui_llm_with_tools",
-        lambda _runtime: (_ for _ in ()).throw(
-            AssertionError("로딩 화면을 범용 모델에 보내면 안 됩니다.")
+        lambda: (_ for _ in ()).throw(
+            AssertionError("기존 큐가 있으면 카드 선택 모델을 다시 호출하면 안 됩니다.")
         ),
     )
 
-    result = worker_reasoning.reasoning_node(
-        _state(image_path),
-        node_runtime(),
+    request, trace = selector.select_job_cards(state)
+
+    assert request is None
+    assert trace == {"attempted": False, "reason": "selector_not_applicable"}
+
+
+def test_queue_click_requires_an_exact_queue_id():
+    from agent.runtime.job_card_queue import (
+        activate_job_card,
+        job_card_click_matches_queue,
     )
 
-    assert result["decision"]["pending_action"] is None
-    assert result["decision"]["job_card_selection_trace"]["reason"] == "screen_loading"
+    queue = [
+        {
+            "queue_id": "card-1",
+            "status": "pending",
+            "title": "iOS 개발자",
+            "source_marker_id": 10,
+        }
+    ]
+
+    assert not job_card_click_matches_queue(
+        queue,
+        {"marker_id": 10, "target_component": "job_card_title"},
+    )
+    assert not job_card_click_matches_queue(queue, {"queue_id": "card-2"})
+    assert job_card_click_matches_queue(queue, {"queue_id": "card-1"})
+    assert activate_job_card(queue, {"marker_id": 10}) == queue
+    assert activate_job_card(queue, {"queue_id": "card-1"})[0]["status"] == "active"
 
 
 def test_general_reasoning_converts_model_tool_call(monkeypatch):

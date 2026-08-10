@@ -1,11 +1,8 @@
-import sqlite3
-
 import pytest
 
 from benchmark.run_product_chat_matrix import (
     _frame_payload,
     _scenario_quality,
-    _snapshot_database,
 )
 
 
@@ -144,16 +141,3 @@ def test_product_chat_matrix_accepts_structured_clarification():
 
     assert quality["passed"] is True
     assert quality["clarification_option_count"] == 2
-
-
-def test_product_chat_matrix_snapshots_sqlite_database(tmp_path):
-    source = tmp_path / "source.db"
-    target = tmp_path / "target.db"
-    with sqlite3.connect(source) as connection:
-        connection.execute("CREATE TABLE sample (value TEXT NOT NULL)")
-        connection.execute("INSERT INTO sample(value) VALUES ('copied')")
-
-    _snapshot_database(source, target)
-
-    with sqlite3.connect(target) as connection:
-        assert connection.execute("SELECT value FROM sample").fetchone() == ("copied",)

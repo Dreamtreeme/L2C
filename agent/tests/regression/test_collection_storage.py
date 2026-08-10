@@ -7,7 +7,7 @@ from shared.schema.feedback_schema import WorkerSubmission
 from shared.schema.jd_schema import CollectedJob, JobCollectionEvidence, JobPosting
 
 
-def _processed(*, rejected_items=None) -> PostprocessedCollection:
+def _processed() -> PostprocessedCollection:
     return PostprocessedCollection(
         submission=WorkerSubmission(run_id="worker-1"),
         collected_jobs=[
@@ -25,7 +25,6 @@ def _processed(*, rejected_items=None) -> PostprocessedCollection:
                 ),
             )
         ],
-        rejected_items=list(rejected_items or []),
         site_name="Example",
     )
 
@@ -47,7 +46,7 @@ def test_storage_upserts_validated_job_and_preserves_evidence(monkeypatch, tmp_p
     assert saved["screenshot_path"] == "detail.png"
 
 
-def test_taxonomy_failure_does_not_reject_saved_job(monkeypatch, tmp_path):
+def test_taxonomy_failure_excludes_job_from_answer_ready_report(monkeypatch, tmp_path):
     def fail_link(_self, _job_id):
         raise RuntimeError("index unavailable")
 
@@ -56,29 +55,15 @@ def test_taxonomy_failure_does_not_reject_saved_job(monkeypatch, tmp_path):
         fail_link,
     )
 
-    result = store_postprocessed_collection(
-        _processed(),
-        db_path=tmp_path / "jobs.db",
-    )
+    db_path = tmp_path / "jobs.db"
+    result = store_postprocessed_collection(_processed(), db_path=db_path)
 
-    assert result.persisted_count == 1
-    assert result.rejected_count == 0
-    assert result.persisted_items[0]["taxonomy_status"] == "failed"
-
-
-def test_storage_report_keeps_postprocessing_rejections(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "agent.application.collection_storage.JobTaxonomyLinker.link_job",
-        lambda self, job_id: None,
-    )
-    rejected = [{"index": 4, "issues": ["invalid"]}]
-
-    result = store_postprocessed_collection(
-        _processed(rejected_items=rejected),
-        db_path=tmp_path / "jobs.db",
-    )
-
-    assert result.rejected_items == rejected
+    assert result.persisted_count == 0
+    assert result.rejected_count == 1
+    assert result.rejected_items[0]["issues"] == [
+        "taxonomy_index_failed:RuntimeError"
+    ]
+    assert Database(db_path).get_by_url("https://example.com/jobs/1") is not None
 
 
 def test_storage_failure_isolated_per_job(monkeypatch, tmp_path):

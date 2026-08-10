@@ -29,7 +29,6 @@ def worker_state(
     replay: dict[str, Any] | None = None,
     collection: dict[str, Any] | None = None,
     lifecycle: dict[str, Any] | None = None,
-    safety: dict[str, Any] | None = None,
 ) -> WorkerState:
     return create_worker_state(
         goal,
@@ -40,7 +39,6 @@ def worker_state(
         replay=replay,
         collection=collection,
         lifecycle=lifecycle,
-        safety=safety,
     )
 
 
@@ -56,6 +54,7 @@ def worker_data_services(
     mark_existing_job_cards=None,
     find_existing_job_url=None,
     load_site_recipes=None,
+    record_recipe_replay=None,
 ) -> WorkerDataServices:
     """노드 단위 테스트에서 외부 DB와 모델 호출을 제거한다."""
 
@@ -70,6 +69,9 @@ def worker_data_services(
         load_site_recipes=(
             load_site_recipes
             or (lambda _site, *, task_category=None: [])
+        ),
+        record_recipe_replay=(
+            record_recipe_replay or (lambda _recipe_key, _succeeded: True)
         ),
     )
 

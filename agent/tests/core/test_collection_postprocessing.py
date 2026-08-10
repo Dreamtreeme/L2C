@@ -155,7 +155,7 @@ def test_postprocessing_applies_requested_date_range(monkeypatch):
     assert "posted_at_before_range" in result.rejected_items[0]["issues"][0]
 
 
-def test_page_end_rejects_visible_but_unstructured_required_field(monkeypatch):
+def test_postprocessing_rejects_visible_but_unstructured_required_field(monkeypatch):
     monkeypatch.setattr(
         service,
         "extract_job_from_capture",
@@ -167,34 +167,15 @@ def test_page_end_rejects_visible_but_unstructured_required_field(monkeypatch):
         ),
     )
 
-    result = service.postprocess_collection_batch(
-        _batch(_capture(page_exhausted=True))
-    )
+    for page_exhausted in (False, True):
+        result = service.postprocess_collection_batch(
+            _batch(_capture(page_exhausted=page_exhausted))
+        )
 
-    assert result.collected_jobs == []
-    assert "required_field_extraction_incomplete:main_tasks" in (
-        result.rejected_items[0]["issues"][0]
-    )
-
-
-def test_non_exhausted_capture_rejects_missing_structured_field(monkeypatch):
-    monkeypatch.setattr(
-        service,
-        "extract_job_from_capture",
-        lambda capture: JobPosting(
-            company_name="예시회사",
-            position="AI 엔지니어",
-            url=capture.url,
-            requirements=["Python"],
-        ),
-    )
-
-    result = service.postprocess_collection_batch(_batch(_capture()))
-
-    assert result.collected_jobs == []
-    assert "required_field_extraction_incomplete:main_tasks" in (
-        result.rejected_items[0]["issues"][0]
-    )
+        assert result.collected_jobs == []
+        assert "required_field_extraction_incomplete:main_tasks" in (
+            result.rejected_items[0]["issues"][0]
+        )
 
 
 def test_model_timeout_stops_batch_instead_of_becoming_rejection(monkeypatch):
