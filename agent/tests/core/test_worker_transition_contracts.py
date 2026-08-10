@@ -17,6 +17,11 @@ from agent.tests.worker_test_support import (
 def test_queue_phash_match_records_results_transition(monkeypatch):
     from agent.graph import worker_selection
 
+    monkeypatch.setattr(
+        "agent.runtime.job_card_queue.roi_signature_match",
+        lambda *_args, **_kwargs: {"matched": True, "reason": "roi_matched"},
+    )
+
     result = worker_selection.selection_node(
         worker_state(
             observation={
@@ -61,6 +66,7 @@ def test_queue_phash_match_records_results_transition(monkeypatch):
                         "title": "두 번째 iOS 개발자",
                         "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
                         "center_ratio": [0.4, 0.425],
+                        "roi_signature": {"phash": "0" * 16},
                     }
                 ],
                 "job_results_memory": {

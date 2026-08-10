@@ -11,7 +11,10 @@ from agent.recipe.phash_replay import (
     match_step_by_screen_signature,
     screen_context_signature_match,
 )
-from agent.runtime.site_context import normalize_page_role
+from agent.runtime.site_context import (
+    is_job_detail_context,
+    normalize_page_role,
+)
 from agent.runtime.job_card_queue import release_active_job_card
 from agent.runtime.worker_contracts import (
     WorkerState,
@@ -529,6 +532,17 @@ def _evaluate_after_ocr(
     )
     markers = list(state["observation"].get("current_markers") or [])
     input_confirmed = _input_text_confirmed_by_ocr(state, request)
+    queue_target_reached = is_job_detail_context(
+        current_url,
+        page_role=str(
+            state["observation"].get("current_page_role") or ""
+        ),
+        marker_texts=[
+            marker.get("text")
+            for marker in markers
+            if isinstance(marker, dict)
+        ],
+    )
 
     if source == "reflex":
         matched, reason, after_state_match = _verify_reflex_after_state(
@@ -541,6 +555,11 @@ def _evaluate_after_ocr(
         }
         status = "ready" if matched else "unknown"
         block_recipe = not matched
+    elif source == "job_card_queue" and not queue_target_reached:
+        evaluated_request = request
+        status = "unknown"
+        reason = "job_card_detail_not_reached"
+        block_recipe = False
     elif markers and (url_changed or visual_changed or input_confirmed):
         evaluated_request = request
         status = "ready"
@@ -588,7 +607,7 @@ def _evaluate_after_ocr(
         status=status,
         record_replay_result=record_replay_result,
     )
-    return {
+    update = {
         "transition": {
             "transition_request": {},
             "transition_result": _transition_result(
@@ -616,6 +635,13 @@ def _evaluate_after_ocr(
             ),
         },
     }
+    if source == "job_card_queue" and status != "ready":
+        update["collection"] = {
+            "job_card_queue": release_active_job_card(
+                list(state["collection"].get("job_card_queue", []) or [])
+            )
+        }
+    return update
 
 
 def transition_node(

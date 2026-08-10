@@ -277,6 +277,9 @@ def selection_node(
             markers,
             signature,
             require_anchors=ocr_complete,
+            current_image_path=str(
+                observation.get("current_screenshot") or ""
+            ),
         )
         memory = dict(collection.get("job_results_memory", {}) or {})
         saved_signature = dict(memory.get("screen_signature", {}) or {})

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.config import get_settings
+from agent.recipe.phash_replay import roi_signature_match
 from agent.runtime.worker_contracts import (
     ActionRequest,
     WorkerState,
@@ -18,9 +19,13 @@ from agent.vision.marker_geometry import (
     bbox_from_ratio,
     bbox_to_ratio,
     center_ratio_from_bbox,
+    marker_bbox,
     screen_size_from_signature,
 )
-from agent.vision.screen_signature import hamming_distance
+from agent.vision.screen_signature import (
+    compute_target_roi_signature,
+    hamming_distance,
+)
 from agent.vision.target_snapshot import marker_by_id
 
 
@@ -72,6 +77,7 @@ def _normalized_job_card(
     markers: list[dict],
     size: list[int],
     queue: list[dict],
+    observation: dict[str, Any],
 ) -> dict[str, Any] | None:
     marker_id = int(raw["marker_id"])
     marker = marker_by_id(markers, marker_id)
@@ -82,7 +88,7 @@ def _normalized_job_card(
         return None
     bbox_ratio, center_ratio = _card_geometry(marker, size)
     company = str(raw.get("company") or "").strip()
-    return {
+    card = {
         "queue_id": f"card-{len(queue) + 1}",
         "status": "pending",
         "title": label,
@@ -98,6 +104,20 @@ def _normalized_job_card(
             "marker_type": str(marker.get("type") or ""),
         },
     }
+    roi_signature = compute_target_roi_signature(
+        str(observation.get("current_screenshot") or ""),
+        marker_bbox(marker),
+        size,
+        capture_context=dict(
+            (observation.get("screen_signature") or {}).get(
+                "capture_context", {}
+            )
+            or {}
+        ),
+    )
+    if roi_signature:
+        card["roi_signature"] = roi_signature
+    return card
 
 
 def _job_results_memory(
@@ -137,7 +157,7 @@ def normalize_job_card_queue(
         for item in queue
     }
     for raw in cards[: _queue_limit(state, queue, len(cards))]:
-        card = _normalized_job_card(raw, markers, size, queue)
+        card = _normalized_job_card(raw, markers, size, queue, observation)
         if card is None:
             continue
         identity = (
@@ -398,6 +418,7 @@ def job_card_marker_for_item(
     signature: dict,
     *,
     allow_synthetic: bool = True,
+    current_image_path: str = "",
 ) -> tuple[int | None, list[dict], dict]:
     target = dict(item.get("target") or {})
     target.setdefault("text", item.get("title", ""))
@@ -410,10 +431,31 @@ def job_card_marker_for_item(
         screen_size_from_signature(signature),
     )
     if marker_id is not None:
-        return marker_id, markers, {"reason": "current_marker_ratio_match"}
+        marker = marker_by_id(markers, marker_id) or {}
+        saved_text = job_card_match_text(target.get("text"))
+        current_text = job_card_match_text(marker.get("text"))
+        if saved_text and current_text and (
+            saved_text in current_text or current_text in saved_text
+        ):
+            return marker_id, markers, {
+                "reason": "current_marker_identity_match"
+            }
 
     if not allow_synthetic:
-        return None, markers, {"reason": "current_marker_missing"}
+        return None, markers, {"reason": "current_marker_identity_missing"}
+
+    roi_match = roi_signature_match(
+        dict(item.get("roi_signature") or {}),
+        current_image_path,
+        current_signature=signature,
+    )
+    if not roi_match.get("matched"):
+        return None, markers, {
+            "reason": str(
+                roi_match.get("reason") or "cached_target_roi_mismatch"
+            ),
+            "roi_match": roi_match,
+        }
 
     bbox = bbox_from_ratio(
         item.get("bbox_ratio") or [], screen_size_from_signature(signature)
@@ -443,6 +485,7 @@ def job_card_marker_for_item(
         {
             "reason": "synthetic_marker_from_cached_bbox",
             "bbox": bbox,
+            "roi_match": roi_match,
         },
     )
 
@@ -455,6 +498,7 @@ def replay_job_card_on_results(
     screen_signature: dict,
     *,
     require_anchors: bool = True,
+    current_image_path: str = "",
 ) -> tuple[ActionRequest | None, list[dict], dict]:
     """직전 행동 뒤 목록 화면이 확인되면 다음 카드를 준비한다."""
 
@@ -495,6 +539,7 @@ def replay_job_card_on_results(
         markers,
         screen_signature,
         allow_synthetic=not require_anchors,
+        current_image_path=current_image_path,
     )
     if marker_id is None:
         trace = dict(match_trace)
