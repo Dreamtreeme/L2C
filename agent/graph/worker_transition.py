@@ -347,14 +347,20 @@ def _evaluate_before_ocr(
     record_replay_result,
 ) -> dict[str, Any]:
     source = str(request.get("source") or "")
-    if visual_changed:
+    action = str(request.get("action") or "")
+    input_requires_ocr = action == "type_in_marker"
+    if visual_changed or input_requires_ocr:
         return {
             "transition": {
                 "transition_result": _transition_result(
                     request,
                     status="needs_ocr",
-                    reason="ocr_required",
-                    visual_change_detected=True,
+                    reason=(
+                        "ocr_required"
+                        if visual_changed
+                        else "input_ocr_required"
+                    ),
+                    visual_change_detected=visual_changed,
                     visual_change_ratio=visual_ratio,
                     needs_ocr=True,
                 ),

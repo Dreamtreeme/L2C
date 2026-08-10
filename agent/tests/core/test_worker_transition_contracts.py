@@ -191,6 +191,36 @@ def test_queue_click_without_screen_change_returns_to_reasoning():
     assert route_after_selection(updated) == "reasoning"
 
 
+def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (False, 0.025),
+    )
+    result = worker_transition.transition_node(
+        worker_state(
+            observation={
+                "current_screenshot": "search-suggestions.png",
+                "ocr_complete": False,
+            },
+            transition={
+                "transition_request": {
+                    "action": "type_in_marker",
+                    "action_seq": 11,
+                    "source": "autonomous",
+                    "started_at": time.time(),
+                }
+            },
+        ),
+        node_runtime(),
+    )
+
+    transition = result["transition"]["transition_result"]
+    assert transition["status"] == "needs_ocr"
+    assert transition["reason"] == "input_ocr_required"
+    assert transition["needs_ocr"] is True
+
+
 def test_reflex_transition_rejects_change_without_saved_after_state():
     replay_results = []
     request = {
