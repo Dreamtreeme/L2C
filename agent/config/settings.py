@@ -213,6 +213,24 @@ class BrowserSettings(SectionSettings):
 
 class VisionSettings(SectionSettings):
     recursion_limit: int = Field(180, ge=10, le=500, validation_alias="VISION_AGENT_RECURSION_LIMIT")
+    reasoning_call_limit: int = Field(
+        16,
+        ge=1,
+        le=100,
+        validation_alias="VISION_REASONING_CALL_LIMIT",
+    )
+    reasoning_cost_limit_usd: float = Field(
+        0.25,
+        ge=0,
+        le=100,
+        validation_alias="VISION_REASONING_COST_LIMIT_USD",
+    )
+    no_effect_action_limit: int = Field(
+        3,
+        ge=1,
+        le=20,
+        validation_alias="VISION_NO_EFFECT_ACTION_LIMIT",
+    )
     ui_text_marker_limit: int = Field(90, ge=1, le=1000, validation_alias="VISION_UI_TEXT_MARKER_LIMIT")
     ui_icon_marker_limit: int = Field(45, ge=0, le=1000, validation_alias="VISION_UI_ICON_MARKER_LIMIT")
     reasoning_action_history_limit: int = Field(

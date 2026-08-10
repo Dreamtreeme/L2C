@@ -295,6 +295,7 @@ class DecisionState(TypedDict, total=False):
 
     pending_action: ActionRequest | None
     job_card_selection_trace: dict[str, Any]
+    reasoning_call_count: int
 
 
 class TransitionState(TypedDict, total=False):
@@ -302,6 +303,7 @@ class TransitionState(TypedDict, total=False):
 
     action_events: list[ActionEvent]
     error_count: int
+    no_effect_count: int
     transition_request: TransitionRequest
     transition_result: TransitionResult
 
@@ -458,10 +460,12 @@ def create_worker_state(
         "decision": {
             "pending_action": None,
             "job_card_selection_trace": {},
+            "reasoning_call_count": 0,
         },
         "transition": {
             "action_events": [],
             "error_count": 0,
+            "no_effect_count": 0,
             "transition_request": {},
             "transition_result": {
                 "status": "idle",

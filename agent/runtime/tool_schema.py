@@ -270,9 +270,39 @@ ACTION_TOOL_SCHEMAS = {
     )
 }
 
+DETAIL_ACTION_TOOL_NAMES = (
+    "click_marker",
+    "scroll",
+    "press_key",
+    "finish_detail_reading",
+    "go_back",
+    "close_current_tab",
+    "switch_tab",
+    "finish_task",
+)
+NAVIGATION_ACTION_TOOL_NAMES = (
+    "click_marker",
+    "type_in_marker",
+    "scroll",
+    "press_key",
+    "go_back",
+    "close_current_tab",
+    "switch_tab",
+    "finish_task",
+)
+UNKNOWN_ACTION_TOOL_NAMES = (
+    *NAVIGATION_ACTION_TOOL_NAMES[:4],
+    "open_browser",
+    *NAVIGATION_ACTION_TOOL_NAMES[4:],
+    "finish_detail_reading",
+)
+
 
 __all__ = [
     "ACTION_TOOL_SCHEMAS",
+    "DETAIL_ACTION_TOOL_NAMES",
+    "NAVIGATION_ACTION_TOOL_NAMES",
+    "UNKNOWN_ACTION_TOOL_NAMES",
     "VisibleJobCard",
     "click_marker",
     "close_current_tab",

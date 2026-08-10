@@ -126,6 +126,7 @@ def test_queue_click_requires_an_exact_queue_id():
 
 
 def test_general_reasoning_converts_model_tool_call(monkeypatch):
+    model_tiers = []
     monkeypatch.setattr(
         worker_reasoning,
         "select_job_cards",
@@ -139,7 +140,7 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     monkeypatch.setattr(
         worker_reasoning,
         "_get_ui_llm_with_tools",
-        lambda _runtime: object(),
+        lambda _runtime, _state, *, tier: model_tiers.append(tier) or object(),
     )
     monkeypatch.setattr(
         worker_reasoning,
@@ -157,12 +158,37 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     )
 
     result = worker_reasoning.reasoning_node(
-        worker_state(),
+        worker_state(observation={"current_page_role": "search"}),
         node_runtime(),
     )
 
     assert result["decision"]["pending_action"].tool_calls[0].name == "scroll"
+    assert result["decision"]["reasoning_call_count"] == 1
     assert result["replay"]["reflex_trace"]["source"] == "reasoning"
+    assert model_tiers == ["lightweight"]
+    assert "set_job_card_queue" not in worker_reasoning._reasoning_tool_names(
+        worker_state(observation={"current_page_role": "search"})
+    )
+    assert "finish_detail_reading" in worker_reasoning._reasoning_tool_names(
+        worker_state(observation={"current_page_role": "job_detail"})
+    )
+
+    recovery = worker_reasoning.reasoning_node(
+        worker_state(
+            observation={"current_page_role": "job_detail"},
+            transition={"transition_result": {"status": "unknown"}},
+        ),
+        node_runtime(),
+    )
+    assert recovery["decision"]["pending_action"].tool_calls[0].name == "scroll"
+    assert model_tiers[-1] == "primary"
+
+    exhausted = worker_reasoning.reasoning_node(
+        worker_state(decision={"reasoning_call_count": 16}),
+        node_runtime(),
+    )
+    assert exhausted["decision"]["pending_action"].source == "reasoning_policy"
+    assert exhausted["decision"]["pending_action"].tool_calls[0].name == "finish_task"
 
 
 def test_reasoning_prompt_reuses_already_compacted_queue_action_args():

@@ -8,17 +8,31 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from agent.observability.run_context import invoke_with_metrics, raise_if_cancelled
+from agent.config import get_settings
+from agent.observability.run_context import (
+    RunCancelled,
+    RunDeadlineExceeded,
+    current_run_context,
+    invoke_with_metrics,
+    raise_if_cancelled,
+)
 from agent.runtime.worker_contracts import (
     ActionRequest,
     WorkerState,
     action_event_results,
     action_event_transitions,
     action_request_from_model_response,
+    build_action_request,
 )
-from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
+from agent.runtime.tool_schema import (
+    ACTION_TOOL_SCHEMAS,
+    DETAIL_ACTION_TOOL_NAMES,
+    NAVIGATION_ACTION_TOOL_NAMES,
+    UNKNOWN_ACTION_TOOL_NAMES,
+)
 from agent.graph.worker_reasoning_prompt import build_reasoning_messages
 from agent.runtime.job_card_selector import select_job_cards
+from agent.runtime.site_context import normalize_page_role
 from agent.runtime.transition_runtime import (
     detect_two_screen_transition_cycle,
 )
@@ -26,13 +40,190 @@ from agent.utils.logger import logger
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 
 
-def _get_ui_llm_with_tools(runtime: Runtime[WorkerDependencies]):
-    """작업자 원자 도구를 바인딩한 모델을 재사용한다."""
+_REASONING_COMPONENTS = {
+    "job_card_selection",
+    "vision_reasoning_lightweight",
+    "vision_reasoning",
+}
 
-    return runtime.context.vision.get_ui_model_with_tools(
-        tuple(ACTION_TOOL_SCHEMAS),
-        ACTION_TOOL_SCHEMAS,
+
+def _reasoning_tool_names(state: WorkerState) -> tuple[str, ...]:
+    """현재 화면 역할에 필요한 원자 도구만 모델에 노출한다."""
+
+    role = normalize_page_role(
+        state["observation"].get("current_page_role")
     )
+    if role == "job_detail":
+        return DETAIL_ACTION_TOOL_NAMES
+    if role in {"home", "search", "form", "popup", "error"}:
+        return NAVIGATION_ACTION_TOOL_NAMES
+    return UNKNOWN_ACTION_TOOL_NAMES
+
+
+def _get_ui_llm_with_tools(
+    runtime: Runtime[WorkerDependencies],
+    state: WorkerState,
+    *,
+    tier: str,
+):
+    """화면 역할과 모델 단계가 같은 바인딩을 재사용한다."""
+
+    tool_names = _reasoning_tool_names(state)
+    return runtime.context.vision.get_ui_model_with_tools(
+        tool_names,
+        ACTION_TOOL_SCHEMAS,
+        tier=tier,
+    )
+
+
+def _reasoning_budget(
+    state: WorkerState,
+    call_count: int = 0,
+) -> tuple[int, float, str]:
+    """현재 실행의 화면 판단 호출 수와 비용 제한을 검사한다."""
+
+    settings = get_settings().vision
+    state_calls = max(
+        int(state["decision"].get("reasoning_call_count") or 0),
+        call_count,
+    )
+    observed_calls = 0
+    spent_usd = 0.0
+    context = current_run_context()
+    if context is not None:
+        usage = context.llm_budget_usage(_REASONING_COMPONENTS)
+        observed_calls = int(usage.get("call_count") or 0)
+        spent_usd = float(usage.get("estimated_cost_usd") or 0.0)
+    call_count = max(state_calls, observed_calls)
+    if call_count >= settings.reasoning_call_limit:
+        return call_count, spent_usd, "reasoning_call_limit"
+    if (
+        settings.reasoning_cost_limit_usd > 0
+        and spent_usd >= settings.reasoning_cost_limit_usd
+    ):
+        return call_count, spent_usd, "reasoning_cost_limit"
+    return call_count, spent_usd, ""
+
+
+def _reasoning_stop(
+    call_count: int,
+    spent_usd: float,
+    reason: str,
+) -> dict[str, Any]:
+    model_failed = reason == "primary_reasoning_failed"
+    summary = (
+        "화면 판단 모델의 복구 호출이 실패해 현재까지 수집한 결과로 종료합니다."
+        if model_failed
+        else "화면 판단 예산에 도달해 현재까지 수집한 결과로 종료합니다."
+    )
+    result = (
+        "화면 판단 모델이 유효한 행동을 반환하지 않아 현재까지 확보한 "
+        "정보만으로 수집을 종료했습니다."
+        if model_failed
+        else "화면 판단 호출 한도에 도달해 현재까지 확보한 정보만으로 수집을 종료했습니다."
+    )
+    request = build_action_request(
+        "reasoning_policy",
+        summary,
+        [
+            {
+                "name": "finish_task",
+                "args": {"result": result},
+                "id": "reasoning_policy_stop",
+            }
+        ],
+        metadata={
+            "reason": reason,
+            "call_count": call_count,
+            "estimated_cost_usd": spent_usd,
+        },
+    )
+    logger.warning(
+        "Reasoning stopped by policy",
+        reason=reason,
+        call_count=call_count,
+        estimated_cost_usd=spent_usd,
+    )
+    return {
+        "decision": {
+            "pending_action": request,
+            "reasoning_call_count": call_count,
+        },
+        "replay": {
+            "reflex_trace": {"hit": False, "source": "reasoning_policy"}
+        },
+    }
+
+
+def _invoke_reasoning_model(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+    loop_warning: str,
+    *,
+    tier: str,
+) -> ActionRequest:
+    tool_names = _reasoning_tool_names(state)
+    component = (
+        "vision_reasoning_lightweight"
+        if tier == "lightweight"
+        else "vision_reasoning"
+    )
+    response = invoke_with_metrics(
+        _get_ui_llm_with_tools(runtime, state, tier=tier),
+        build_reasoning_messages(state, loop_warning),
+        component,
+    )
+    request = action_request_from_model_response(
+        response,
+        allowed_tool_names=tool_names,
+    )
+    if not request.tool_calls:
+        raise ValueError("모델이 실행할 도구를 선택하지 않았습니다.")
+    return request
+
+
+def _choose_reasoning_action(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+    loop_warning: str,
+    *,
+    initial_tier: str,
+    call_count: int,
+) -> tuple[ActionRequest | None, int, str, str, float]:
+    """경량 판단이 실패한 경우에만 고성능 모델로 한 번 복구한다."""
+
+    tiers = (
+        ("primary",)
+        if initial_tier == "primary"
+        else ("lightweight", "primary")
+    )
+    spent_usd = 0.0
+    for tier in tiers:
+        call_count, spent_usd, stop_reason = _reasoning_budget(
+            state,
+            call_count,
+        )
+        if stop_reason:
+            return None, call_count, tier, stop_reason, spent_usd
+        try:
+            request = _invoke_reasoning_model(
+                state,
+                runtime,
+                loop_warning,
+                tier=tier,
+            )
+            return request, call_count + 1, tier, "", spent_usd
+        except (RunCancelled, RunDeadlineExceeded):
+            raise
+        except Exception as exc:
+            call_count += 1
+            logger.warning(
+                "Worker reasoning attempt failed",
+                tier=tier,
+                error=str(exc),
+            )
+    _, spent_usd, _ = _reasoning_budget(state, call_count)
+    return None, call_count, "primary", "primary_reasoning_failed", spent_usd
 
 
 def _is_repeating(history: list[Any], count: int) -> bool:
@@ -111,8 +302,13 @@ def reasoning_node(
     started = time.perf_counter()
     logger.info("Executing Reasoning Node")
     loop_warning, error_increment = _loop_warning(state)
+    call_count, spent_usd, budget_reason = _reasoning_budget(state)
+    if budget_reason:
+        return _reasoning_stop(call_count, spent_usd, budget_reason)
 
     selector_request, selector_trace = select_job_cards(state)
+    if selector_trace.get("attempted"):
+        call_count += 1
     if selector_request is not None:
         logger.info(
             "Reasoning Node completed",
@@ -124,6 +320,7 @@ def reasoning_node(
             "decision": {
                 "pending_action": selector_request,
                 "job_card_selection_trace": selector_trace,
+                "reasoning_call_count": call_count,
             },
             "replay": {
                 "reflex_trace": {
@@ -140,42 +337,49 @@ def reasoning_node(
             }
         return result
 
+    if selector_trace.get("attempted"):
+        _, spent_usd, budget_reason = _reasoning_budget(state, call_count)
+        if budget_reason:
+            return _reasoning_stop(call_count, spent_usd, budget_reason)
+
     reasoning_mode = (
         "general_after_card_selector" if selector_trace.get("attempted") else "general"
     )
-    response = invoke_with_metrics(
-        _get_ui_llm_with_tools(runtime),
-        build_reasoning_messages(
-            state,
-            loop_warning,
-        ),
-        "vision_reasoning",
+    transition_status = str(
+        state["transition"].get("transition_result", {}).get("status") or ""
     )
-    try:
-        pending_action = action_request_from_model_response(
-            response,
-            allowed_tool_names=tuple(ACTION_TOOL_SCHEMAS),
+    initial_tier = (
+        "primary"
+        if transition_status == "unknown" or loop_warning
+        else "lightweight"
+    )
+    pending_action, call_count, tier, stop_reason, spent_usd = (
+        _choose_reasoning_action(
+            state,
+            runtime,
+            loop_warning,
+            initial_tier=initial_tier,
+            call_count=call_count,
         )
-    except (TypeError, ValueError) as exc:
-        logger.warning("Model action request rejected", error=str(exc))
-        pending_action = ActionRequest(
-            source="llm",
-            summary="모델이 유효하지 않은 도구 호출을 반환했습니다.",
-            metadata={"validation_error": str(exc)},
-        )
-        error_increment += 1
+    )
+    if pending_action is None:
+        return _reasoning_stop(call_count, spent_usd, stop_reason)
+    if tier != initial_tier:
+        reasoning_mode += "_recovery"
 
     logger.info(
         "Reasoning Node completed",
         component="reasoning",
         duration_sec=round(time.perf_counter() - started, 6),
         reasoning_mode=reasoning_mode,
+        model_tier=tier,
     )
 
     result = {
         "decision": {
             "pending_action": pending_action,
             "job_card_selection_trace": selector_trace,
+            "reasoning_call_count": call_count,
         },
         "replay": {"reflex_trace": {"hit": False, "source": "reasoning"}},
     }

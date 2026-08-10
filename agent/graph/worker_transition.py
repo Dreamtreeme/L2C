@@ -430,6 +430,7 @@ def _evaluate_before_ocr(
     if visual_changed or input_requires_ocr:
         return {
             "transition": {
+                "no_effect_count": 0,
                 "transition_result": _transition_result(
                     request,
                     status="needs_ocr",
@@ -479,6 +480,9 @@ def _evaluate_before_ocr(
     )
     update = {
         "transition": {
+            "no_effect_count": (
+                int(state["transition"].get("no_effect_count") or 0) + 1
+            ),
             "transition_request": {},
             "transition_result": _transition_result(
                 request,
@@ -609,6 +613,11 @@ def _evaluate_after_ocr(
     )
     update = {
         "transition": {
+            "no_effect_count": (
+                0
+                if status == "ready"
+                else int(state["transition"].get("no_effect_count") or 0) + 1
+            ),
             "transition_request": {},
             "transition_result": _transition_result(
                 evaluated_request,

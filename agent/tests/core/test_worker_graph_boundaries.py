@@ -6,6 +6,7 @@ from agent.graph import (
     worker_execution,
     worker_execution_dispatch,
     worker_observation,
+    worker_selection,
 )
 from agent.runtime.worker_contracts import action_event_results, build_action_request
 from agent.graph.workflow import (
@@ -467,6 +468,13 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     assert action_result["reason"] == "same_screen_no_effect_action_blocked"
     assert result["transition"]["error_count"] == 1
 
+    stopped = worker_selection.selection_node(
+        worker_state(transition={"no_effect_count": 3}),
+        node_runtime(),
+    )
+    assert stopped["decision"]["pending_action"].source == "transition_policy"
+    assert stopped["decision"]["pending_action"].tool_calls[0].name == "finish_task"
+
 
 def test_execution_accumulates_detail_field_evidence(monkeypatch):
     monkeypatch.setattr(
@@ -830,6 +838,14 @@ def test_graph_custom_event_is_shared_by_metrics_and_sse():
                 "success": True,
             }
         )
+        context.record_llm_call(
+            "vision_reasoning",
+            "langchain",
+            "gemini-3.6-flash",
+            {"input_tokens": 1000, "output_tokens": 100},
+            0.5,
+        )
+        budget = context.llm_budget_usage({"vision_reasoning"})
         snapshot = context.snapshot()
 
     graph_events = [event for event in events if event.event.startswith("graph_step_")]
@@ -846,6 +862,8 @@ def test_graph_custom_event_is_shared_by_metrics_and_sse():
             "success": True,
         }
     ]
+    assert budget["call_count"] == 1
+    assert budget["estimated_cost_usd"] > 0
 
 
 def test_worker_graph_forwards_custom_stream_and_preserves_values(monkeypatch):

@@ -231,6 +231,27 @@ class RunContext:
             self.llm_calls.append(metric)
         logger.info("LLM call completed", **metric)
 
+    def llm_budget_usage(self, components: set[str]) -> dict[str, Any]:
+        """지정한 구성 요소의 실제 호출 수와 누적 비용을 반환한다."""
+
+        with self._lock:
+            calls = [
+                dict(item)
+                for item in self.llm_calls
+                if str(item.get("component") or "") in components
+            ]
+        by_model: dict[str, dict[str, Any]] = {}
+        for call in calls:
+            _merge_usage(
+                by_model.setdefault(str(call.get("model") or "unknown"), {}),
+                call,
+            )
+        cost = estimate_llm_cost(by_model)
+        return {
+            "call_count": len(calls),
+            "estimated_cost_usd": cost.get("estimated_total"),
+        }
+
     def snapshot(self) -> dict[str, Any]:
         langchain_by_model = {
             str(model): normalize_usage(dict(usage or {}))

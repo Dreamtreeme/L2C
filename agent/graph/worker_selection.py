@@ -52,6 +52,27 @@ def _low_information_stop() -> dict[str, Any]:
     }
 
 
+def _no_effect_stop(count: int) -> dict[str, Any]:
+    request = build_action_request(
+        "transition_policy",
+        "효과가 없는 화면 행동이 연속되어 현재까지 수집한 결과로 종료합니다.",
+        [
+            {
+                "name": "finish_task",
+                "args": {
+                    "result": (
+                        "화면이 연속 행동에 반응하지 않아 현재까지 확보한 "
+                        "정보만으로 수집을 종료했습니다."
+                    )
+                },
+                "id": "transition_no_effect_stop",
+            }
+        ],
+        metadata={"no_effect_count": count},
+    )
+    return {"decision": {"pending_action": request}}
+
+
 def _skip_duplicate_detail(
     state: WorkerState,
     *,
@@ -213,6 +234,10 @@ def selection_node(
     collection = state["collection"]
     if decision.get("pending_action") is not None:
         return {}
+
+    no_effect_count = int(transition.get("no_effect_count") or 0)
+    if no_effect_count >= get_settings().vision.no_effect_action_limit:
+        return _no_effect_stop(no_effect_count)
 
     capture_count = int(
         observation.get("low_information_capture_count") or 0

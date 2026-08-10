@@ -98,29 +98,52 @@ class VisionWorkerRuntime:
         self,
         tool_names: tuple[str, ...],
         tool_schemas: Mapping[str, Any],
+        *,
+        tier: str = "primary",
     ) -> Any:
         with self._resource_lock:
             self._require_open()
-            if tool_names not in self._ui_models:
+            cache_key = (tier, *tool_names)
+            if cache_key not in self._ui_models:
                 from agent.llm.clients import get_google_chat_model
                 from agent.llm.policy import (
+                    lightweight_model_name,
                     worker_reasoning_model_name,
                     worker_reasoning_thinking_level,
                 )
 
+                if tier not in {"lightweight", "primary"}:
+                    raise ValueError(f"지원하지 않는 작업자 모델 단계입니다: {tier}")
+                lightweight = tier == "lightweight"
                 model = get_google_chat_model(
-                    worker_reasoning_model_name(),
+                    (
+                        lightweight_model_name()
+                        if lightweight
+                        else worker_reasoning_model_name()
+                    ),
                     temperature=0.1,
-                    thinking_level=worker_reasoning_thinking_level(),
-                    execution_role="worker_reasoning",
+                    thinking_level=(
+                        "minimal"
+                        if lightweight
+                        else worker_reasoning_thinking_level()
+                    ),
+                    execution_role=(
+                        "lightweight" if lightweight else "worker_reasoning"
+                    ),
                 )
-                self._ui_models[tool_names] = model.bind_tools(
+                self._ui_models[cache_key] = model.bind_tools(
                     [tool_schemas[name] for name in tool_names]
                 )
-            return self._ui_models[tool_names]
+            return self._ui_models[cache_key]
 
     def prepare_reasoning_models(self, tool_schemas: Mapping[str, Any]) -> None:
-        self.get_ui_model_with_tools(tuple(tool_schemas), tool_schemas)
+        from agent.runtime.tool_schema import NAVIGATION_ACTION_TOOL_NAMES
+
+        self.get_ui_model_with_tools(
+            NAVIGATION_ACTION_TOOL_NAMES,
+            tool_schemas,
+            tier="lightweight",
+        )
         from agent.runtime.job_card_selector import prepare_job_card_selector_model
 
         prepare_job_card_selector_model()
