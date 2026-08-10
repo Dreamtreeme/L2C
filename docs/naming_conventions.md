@@ -45,13 +45,12 @@ tags:
 | `screen_context_signature` | 좌표 없는 행동 직전 화면의 축약 pHash 서명. 해당 단계의 active replay 판단 기준 |
 | `target_snapshot` | 특정 행동 대상의 text, bbox, ratio, label 등 관찰 스냅샷 |
 | `job_card_queue` | 채용 검색 결과에서 수집할 공고 카드 작업 큐 |
-| `job_results_memory` | 공고 카드 큐를 만든 검색 결과 화면의 복귀 검증용 기억 |
+| `job_results_memory` | 공고 카드 큐를 만든 목록의 URL과 `screen_signature`를 보관하는 복귀 검증 상태 |
 | `job_detail_buffer` | 공고 상세 화면에서 누적한 OCR 본문 |
 | `transition_request` | 직전 행동 묶음이 요청한 화면 전환과 저장된 도착 상태 |
 | `transition_result` | 화면 전환 검증의 현재 결과 |
 | `action_event` | 행동 결과, 레시피 단계, 피드백 근거와 전환 판정을 같은 순번으로 묶은 기록 |
 | `action_events` | 작업자 상태가 보관하는 순서화된 `ActionEvent` 목록 |
-| `transition_records` | 제출물 생성 시 `action_events`에서 추출한 확정 화면 전환 목록 |
 | `pending_action` | 아직 실행하지 않은 검증된 `ActionRequest` |
 | `tool_call_metadata` | 큐 ID, 전환 출처처럼 물리 도구 인자가 아닌 실행 추적값 |
 | `observation_id` | 화면 파일, OCR, 마커와 화면 서명을 함께 묶는 실행 내 관찰 식별자 |
@@ -126,7 +125,7 @@ tags:
 | `worker_execution_dispatch.py` | 원자 도구와 상태 행동 실행 |
 | `worker_execution_context.py` | 한 행동 실행 중 변경되는 상태 조립 |
 | `worker_execution_policy.py` | 실행 전후에 사용하는 순수 판정과 스냅샷 생성 |
-| `worker_action_guard.py` | 물리 행동 전 안전·화면 유효성 검사 |
+| `worker_action_guard.py` | 물리 행동 전 작업 권한과 무효 행동 반복 검사 |
 | `worker_action_effects.py` | 행동 결과를 카드 큐·상세 수집·종료 상태에 반영 |
 
 활성 레시피 조회와 ROI 재생은 `agent/recipe/replay.py`와 `replay_runtime.py`가 담당한다. 작업자 상태 계약과 상태 조회 함수는 `agent/runtime/worker_contracts.py`, `worker_state.py`에 둔다.

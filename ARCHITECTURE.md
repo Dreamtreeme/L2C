@@ -111,7 +111,7 @@ flowchart TD
 ## 상태와 행동 계약
 
 - 모든 작업자 진입점은 `create_worker_state()`로 독립된 초기 상태를 만듭니다.
-- `WorkerState`는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety` 구역으로 구성됩니다. 각 구역의 reducer는 노드가 반환한 부분 갱신을 기존 구역에 병합합니다.
+- `WorkerState`는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle` 구역으로 구성됩니다. 각 구역의 reducer는 노드가 반환한 부분 갱신을 기존 구역에 병합합니다.
 - 상태 구역은 책임 경계입니다. 요청 계약은 실행 중 바뀌지 않고, 화면 관찰은 관찰 노드, 행동 선택은 선택·Reflex·추론 노드, 행동 결과와 전환 요청은 실행 노드가 갱신합니다.
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `decision.pending_action: ActionRequest`, 실행 결과는 `transition.action_events`에 순서대로 기록합니다.
@@ -120,7 +120,7 @@ flowchart TD
 - 실행기는 안전 검증, 도구 전달, 상태 효과를 순서대로 조립하며 행동 종류는 `agent/runtime/worker_actions.py`에서 한 번만 정의합니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
-- 행동이 요구한 전환은 `transition.transition_request`, 현재 검증 결과는 `transition.transition_result`로 구분합니다. 확정된 전환은 같은 순번의 `transition.action_events`에 연결되고 제출물 생성 시 `transition_records`로 변환됩니다.
+- 행동이 요구한 전환은 `transition.transition_request`, 현재 검증 결과는 `transition.transition_result`로 구분합니다. 확정된 전환은 같은 순번의 `transition.action_events`에 연결되고 제출물에도 같은 구조로 저장됩니다.
 - 결정론적 정책이 검증에 실패하면 행동을 강행하지 않고 reasoning으로 폴백합니다.
 
 ## 그래프 의존성 주입

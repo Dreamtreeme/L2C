@@ -41,7 +41,6 @@ tags:
 | [Reflex Recipe 구현 기준](reflex_recipe_plan.md) | 현재 | 후보 저장, Critic 검토, ROI 재생 흐름 |
 | [`troubleshooting.md`](../troubleshooting.md) | 분할 예정 | 실험 과정과 장애 해결 원본 기록 |
 | [트러블슈팅 및 교훈](lessons_learned.md) | 역사 기록 | 초기 GUI·VLM 구현에서 얻은 교훈 |
-| [`jd_comparison_report.md`](../benchmark/jd_comparison_report.md) | 벤치마크 | Classic과 Vision 수집 비교 |
 
 ## 검색과 사이트
 

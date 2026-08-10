@@ -45,7 +45,6 @@ L2C는 두 방식의 장점을 결합하는 구조를 실험합니다. 지원할
 기반 자율 수집과 본문 추출 가능성을 확인했으며, 이를 전체 사이트 성공률로
 해석하지 않습니다. 현재는 Phase 8에서 자율 탐색 기록을 경험 기반 탐색에 재사용해
 reasoning 호출을 줄이는 구조를 검증 중입니다. 자세한 결과는
-[`benchmark/jd_comparison_report.md`](./benchmark/jd_comparison_report.md)와
 [`troubleshooting.md`](./troubleshooting.md)에서 확인할 수 있습니다.
 설계·실험·운영 문서 전체는 [`docs/index.md`](./docs/index.md)에서 찾을 수
 있습니다.
@@ -74,7 +73,7 @@ reasoning 호출을 줄이는 구조를 검증 중입니다. 자세한 결과는
 - pHash 기반 Reflex는 원티드의 유사 채용공고 수집 흐름에서 reasoning 감소 효과를 확인했다.
 - 동일한 ROI 재생 구조가 사람인·잡코리아·고용24에서도 동작하지만, 승격 범위가 작으면 전체 실행시간은 줄지 않는다.
 - 검색 진입, 일부 목록 이동, 반복 가능한 UI 조작처럼 안정적인 상위 경로는 replay 후보로 적합하다.
-- 공고 상세 본문, 현재 검색 결과의 카드 선택, 예외 화면처럼 매번 달라지는 마지막 판단은 아직 LLM reasoning이 필요하다.
+- 공고 상세 본문, 최초 검색 결과의 카드 의미 선택, 예외 화면처럼 매번 달라지는 판단은 LLM이 담당한다. 한 번 만든 카드 큐 안의 다음 항목은 저장 좌표로 재생한다.
 - DB에서 확인된 중복 카드는 신규 수집과 구분하되 사용자 목표를 해결한 카드로 계산해 불필요한 상세 순회를 끝낸다.
 - 다음 단계는 사이트별 표본 수를 늘려 경험 기반 탐색 성공률·잘못된 클릭률·공고당 비용을 비교하는 것이다.
 
@@ -119,7 +118,7 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 
 **Agent — 비전 LLM 에이전트 (자율 탐색 및 시드 수집기)**
 
-화면을 시각으로 이해하고 도구를 사용해 행동합니다. 자연어 명령에서 시작합니다. URL 입력이 불필요한 대신 처리 시간이 길고 LLM 호출 비용이 누적됩니다. 정량 비교 결과는 [`benchmark/jd_comparison_report.md`](./benchmark/jd_comparison_report.md)에서 확인할 수 있습니다.
+화면을 시각으로 이해하고 도구를 사용해 행동합니다. 자연어 명령에서 시작합니다. URL 입력이 불필요한 대신 처리 시간이 길고 LLM 호출 비용이 누적됩니다.
 
 이 시스템에서 비전 에이전트는 **탐색과 피드백 수집기** 역할을 함께 맡습니다.
 등록된 신규 사이트의 첫 진입과 UI 변경 시 현재 화면을 분석하고 행동 후보를
@@ -168,9 +167,9 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
 
 `agent/bootstrap.py`는 체크포인터, DB·대화·수집 포트, 모델 묶음과 비전 런타임을 생성해 그래프에 주입하는 조립 지점입니다. Investigation LangGraph가 대화 문맥, 노드 순서, DB 조회·저장 시점, 분기, 중단·재개와 상태 갱신을 담당합니다. 실제 SQL, 브라우저와 OCR 자원 수명은 주입된 어댑터가 담당합니다. Vision 노드는 전역 런타임 조회 없이 LangGraph `Runtime` 문맥으로 전달된 `VisionWorkerRuntime`을 사용합니다.
 
-작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`의 8개 책임 구역으로 나뉩니다. 노드는 자신이 변경한 구역만 `WorkerStateUpdate`로 반환하고 LangGraph reducer가 해당 구역을 병합합니다. 행동 실행은 불변 입력과 가변 결과를 분리하고, 결과 상태에서 최초 입력과 달라진 구역만 반환합니다.
+작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`의 7개 책임 구역으로 나뉩니다. 노드는 자신이 변경한 구역만 `WorkerStateUpdate`로 반환하고 LangGraph reducer가 해당 구역을 병합합니다. 행동 실행은 불변 입력과 가변 결과를 분리하고, 결과 상태에서 최초 입력과 달라진 구역만 반환합니다.
 
-Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. Investigation LangGraph가 요청과 저장 흐름을 지휘하고, `agent/application/`은 상세 정제·DB 작업·비전 실행 어댑터를 제공하며 `agent/bootstrap.py`는 자원 수명주기만 조립합니다.
+Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습니다. 전환 검증, 상세 OCR 누적, 카드 큐, Reflex 재생은 `agent/runtime/`에 분리되어 화면 서명·OCR 마커·좌표비율만 사용합니다. 최초 검색 결과에서는 경량 모델이 수집할 카드를 한 번 고르고, 상세에서 돌아온 뒤에는 목록 pHash와 저장 좌표로 큐의 다음 카드를 실행합니다. 큐를 모두 처리한 뒤 추가 탐색이 필요할 때만 일반 화면 추론이 새 큐를 만듭니다. Investigation LangGraph가 요청과 저장 흐름을 지휘하고, `agent/application/`은 상세 정제·DB 작업·비전 실행 어댑터를 제공하며 `agent/bootstrap.py`는 자원 수명주기만 조립합니다.
 
 운영 경로는 지연 초기화(lazy initialization)를 적용합니다. DB 질의와 웹 Q&A 서버는 비전 엔진, YOLO 모델, 물리 GUI 제어 도구를 import 시점에 초기화하지 않고, 실시간 수집이 실제로 필요할 때만 비전 파이프라인을 준비합니다. PaddleOCR subprocess는 작업 동안 계속 재사용하고, 요청 timeout이나 worker 오류가 발생할 때만 재시작합니다. OCR 입력 최대 변은 1152로 제한합니다.
 
@@ -183,7 +182,7 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
   - [x] Gemini 구조화 출력 기반 LLM 정형화 및 SQLite 저장
   - [x] LLM 출력 JSON 모드 및 타입 정규화 (string ↔ list 자동 변환)
   - [x] 사이트별 어댑터 패턴 및 URL 디스패처 (`classic/automation/sites/`)
-  - [x] 5개 주요 사이트 안정화 (원티드, 잡코리아, 사람인, 워크넷, 로켓펀치)
+  - [x] Classic 기준선 3개 사이트 구현 (원티드, 잡코리아, 로켓펀치)
 
 - [x] Phase 2: 비전 및 물리 제어 엔진 기반 에이전트 도구 구축
   - [x] 1. 지표 및 에러 추적 세팅
@@ -239,7 +238,6 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
   - [x] 2. **[추가]** Classic 시스템이 수집한 공고 원문 파일과 Agent가 저장한 본문 텍스트 파일 간의 텍스트 매칭 정확도 및 누락률 정량 비교
   - [x] 3. LangSmith 데이터 기반 에이전트 오류 자가 복구율 분석 및 LangGraph `recursion_limit` 60으로 완화 조정
   - [x] 4. 토큰 사용량 기반 비용 산출 및 로컬 모델 메모리 부족(OOM)으로 발생하던 500 에러를 대비하기 위한 Gemini API 텍스트 추론 경로 추가 (하이브리드 추론 구조로 전환)
-  - [x] 5. 최종 결과 보고서 작성 및 모니터 위 물리 마우스 자율 조작 벤치마크 리포트 배포 ([`benchmark/jd_comparison_report.md`](./benchmark/jd_comparison_report.md))
 
 - [x] Phase 6: 수집 데이터 전처리 및 DB 적재 신뢰성 강화
   - [x] 1. 고정밀 텍스트 전처리 엔진 구현 (`preprocessor.py`)
@@ -264,30 +262,27 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
   - [x] 3. 답변 생성 및 출처 검증
     - [x] 검증된 공고만 구조화 문서로 답변 모델에 제공
     - [x] 답변의 `[job_id:N]`이 실제 근거 문서에 포함되는지 검사
-  - [x] 4. 검색 의미 사전 운영
-      - [x] 6개 업무 영역·로컬 직무군·O*NET 세부 직업·소프트웨어 기술 어휘 적재
+  - [x] 4. 정적 검색 의미 사전
+      - [x] 버전 관리되는 한국어 업무 영역·직무·기술 별칭 적재
       - [x] 업무 영역부터 직무군까지 DB 공고 수와 사전 직무 수를 구분한 단계형 질문
-      - [x] 선택 영역 하위 후보만 이용한 미등록 직무 의미 확인과 사용자 승인 별칭 승격
-      - [x] 미등록 기술을 후보로 모으고 검토 후 별칭 또는 새 개념으로 승인
+      - [x] 미등록 직무는 선택 영역의 하위 개념만 LLM에 제공하고 현재 요청에서 확인
 
 - [ ] **Phase 8: 피드백 루프 기반 Reflex Recipe 승격 (현재 단계)**
 
-  > 현재 진행 중인 핵심 단계. 자율탐색은 행동을 선택할 때 `fixed / parameterized / reasoning` 재사용 방식과 입력 슬롯을 함께 기록한다. Critic은 실행 내용을 새로 만들거나 수정하지 않고 실패·불안정 행동만 제거한다. `자율탐색 후보 ∩ Critic 유지 ∩ 화면 증거 통과`에 해당하는 기록을 `이전 상태 + 행동 묶음 + 도착 상태` 전이로 저장한다. 경로는 한 번 선택한 뒤 도착 상태가 확인될 때만 다음 전이로 진행하고, 실패하거나 확신이 낮은 상황에서는 다시 자율탐색으로 폴백한다. 여러 실행의 반복 성공을 승격 전 필수 조건으로 두는 정책과 negative example 학습은 아직 완료되지 않았다.
+  > 현재 진행 중인 핵심 단계. 자율탐색은 행동을 선택할 때 `fixed / parameterized / reasoning` 재사용 방식과 입력 슬롯을 함께 기록한다. Critic은 실행 내용을 새로 만들거나 수정하지 않고 실패·불안정 행동만 제거한다. `자율탐색 후보 ∩ Critic 유지 ∩ 화면 증거 통과`에 해당하는 기록을 `이전 상태 + 행동 묶음 + 도착 상태` 전이로 저장한다. 경로는 한 번 선택한 뒤 도착 상태가 확인될 때만 다음 전이로 진행하고, 실패하면 다시 자율탐색으로 폴백한다.
 
   - [x] 1. 제안 로그 포맷 정규화
     - [x] LLM/VLM이 선택한 행동, 대상 마커, target_label, component, 재사용 방식, 선택 이유(`reason`)를 기록
     - [x] 검색어처럼 실행마다 바뀌는 값은 도구 호출의 `slot_name`과 레시피 `slot_refs`로 보존
   - [x] 2. 전후 관찰(Observer) 파이프라인 구축
-    - [x] 화면 변경 행동과 다음 OCR·스크린샷을 `transition_records`로 연결
+    - [x] 화면 변경 행동과 다음 OCR·스크린샷을 같은 `action_events` 항목으로 연결
     - [x] OpenCV 연속 프레임 비교로 화면 변화 시작과 렌더링 안정화를 판단하고, pHash는 저장 상태 확인에 사용
     - [ ] 같은 카드 반복 클릭, 화면 변화 없음, 팝업/승인창 개입 등 오염 신호 탐지
   - [x] 3. Critic 피드백 루프 추가
-    - [x] success / partial / wrong_target / no_effect / loop_risk 라벨 부여
+    - [x] success / partial / no_effect / error 라벨 부여
     - [ ] 공고 카드 클릭 후 상세 페이지 진입, 상세 수집 후 DB 적재, go_back 후 목록 복귀 같은 목표 전이를 기준으로 판단
   - [ ] 4. Recipe Memory 승격 정책
-    - [ ] 같은 사이트·페이지 역할·작업 유형에서 반복 성공한 패턴만 confidence 상승
-    - [ ] 실패 패턴은 negative example로 저장하고 Reflex 후보에서 제외
-    - [ ] Codex 승인창, 브라우저 툴바, 광고/팝업처럼 사이트 고유 동작이 아닌 요소는 승격 금지
+    - [ ] 브라우저 툴바, 시스템 대화상자, 광고/팝업처럼 사이트 고유 동작이 아닌 요소는 승격 금지
     - [x] 자율탐색이 각 단계를 `fixed / parameterized / reasoning`으로 제안하고 Critic은 유지/제거만 판정
     - [x] Critic이 행동·파라미터·슬롯·화면 역할·전환 조건을 덮어쓰지 못하도록 스키마 축소
     - [ ] 승인된 후보를 활성 Recipe Memory에 반영하는 수동/승인 정책 결정
@@ -295,8 +290,7 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
     - [x] 검색어가 바뀌면 `query` 슬롯만 교체하고 고정 UI 절차는 유지
     - [x] 행동 후 저장된 도착 ROI 또는 화면 문맥을 확인하고, 불일치나 시간 초과 시 자율탐색으로 폴백
     - [x] 검색 결과의 현재 공고 제목은 동적 대상으로 취급하여 과거 제목을 재생하지 않고, 작업자가 미방문 카드를 선택
-    - [x] 상위 N개 요청은 `target_count`와 방문 이력을 유지하며 `현재 카드 선택 → 상세 수집 → 필요 시 go_back` 루프를 반복
-    - [ ] Reflex는 높은 confidence 패턴만 실행하고, 불확실하면 추론하지 않고 Explore로 폴백
+    - [x] 상위 N개 요청은 `최초 카드 큐 생성 → 상세 수집 → 목록 화면 확인 → 저장된 다음 카드 좌표 실행` 루프를 반복
   - [x] 6. pHash 기반 경험 탐색 정량 검증
     - [x] 화면 pHash, OCR anchor, target bbox 비율을 결합해 replay 후보를 검증
     - [x] `ios 개발자 공고 2개`에서 기존 자율 탐색과 동일한 2건 저장 확인
@@ -393,14 +387,17 @@ cd L2C
 # Classic 방식 — URL 직접 입력
 python -m classic.main extract https://www.wanted.co.kr/wd/350432
 
-# 기본 회귀 테스트 (외부 API와 물리 브라우저 E2E 제외)
+# 핵심 제품 계약 118개
 .\scripts\test.cmd
 
-# 실제 외부 API 테스트를 명시적으로 포함
-.\scripts\test.cmd -m external
+# 과거 장애와 세부 기능 회귀
+.\scripts\test.cmd agent\tests\regression -q
 
-# 두 방식 비교. 실패 시 정상 데이터를 임의로 채우지 않음
-python -m benchmark.run_compare_jd
+# 벤치마크와 품질 계산 검증
+.\scripts\test.cmd agent\tests\evaluation -q
+
+# 전체 242개
+.\scripts\test.cmd agent\tests -q
 
 # Realtime E2E: 로그, 구조화 요약, 선택적 LangSmith trace를 함께 생성
 python -m benchmark.run_realtime_e2e --site wanted --search-keyword "iOS 개발자" --original-query "ios 개발자 공고 2개" --target-count 2 --count-mode explicit --scenario-id wanted-ios-2 --execution-mode experience_guided --log logs/e2e_wanted_ios2.log

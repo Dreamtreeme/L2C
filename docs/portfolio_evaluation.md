@@ -18,7 +18,7 @@ E2E 로그는 원인 분석 자료로 유지하고 성공률 분모에는 포함
 
 ```powershell
 .\setup.cmd -Development
-.\scripts\test.cmd
+.\scripts\test.cmd agent\tests -q
 git status --short
 ```
 

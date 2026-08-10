@@ -71,11 +71,15 @@ Investigation LangGraph는 대화 문맥 조회, 요청 해석, DB 근거 검사
 
 전환 검증, 상세 OCR 버퍼, 결과 카드 큐, Reflex 재생은 `agent/runtime/`의 독립 모듈로 분리했습니다. 이 정책들은 DOM selector가 아니라 화면 서명, OCR 마커, 좌표비율만 입력으로 받습니다.
 
+카드 선택용 경량 모델은 큐가 없는 최초 검색 결과에서 공고 제목과 회사, 화면에 표시된 결과 개수만 판단합니다. 로딩 완료는 OpenCV 화면 대기가 담당하고 필터 조작과 큐 소진 후 추가 탐색은 일반 화면 추론이 담당합니다. 상세 페이지에서 목록으로 돌아오면 저장한 목록 pHash와 카드 좌표비율로 큐의 다음 항목을 실행하므로 같은 목록을 매번 OCR하거나 다시 고르지 않습니다.
+
 ## 9. LLM 선택과 물리 도구 계약 분리
 
 LLM은 화면의 의미와 목표 대상을 판단하지만, 선택한 마커가 해당 물리 도구로 실행 가능한지는 실행기가 검증합니다. 예를 들어 `type_in_marker`가 텍스트 없는 작은 아이콘을 가리키면 클릭과 `Ctrl+A`를 보내지 않고 같은 화면에서 다른 마커를 다시 판단하게 합니다.
 
 LLM이 반환한 LangChain 메시지는 `reasoning_node` 밖으로 전달하지 않습니다. 이 경계에서 `ActionRequest`로 한 번 변환하고, Reflex와 공고 카드 큐도 같은 계약을 직접 생성합니다. `execution_node`는 요청 출처와 관계없이 검증된 호출만 실행하며 결과·레시피 단계·피드백 근거를 `transition.action_events`에 기록합니다. 정책 테스트와 실행기는 특정 채팅 메시지 구현에 의존하지 않습니다.
+
+Vision Worker는 물리 화면 작업을 직렬 실행하고 `observation_id`로 캡처·OCR·판단·행동을 묶습니다. LLM 판단 뒤 행동 직전에 같은 화면을 다시 캡처하는 pHash 검사는 제거했습니다. 새 화면 검증은 화면 변경 행동 뒤의 캡처·전환 노드에서 수행합니다. OCR도 관찰당 한 번만 실행하므로 Perception 내부의 동일 이미지 분석 캐시를 두지 않습니다.
 
 이 검증은 사이트명, 마커 번호, 화면 문구를 사용하지 않습니다. OCR 텍스트 여부, 내부 텍스트 포함 관계, bbox 형태처럼 화면에서 관찰한 물리적 affordance만 사용합니다. 따라서 사이트 의미를 코드로 복제하지 않으면서 닫기 버튼 같은 명백한 도구 계약 위반을 막습니다.
 
@@ -93,7 +97,7 @@ LLM이 반환한 LangChain 메시지는 `reasoning_node` 밖으로 전달하지 
 
 - 애플리케이션 수명: 조사 체크포인터, 컴파일된 그래프, OmniParser YOLO, PaddleOCR worker, Gemini 기본/구조화 클라이언트, 승격 작업자
 - 수집 요청 수명: 전용 Chrome 창, 탭과 사이트 렌더링 상태
-- 단일 작업 수명: `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`로 구분한 `WorkerState`
+- 단일 작업 수명: `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`로 구분한 `WorkerState`
 
 Gemini 클라이언트는 모델명, temperature, 구조화 출력 스키마별로 캐시하지만 실제 API 요청을 미리 보내지는 않습니다. 유료 더미 요청은 서버 측 warm 상태를 보장하지 못하고 비용만 추가하기 때문입니다. 로컬 비전 자원은 `VisionWorkerRuntime`이 첫 수집 요청에서 지연 초기화하여 DB 질의와 UI 서버 기동이 GPU 환경에 묶이지 않게 합니다.
 
@@ -109,7 +113,7 @@ Gemini 클라이언트는 모델명, temperature, 구조화 출력 스키마별�
 
 ## 13. 지휘자와 경량 모델 분리
 
-복잡한 조사 계획, 화면 행동 판단, worker 결과 검토와 레시피 Critic은 `gemini-3.6-flash`를 사용합니다. 상세 OCR 구조화, 검색 의도 추출, 결과 카드 후보 선택과 요약·정규화는 `gemini-3.5-flash-lite`를 사용합니다. 역할별 기본값은 `agent/application/model_policy.py` 한 곳에서 관리하고 `COMMANDER_MODEL`, `VISION_LIGHTWEIGHT_MODEL`로 교체할 수 있습니다.
+복잡한 조사 계획, 화면 행동 판단, worker 결과 검토와 레시피 Critic은 `gemini-3.6-flash`를 사용합니다. 상세 OCR 구조화, 검색 의도 추출, 결과 카드 후보 선택과 요약·정규화는 `gemini-3.5-flash-lite`를 사용합니다. 역할별 기본값은 `agent/llm/policy.py` 한 곳에서 관리하고 `COMMANDER_MODEL`, `VISION_LIGHTWEIGHT_MODEL`로 교체할 수 있습니다.
 
 선택 근거는 Google이 공개한 2026년 7월 평가에서 3.6 Flash가 OSWorld-Verified 83.0%, CharXiv 85.2%를 기록해 비교 모델보다 컴퓨터 조작과 복잡한 화면 정보 추론에서 우위를 보였고, 3.5 Flash-Lite는 문서 추출·구조화 작업을 주요 용도로 제시하면서 초당 350 출력 토큰의 처리량과 낮은 단가를 제공한 점입니다. 이 수치는 공급사 평가이므로 L2C의 실제 채용 사이트 완료율을 보장하지 않으며, 모델 교체 효과는 동일 E2E의 완료율, 잘못된 도구 선택, 구조화 품질, 실행시간과 토큰 비용으로 별도 검증합니다.
 

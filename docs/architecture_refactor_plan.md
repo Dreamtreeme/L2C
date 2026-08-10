@@ -48,7 +48,7 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 |---|---|---|
 | 조사 재개 | 업무 DB와 분리된 LangGraph SQLite 체크포인트 사용 | 사용자 확인이 필요한 조사 그래프만 체크포인트 재개 |
 | 사용자 확인 | `interrupt()` 중단 후 같은 `thread_id`에 `Command(resume=...)` 전달 | 완료 |
-| 작업자 상태 | 8개 책임 구역으로 나눈 `WorkerState`와 구역별 reducer 사용 | 노드는 변경한 구역만 `WorkerStateUpdate`로 반환 |
+| 작업자 상태 | 7개 책임 구역으로 나눈 `WorkerState`와 구역별 reducer 사용 | 노드는 변경한 구역만 `WorkerStateUpdate`로 반환 |
 | 행동 계약 | `decision.pending_action`과 `transition.action_events`로 분리 | 완료 |
 | 노드 책임 | 관찰·전환·수집·선택·추론·실행·기록과 실행 검증·전달·상태 효과를 분리 | 완료 |
 | 런타임 | `ApplicationRuntime`과 `VisionWorkerRuntime`이 자원 수명을 소유 | 완료 |
@@ -91,7 +91,7 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - `InvestigationWorkflow._save()`와 각 노드의 수동 저장을 제거한다.
 - `run()`에서 저장 JSON을 읽어 새 초기 상태를 만드는 재개 코드를 제거한다.
 - `InvestigationStore` 코드와 `investigation_sessions.state_json` 의존성을 제거한다.
-- API의 `resume_mode="restart_from_request"`를 실제 체크포인트 재개로 바꾼다.
+- API가 저장 JSON으로 요청을 다시 만들던 재시작 경로를 제거하고 체크포인트 재개로 통일한다.
 
 주요 파일:
 
@@ -245,7 +245,9 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - `worker_execution.py`에는 실행 진입과 행동 호출 순서만 남겼다. 상태 조립은 `worker_execution_context`, 원자 도구 전달은 `worker_execution_dispatch`, 실행 전 검증은 `worker_action_guard`, 행동 후 상태 반영은 `worker_action_effects`가 담당한다.
 - UI·상태·종료 행동 분류는 `runtime/worker_actions.py`의 단일 계약을 사용하며 피드백 기록에 있던 중복 행동 집합을 제거했다.
 - `worker_reasoning.py`에는 카드 선택기, 모델 호출과 응답 검증만 남기고 화면·수집·전환 프롬프트 조립은 `worker_reasoning_prompt.py`로 분리했다. 호출되지 않던 동일 대상 재시도 판정 함수도 삭제했다.
-- `create_worker_state()`가 8개 책임 구역을 초기화하고 각 구역 reducer가 부분 갱신을 병합한다. 평면 호환 필드와 구역 상태를 함께 유지하는 경로는 없다.
+- 카드 선택기는 최초 목록의 카드와 결과 개수만 판단하도록 축소했다. 중복되던 로딩 판정과 필터 조작, 소진 큐 자동 보충을 제거하고 각각 OpenCV 대기와 일반 화면 추론에 맡겼다. 큐 항목 활성화는 실제 `queue_id`가 일치하는 호출만 허용한다.
+- 직렬 작업자에서 LLM 행동마다 추가 캡처를 만들던 행동 직전 pHash 검사를 제거했다. 화면 전환 검증은 기존 캡처·전환 노드만 담당한다. 관찰당 OCR 한 번 계약과 겹치던 동일 이미지 SHA-256 분석 캐시와 미사용 설정도 삭제했다.
+- `create_worker_state()`가 7개 책임 구역을 초기화하고 각 구역 reducer가 부분 갱신을 병합한다. 평면 호환 필드와 구역 상태를 함께 유지하는 경로는 없다.
 - 화면 변경 뒤에는 캡처와 전환 판정을 거쳐 필요한 OCR을 먼저 수행한다. 상세 후속 추론이 새 화면 OCR을 앞지르던 순서 오류도 수정했다.
 - 마커 조회와 타깃의 픽셀·비율 좌표 생성은 `vision/target_snapshot.py`로 통합하고 피드백, 실행 기록, 카드 큐에 있던 중복 구현을 제거했다.
 - 삭제된 거대 노드의 로컬 백업 파일도 제거했다. 현재 서비스가 실행하지 않는 민감 행동의 중단 후 재개는 작업자 그래프 분할 완료 조건에서 제외한다.
@@ -266,14 +268,14 @@ L2C의 강점인 비전 기반 물리 조작, ROI Reflex, 결과 카드 큐, 전
 - `ApplicationRuntime`과 `build_investigation_workflow()`가 체크포인터, 서비스, 모델 묶음, 조사 노드와 비전 런타임을 조립한다.
 - `InvestigationWorkflow`는 주입된 노드와 체크포인터 `saver`를 연결하고 실행·중단·재개만 담당한다. 체크포인터 종료는 `ApplicationRuntime`이 수행한다.
 - 조사 상태는 `request`, `evidence`, `execution`, `answer`로 나눴다.
-- 작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`, `safety`로 나눴다.
+- 작업자 상태는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle`로 나눴다. 실행 권한은 작업 중 변하지 않으므로 `request`가 보관한다.
 - Vision Worker 그래프는 `context_schema=WorkerDependencies`를 선언한다. 실행 서비스가 `VisionWorkerRuntime`을 LangGraph 문맥으로 전달하고 노드는 `Runtime[WorkerDependencies]`에서 읽는다.
 - 현재 런타임을 찾던 전역 변수, `ContextVar`, 노드 바인딩 함수와 활성화 컨텍스트를 제거했다.
 - `WorkerExecutionContext`는 불변 입력과 가변 실행 결과를 분리하고, 최초 상태와 달라진 구역만 반환한다. 실행 전후 상태를 필드별로 복사하던 매핑을 제거했다.
 
 검증 결과:
 
-- 애플리케이션 계층의 의존성 조립, 조사 체크포인트 재개, 작업자 Runtime 문맥 전달과 8개 상태 구역 계약을 단위 테스트로 검증했다.
+- 애플리케이션 계층의 의존성 조립, 조사 체크포인트 재개, 작업자 Runtime 문맥 전달과 7개 상태 구역 계약을 단위 테스트로 검증했다.
 - Python 3.13 환경에서 현재 전체 `agent/tests` 276건을 통과했다.
 - 원티드 `iOS 개발자 1건` 경험 기반 탐색 E2E는 24.06초에 품질 게이트를 통과했다. Reflex 경로 2단계가 완료됐고 기존 DB 공고 ID 57을 근거로 종료했으며 브라우저도 정리됐다.
 
