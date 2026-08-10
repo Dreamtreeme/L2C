@@ -126,6 +126,31 @@ def test_queue_click_requires_an_exact_queue_id():
 
 
 def test_general_reasoning_converts_model_tool_call(monkeypatch):
+    from agent.runtime.tool_schema import model_action_tool_schema
+    from agent.runtime.worker_contracts import action_request_from_model_response
+
+    scroll_schema = model_action_tool_schema("scroll")
+    scroll_properties = scroll_schema["function"]["parameters"]["properties"]
+    assert "amount" not in scroll_properties
+    assert scroll_properties["scroll_distance"]["enum"] == ["small", "page"]
+    normalized_scroll = action_request_from_model_response(
+        SimpleNamespace(
+            content="조금 아래를 읽습니다.",
+            tool_calls=[
+                {
+                    "id": "scroll-contract",
+                    "name": "scroll",
+                    "args": {
+                        "direction": "down",
+                        "scroll_distance": "small",
+                    },
+                }
+            ],
+        ),
+        allowed_tool_names=("scroll",),
+    )
+    assert normalized_scroll.tool_calls[0].args["amount"] == "small"
+
     model_tiers = []
     monkeypatch.setattr(
         worker_reasoning,

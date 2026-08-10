@@ -7,7 +7,10 @@ from typing import Annotated, Any, TypedDict, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from agent.runtime.tool_schema import ACTION_TOOL_SCHEMAS
+from agent.runtime.tool_schema import (
+    ACTION_TOOL_SCHEMAS,
+    normalize_model_action_calls,
+)
 from agent.runtime.worker_actions import is_supported_recipe_action_group
 from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
 from shared.schema.collection_intent import CollectionIntent
@@ -219,11 +222,13 @@ def action_request_from_model_response(
 ) -> ActionRequest:
     """LangChain 모델 응답을 추론 경계에서 한 번만 도메인 계약으로 바꾼다."""
 
-    raw_calls = getattr(response, "tool_calls", None) or []
+    raw_calls = normalize_model_action_calls(
+        list(getattr(response, "tool_calls", None) or [])
+    )
     return build_action_request(
         "llm",
         _message_text(getattr(response, "content", "")),
-        list(raw_calls),
+        raw_calls,
         allowed_tool_names=allowed_tool_names,
     )
 

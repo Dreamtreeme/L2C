@@ -111,6 +111,7 @@ class VisionWorkerRuntime:
                     worker_reasoning_model_name,
                     worker_reasoning_thinking_level,
                 )
+                from agent.runtime.tool_schema import model_action_tool_schema
 
                 if tier not in {"lightweight", "primary"}:
                     raise ValueError(f"지원하지 않는 작업자 모델 단계입니다: {tier}")
@@ -132,7 +133,7 @@ class VisionWorkerRuntime:
                     ),
                 )
                 self._ui_models[cache_key] = model.bind_tools(
-                    [tool_schemas[name] for name in tool_names]
+                    [model_action_tool_schema(name) for name in tool_names]
                 )
             return self._ui_models[cache_key]
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -298,11 +299,45 @@ UNKNOWN_ACTION_TOOL_NAMES = (
 )
 
 
+def model_action_tool_schema(name: str) -> dict[str, Any]:
+    """내부 행동 계약을 모델이 혼동하지 않는 함수 스키마로 변환한다."""
+
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+    schema = ACTION_TOOL_SCHEMAS[name]
+    tool = deepcopy(convert_to_openai_tool(schema))
+    if name == "scroll":
+        properties = tool["function"]["parameters"]["properties"]
+        distance = properties.pop("amount")
+        distance["description"] = (
+            "스크롤 이동 거리. 방향을 넣지 말고 small 또는 page 중 하나를 선택합니다."
+        )
+        properties["scroll_distance"] = distance
+    return tool
+
+
+def normalize_model_action_calls(
+    raw_calls: List[dict[str, Any]],
+) -> List[dict[str, Any]]:
+    """모델 전용 인자명을 내부 실행 계약의 인자명으로 되돌린다."""
+
+    calls = deepcopy(raw_calls)
+    for call in calls:
+        if call.get("name") != "scroll":
+            continue
+        args = call.get("args")
+        if isinstance(args, dict) and "scroll_distance" in args:
+            args["amount"] = args.pop("scroll_distance")
+    return calls
+
+
 __all__ = [
     "ACTION_TOOL_SCHEMAS",
     "DETAIL_ACTION_TOOL_NAMES",
     "NAVIGATION_ACTION_TOOL_NAMES",
     "UNKNOWN_ACTION_TOOL_NAMES",
+    "model_action_tool_schema",
+    "normalize_model_action_calls",
     "VisibleJobCard",
     "click_marker",
     "close_current_tab",
