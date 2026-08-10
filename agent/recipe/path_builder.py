@@ -1,20 +1,14 @@
-"""자율탐색 기록을 검증 가능한 경험 기반 탐색 경로로 변환한다."""
+"""자율탐색 행동과 실제 전환 기록으로 경험 기반 탐색 경로를 만든다."""
 
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
 
-from agent.config import get_settings
+from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
     TARGET_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
-)
-from agent.runtime.site_context import normalize_page_role
-from agent.utils.text import url_template
-from agent.vision.screen_signature import (
-    compact_screen_context_signature,
-    hamming_distance,
 )
 from shared.schema.feedback_schema import RecipeCandidate, RecordedTransition
 
@@ -26,91 +20,24 @@ def _sequence(item: dict[str, Any]) -> int | None:
         return None
 
 
-def _checkpoint(
-    *,
-    observation_id: Any = "",
-    url: Any = "",
-    page_role: Any = "",
-    screen_signature: Any = None,
-) -> dict[str, Any]:
-    context_signature = compact_screen_context_signature(
-        screen_signature if isinstance(screen_signature, dict) else {}
-    )
+def _checkpoint_payload(stored: dict[str, Any]) -> dict[str, Any]:
     return {
-        "observation_id": str(observation_id or ""),
-        "url_template": url_template(str(url or "")),
-        "page_role": str(page_role or ""),
-        "screen_context_signature": context_signature,
+        "observation_id": str(stored.get("observation_id") or ""),
+        "url_template": str(stored.get("url_template") or ""),
+        "page_role": str(stored.get("page_role") or ""),
+        "screen_context_signature": deepcopy(
+            stored.get("screen_context_signature") or {}
+        ),
     }
 
 
 def _checkpoint_from_step(step: dict[str, Any]) -> dict[str, Any]:
-    stored = (
-        dict(step.get("before_state") or {})
-        if isinstance(step.get("before_state"), dict)
-        else {}
-    )
-    if not stored:
-        return {}
-    return {
-        "observation_id": str(stored.get("observation_id") or ""),
-        "url_template": str(stored.get("url_template") or ""),
-        "page_role": str(stored.get("page_role") or ""),
-        "screen_context_signature": dict(stored.get("screen_context_signature") or {}),
-    }
+    stored = step.get("before_state")
+    return _checkpoint_payload(stored) if isinstance(stored, dict) and stored else {}
 
 
-def _checkpoint_from_transition(
-    record: RecordedTransition,
-) -> dict[str, Any]:
-    stored = record.after_state
-    if not stored:
-        return {}
-    return {
-        "observation_id": str(stored.get("observation_id") or ""),
-        "url_template": str(stored.get("url_template") or ""),
-        "page_role": str(stored.get("page_role") or ""),
-        "screen_context_signature": dict(stored.get("screen_context_signature") or {}),
-    }
-
-
-def _feedback_before_states(
-    candidate: RecipeCandidate,
-) -> dict[int, dict[str, Any]]:
-    states: dict[int, dict[str, Any]] = {}
-    for episode in candidate.submission.feedback_episodes:
-        before = episode.observation.before
-        states[episode.seq] = _checkpoint(
-            observation_id=before.get("observation_id"),
-            url=before.get("url"),
-            page_role=before.get("page_role"),
-            screen_signature=before.get("screen_signature"),
-        )
-    return states
-
-
-def _transition_after_states(
-    candidate: RecipeCandidate,
-) -> dict[int, dict[str, Any]]:
-    states: dict[int, dict[str, Any]] = {}
-    for record in candidate.submission.transition_records:
-        if record.action_seq is None:
-            continue
-        states[record.action_seq] = _checkpoint_from_transition(record)
-    return states
-
-
-def _merge_checkpoint(
-    primary: dict[str, Any],
-    fallback: dict[str, Any],
-) -> dict[str, Any]:
-    """서로 다른 기록원이 가진 체크포인트 필드를 손실 없이 합친다."""
-
-    merged = deepcopy(fallback)
-    for key, value in primary.items():
-        if value not in (None, "", {}, []):
-            merged[key] = deepcopy(value)
-    return merged
+def _checkpoint_from_transition(record: RecordedTransition) -> dict[str, Any]:
+    return _checkpoint_payload(record.after_state) if record.after_state else {}
 
 
 def _action_from_step(step: dict[str, Any]) -> dict[str, Any]:
@@ -127,7 +54,6 @@ def _action_from_step(step: dict[str, Any]) -> dict[str, Any]:
         "component": str(step.get("component") or ""),
         "slot_refs": list(step.get("slot_refs") or []),
         "risk_level": str(step.get("risk_level") or ""),
-        "needs_user_confirmation": bool(step.get("needs_user_confirmation")),
         "replay_mode": str(step.get("replay_mode") or "reasoning"),
     }
 
@@ -147,35 +73,12 @@ def _add_action_anchor(
     return out
 
 
-def _states_match(
-    left: dict[str, Any],
-    right: dict[str, Any],
-) -> bool:
-    """Critic이 중간 행동을 삭제해도 같은 화면이 이어지는지 확인한다."""
+def _states_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """같은 실행에서 기록한 관찰 식별자가 연속되는지 확인한다."""
 
-    left_observation = str(left.get("observation_id") or "")
-    right_observation = str(right.get("observation_id") or "")
-    if (
-        left_observation
-        and right_observation
-        and left_observation == right_observation
-    ):
-        return True
-
-    left_url = str(left.get("url_template") or "")
-    right_url = str(right.get("url_template") or "")
-    if left_url and right_url and left_url != right_url:
-        return False
-
-    left_signature = dict(left.get("screen_context_signature") or {})
-    right_signature = dict(right.get("screen_context_signature") or {})
-    distance = hamming_distance(
-        str(left_signature.get("phash") or ""),
-        str(right_signature.get("phash") or ""),
-    )
-    if distance is None:
-        return False
-    return distance <= get_settings().reflex.screen_context_phash_max_distance
+    left_id = str(left.get("observation_id") or "")
+    right_id = str(right.get("observation_id") or "")
+    return bool(left_id and right_id and left_id == right_id)
 
 
 def _has_verifiable_identity(
@@ -198,7 +101,7 @@ def _has_verifiable_identity(
 def _merge_commit_actions(
     transitions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """입력과 Enter처럼 하나의 화면 전환을 만드는 행동만 합친다."""
+    """입력 뒤 Enter처럼 코드가 허용한 단일 조합만 한 전이로 묶는다."""
 
     merged: list[dict[str, Any]] = []
     index = 0
@@ -206,15 +109,13 @@ def _merge_commit_actions(
         current = deepcopy(transitions[index])
         if index + 1 < len(transitions):
             following = transitions[index + 1]
-            actions = list(current.get("actions") or []) + list(
-                following.get("actions") or []
-            )
+            actions = list(current["actions"]) + list(following["actions"])
             if is_supported_recipe_action_group(actions) and _states_match(
-                dict(current.get("after") or {}),
-                dict(following.get("before") or {}),
+                current["after"],
+                following["before"],
             ):
                 current["actions"] = actions
-                current["after"] = deepcopy(following.get("after") or {})
+                current["after"] = deepcopy(following["after"])
                 current["expected_after"] = str(
                     following.get("expected_after")
                     or current.get("expected_after")
@@ -261,54 +162,29 @@ def _remove_invalid_path_prefix(
         )
 
 
-def _raw_steps_by_seq(candidate: RecipeCandidate) -> dict[int, dict[str, Any]]:
-    return {
-        int(step.seq): step.model_dump(mode="json")
-        for step in candidate.steps
-        if step.seq is not None
-    }
+def _transition_after_states(
+    candidate: RecipeCandidate,
+) -> dict[int, dict[str, Any]]:
+    states: dict[int, dict[str, Any]] = {}
+    for record in candidate.submission.transition_records:
+        if record.action_seq is None or not record.after_state:
+            continue
+        states[int(record.action_seq)] = _checkpoint_from_transition(record)
+    return states
 
 
-def _before_checkpoint(
-    step: dict[str, Any],
-    feedback_before: dict[int, dict[str, Any]],
-) -> dict[str, Any]:
-    seq = int(step["seq"])
-    before = _checkpoint_from_step(step)
-    if seq in feedback_before:
-        return _merge_checkpoint(before, feedback_before[seq])
-    return before
-
-
-def _after_checkpoint(
-    seq: int,
-    raw_steps: dict[int, dict[str, Any]],
-    feedback_before: dict[int, dict[str, Any]],
-    transition_after: dict[int, dict[str, Any]],
-) -> dict[str, Any]:
-    after = deepcopy(transition_after.get(seq) or {})
-    if after:
-        return after
-    next_step = raw_steps.get(seq + 1)
-    if not next_step:
-        return {}
-    after = _checkpoint_from_step(next_step)
-    if seq + 1 in feedback_before:
-        after = _merge_checkpoint(after, feedback_before[seq + 1])
-    return after
-
-
-def _append_continuity_issues(
+def _append_remaining_issues(
     ordered: list[dict[str, Any]],
     start_position: int,
     issues: list[dict[str, Any]],
+    reason: str,
 ) -> None:
     for remaining in ordered[start_position:]:
         issues.append(
             {
                 "seq": remaining.get("seq"),
                 "action": remaining.get("action"),
-                "reason": "state_continuity_unproven",
+                "reason": reason,
             }
         )
 
@@ -318,29 +194,28 @@ def _build_atomic_transitions(
     ordered: list[dict[str, Any]],
     issues: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    raw_steps = _raw_steps_by_seq(candidate)
-    feedback_before = _feedback_before_states(candidate)
-    transition_after = _transition_after_states(candidate)
+    after_states = _transition_after_states(candidate)
     atomic: list[dict[str, Any]] = []
-    previous_seq: int | None = None
     previous_after: dict[str, Any] | None = None
     for position, step in enumerate(ordered):
         seq = int(step["seq"])
-        before = _before_checkpoint(step, feedback_before)
-        after = _after_checkpoint(
-            seq,
-            raw_steps,
-            feedback_before,
-            transition_after,
-        )
-        discontinuous = (
-            previous_seq is not None
-            and seq != previous_seq + 1
-            and previous_after is not None
-            and not _states_match(previous_after, before)
-        )
-        if discontinuous:
-            _append_continuity_issues(ordered, position, issues)
+        before = _checkpoint_from_step(step)
+        after = deepcopy(after_states.get(seq) or {})
+        if not before or not after:
+            _append_remaining_issues(
+                ordered,
+                position,
+                issues,
+                "recorded_transition_missing",
+            )
+            break
+        if previous_after is not None and not _states_match(previous_after, before):
+            _append_remaining_issues(
+                ordered,
+                position,
+                issues,
+                "state_continuity_unproven",
+            )
             break
         action = _action_from_step(step)
         atomic.append(
@@ -353,18 +228,8 @@ def _build_atomic_transitions(
                 "intent": str(step.get("intent") or ""),
             }
         )
-        previous_seq = seq
         previous_after = after
     return atomic
-
-
-def _anchor_following_actions(transitions: list[dict[str, Any]]) -> None:
-    for index in range(len(transitions) - 1):
-        next_action = transitions[index + 1]["actions"][0]
-        transitions[index]["after"] = _add_action_anchor(
-            transitions[index]["after"],
-            next_action,
-        )
 
 
 def _remove_unverifiable_tail(
@@ -376,7 +241,7 @@ def _remove_unverifiable_tail(
         transitions[-1]["after"],
     ):
         removed = transitions.pop()
-        first_action = (removed.get("actions") or [{}])[0]
+        first_action = removed["actions"][0]
         issues.append(
             {
                 "seq": first_action.get("source_seq"),
@@ -390,7 +255,7 @@ def build_recipe_path(
     candidate: RecipeCandidate,
     replay_steps: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    """가지치기된 행동을 하나의 연속 상태 전이 경로로 만든다."""
+    """가지치기된 행동 중 실제 전환이 이어지는 구간만 경로로 만든다."""
 
     ordered = _ordered_replay_steps(replay_steps)
     issues: list[dict[str, Any]] = []
@@ -399,17 +264,12 @@ def build_recipe_path(
     _remove_invalid_path_prefix(ordered, issues)
     if not ordered:
         return None, issues
-    atomic = _build_atomic_transitions(candidate, ordered, issues)
-    transitions = _merge_commit_actions(atomic)
-    if not transitions:
-        return None, issues
-    _anchor_following_actions(transitions)
+    transitions = _merge_commit_actions(
+        _build_atomic_transitions(candidate, ordered, issues)
+    )
     _remove_unverifiable_tail(transitions, issues)
     if not transitions:
         return None, issues
-
-    for index, transition in enumerate(transitions):
-        transition["seq"] = index
     return {
         "start_state": deepcopy(transitions[0]["before"]),
         "transitions": transitions,

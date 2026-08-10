@@ -30,12 +30,10 @@ from shared.schema.investigation_schema import InvestigationPlanStep
 def _scope_exhausted(submission: WorkerSubmission, resolved_count: int) -> bool:
     availability = submission.extracted_summary.get("job_results_availability") or {}
     available_count = availability.get("available_job_count")
-    confidence = float(availability.get("count_confidence") or 0.0)
     evidence = str(availability.get("count_evidence") or "").strip()
     return bool(
         isinstance(available_count, int)
         and available_count >= 0
-        and confidence >= 0.8
         and evidence
         and resolved_count >= available_count
     )
@@ -81,11 +79,13 @@ def build_collection_result(
     document_ids = sorted(persisted_ids | observed_ids)
     resolved_count = len(document_ids)
     scope_exhausted = _scope_exhausted(submission, resolved_count)
+    worker_finished = submission.run_status == "finished"
+    hit_recursion_limit = submission.run_status == "recursion_limit"
     status = _collection_status(
         resolved_count=resolved_count,
         target_count=intent.target_count,
         rejected_count=persistence.rejected_count,
-        worker_finished=submission.is_finished,
+        worker_finished=worker_finished,
         scope_exhausted=scope_exhausted,
     )
     return CollectionResult(
@@ -110,11 +110,9 @@ def build_collection_result(
         observed_job_ids=sorted(observed_ids),
         document_ids=document_ids,
         scope_exhausted=scope_exhausted,
-        worker_finished=submission.is_finished,
-        hit_recursion_limit=submission.hit_recursion_limit,
-        submission_id=experience.submission_id,
-        worker_run_id=submission.run_id,
-        candidate_id=experience.recipe_learning.candidate_id,
+        worker_finished=worker_finished,
+        hit_recursion_limit=hit_recursion_limit,
+        worker_run_id=experience.run_id,
     )
 
 
@@ -151,7 +149,7 @@ def _complete_step_update(
             "target_count": result.target_count,
             "resolved_count": result.resolved_count,
             "persisted_count": result.persisted_count,
-            "submission_id": result.submission_id,
+            "worker_run_id": result.worker_run_id,
             "document_ids": result.document_ids,
         },
     )
@@ -304,7 +302,7 @@ class InvestigationCollectionNodes:
         except Exception as exc:
             logger.warning("Collection experience recording failed: %s", exc)
             experience = CollectionExperienceResult(
-                submission_id="",
+                run_id="",
                 recipe_learning=RecipeLearningResult(
                     status="failed",
                     reason="experience_recording_failed",

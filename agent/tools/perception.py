@@ -1,7 +1,6 @@
 import ctypes
 import ctypes.wintypes as wintypes
 import datetime
-import hashlib
 import os
 import platform
 import time
@@ -21,6 +20,10 @@ from agent.utils.logger import logger
 from agent.vision.loading_wait import LoadingWait
 
 
+class BrowserWindowNotFoundError(RuntimeError):
+    """캡처할 브라우저 창을 현재 데스크톱에서 찾지 못한 경우."""
+
+
 class PerceptionEngine:
     """
     모니터 화면을 인식하고 분석하는 Perception 엔진입니다.
@@ -36,11 +39,7 @@ class PerceptionEngine:
         self.scale_y = 1.0
         self.last_region = None
         self._browser_window_id = None
-        self._last_url = ""
         self.last_capture_quality: Dict[str, Any] = {}
-        self._analysis_cache: Dict[str, Dict[str, Any]] = {}
-        self._analysis_cache_order: list[str] = []
-        self._analysis_cache_limit = get_settings().vision.ui_analysis_cache_limit
 
         self.loading_wait = LoadingWait(self)
 
@@ -121,16 +120,44 @@ class PerceptionEngine:
         except Exception as e:
             logger.debug("Failed to activate window (bring to front)", error=str(e))
 
-        border = 8
-        top = win.top + border if win.isMaximized else win.top
-        region = {
-            "top": top,
-            "left": win.left + border,
-            "width": win.width - (border * 2),
-            "height": win.height - border - (border if win.isMaximized else 0),
+        region = self._client_region(win) or {
+            "top": int(win.top),
+            "left": int(win.left),
+            "width": int(win.width),
+            "height": int(win.height),
         }
         work_area = self._monitor_work_area(win)
         return self._intersect_regions(region, work_area) if work_area else region
+
+    @classmethod
+    def _client_region(cls, window) -> Optional[Dict[str, int]]:
+        """Windows 창의 고정 테두리를 제외한 실제 클라이언트 영역을 읽는다."""
+
+        if os.name != "nt":
+            return None
+        window_id = cls._window_id(window)
+        if not window_id:
+            return None
+        try:
+            rect = wintypes.RECT()
+            origin = wintypes.POINT(0, 0)
+            user32 = ctypes.windll.user32
+            if not user32.GetClientRect(wintypes.HWND(window_id), ctypes.byref(rect)):
+                return None
+            if not user32.ClientToScreen(
+                wintypes.HWND(window_id),
+                ctypes.byref(origin),
+            ):
+                return None
+            return {
+                "top": int(origin.y),
+                "left": int(origin.x),
+                "width": int(rect.right - rect.left),
+                "height": int(rect.bottom - rect.top),
+            }
+        except Exception as exc:
+            logger.debug("Browser client region lookup failed", error=str(exc))
+            return None
 
     @staticmethod
     def _intersect_regions(
@@ -209,6 +236,7 @@ class PerceptionEngine:
                 window_id=preferred_id,
             )
             self.clear_browser_window()
+            return None
 
         active = gw.getActiveWindow()
         if (
@@ -219,17 +247,10 @@ class PerceptionEngine:
             self.bind_browser_window(active)
             return active
 
-        for win in windows:
-            if self._looks_like_browser_window(win):
-                self.bind_browser_window(win)
-                return win
         return None
 
     def _get_browser_region(self) -> Optional[Dict[str, int]]:
-        """
-        Return the bound browser window region when available.
-        If no browser is bound yet, bind the active visible browser first, then fall back to any visible browser.
-        """
+        """바인딩된 창 또는 현재 활성 브라우저의 캡처 영역을 반환한다."""
         win = self._find_browser_window()
         if not win:
             return None
@@ -241,12 +262,18 @@ class PerceptionEngine:
     ) -> Path:
         """현재 브라우저 화면을 즉시 한 장 저장한다."""
 
-        region = self._get_browser_region()
+        region = self._require_browser_region()
         return self._save_capture(region, filename)
+
+    def _require_browser_region(self) -> Dict[str, int]:
+        region = self._get_browser_region()
+        if region is None:
+            raise BrowserWindowNotFoundError("캡처할 브라우저 창을 찾지 못했습니다.")
+        return region
 
     def _save_capture(
         self,
-        region: Optional[Dict[str, int]],
+        region: Dict[str, int],
         filename: Optional[str] = None,
     ) -> Path:
         """이미 찾은 브라우저 영역을 다시 조회하지 않고 저장한다."""
@@ -258,33 +285,16 @@ class PerceptionEngine:
         output_path = self.screenshot_dir / filename
 
         try:
-            if region:
-                # 브라우저만 캡처
-                sct_img = self.sct.grab(region)
-                self.scale_x = sct_img.width / region["width"]
-                self.scale_y = sct_img.height / region["height"]
-                self.last_region = region
-                logger.debug(
-                    "Captured browser window only",
-                    region=region,
-                    scale_x=self.scale_x,
-                    scale_y=self.scale_y,
-                )
-            else:
-                # 브라우저를 못 찾으면 모니터 1번 (주 모니터) 전체 캡처
-                monitor = self.sct.monitors[1]
-                sct_img = self.sct.grab(monitor)
-                self.scale_x = 1.0
-                self.scale_y = 1.0
-                self.last_region = {
-                    "top": monitor["top"],
-                    "left": monitor["left"],
-                    "width": monitor["width"],
-                    "height": monitor["height"],
-                }
-                logger.debug(
-                    "Browser not found, captured full monitor", monitor=monitor
-                )
+            sct_img = self.sct.grab(region)
+            self.scale_x = sct_img.width / region["width"]
+            self.scale_y = sct_img.height / region["height"]
+            self.last_region = region
+            logger.debug(
+                "Captured browser window only",
+                region=region,
+                scale_x=self.scale_x,
+                scale_y=self.scale_y,
+            )
 
             # Convert to PIL Image and preserve text edges by default.
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
@@ -306,7 +316,7 @@ class PerceptionEngine:
 
     def wait_for_transition_change(self, reference_image_path: str) -> bool:
         """화면 변경 행동 뒤 이전 화면이 그대로인 동안에는 OCR 캡처를 미룹니다."""
-        region = self._get_browser_region()
+        region = self._require_browser_region()
         return self.loading_wait.wait_for_change(
             reference_image_path,
             region=region,
@@ -326,7 +336,7 @@ class PerceptionEngine:
         )
         if wait_sec > 0:
             time.sleep(wait_sec)
-        region = self._get_browser_region()
+        region = self._require_browser_region()
         self.last_capture_quality = self.loading_wait.wait_until_ready(region=region)
         return self._save_capture(region)
 
@@ -356,7 +366,6 @@ class PerceptionEngine:
                 self.release_address_bar_focus(key_pause=key_pause)
                 pyautogui.PAUSE = old_pause
             if url.startswith(("http://", "https://")):
-                self._last_url = url
                 return url
         except Exception as e:
             logger.debug("Failed to read current browser URL", error=str(e))
@@ -410,33 +419,8 @@ class PerceptionEngine:
         pyautogui.PAUSE = min(old_pause, key_pause)
         try:
             pyautogui.press("esc")
-            pyautogui.press("esc")
         finally:
             pyautogui.PAUSE = old_pause
-
-    def _image_signature(self, image_path: Path) -> str:
-        try:
-            with Image.open(image_path) as img:
-                thumb = img.convert("L").resize((32, 32), Image.Resampling.BILINEAR)
-                return hashlib.sha1(thumb.tobytes()).hexdigest()
-        except (OSError, ValueError) as e:
-            logger.debug("Failed to build image signature", error=str(e))
-            return ""
-
-    def _cache_analysis(self, key: str, analysis: Dict[str, Any]) -> None:
-        if not key or self._analysis_cache_limit <= 0:
-            return
-        self._analysis_cache[key] = {
-            "markers": [dict(marker) for marker in analysis.get("markers", [])],
-            "marked_image": analysis.get("marked_image", ""),
-            "content_top": int(analysis.get("content_top", 0) or 0),
-        }
-        if key in self._analysis_cache_order:
-            self._analysis_cache_order.remove(key)
-        self._analysis_cache_order.append(key)
-        while len(self._analysis_cache_order) > self._analysis_cache_limit:
-            old_key = self._analysis_cache_order.pop(0)
-            self._analysis_cache.pop(old_key, None)
 
     def analyze_ui(self, image_path: Path) -> Dict[str, Any]:
         """PaddleOCR와 OmniParser 결과를 물리 좌표가 있는 마커로 변환한다."""
@@ -446,19 +430,6 @@ class PerceptionEngine:
                 "Image file not found for UI analysis", image_path=str(image_path)
             )
             raise FileNotFoundError(f"Image not found: {image_path}")
-
-        cache_key = self._image_signature(image_path)
-        if cache_key and cache_key in self._analysis_cache:
-            cached = self._analysis_cache[cache_key]
-            logger.info(
-                "UI analysis cache hit", markers_count=len(cached.get("markers", []))
-            )
-            return {
-                "markers": [dict(marker) for marker in cached.get("markers", [])],
-                "marked_image": cached.get("marked_image", ""),
-                "content_top": int(cached.get("content_top", 0) or 0),
-                "analysis_mode": str(cached.get("analysis_mode") or "full"),
-            }
 
         crop_top = int(self.last_capture_quality.get("content_top", 0) or 0)
         marked_filename = f"marked_{image_path.name}"
@@ -489,11 +460,8 @@ class PerceptionEngine:
             markers.append(marker)
 
         logger.info("UI analysis pipeline complete", final_markers_count=len(markers))
-        analysis = {
+        return {
             "markers": markers,
             "marked_image": str(marked_path),
             "content_top": crop_top,
-            "analysis_mode": "full",
         }
-        self._cache_analysis(cache_key, analysis)
-        return analysis

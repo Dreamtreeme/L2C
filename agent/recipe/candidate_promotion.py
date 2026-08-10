@@ -64,26 +64,17 @@ def _candidate_skill_metadata(
 ) -> RecipeSkillMetadata:
     """재생에 필요한 입력 슬롯을 자율탐색 행동에서 직접 만든다."""
 
-    slots: dict[str, dict[str, Any]] = {}
+    slots: set[str] = set()
     for step in candidate.steps:
         for raw_name in step.slot_refs:
             name = str(raw_name or "").strip()
-            if not name or name in slots:
-                continue
-            slots[name] = {
-                "name": name,
-                "description": step.intent.strip(),
-                "observed_value": step.param.get("text"),
-                "required": True,
-                "source": "recorded_step",
-            }
+            if name:
+                slots.add(name)
     return RecipeSkillMetadata(
-        when_to_use=candidate.goal,
-        site=candidate.site,
         task_category=normalize_task_category(
             candidate.submission.collection_intent.task_category
         ),
-        inputs=list(slots.values()),
+        inputs=[{"name": name} for name in sorted(slots)],
     )
 
 
@@ -269,7 +260,7 @@ def apply_candidate_promotion(
         candidate.goal,
         recipe_paths,
         metadata=metadata,
-        candidate_id=candidate.candidate_id,
+        source_run_id=candidate.run_id,
     )
     return {
         "enabled": True,
@@ -289,15 +280,15 @@ def apply_candidate_promotion(
 
 
 def reapply_reviewed_candidate_promotion(
-    candidate_id: str,
+    run_id: str,
     db_path=None,
 ) -> dict[str, Any]:
     """저장된 가지치기 판정을 현재 결정론 정책으로 다시 적용한다."""
 
-    candidate = RecipeCandidateStore(db_path).get_candidate(candidate_id)
+    candidate = RecipeCandidateStore(db_path).get_candidate(run_id)
     if not candidate:
         return {
-            "candidate_id": candidate_id,
+            "run_id": run_id,
             "promoted": False,
             "reason": "candidate_not_found",
         }
@@ -308,7 +299,7 @@ def reapply_reviewed_candidate_promotion(
         for item in review.get("step_verdicts") or []
     ):
         return {
-            "candidate_id": candidate_id,
+            "run_id": run_id,
             "promoted": False,
             "reason": "stored_review_not_promotable",
         }
@@ -317,7 +308,7 @@ def reapply_reviewed_candidate_promotion(
         review,
         db_path=db_path,
     )
-    return {"candidate_id": candidate_id, **promotion}
+    return {"run_id": run_id, **promotion}
 
 
 __all__ = [

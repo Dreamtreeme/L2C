@@ -27,13 +27,11 @@ class RunRegistry:
         query: str,
         *,
         conversation_id: str = "",
-        user_query: str | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         item = {
             "run_id": run_id,
             "query": query,
-            "user_query": str(user_query if user_query is not None else query),
             "conversation_id": str(conversation_id or ""),
             "status": RunStatus.QUEUED.value,
             "phase": "received",

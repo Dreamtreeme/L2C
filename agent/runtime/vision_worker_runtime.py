@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
-from agent.runtime.worker_contracts import WorkerState
 from agent.runtime.worker_data_services import WorkerDataServices
 
 from agent.utils.logger import logger
@@ -128,31 +127,6 @@ class VisionWorkerRuntime:
 
     def ensure_ocr_worker_ready(self) -> None:
         self.get_perception().ensure_ocr_worker_ready()
-
-    def check_reasoning_screen(
-        self,
-        state: WorkerState,
-        *,
-        marker_id: int | None = None,
-    ) -> dict[str, Any]:
-        """저장한 화면과 현재 물리 화면이 같은 행동 대상을 가리키는지 확인한다."""
-
-        observation = state.get("observation") or {}
-        if not str((observation.get("screen_signature") or {}).get("phash") or ""):
-            return {
-                "checked": False,
-                "stale": False,
-                "must_refresh": True,
-                "reason": "previous_phash_missing",
-            }
-
-        from agent.runtime.action_guard import check_reasoning_screen_stale
-
-        return check_reasoning_screen_stale(
-            state,
-            self.get_perception(),
-            marker_id=marker_id,
-        )
 
     def get_graph(self) -> Any:
         with self._resource_lock:

@@ -14,7 +14,6 @@ from agent.runtime.worker_contracts import WorkerState, action_event_results
 from agent.prompts.trust_boundary import external_content_contract_en
 from agent.runtime.worker_state import target_count_from_state
 from agent.prompts.commander import COMMANDER_SYSTEM_PROMPT
-from agent.runtime.action_validation import IMPLAUSIBLE_TEXT_INPUT_TARGET
 from agent.runtime.detail_runtime import compact_job_detail_buffer_context
 from agent.runtime.job_card_queue import (
     job_detail_key_from_state,
@@ -49,10 +48,7 @@ def _recent_forbidden_actions(
 
         reason = action.get("reason", "") or ""
         forbidden_reason = ""
-        if reason in {
-            "same_screen_no_effect_action_blocked",
-            IMPLAUSIBLE_TEXT_INPUT_TARGET,
-        }:
+        if reason == "same_screen_no_effect_action_blocked":
             forbidden_reason = reason
         elif _is_open_browser_noop(action):
             forbidden_reason = action.get("result", {}).get(
@@ -119,8 +115,8 @@ def _safety_page_role_contract() -> str:
         "\n\n" + external_content_contract_en() + "\n[Safety and page-role contract]\n"
         "- For every UI tool call, include page_role when you can infer it: home, search, list, detail, form, popup, error, or unknown.\n"
         "- Include risk_level: safe_read, safe_navigation, or sensitive.\n"
-        "- Set needs_user_confirmation=true before login, password/authentication, personal data, agreement/terms, application/submission, payment, transfer, account, finance, or legal-effect steps. The executor will stop and ask the user.\n"
-        "- Set needs_user_confirmation=false for safe UI actions. For type_in_marker, set slot_name to the matching task input key such as query or keyword; type only values supplied by the task contract.\n"
+        "- Mark login, authentication, personal data, agreement, application, payment, account, finance, and legal-effect actions as sensitive. The public job collection policy blocks them.\n"
+        "- For type_in_marker, set slot_name to the matching task input key such as query or keyword; type only values supplied by the task contract.\n"
         "- For public job collection, do not attempt login, signup, authentication, or account switching unless the user explicitly asked for it. If such a screen appears, leave that flow and return to a public search/list/home surface. Use neutral action reasons such as 'return to public search surface' instead of describing a login/signup action.\n"
         "- If a login or signup modal covers public content, do not interact with credentials. Dismiss it using one suitable visible action: a close control, Escape, or a click on the dimmed area outside the modal. If it cannot be dismissed, return to the public results and skip the blocked item.\n"
         "- A marker whose OCR text is only a generic icon label has no known semantic identity. Infer it only from a clearly visible symbol; otherwise choose a nearby labeled text marker or another visible navigation path instead of inventing what its ID means.\n"
@@ -230,25 +226,12 @@ def _compact_job_card_queue_context(state: WorkerState) -> str:
         for item in queue
     ]
     pending_count = len(pending_job_cards(queue))
-    transition_result = dict(
-        state["transition"].get("transition_result", {}) or {}
-    )
-    if transition_result.get("reason") == "queue_retry_no_screen_change":
-        guidance = (
-            "- 저장 좌표와 현재 OCR 좌표의 카드 클릭이 모두 화면을 바꾸지 못했습니다. "
-            "현재 화면에서 같은 카드의 다른 클릭 가능한 영역을 고르거나, 해당 카드를 "
-            "열 수 없으면 다음 후보로 진행하십시오.\n"
-        )
-    else:
-        guidance = (
-            "- 큐가 있으면 상세 수집 완료 후 다음 카드 선택은 executor가 처리합니다. "
-            "같은 목록에서 다음 카드를 다시 고르지 마십시오.\n"
-        )
     return (
         "공고 카드 큐:\n"
         f"- pending_count: {pending_count}\n"
         f"- cards: {json.dumps(compact, ensure_ascii=False, separators=(',', ':'))}\n"
-        f"{guidance}\n"
+        "- 큐가 있으면 상세 수집 완료 후 다음 카드 선택은 executor가 처리합니다. "
+        "같은 목록에서 다음 카드를 다시 고르지 마십시오.\n\n"
     )
 
 
@@ -292,7 +275,6 @@ def _compact_job_results_availability_context(
         "검색 결과 개수 힌트:\n"
         f"- 현재 검색 조건의 전체 결과 수: {availability.get('available_job_count')}\n"
         f"- 화면 근거: {availability.get('count_evidence') or '(없음)'}\n"
-        f"- 판단 신뢰도: {availability.get('count_confidence', 0)}\n"
         "- 이 숫자는 현재 검색어와 필터 조건의 결과 수이지 사이트 전체의 최대치가 아닙니다.\n"
         "- 현재 조건의 결과를 모두 수집했으면 같은 목록을 더 스크롤하지 마십시오. 목표 수가 남았다면 사용자 의도를 "
         "유지하는 범위에서 검색어 또는 필터를 넓힐지 판단하고, 적절한 확장 방법이 없으면 수집 건수와 부족분을 밝히며 "
@@ -317,7 +299,6 @@ def _reasoning_image_base64(state: WorkerState) -> str:
 def build_reasoning_messages(
     state: WorkerState,
     loop_warning: str,
-    selector_trace: dict[str, Any] | None = None,
 ) -> list:
     """현재 작업 상태를 텍스트 또는 멀티모달 추론 메시지로 만든다."""
 
@@ -380,16 +361,6 @@ def build_reasoning_messages(
                 "close_current_tab을 사용하고, 이전 탭을 유지해야 하면 switch_tab을 사용하십시오.\n"
             )
         transition_context += "\n"
-    job_results_refinement_context = ""
-    selector_trace = selector_trace or {}
-    if selector_trace.get("reason") == "job_results_refinement_needed":
-        refinement_reason = str(selector_trace.get("refinement_reason") or "").strip()
-        job_results_refinement_context = (
-            "검색 결과 정제 필요:\n"
-            "- 현재 화면에서 검색어와 직접 일치하는 공고가 목표 수보다 부족합니다. 비슷한 직무로 개수를 채우지 마십시오.\n"
-            "- 검색어를 더 정확하게 표현하는 화면 필터가 있으면 적용하고, 없으면 다음 정확한 후보를 찾도록 스크롤하십시오.\n"
-            f"- 카드 선택기 판단: {refinement_reason or '(구체적 이유 없음)'}\n\n"
-        )
     forbidden_action_context = _build_forbidden_action_context(action_history)
     if forbidden_action_context:
         forbidden_action_context += "\n\n"
@@ -404,7 +375,6 @@ def build_reasoning_messages(
         f"{_compact_next_card_navigation_context(state)}"
         f"{compact_job_detail_buffer_context(state, current_url, job_detail_key_from_state(state))}"
         f"{transition_context}"
-        f"{job_results_refinement_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"
         f"{forbidden_action_context}"
         f"{_compact_recent_actions_context(action_history)}"

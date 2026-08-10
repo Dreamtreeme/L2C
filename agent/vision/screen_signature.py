@@ -32,13 +32,6 @@ def _dct_basis(size: int):
     return basis
 
 
-def perceptual_hash(image_path: str | Path) -> str:
-    """64비트 DCT pHash를 계산한다."""
-
-    with Image.open(image_path) as img:
-        return perceptual_hash_image(img)
-
-
 def perceptual_hash_image(img: Image.Image) -> str:
     """PIL 이미지 객체에서 64비트 pHash를 계산한다."""
 

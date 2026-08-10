@@ -6,16 +6,15 @@ from collections.abc import Mapping
 from typing import Annotated, Any, TypedDict
 
 from agent.config import get_settings
-from agent.llm.clients import (
-    get_google_chat_model,
-    get_structured_google_model,
-)
+from agent.llm.clients import get_structured_google_model
 from agent.llm.policy import commander_model_name
 from agent.sites import list_supported_sites
 from shared.schema.investigation_schema import (
     EvidencePlan,
     EvidenceRequirement,
     EvidenceValidation,
+    GroundedAnswer,
+    GroundedAnswerDraft,
     InvestigationActionPlan,
     InvestigationConstraints,
     InvestigationPlanStep,
@@ -29,7 +28,6 @@ from shared.schema.collection_run import CollectionBatch, PostprocessedCollectio
 
 class InvestigationRequestState(TypedDict, total=False):
     investigation: InvestigationRequest
-    context_run_id: str
 
 
 class InvestigationEvidenceState(TypedDict, total=False):
@@ -49,6 +47,7 @@ class InvestigationExecutionState(TypedDict, total=False):
 
 class InvestigationAnswerState(TypedDict, total=False):
     final_answer: str
+    grounded_answer: GroundedAnswer | None
 
 
 def merge_investigation_section(
@@ -79,15 +78,12 @@ class InvestigationState(TypedDict):
 
 def create_investigation_state(
     investigation: InvestigationRequest,
-    *,
-    context_run_id: str = "",
 ) -> InvestigationState:
     """새 조사 실행에 필요한 네 책임 섹션을 초기화한다."""
 
     return {
         "request": {
             "investigation": investigation,
-            "context_run_id": context_run_id,
         },
         "evidence": {
             "requirements": [],
@@ -102,7 +98,7 @@ def create_investigation_state(
             "postprocessed_collection": None,
             "cannot_proceed_reason": "",
         },
-        "answer": {"final_answer": ""},
+        "answer": {"final_answer": "", "grounded_answer": None},
     }
 
 
@@ -131,7 +127,13 @@ class InvestigationModels:
         value = get_settings().models.commander_max_output_tokens
         return value if value > 0 else None
 
-    def _structured(self, injected_model: Any, schema: type) -> Any:
+    def _structured(
+        self,
+        injected_model: Any,
+        schema: type,
+        *,
+        thinking_level: str | None = None,
+    ) -> Any:
         if injected_model is not None:
             return injected_model
         return get_structured_google_model(
@@ -139,6 +141,7 @@ class InvestigationModels:
             schema,
             temperature=0.0,
             max_output_tokens=self._max_output_tokens(),
+            thinking_level=thinking_level,
             execution_role="commander",
         )
 
@@ -155,27 +158,18 @@ class InvestigationModels:
         return self._structured(self.action_model, InvestigationActionPlan)
 
     def validation(self) -> Any:
-        return self._structured(self.validation_model, EvidenceValidation)
-
-    def answer(self) -> Any:
-        if self.answer_model is not None:
-            return self.answer_model
-        return get_google_chat_model(
-            commander_model_name(),
-            temperature=0.0,
-            max_output_tokens=self._max_output_tokens(),
-            execution_role="commander",
+        return self._structured(
+            self.validation_model,
+            EvidenceValidation,
+            thinking_level="low",
         )
 
-
-def message_text(value: Any) -> str:
-    content = getattr(value, "content", value)
-    if isinstance(content, list):
-        return "".join(
-            item.get("text", "") if isinstance(item, dict) else str(item)
-            for item in content
+    def answer(self, *, thinking_level: str | None = None) -> Any:
+        return self._structured(
+            self.answer_model,
+            GroundedAnswerDraft,
+            thinking_level=thinking_level,
         )
-    return str(content or "")
 
 
 def normalize_site_slugs(
@@ -245,7 +239,6 @@ __all__ = [
     "InvestigationModels",
     "build_request_prompt_context",
     "collection_capabilities_for",
-    "message_text",
     "create_investigation_state",
     "merge_investigation_section",
     "normalize_site_slugs",

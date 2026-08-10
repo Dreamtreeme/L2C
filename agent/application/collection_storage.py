@@ -39,23 +39,31 @@ def _store_job(
         )
         return
 
-    item = {
-        "job_id": job_id,
-        "url": url,
-        "company_name": posting.company_name or "",
-        "position": posting.position or "",
-        "operation": "updated" if existed else "created",
-        "required_fields": [field.value for field in evidence.required_fields],
-        "unavailable_fields": [field.value for field in evidence.unavailable_fields],
-        "taxonomy_status": "linked",
-    }
     try:
         taxonomy_linker.link_job(job_id)
     except Exception as exc:
-        item["taxonomy_status"] = "failed"
-        item["warnings"] = [f"taxonomy_index_failed:{type(exc).__name__}"]
         logger.warning("검색 사전 연결 실패 job_id=%s: %s", job_id, exc)
-    report.persisted_items.append(item)
+        report.reject(
+            {
+                "index": index,
+                "job_id": job_id,
+                "url": url,
+                "issues": [f"taxonomy_index_failed:{type(exc).__name__}"],
+            }
+        )
+        return
+
+    report.persisted_items.append(
+        {
+            "job_id": job_id,
+            "url": url,
+            "company_name": posting.company_name or "",
+            "position": posting.position or "",
+            "operation": "updated" if existed else "created",
+            "required_fields": [field.value for field in evidence.required_fields],
+            "unavailable_fields": [field.value for field in evidence.unavailable_fields],
+        }
+    )
 
 
 def store_postprocessed_collection(

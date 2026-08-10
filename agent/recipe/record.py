@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from agent.recipe.matcher import marker_ordinal, marker_region
+from agent.recipe.matcher import marker_region
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
@@ -12,30 +12,15 @@ from agent.runtime.worker_actions import (
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
+from agent.runtime.worker_contracts import WorkerState
 from agent.utils.text import normalize_text, url_template
-from agent.vision.marker_geometry import marker_bbox, marker_center
+from agent.vision.marker_geometry import marker_bbox
 from agent.vision.screen_signature import (
     compact_screen_context_signature,
     compute_target_roi_signature,
 )
 from agent.vision.target_snapshot import build_marker_target_snapshot, marker_by_id
 from shared.schema.feedback_schema import RecordedRecipeStep
-
-
-def _has_letter(text: str) -> bool:
-    return any(ch.isalpha() for ch in text or "")
-
-
-def _text_counts(markers: list[dict]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for marker in markers or []:
-        if not isinstance(marker, dict):
-            continue
-        text = normalize_text(marker.get("text"))
-        key = text.lower().replace(" ", "")
-        if key:
-            counts[key] = counts.get(key, 0) + 1
-    return counts
 
 
 def _recorded_replay_mode(
@@ -57,70 +42,6 @@ def _recorded_replay_mode(
     return "fixed" if mode == "fixed" else "reasoning"
 
 
-def _collect_evidence_candidates(
-    target_marker: dict,
-    markers: list[dict],
-    counts: dict[str, int],
-    target_text: str,
-    unique_only: bool,
-    max_dx: int,
-    max_dy: int,
-) -> list[tuple[int, int, int, int, str]]:
-    seen = {target_text} if target_text else set()
-    tx, ty = marker_center(target_marker)
-    scored = []
-    for marker in markers or []:
-        if not isinstance(marker, dict) or marker.get("id") == target_marker.get("id"):
-            continue
-        text = normalize_text(marker.get("text"))
-        key = text.lower().replace(" ", "")
-        if not text or text in seen or len(key) < 2 or not _has_letter(text):
-            continue
-        if unique_only and counts.get(key, 0) != 1:
-            continue
-        x, y = marker_center(marker)
-        dx = abs(x - tx)
-        dy = abs(y - ty)
-        if dx > max_dx or dy > max_dy:
-            continue
-        seen.add(text)
-        length_bonus = min(len(key), 40)
-        rank = dy * 2 + dx - length_bonus * 4
-        scored.append((rank, dy, dx, marker.get("id", 0), text))
-    return sorted(scored)
-
-
-def _evidence_texts_for_marker(
-    target_marker: dict,
-    markers: list[dict],
-    max_items: int = 6,
-    max_dx: int = 850,
-    max_dy: int = 320,
-) -> list[str]:
-    target_text = normalize_text(target_marker.get("text"))
-    counts = _text_counts(markers)
-    scored = _collect_evidence_candidates(
-        target_marker,
-        markers,
-        counts,
-        target_text,
-        unique_only=True,
-        max_dx=max_dx,
-        max_dy=max_dy,
-    )
-    if not scored:
-        scored = _collect_evidence_candidates(
-            target_marker,
-            markers,
-            counts,
-            target_text,
-            unique_only=False,
-            max_dx=max_dx,
-            max_dy=max_dy,
-        )
-    return [item[-1] for item in scored[:max_items]]
-
-
 def _new_recorded_step(
     state: dict,
     action_name: str,
@@ -137,8 +58,6 @@ def _new_recorded_step(
         "seq": seq,
         "url_template": url_template(url),
         "page_role": page_role,
-        "observed_page_role": observed_page_role,
-        "declared_page_role": declared_page_role,
         "before_state": {
             "observation_id": str(state.get("observation_id") or ""),
             "url_template": url_template(url),
@@ -156,7 +75,6 @@ def _new_recorded_step(
         "component": normalize_text(args.get("target_component")),
         "slot_refs": [slot_name] if slot_name else [],
         "risk_level": normalize_text(args.get("risk_level")),
-        "needs_user_confirmation": bool(args.get("needs_user_confirmation")),
         "replay_mode": _recorded_replay_mode(action_name, args, slot_name),
     }
 
@@ -178,7 +96,6 @@ def _target_descriptor(
     target = {
         "text": normalize_text(marker.get("text")),
         "region": marker_region(marker, markers),
-        "ordinal": marker_ordinal(marker, markers),
     }
     marker_type = normalize_text(marker.get("type"))
     if marker_type:
@@ -189,9 +106,6 @@ def _target_descriptor(
     target_label = normalize_text(args.get("target_label"))
     if target_label:
         target["semantic_label"] = target_label
-    evidence_texts = _evidence_texts_for_marker(marker, markers)
-    if evidence_texts:
-        target["evidence_texts"] = evidence_texts
     return target
 
 
@@ -282,7 +196,7 @@ def _record_contextual_parameters(
 
 def record_ui_step(
     recorded_steps: list[RecordedRecipeStep],
-    state: dict,
+    state: WorkerState,
     action_name: str,
     args: dict,
     seq: int,
@@ -291,11 +205,12 @@ def record_ui_step(
 
     if action_name not in RECORDED_REPLAY_ACTIONS:
         return
+    observation = state["observation"]
     slot_name = normalize_text(args.get("slot_name"))
-    screen_signature = dict(state.get("screen_signature", {}) or {})
+    screen_signature = dict(observation.get("screen_signature", {}) or {})
     context_signature = compact_screen_context_signature(screen_signature)
     step = _new_recorded_step(
-        state,
+        observation,
         action_name,
         args,
         seq,
@@ -308,7 +223,7 @@ def record_ui_step(
     if targeted_action:
         if not _record_target_action(
             step,
-            state,
+            observation,
             action_name,
             args,
             slot_name,

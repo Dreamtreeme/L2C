@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -19,33 +18,219 @@ from agent.graph.investigation_context import (
     InvestigationState,
     InvestigationModels,
     build_request_prompt_context,
-    message_text,
 )
 from agent.graph.investigation_evidence_policy import compact_db_report
 from agent.prompts.investigation import answer_prompt
 from shared.schema.collection_intent import CollectionResult
-from shared.schema.jd_schema import JOB_DETAIL_FIELDS, StoredJob
+from shared.schema.jd_schema import JOB_DETAIL_FIELDS, JobField, StoredJob
+from shared.schema.investigation_schema import (
+    AnswerEvidenceRef,
+    GroundedAnswer,
+    GroundedAnswerDraft,
+    GroundedAnswerDraftLine,
+    GroundedAnswerLine,
+    InvestigationPurpose,
+)
 from shared.schema.run_schema import RunStatus
 
 
-def validate_citations(answer: str, allowed_document_ids: list[int]) -> str:
-    """답변의 job_id 인용이 실제 근거 문서에 포함됐는지 검증한다."""
+_LIST_EVIDENCE_FIELDS = {
+    JobField.TECH_STACK,
+    JobField.MAIN_TASKS,
+    JobField.REQUIREMENTS,
+    JobField.PREFERRED,
+    JobField.BENEFITS,
+}
 
-    valid = {str(job_id) for job_id in allowed_document_ids}
 
-    def expand_group(match: re.Match[str]) -> str:
-        citation_ids = re.findall(r"\d+", match.group(1))
-        return " ".join(f"[job_id:{job_id}]" for job_id in citation_ids)
+def _evidence_value(
+    reference: AnswerEvidenceRef,
+    documents_by_id: dict[int, dict[str, Any]],
+) -> Any | None:
+    document = documents_by_id.get(reference.document_id)
+    if document is None:
+        return None
+    value = document.get(reference.field.value)
+    if reference.field in _LIST_EVIDENCE_FIELDS:
+        if not isinstance(value, list) or reference.item_index is None:
+            return None
+        if reference.item_index >= len(value):
+            return None
+        item = value[reference.item_index]
+        return item if str(item or "").strip() else None
+    if reference.item_index is not None or value in (None, "", [], {}):
+        return None
+    return value
 
-    def replace(match: re.Match[str]) -> str:
-        return match.group(0) if match.group(1) in valid else "[출처 확인 불가]"
 
-    normalized = re.sub(
-        r"\[job_id:(\d+(?:\s*,\s*\d+)+)\]",
-        expand_group,
-        answer,
+def _answer_line_references(
+    line: GroundedAnswerDraftLine,
+    documents_by_id: dict[int, dict[str, Any]],
+    citations: list[AnswerEvidenceRef],
+    citation_ids_by_pointer: dict[tuple[int, JobField, int | None], int],
+) -> list[int]:
+    """초안 포인터를 실제 DB 값이 포함된 인용으로 변환한다."""
+
+    citation_ids: list[int] = []
+    for pointer in line.evidence:
+        if line.kind == "detail" and line.document_id != pointer.document_id:
+            continue
+        key = (pointer.document_id, pointer.field, pointer.item_index)
+        citation_id = citation_ids_by_pointer.get(key)
+        if citation_id is not None:
+            citation_ids.append(citation_id)
+            continue
+        reference = AnswerEvidenceRef(
+            citation_id=len(citations) + 1,
+            document_id=pointer.document_id,
+            field=pointer.field,
+            item_index=pointer.item_index,
+        )
+        evidence_value = _evidence_value(reference, documents_by_id)
+        if evidence_value is None:
+            continue
+        reference = reference.model_copy(
+            update={"evidence_text": str(evidence_value).strip()}
+        )
+        citation_ids_by_pointer[key] = reference.citation_id
+        citations.append(reference)
+        citation_ids.append(reference.citation_id)
+    return list(dict.fromkeys(citation_ids))
+
+
+def validate_grounded_answer(
+    answer: GroundedAnswerDraft,
+    documents: list[dict[str, Any]],
+    *,
+    maximum_document_sections: int | None = None,
+) -> GroundedAnswer:
+    """존재하는 DB 필드와 항목을 가리키는 문장만 답변에 남긴다."""
+
+    documents_by_id = {
+        int(document["id"]): document
+        for document in documents
+        if int(document.get("id") or 0) > 0
+    }
+    require_evidence = bool(documents_by_id)
+    allowed_document_sections: list[int] = []
+    citation_ids_by_pointer: dict[tuple[int, JobField, int | None], int] = {}
+    citations: list[AnswerEvidenceRef] = []
+    lines: list[GroundedAnswerLine] = []
+    for line in answer.lines:
+        document_id = line.document_id
+        if document_id is not None and document_id not in documents_by_id:
+            continue
+        if line.kind == "detail" and document_id is None and not line.title.strip():
+            continue
+        if (
+            line.kind == "detail"
+            and document_id is not None
+            and document_id not in allowed_document_sections
+            and maximum_document_sections is not None
+            and len(allowed_document_sections) >= maximum_document_sections
+        ):
+            continue
+        citation_ids = _answer_line_references(
+            line,
+            documents_by_id,
+            citations,
+            citation_ids_by_pointer,
+        )
+        if require_evidence and not citation_ids:
+            continue
+        if line.kind == "detail" and document_id is not None:
+            if document_id not in allowed_document_sections:
+                allowed_document_sections.append(document_id)
+        lines.append(
+            GroundedAnswerLine(
+                kind=line.kind,
+                document_id=document_id,
+                title=line.title.strip(),
+                text=line.text.strip(),
+                citation_ids=citation_ids,
+            )
+        )
+
+    return GroundedAnswer(lines=lines, citations=citations)
+
+
+def _citation_suffix(
+    line: GroundedAnswerLine,
+    citations_by_id: dict[int, AnswerEvidenceRef],
+) -> str:
+    document_ids = list(
+        dict.fromkeys(
+            citations_by_id[citation_id].document_id
+            for citation_id in line.citation_ids
+            if citation_id in citations_by_id
+        )
     )
-    return re.sub(r"\[job_id:(\d+)\]", replace, normalized)
+    if not document_ids:
+        return ""
+    return " " + " ".join(
+        f"[job_id:{document_id}]" for document_id in document_ids
+    )
+
+
+def render_grounded_answer(
+    answer: GroundedAnswer,
+    documents: list[dict[str, Any]],
+) -> str:
+    """검증된 구조를 기존 채팅 UI가 표시할 수 있는 Markdown으로 만든다."""
+
+    documents_by_id = {
+        int(document["id"]): document
+        for document in documents
+        if int(document.get("id") or 0) > 0
+    }
+    citations_by_id = {
+        citation.citation_id: citation for citation in answer.citations
+    }
+    blocks = [
+        f"{line.text}{_citation_suffix(line, citations_by_id)}"
+        for line in answer.lines
+        if line.kind == "overview"
+    ]
+    detail_groups: list[tuple[int | None, str, list[GroundedAnswerLine]]] = []
+    detail_group_indexes: dict[tuple[int | None, str], int] = {}
+    for line in answer.lines:
+        if line.kind != "detail":
+            continue
+        key = (line.document_id, "" if line.document_id is not None else line.title)
+        if key not in detail_group_indexes:
+            detail_group_indexes[key] = len(detail_groups)
+            detail_groups.append((line.document_id, line.title, []))
+        detail_groups[detail_group_indexes[key]][2].append(line)
+
+    document_number = 0
+    for document_id, section_title, lines in detail_groups:
+        if document_id is not None:
+            document_number += 1
+            document = documents_by_id[document_id]
+            heading = " - ".join(
+                value
+                for value in (
+                    str(document.get("company_name") or "").strip(),
+                    str(document.get("position") or "").strip(),
+                )
+                if value
+            ) or f"공고 {document_id}"
+            title = f"### {document_number}. {heading} [job_id:{document_id}]"
+        else:
+            title = f"### {section_title}"
+        claims = "\n".join(
+            f"- {line.text}{_citation_suffix(line, citations_by_id)}"
+            for line in lines
+        )
+        blocks.append(f"{title}\n{claims}")
+    caveat_lines = [line for line in answer.lines if line.kind == "caveat"]
+    if caveat_lines:
+        caveats = "\n".join(
+            f"- {line.text}{_citation_suffix(line, citations_by_id)}"
+            for line in caveat_lines
+        )
+        blocks.append(f"### 참고\n{caveats}")
+    return "\n\n".join(blocks) or "검증 가능한 근거가 부족합니다."
 
 
 def compact_collection_results(
@@ -115,19 +300,28 @@ class InvestigationAnswerNodes:
         self.load_evidence_documents = load_documents
 
     def _load_documents(self, state: InvestigationState) -> list[dict[str, Any]]:
-        ids = sorted(
-            {
+        ids = list(
+            dict.fromkeys(
                 int(document_id)
                 for document_id in state["evidence"]
                 .get("db_report", {})
                 .get("document_ids", [])
                 if int(document_id) > 0
-            }
+            )
         )
         if not ids:
             return []
         documents = self.load_evidence_documents(ids)
-        return [document.model_dump(mode="json") for document in documents]
+        documents_by_id = {
+            int(document.id): document
+            for document in documents
+            if int(document.id) > 0
+        }
+        return [
+            documents_by_id[document_id].model_dump(mode="json")
+            for document_id in ids
+            if document_id in documents_by_id
+        ]
 
     def answer(self, state: InvestigationState) -> dict[str, Any]:
         raise_if_cancelled()
@@ -140,8 +334,13 @@ class InvestigationAnswerNodes:
             RunPhase.ANSWERING,
             "검증된 근거로 답변을 정리하고 있습니다.",
         )
+        use_low_thinking = (
+            investigation.purpose == InvestigationPurpose.LOOKUP and bool(documents)
+        )
         response = invoke_with_metrics(
-            self.models.answer(),
+            self.models.answer(
+                thinking_level="low" if use_low_thinking else None,
+            ),
             [
                 SystemMessage(content=answer_prompt()),
                 HumanMessage(
@@ -166,17 +365,28 @@ class InvestigationAnswerNodes:
             ],
             "investigation_answer",
         )
-        answer = validate_citations(
-            message_text(response),
-            [int(document["id"]) for document in documents],
+        grounded_answer = validate_grounded_answer(
+            GroundedAnswerDraft.model_validate(response),
+            documents,
+            maximum_document_sections=investigation.constraints.result_limit,
         )
+        answer = render_grounded_answer(grounded_answer, documents)
         emit_run_event(
             "run_completed",
             RunPhase.COMPLETED,
             "답변을 완료했습니다.",
             status=RunStatus.COMPLETED,
         )
-        return {"answer": {"final_answer": answer}}
+        return {
+            "answer": {
+                "final_answer": answer,
+                "grounded_answer": grounded_answer,
+            }
+        }
 
 
-__all__ = ["InvestigationAnswerNodes", "validate_citations"]
+__all__ = [
+    "InvestigationAnswerNodes",
+    "render_grounded_answer",
+    "validate_grounded_answer",
+]

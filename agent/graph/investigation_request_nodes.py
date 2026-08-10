@@ -56,7 +56,6 @@ class InvestigationRequestNodes:
             return {}
         conversation_history = self.load_conversation_context(
             existing.conversation_id,
-            state["request"].get("context_run_id", ""),
         )
         emit_run_event(
             "request_understanding",
@@ -127,16 +126,9 @@ class InvestigationRequestNodes:
         question = next(iter(investigation.clarification_questions), None)
         if question is None:
             raise ValueError("사용자에게 확인할 질문이 없습니다.")
-        payload = {
-            "needs_clarification": True,
-            **question.model_dump(mode="json"),
-            "missing_fields": [
-                item.field for item in investigation.clarification_questions
-            ],
-            "investigation_id": investigation.investigation_id,
-        }
-        answer = ClarificationAnswer.model_validate(interrupt(payload))
-        self.occupation_clarification.accept_answer(investigation, answer)
+        answer = ClarificationAnswer.model_validate(
+            interrupt(question.model_dump(mode="json"))
+        )
         updated = self.apply_clarification(
             investigation,
             answer,

@@ -68,18 +68,6 @@ CREATE TABLE IF NOT EXISTS search_concept_relations (
 CREATE INDEX IF NOT EXISTS idx_search_relations_target
 ON search_concept_relations(target_concept_id, relation_type);
 
-CREATE TABLE IF NOT EXISTS search_external_mappings (
-    concept_id          INTEGER NOT NULL,
-    source_key          TEXT NOT NULL,
-    external_id         TEXT NOT NULL,
-    external_url        TEXT,
-    source_version      TEXT NOT NULL,
-    created_at          TEXT NOT NULL,
-    PRIMARY KEY(concept_id, source_key, external_id),
-    FOREIGN KEY(concept_id) REFERENCES search_concepts(id) ON DELETE CASCADE,
-    FOREIGN KEY(source_key) REFERENCES taxonomy_sources(source_key)
-);
-
 CREATE TABLE IF NOT EXISTS job_concept_links (
     job_id              INTEGER NOT NULL,
     concept_id          INTEGER NOT NULL,
@@ -102,35 +90,6 @@ CREATE TABLE IF NOT EXISTS job_concept_links (
 
 CREATE INDEX IF NOT EXISTS idx_job_concept_links_concept
 ON job_concept_links(concept_id, link_type, job_id);
-
-CREATE TABLE IF NOT EXISTS search_term_candidates (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    normalized_term     TEXT NOT NULL,
-    display_term        TEXT NOT NULL,
-    proposed_type       TEXT NOT NULL,
-    status              TEXT NOT NULL DEFAULT 'candidate',
-    observation_count   INTEGER NOT NULL DEFAULT 1,
-    first_seen_at       TEXT NOT NULL,
-    last_seen_at        TEXT NOT NULL,
-    sample_job_id       INTEGER,
-    metadata_json       TEXT,
-    reviewed_at         TEXT,
-    review_note         TEXT,
-    accepted_concept_key TEXT,
-    UNIQUE(normalized_term, proposed_type),
-    FOREIGN KEY(sample_job_id) REFERENCES jobs(id) ON DELETE SET NULL,
-    CHECK(proposed_type IN ('occupation', 'skill', 'domain')),
-    CHECK(status IN ('candidate', 'accepted', 'rejected'))
-);
-
-CREATE TABLE IF NOT EXISTS search_term_candidate_observations (
-    candidate_id        INTEGER NOT NULL,
-    job_id              INTEGER NOT NULL,
-    observed_at         TEXT NOT NULL,
-    PRIMARY KEY(candidate_id, job_id),
-    FOREIGN KEY(candidate_id) REFERENCES search_term_candidates(id) ON DELETE CASCADE,
-    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
-);
 """
 
 

@@ -21,13 +21,11 @@ logger = logging.getLogger(__name__)
 def _learning_result(
     status: str,
     *,
-    candidate_id: str = "",
     reason: str = "",
     error: str = "",
 ) -> RecipeLearningResult:
     return RecipeLearningResult(
         status=status,
-        candidate_id=candidate_id,
         reason=reason,
         error=error,
     )
@@ -39,8 +37,6 @@ def _run_is_reusable(
 ) -> bool:
     return bool(
         submission.run_status == "finished"
-        and submission.is_finished
-        and not submission.hit_recursion_limit
         and submission.recorded_steps
         and persistence.persisted_count > 0
         and persistence.rejected_count == 0
@@ -50,26 +46,23 @@ def _run_is_reusable(
 def _record_recipe_candidate(
     submission: WorkerSubmission,
     persistence: PersistenceReport,
-    submission_id: str,
+    run_id: str,
 ) -> RecipeLearningResult:
     if not _run_is_reusable(submission, persistence):
         return _learning_result("not_eligible")
     try:
         candidate_store = RecipeCandidateStore()
-        candidate_id = candidate_store.commit_candidate(
+        recorded_run_id = candidate_store.commit_candidate(
             submission,
-            submission_id=submission_id,
+            run_id=run_id,
         )
-        if not candidate_id:
+        if not recorded_run_id:
             return _learning_result("failed", reason="candidate_not_saved")
         scheduled = bool(
             get_settings().recipe.auto_promote
-            and candidate_store.enqueue_review(candidate_id)
+            and candidate_store.enqueue_review(recorded_run_id)
         )
-        return _learning_result(
-            "queued" if scheduled else "recorded",
-            candidate_id=candidate_id,
-        )
+        return _learning_result("queued" if scheduled else "recorded")
     except Exception as exc:
         logger.warning("레시피 후보 등록 실패: %s", exc)
         return _learning_result(
@@ -91,11 +84,11 @@ def record_collection_experience(
         update={"persisted_count": persistence.persisted_count}
     )
     try:
-        submission_id = SubmissionStore().commit_submission(submission, source=source)
+        run_id = SubmissionStore().commit_submission(submission, source=source)
     except Exception as exc:
         logger.warning("작업자 제출물 저장 실패: %s", exc)
         return CollectionExperienceResult(
-            submission_id="",
+            run_id="",
             recipe_learning=_learning_result(
                 "failed",
                 reason="submission_registration_failed",
@@ -103,11 +96,11 @@ def record_collection_experience(
             ),
         )
     return CollectionExperienceResult(
-        submission_id=submission_id,
+        run_id=run_id,
         recipe_learning=_record_recipe_candidate(
             submission,
             persistence,
-            submission_id,
+            run_id,
         ),
     )
 

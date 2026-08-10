@@ -70,8 +70,7 @@
       "preferred_label_en": "Management Occupations",
       "definition": "조직의 전략, 운영, 자원과 사업을 계획하고 관리하는 직무군",
       "aliases": ["경영 관리 직무", "관리자 직군"],
-      "broader": "l2c:domain:management_office_finance",
-      "soc_major_groups": ["11"]
+      "broader": "l2c:domain:management_office_finance"
     },
     {
       "concept_key": "l2c:occupation:business_financial",
@@ -80,8 +79,7 @@
       "preferred_label_en": "Business and Financial Operations Occupations",
       "definition": "사업 운영, 재무, 회계, 인사와 전문 분석을 수행하는 직무군",
       "aliases": ["사업 금융 직무", "재무 회계 직군"],
-      "broader": "l2c:domain:management_office_finance",
-      "soc_major_groups": ["13"]
+      "broader": "l2c:domain:management_office_finance"
     },
     {
       "concept_key": "l2c:occupation:creative_media",
@@ -90,8 +88,7 @@
       "preferred_label_en": "Arts, Design, Entertainment, Sports and Media Occupations",
       "definition": "콘텐츠를 기획, 디자인, 제작하거나 미디어로 전달하는 직무군",
       "aliases": ["기획 디자인 미디어", "디자인 미디어 직군"],
-      "broader": "l2c:domain:management_office_finance",
-      "soc_major_groups": ["27"]
+      "broader": "l2c:domain:management_office_finance"
     },
     {
       "concept_key": "l2c:occupation:office_administration",
@@ -100,8 +97,7 @@
       "preferred_label_en": "Office and Administrative Support Occupations",
       "definition": "문서, 일정, 고객 기록과 조직 행정을 지원하는 직무군",
       "aliases": ["사무 행정지원", "사무 행정 직군"],
-      "broader": "l2c:domain:management_office_finance",
-      "soc_major_groups": ["43"]
+      "broader": "l2c:domain:management_office_finance"
     },
     {
       "concept_key": "l2c:occupation:architecture_engineering",
@@ -110,8 +106,7 @@
       "preferred_label_en": "Architecture and Engineering Occupations",
       "definition": "건축물, 기계, 전기, 전자와 산업 시스템을 설계하고 검증하는 직무군",
       "aliases": ["건축 공학 직무", "엔지니어링 직군"],
-      "broader": "l2c:domain:research_engineering",
-      "soc_major_groups": ["17"]
+      "broader": "l2c:domain:research_engineering"
     },
     {
       "concept_key": "l2c:occupation:science_research",
@@ -120,8 +115,7 @@
       "preferred_label_en": "Life, Physical and Social Science Occupations",
       "definition": "생명, 물리, 환경과 사회 현상을 연구하고 분석하는 직무군",
       "aliases": ["자연 사회과학 연구", "과학 연구직"],
-      "broader": "l2c:domain:research_engineering",
-      "soc_major_groups": ["19"]
+      "broader": "l2c:domain:research_engineering"
     },
     {
       "concept_key": "l2c:occupation:farming_forestry",
@@ -130,8 +124,7 @@
       "preferred_label_en": "Farming, Fishing and Forestry Occupations",
       "definition": "농업, 임업, 어업 생산과 현장 운영을 수행하는 직무군",
       "aliases": ["농림 수산 직무", "농업 임업 어업 직군"],
-      "broader": "l2c:domain:production_manufacturing_maintenance",
-      "soc_major_groups": ["45"]
+      "broader": "l2c:domain:production_manufacturing_maintenance"
     },
     {
       "concept_key": "l2c:occupation:construction_extraction",
@@ -140,8 +133,7 @@
       "preferred_label_en": "Construction and Extraction Occupations",
       "definition": "건축과 토목 현장을 시공하거나 자원을 채굴하는 직무군",
       "aliases": ["건설 채굴 직무", "건설 현장 직군"],
-      "broader": "l2c:domain:production_manufacturing_maintenance",
-      "soc_major_groups": ["47"]
+      "broader": "l2c:domain:production_manufacturing_maintenance"
     },
     {
       "concept_key": "l2c:occupation:installation_maintenance_repair",
@@ -150,8 +142,7 @@
       "preferred_label_en": "Installation, Maintenance and Repair Occupations",
       "definition": "설비와 장비를 설치, 점검, 정비하고 수리하는 직무군",
       "aliases": ["설치 정비 수리", "설비 정비 직군"],
-      "broader": "l2c:domain:production_manufacturing_maintenance",
-      "soc_major_groups": ["49"]
+      "broader": "l2c:domain:production_manufacturing_maintenance"
     },
     {
       "concept_key": "l2c:occupation:production",
@@ -160,8 +151,7 @@
       "preferred_label_en": "Production Occupations",
       "definition": "제품과 부품을 가공, 조립, 검사하고 생산 설비를 운용하는 직무군",
       "aliases": ["생산 제조 직무", "제조 생산직"],
-      "broader": "l2c:domain:production_manufacturing_maintenance",
-      "soc_major_groups": ["51"]
+      "broader": "l2c:domain:production_manufacturing_maintenance"
     },
     {
       "concept_key": "l2c:occupation:food_service",
@@ -170,8 +160,7 @@
       "preferred_label_en": "Food Preparation and Serving Related Occupations",
       "definition": "음식을 준비, 조리하고 고객에게 제공하는 직무군",
       "aliases": ["조리 식음료 서비스", "외식 서비스 직군"],
-      "broader": "l2c:domain:sales_service_logistics",
-      "soc_major_groups": ["35"]
+      "broader": "l2c:domain:sales_service_logistics"
     },
     {
       "concept_key": "l2c:occupation:building_grounds_service",
@@ -180,8 +169,7 @@
       "preferred_label_en": "Building and Grounds Cleaning and Maintenance Occupations",
       "definition": "건물과 외부 공간을 청소, 관리하고 환경을 유지하는 직무군",
       "aliases": ["시설 환경 서비스", "시설 미화 직군"],
-      "broader": "l2c:domain:sales_service_logistics",
-      "soc_major_groups": ["37"]
+      "broader": "l2c:domain:sales_service_logistics"
     },
     {
       "concept_key": "l2c:occupation:personal_care_service",
@@ -190,8 +178,7 @@
       "preferred_label_en": "Personal Care and Service Occupations",
       "definition": "미용, 돌봄, 여가 등 개인 대상 서비스를 제공하는 직무군",
       "aliases": ["개인 생활 서비스", "생활 서비스 직군"],
-      "broader": "l2c:domain:sales_service_logistics",
-      "soc_major_groups": ["39"]
+      "broader": "l2c:domain:sales_service_logistics"
     },
     {
       "concept_key": "l2c:occupation:sales",
@@ -200,8 +187,7 @@
       "preferred_label_en": "Sales and Related Occupations",
       "definition": "상품과 서비스를 제안, 판매하고 고객 관계를 관리하는 직무군",
       "aliases": ["영업 판매 직무", "세일즈 직군"],
-      "broader": "l2c:domain:sales_service_logistics",
-      "soc_major_groups": ["41"]
+      "broader": "l2c:domain:sales_service_logistics"
     },
     {
       "concept_key": "l2c:occupation:transportation_logistics",
@@ -210,8 +196,7 @@
       "preferred_label_en": "Transportation and Material Moving Occupations",
       "definition": "사람과 물품을 운송하고 보관, 하역, 이동하는 직무군",
       "aliases": ["운송 물류 직무", "물류 운송 직군"],
-      "broader": "l2c:domain:sales_service_logistics",
-      "soc_major_groups": ["53"]
+      "broader": "l2c:domain:sales_service_logistics"
     },
     {
       "concept_key": "l2c:occupation:community_social_service",
@@ -220,8 +205,7 @@
       "preferred_label_en": "Community and Social Service Occupations",
       "definition": "개인과 지역사회의 복지, 상담과 사회 서비스를 담당하는 직무군",
       "aliases": ["사회복지 상담 직무", "사회 서비스 직군"],
-      "broader": "l2c:domain:healthcare_education_public",
-      "soc_major_groups": ["21"]
+      "broader": "l2c:domain:healthcare_education_public"
     },
     {
       "concept_key": "l2c:occupation:legal",
@@ -230,8 +214,7 @@
       "preferred_label_en": "Legal Occupations",
       "definition": "법률 판단, 자문, 소송과 법무 지원을 수행하는 직무군",
       "aliases": ["법률 법무 직무", "법무 직군"],
-      "broader": "l2c:domain:healthcare_education_public",
-      "soc_major_groups": ["23"]
+      "broader": "l2c:domain:healthcare_education_public"
     },
     {
       "concept_key": "l2c:occupation:education_library",
@@ -240,8 +223,7 @@
       "preferred_label_en": "Educational Instruction and Library Occupations",
       "definition": "학습을 설계하고 가르치거나 교육·도서 정보를 지원하는 직무군",
       "aliases": ["교육 도서관 직무", "교육 교직 직군"],
-      "broader": "l2c:domain:healthcare_education_public",
-      "soc_major_groups": ["25"]
+      "broader": "l2c:domain:healthcare_education_public"
     },
     {
       "concept_key": "l2c:occupation:healthcare_practitioner",
@@ -250,8 +232,7 @@
       "preferred_label_en": "Healthcare Practitioners and Technical Occupations",
       "definition": "환자를 진단, 치료하고 전문 의료 기술을 제공하는 직무군",
       "aliases": ["의료 전문 직무", "보건 의료 전문가"],
-      "broader": "l2c:domain:healthcare_education_public",
-      "soc_major_groups": ["29"]
+      "broader": "l2c:domain:healthcare_education_public"
     },
     {
       "concept_key": "l2c:occupation:healthcare_support",
@@ -260,8 +241,7 @@
       "preferred_label_en": "Healthcare Support Occupations",
       "definition": "의료 서비스와 환자 돌봄을 현장에서 지원하는 직무군",
       "aliases": ["보건 의료 지원", "의료 지원 직군"],
-      "broader": "l2c:domain:healthcare_education_public",
-      "soc_major_groups": ["31"]
+      "broader": "l2c:domain:healthcare_education_public"
     },
     {
       "concept_key": "l2c:occupation:protective_service",
@@ -270,8 +250,7 @@
       "preferred_label_en": "Protective Service Occupations",
       "definition": "사람, 재산과 공공 안전을 보호하는 직무군",
       "aliases": ["안전 보호 서비스", "보안 안전 직군"],
-      "broader": "l2c:domain:healthcare_education_public",
-      "soc_major_groups": ["33"]
+      "broader": "l2c:domain:healthcare_education_public"
     },
     {
       "concept_key": "l2c:occupation:military",
@@ -280,8 +259,7 @@
       "preferred_label_en": "Military Specific Occupations",
       "definition": "군 조직에서 전투, 지휘, 기술과 작전 임무를 수행하는 직무군",
       "aliases": ["군사 직군", "군 직무"],
-      "broader": "l2c:domain:healthcare_education_public",
-      "soc_major_groups": ["55"]
+      "broader": "l2c:domain:healthcare_education_public"
     },
     {
       "concept_key": "l2c:occupation:technology",
@@ -290,8 +268,7 @@
       "preferred_label_en": "Technology occupations",
       "definition": "컴퓨터, 소프트웨어, 데이터와 정보 시스템을 설계·개발·운영하는 직무군",
       "aliases": ["기술 직군", "개발 직군", "IT 직군", "IT 개발자", "개발자"],
-      "broader": "l2c:domain:it_data",
-      "soc_major_groups": ["15"]
+      "broader": "l2c:domain:it_data"
     },
     {
       "concept_key": "l2c:occupation:software_engineer",
@@ -299,8 +276,7 @@
       "preferred_label_ko": "소프트웨어 엔지니어",
       "preferred_label_en": "Software Engineer",
       "aliases": ["소프트웨어 엔지니어", "소프트웨어 개발자", "Software Engineer"],
-      "broader": "l2c:occupation:technology",
-      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1252.00"}]
+      "broader": "l2c:occupation:technology"
     },
     {
       "concept_key": "l2c:occupation:backend_engineer",
@@ -308,8 +284,7 @@
       "preferred_label_ko": "백엔드 엔지니어",
       "preferred_label_en": "Backend Engineer",
       "aliases": ["백엔드 엔지니어", "백엔드 개발자", "백엔드 개발", "백엔드", "Backend Engineer", "Backend Developer", "BackEnd 개발자", "서버 개발자"],
-      "broader": "l2c:occupation:software_engineer",
-      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1252.00"}]
+      "broader": "l2c:occupation:software_engineer"
     },
     {
       "concept_key": "l2c:occupation:frontend_engineer",
@@ -317,8 +292,7 @@
       "preferred_label_ko": "프론트엔드 엔지니어",
       "preferred_label_en": "Frontend Engineer",
       "aliases": ["프론트엔드 엔지니어", "프론트엔드 개발자", "프론트엔드 개발", "Frontend Engineer", "Frontend Developer", "Frontend 개발", "프론트엔드"],
-      "broader": "l2c:occupation:software_engineer",
-      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1252.00"}]
+      "broader": "l2c:occupation:software_engineer"
     },
     {
       "concept_key": "l2c:occupation:mobile_engineer",
@@ -326,8 +300,7 @@
       "preferred_label_ko": "모바일 앱 개발자",
       "preferred_label_en": "Mobile Application Developer",
       "aliases": ["모바일 앱 개발자", "모바일 앱 개발", "모바일 개발자", "모바일 개발", "모바일 엔지니어", "Mobile Engineer", "Mobile Developer", "Software Engineer Mobile"],
-      "broader": "l2c:occupation:software_engineer",
-      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1252.00"}]
+      "broader": "l2c:occupation:software_engineer"
     },
     {
       "concept_key": "l2c:occupation:ios_engineer",
@@ -367,8 +340,7 @@
       "preferred_label_ko": "QA 엔지니어",
       "preferred_label_en": "Software QA Engineer",
       "aliases": ["QA 엔지니어", "QA Engineer", "QA", "QA자동화 엔지니어", "QA 자동화", "QA/테스트", "QA / 테스트", "테스트/QA", "테스트 자동화 / QA", "품질보증 QA", "테스트 자동화 엔지니어"],
-      "broader": "l2c:occupation:technology",
-      "external_mappings": [{"source_key": "onet_30_3", "external_id": "15-1253.00"}]
+      "broader": "l2c:occupation:technology"
     },
     {
       "concept_key": "l2c:occupation:system_architect",
@@ -424,8 +396,7 @@
       "preferred_label_ko": "로보틱스 AI 엔지니어",
       "preferred_label_en": "Robotics AI Engineer",
       "aliases": ["로보틱스 AI 엔지니어", "로봇 AI 엔지니어", "Physical AI 엔지니어", "Robotics AI Engineer", "로봇/AI"],
-      "broader": "l2c:occupation:ai_ml_engineer",
-      "external_mappings": [{"source_key": "onet_30_3", "external_id": "17-2199.08"}]
+      "broader": "l2c:occupation:ai_ml_engineer"
     },
     {
       "concept_key": "l2c:skill:llm",

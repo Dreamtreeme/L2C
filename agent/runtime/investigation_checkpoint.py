@@ -11,6 +11,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 CHECKPOINT_MODEL_ALLOWLIST = [
     ("shared.schema.investigation_schema", "InvestigationRequest"),
+    ("shared.schema.investigation_schema", "EvidenceRequirement"),
     ("shared.schema.investigation_schema", "InvestigationPurpose"),
     ("shared.schema.investigation_schema", "EvidencePolicy"),
     ("shared.schema.collection_intent", "CollectionCountMode"),

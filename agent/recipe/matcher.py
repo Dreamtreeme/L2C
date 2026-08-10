@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from agent.config import get_settings
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
 from agent.utils.text import normalize_text
-from agent.vision.marker_geometry import marker_bbox, marker_center
+from agent.vision.marker_geometry import marker_center
 
 
 def marker_region(marker: dict, markers: list[dict]) -> str:
@@ -40,33 +39,6 @@ def marker_region(marker: dict, markers: list[dict]) -> str:
         return names[2]
 
     return f"{band(y, min_y, max_y, ('top', 'middle', 'bottom'))}-{band(x, min_x, max_x, ('left', 'center', 'right'))}"
-
-
-def marker_ordinal(target_marker: dict, markers: list[dict]) -> int | None:
-    """브라우저 상단을 제외한 동일 텍스트·영역 마커 중 순서(0-base)를 반환한다."""
-    target_text = normalize_text(target_marker.get("text"))
-    if not target_text:
-        return None
-    target_region = marker_region(target_marker, markers)
-    matches = [
-        marker
-        for marker in markers or []
-        if (
-            isinstance(marker, dict)
-            and normalize_text(marker.get("text")) == target_text
-            and marker_region(marker, markers) == target_region
-        )
-    ]
-    content_top = get_settings().reflex.interactive_content_top_px
-    if marker_bbox(target_marker)[1] >= content_top:
-        content_matches = [marker for marker in matches if marker_bbox(marker)[1] >= content_top]
-        if content_matches:
-            matches = content_matches
-    matches = sorted(matches, key=lambda marker: (marker_bbox(marker)[1], marker_bbox(marker)[0], marker.get("id", 0)))
-    for idx, marker in enumerate(matches):
-        if marker.get("id") == target_marker.get("id"):
-            return idx
-    return None
 
 
 def is_replayable_action(action_item: dict) -> bool:

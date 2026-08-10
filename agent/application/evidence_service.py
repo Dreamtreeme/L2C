@@ -15,7 +15,6 @@ from shared.schema.agent_contract import ANSWER_EVIDENCE_FIELDS
 from shared.schema.jd_schema import StoredJob
 from shared.schema.investigation_schema import (
     EvidenceRequirement,
-    InvestigationConstraints,
 )
 
 
@@ -74,17 +73,18 @@ def _matches_exact_text_groups(
 def _rows_for_requirement(
     rows: list[sqlite3.Row],
     requirement: EvidenceRequirement,
-    constraints: InvestigationConstraints,
     allowed_job_ids: set[int] | None = None,
 ) -> list[sqlite3.Row]:
-    exact_text_groups = requirement.exact_text_groups or constraints.exact_text_groups
+    scope = requirement.scope
+    exact_text_groups = scope.exact_text_groups
     sites = {
         str(site).strip().casefold()
-        for site in (requirement.required_sites or constraints.sites)
+        for site in scope.sites
         if str(site).strip()
     }
-    start = _parse_date(requirement.posted_from)
-    end = _parse_date(requirement.posted_to)
+    start = _parse_date(scope.posted_from)
+    end = _parse_date(scope.posted_to)
+    maximum_required_experience = scope.maximum_required_experience_years
     matched: list[sqlite3.Row] = []
     for row in rows:
         if allowed_job_ids is not None and int(row["id"]) not in allowed_job_ids:
@@ -94,6 +94,13 @@ def _rows_for_requirement(
             continue
         if exact_text_groups and not _matches_exact_text_groups(row, exact_text_groups):
             continue
+        if maximum_required_experience is not None:
+            experience_min = row["experience_min"]
+            if (
+                experience_min is None
+                or int(experience_min) > maximum_required_experience
+            ):
+                continue
         posted_at = _parse_date(row["posted_at"])
         if start and (posted_at is None or posted_at < start):
             continue
@@ -109,7 +116,15 @@ def _load_evidence_rows(db_path: str | Path) -> EvidenceRows:
     conn = sqlite3.connect(Path(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        columns = ", ".join(("id", "source_platform", *ANSWER_EVIDENCE_FIELDS))
+        columns = ", ".join(
+            (
+                "id",
+                "source_platform",
+                "experience_min",
+                "experience_max",
+                *ANSWER_EVIDENCE_FIELDS,
+            )
+        )
         total_db_rows = int(
             conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
         )
@@ -137,57 +152,53 @@ def _document_scope_ids(
 def _match_requirement_evidence(
     rows: list[sqlite3.Row],
     requirement: EvidenceRequirement,
-    constraints: InvestigationConstraints,
     *,
     taxonomy: SearchTaxonomyService,
-    taxonomy_constraints: InvestigationConstraints,
     document_scope: set[int] | None,
     force_semantic_review: bool,
 ) -> RequirementEvidence:
     """분류 사전과 명시 조건을 적용해 요구사항 후보를 고른다."""
 
+    scope = requirement.scope
+    taxonomy_scope = scope.model_copy(
+        update={"location": "", "experience": "", "employment_type": ""}
+    )
     candidate_sets: list[set[int]] = []
     semantic_occupation_ids: set[int] = set()
-    occupation_keys = list(
-        requirement.occupation_concept_keys
-        or constraints.occupation_concept_keys
-    )
-    occupation_domain_keys = list(
-        requirement.occupation_domain_concept_keys
-        or constraints.occupation_domain_concept_keys
-    )
-    occupation_filter_keys = (
-        occupation_keys
-        or requirement.occupation_domain_concept_keys
-        or constraints.occupation_domain_concept_keys
-    )
+    occupation_keys = list(scope.occupation_concept_keys)
+    occupation_domain_keys = list(scope.occupation_domain_concept_keys)
+    occupation_filter_keys = occupation_keys or occupation_domain_keys
     if occupation_filter_keys:
         occupation_job_ids = taxonomy.matching_occupation_job_ids(
             occupation_filter_keys,
-            taxonomy_constraints,
+            taxonomy_scope,
         )
         candidate_sets.append(occupation_job_ids)
         semantic_occupation_ids = (
             taxonomy.matching_occupation_job_ids(
                 occupation_filter_keys,
-                taxonomy_constraints,
+                taxonomy_scope,
                 evidence_fields=("main_tasks",),
             )
             & occupation_job_ids
         )
-    skill_keys = list(
-        requirement.skill_concept_keys or constraints.skill_concept_keys
-    )
+    skill_keys = list(scope.skill_concept_keys)
     if skill_keys:
         candidate_sets.append(
             taxonomy.matching_skill_job_ids(
                 skill_keys,
-                taxonomy_constraints,
-                match_mode=requirement.skill_match_mode,
-                requirement_type=requirement.skill_requirement_type,
+                taxonomy_scope,
+                match_mode=scope.skill_match_mode,
+                requirement_type=scope.skill_requirement_type,
             )
         )
-    allowed_job_ids = set.intersection(*candidate_sets) if candidate_sets else None
+    match_mode = scope.occupation_skill_match_mode
+    if not candidate_sets:
+        allowed_job_ids = None
+    elif match_mode == "any":
+        allowed_job_ids = set.union(*candidate_sets)
+    else:
+        allowed_job_ids = set.intersection(*candidate_sets)
     if document_scope is not None:
         allowed_job_ids = (
             set(document_scope)
@@ -197,22 +208,19 @@ def _match_requirement_evidence(
     matched_rows = _rows_for_requirement(
         rows,
         requirement,
-        constraints,
         allowed_job_ids,
     )
     matched_row_ids = {int(row["id"]) for row in matched_rows}
     semantic_review_required = bool(
         force_semantic_review
         or semantic_occupation_ids & matched_row_ids
-        or (requirement.occupation_query and not occupation_keys)
-        or (
-            requirement.occupation_domain_query
-            and not occupation_domain_keys
-        )
-        or (requirement.skill_queries and not skill_keys)
-        or constraints.location
-        or constraints.experience
-        or constraints.employment_type
+        or (scope.occupation_query and not occupation_keys)
+        or (scope.occupation_domain_query and not occupation_domain_keys)
+        or (scope.skill_queries and not skill_keys)
+        or scope.location
+        or scope.experience
+        or scope.employment_type
+        or scope.semantic_filters
     )
     return RequirementEvidence(
         requirement=requirement,
@@ -228,6 +236,7 @@ def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
     """후보 공고의 표본 수, 날짜와 필드 충족률을 보고서로 만든다."""
 
     requirement = evidence.requirement
+    scope = requirement.scope
     matched = evidence.matched_rows
     field_coverage = {
         field: sum(1 for row in matched if str(row[field] or "").strip())
@@ -246,18 +255,18 @@ def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
         if field_coverage.get(field, 0) < requirement.minimum_count:
             missing.append(f"{field} 근거 부족")
     if (
-        requirement.posted_from or requirement.posted_to
+        scope.posted_from or scope.posted_to
     ) and len(posted_dates) < requirement.minimum_count:
         missing.append("검증된 게시일 근거 부족")
 
     return {
         "requirement_id": requirement.requirement_id,
         "description": requirement.description,
-        "occupation_domain_query": requirement.occupation_domain_query,
+        "occupation_domain_query": scope.occupation_domain_query,
         "occupation_domain_concept_keys": evidence.occupation_domain_keys,
-        "occupation_query": requirement.occupation_query,
+        "occupation_query": scope.occupation_query,
         "occupation_concept_keys": evidence.occupation_keys,
-        "skill_queries": list(requirement.skill_queries),
+        "skill_queries": list(scope.skill_queries),
         "skill_concept_keys": evidence.skill_keys,
         "semantic_review_required": evidence.semantic_review_required,
         "matching_count": len(matched),
@@ -276,7 +285,9 @@ def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
                 "position": str(row["position"] or ""),
                 "url": str(row["url"] or ""),
                 "job_category": str(row["job_category"] or ""),
-                "experience": str(row["experience_text"] or ""),
+                "experience_min": row["experience_min"],
+                "experience_max": row["experience_max"],
+                "experience_text": str(row["experience_text"] or ""),
                 "education": str(row["education"] or ""),
                 "employment_type": str(row["employment_type"] or ""),
                 "location": str(row["location"] or ""),
@@ -305,7 +316,6 @@ def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
 def inspect_job_evidence(
     db_path: str | Path,
     requirements: list[EvidenceRequirement],
-    constraints: InvestigationConstraints,
     *,
     document_scope_ids: list[int] | set[int] | None = None,
     force_semantic_review: bool = False,
@@ -316,17 +326,12 @@ def inspect_job_evidence(
     taxonomy = taxonomy_service or SearchTaxonomyService(db_path)
     evidence_rows = _load_evidence_rows(db_path)
     document_scope = _document_scope_ids(document_scope_ids)
-    taxonomy_constraints = constraints.model_copy(
-        update={"location": "", "experience": "", "employment_type": ""}
-    )
     reports = [
         _requirement_report(
             _match_requirement_evidence(
                 evidence_rows.indexed_rows,
                 requirement,
-                constraints,
                 taxonomy=taxonomy,
-                taxonomy_constraints=taxonomy_constraints,
                 document_scope=document_scope,
                 force_semantic_review=force_semantic_review,
             )

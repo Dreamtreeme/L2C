@@ -9,37 +9,30 @@ from typing import Any, Callable
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.observability.run_context import invoke_with_metrics
-from agent.application.search_taxonomy_review_service import (
-    SearchTaxonomyReviewService,
-)
 from agent.application.search_taxonomy_question_builder import TaxonomyQuestionBuilder
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.prompts.investigation import taxonomy_resolution_prompt
 from agent.utils.model_conversion import parse_model_payload
 from shared.schema.investigation_schema import (
-    ClarificationAnswer,
     ClarificationOption,
     ClarificationQuestion,
     InvestigationConstraints,
-    InvestigationRequest,
     TaxonomyResolution,
 )
 
 
 class OccupationClarificationService:
-    """직무 범위를 좁히는 질문을 만들고 확인된 별칭을 기록한다."""
+    """정적 사전을 사용해 직무 범위를 좁히는 질문을 만든다."""
 
     def __init__(
         self,
         *,
         taxonomy_model: Callable[[], Any],
         taxonomy_service: SearchTaxonomyService,
-        taxonomy_review_service: SearchTaxonomyReviewService,
     ) -> None:
         self.taxonomy_model = taxonomy_model
         self.taxonomy_service = taxonomy_service
         self.question_builder = TaxonomyQuestionBuilder(taxonomy_service)
-        self.taxonomy_review_service = taxonomy_review_service
 
     @staticmethod
     def _non_taxonomy_questions(
@@ -109,16 +102,6 @@ class OccupationClarificationService:
             :4
         ]
         if resolution.decision == "no_match" or selected_key not in by_key:
-            self.taxonomy_service.record_occupation_candidate(
-                constraints.occupation_query,
-                metadata={
-                    "occupation_domain_concept_keys": list(
-                        constraints.occupation_domain_concept_keys
-                    ),
-                    "candidate_count": len(candidates),
-                    "resolution_reason": resolution.reason,
-                },
-            )
             return constraints.model_copy(
                 update={"occupation_resolution": "semantic_no_match"}
             ), None
@@ -200,40 +183,6 @@ class OccupationClarificationService:
         constraints: InvestigationConstraints,
     ) -> InvestigationConstraints:
         return self.taxonomy_service.enrich_constraints(constraints)
-
-    def accept_answer(
-        self,
-        investigation: InvestigationRequest,
-        answer: ClarificationAnswer,
-    ) -> None:
-        if answer.custom_value.strip():
-            return
-        question = next(
-            (
-                item
-                for item in investigation.clarification_questions
-                if item.question_id == answer.question_id
-            ),
-            None,
-        )
-        if question is None or question.facet_type != "semantic_occupation":
-            return
-        selected = next(
-            (
-                option
-                for option in question.options
-                if option.option_id == answer.selected_option_id
-                or (answer.value and option.value == answer.value)
-            ),
-            None,
-        )
-        if selected is None or not investigation.constraints.occupation_query:
-            return
-        self.taxonomy_review_service.add_reviewed_alias(
-            selected.value,
-            investigation.constraints.occupation_query,
-            note="직무 의미 확인 질문에서 사용자가 선택",
-        )
 
 
 __all__ = ["OccupationClarificationService"]

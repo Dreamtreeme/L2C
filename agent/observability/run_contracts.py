@@ -10,7 +10,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from shared.schema.investigation_schema import ClarificationAnswer
+from shared.schema.investigation_schema import (
+    ClarificationAnswer,
+    ClarificationQuestion,
+    GroundedAnswer,
+)
 from shared.schema.run_schema import RunStatus
 
 
@@ -45,7 +49,6 @@ class ChatRequest(BaseModel):
     """사용자 채팅 실행 요청."""
 
     query: str
-    resume_run_id: str | None = None
     conversation_id: str = ""
     investigation_id: str = ""
     clarification_answer: ClarificationAnswer | None = None
@@ -57,9 +60,9 @@ class ChatResult(BaseModel):
     run_id: str
     status: RunStatus
     text: str = ""
-    clarification: dict[str, Any] | None = None
+    grounded_answer: GroundedAnswer | None = None
+    clarification: ClarificationQuestion | None = None
     investigation_id: str = ""
-    resumed_from_run_id: str | None = None
     resume_mode: str = ""
     conversation_id: str = ""
     metrics: dict[str, Any] = Field(default_factory=dict)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.schema.skill_schema import RecipeSkillMetadata, ReplayMode
 
@@ -16,11 +16,11 @@ from shared.schema.skill_schema import RecipeSkillMetadata, ReplayMode
 class RecipeTarget(BaseModel):
     """클릭/입력 대상 마커(target marker)를 다시 찾기 위한 정보."""
 
+    model_config = ConfigDict(extra="forbid")
+
     text: str = Field("", description="정규화된 OCR 텍스트(OCR text)")
     semantic_label: Optional[str] = Field(None, description="LLM이 보정한 대상 라벨(semantic label)")
     region: Optional[str] = Field(None, description="화면 내 대략적 위치(region)")
-    ordinal: Optional[int] = Field(None, description="동일 텍스트 중 화면 순서(ordinal)")
-    evidence_texts: List[str] = Field(default_factory=list, description="주변 OCR 근거 텍스트(evidence texts)")
     marker_type: str = Field("", description="OCR/아이콘 마커 유형(marker type)")
     bbox_ratio: List[float] = Field(default_factory=list, description="화면 크기 대비 대상 bbox 비율(bbox ratio)")
     center_ratio: List[float] = Field(default_factory=list, description="화면 크기 대비 대상 중심 비율(center ratio)")
@@ -28,6 +28,8 @@ class RecipeTarget(BaseModel):
 
 class RecipeCheckpoint(BaseModel):
     """전이 전후에 다시 확인할 화면 상태."""
+
+    model_config = ConfigDict(extra="forbid")
 
     observation_id: str = Field(
         "",
@@ -52,6 +54,8 @@ class RecipeCheckpoint(BaseModel):
 class RecipeAction(BaseModel):
     """한 화면 관찰을 근거로 연속 실행할 수 있는 물리 행동."""
 
+    model_config = ConfigDict(extra="forbid")
+
     source_seq: int = Field(..., description="자율탐색 원본 행동 번호(source sequence)")
     action: str = Field(..., description="도구 이름(tool action)")
     target: Optional[RecipeTarget] = Field(None, description="클릭/입력 대상(target)")
@@ -70,10 +74,6 @@ class RecipeAction(BaseModel):
         "",
         description="자율 탐색 실행 당시 위험도 선언(risk level)",
     )
-    needs_user_confirmation: bool = Field(
-        False,
-        description="자율 탐색 실행 당시 사용자 승인 필요 여부",
-    )
     replay_mode: ReplayMode = Field(
         "reasoning",
         description="이 단계를 그대로 재생할지, 파라미터화할지, 추론할지(replay mode)",
@@ -82,6 +82,8 @@ class RecipeAction(BaseModel):
 
 class RecipeTransition(BaseModel):
     """검증된 이전 상태에서 행동 묶음을 수행해 다음 상태로 이동하는 단위."""
+
+    model_config = ConfigDict(extra="forbid")
 
     seq: int = Field(..., description="레시피 전이 순서(transition index)")
     before: RecipeCheckpoint
@@ -94,6 +96,8 @@ class RecipeTransition(BaseModel):
 class RecipePath(BaseModel):
     """검증 가능한 시작·전이·완료 상태로 구성된 실행 경로."""
 
+    model_config = ConfigDict(extra="forbid")
+
     start_state: RecipeCheckpoint
     transitions: List[RecipeTransition] = Field(min_length=1)
     completion_state: RecipeCheckpoint
@@ -105,5 +109,7 @@ class SiteRecipe(RecipePath):
     site: str = Field(..., description="사이트 식별자(site)")
     goal: str = Field("", description="학습 당시 사용자 목표(goal)")
     skill_metadata: RecipeSkillMetadata = Field(default_factory=RecipeSkillMetadata)
-    success_count: int = Field(1, description="성공 누적 횟수(success_count)")
+    support_count: int = Field(1, description="같은 경로를 지지한 자율탐색 후보 수")
+    replay_success_count: int = Field(0, description="실제 재생 성공 횟수")
+    replay_failure_count: int = Field(0, description="실제 재생 실패 횟수")
     updated_at: str = Field("", description="마지막 갱신 시각(updated_at)")

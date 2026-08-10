@@ -20,6 +20,7 @@ from agent.graph.investigation_evidence_nodes import InvestigationEvidenceNodes
 from agent.graph.investigation_request_nodes import InvestigationRequestNodes
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
+    ClarificationQuestion,
     InvestigationOutcome,
     InvestigationRequest,
     InvestigationResumeMode,
@@ -115,12 +116,16 @@ class InvestigationWorkflow:
         return {"configurable": {"thread_id": investigation_id}}
 
     @staticmethod
-    def _pending_clarification(result: dict[str, Any]) -> dict[str, Any] | None:
+    def _pending_clarification(
+        result: dict[str, Any],
+    ) -> ClarificationQuestion | None:
         interruptions = result.get("__interrupt__") or ()
         if not interruptions:
             return None
         payload = getattr(interruptions[0], "value", None)
-        return dict(payload) if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        return ClarificationQuestion.model_validate(payload)
 
     def _normalize_result(
         self,
@@ -138,18 +143,19 @@ class InvestigationWorkflow:
         final_answer = str(answer.get("final_answer") or "")
         if clarification is not None:
             run_status = RunStatus.WAITING_INPUT
-            final_answer = str(clarification.get("question") or "")
+            final_answer = clarification.question
             emit_run_event(
                 "clarification_required",
                 RunPhase.CLARIFICATION,
                 final_answer or "추가 정보가 필요합니다.",
                 status=RunStatus.WAITING_INPUT,
-                data=clarification,
+                data=clarification.model_dump(mode="json"),
             )
         return InvestigationOutcome(
             investigation=investigation,
             run_status=run_status,
             final_answer=final_answer,
+            grounded_answer=answer.get("grounded_answer"),
             clarification=clarification,
             resume_mode=resume_mode,
         )
@@ -159,7 +165,6 @@ class InvestigationWorkflow:
         query: str,
         *,
         conversation_id: str = "",
-        context_run_id: str = "",
         investigation_id: str = "",
         clarification_answer: ClarificationAnswer | None = None,
     ) -> InvestigationOutcome:
@@ -195,17 +200,14 @@ class InvestigationWorkflow:
             conversation_id=conversation_id,
             original_query=str(query or "").strip(),
         )
-        state = create_investigation_state(
-            investigation,
-            context_run_id=context_run_id,
-        )
+        state = create_investigation_state(investigation)
         result = self.graph.invoke(
             state,
             config=self._thread_config(investigation.investigation_id),
         )
         return self._normalize_result(
             dict(result),
-            resume_mode="restart_from_request" if context_run_id else "",
+            resume_mode="",
         )
 
 

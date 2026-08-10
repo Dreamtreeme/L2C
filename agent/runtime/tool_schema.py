@@ -88,7 +88,6 @@ class click_marker(_DetailObservation, _ReplayProposal):
     expected_after: Optional[str] = Field(None, description="클릭 후 정상이라면 보여야 할 화면 변화(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class type_in_marker(_ReplayProposal):
@@ -110,7 +109,6 @@ class type_in_marker(_ReplayProposal):
     expected_after: Optional[str] = Field(None, description="입력 후 정상이라면 보여야 할 화면 변화(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class scroll(_DetailObservation, _ReplayProposal):
@@ -141,7 +139,6 @@ class scroll(_DetailObservation, _ReplayProposal):
         "safe_read",
         description="스크롤은 화면 내용을 더 읽는 읽기 전용 행동입니다.",
     )
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class press_key(_ReplayProposal):
@@ -152,7 +149,6 @@ class press_key(_ReplayProposal):
     expected_after: Optional[str] = Field(None, description="키 입력 후 정상이라면 보여야 할 화면 변화(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class open_browser(BaseModel):
@@ -163,7 +159,6 @@ class open_browser(BaseModel):
     expected_after: Optional[str] = Field(None, description="브라우저 이동 후 정상이라면 보여야 할 화면 변화(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class close_current_tab(_ReplayProposal):
@@ -173,7 +168,6 @@ class close_current_tab(_ReplayProposal):
     expected_after: Optional[str] = Field(None, description="탭을 닫은 뒤 기대 상태(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class switch_tab(_ReplayProposal):
@@ -187,7 +181,6 @@ class switch_tab(_ReplayProposal):
     expected_after: Optional[str] = Field(None, description="탭 전환 뒤 기대 상태(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class finish_detail_reading(_DetailObservation):
@@ -208,7 +201,6 @@ class finish_detail_reading(_DetailObservation):
     expected_after: Optional[str] = Field(None, description="정제 후 정상이라면 다음에 기대되는 상태(expected_after)")
     page_role: Optional[str] = Field("job_detail", description="Current page role.")
     risk_level: Optional[str] = Field("safe_read", description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class go_back(_ReplayProposal):
@@ -218,7 +210,6 @@ class go_back(_ReplayProposal):
     expected_after: Optional[str] = Field(None, description="뒤로가기 후 정상이라면 보여야 할 화면 변화(expected_after)")
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-    needs_user_confirmation: Optional[bool] = Field(None, description="True before sensitive steps.")
 
 
 class VisibleJobCard(BaseModel):
@@ -253,7 +244,6 @@ class set_job_card_queue(BaseModel):
         description="화면에 명시된 전체 검색 결과 개수. 숫자의 의미가 확실할 때만 입력합니다.",
     )
     count_evidence: Optional[str] = Field(None, description="전체 결과 개수를 판단한 화면 문구")
-    count_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     reason: Optional[str] = Field(None, description="이 카드들을 큐에 넣은 이유")
 
 

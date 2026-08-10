@@ -340,24 +340,18 @@ def _set_job_card_queue(
     availability: dict[str, Any] = {}
     try:
         available_count = int(availability_source.get("available_job_count"))
-        count_confidence = float(
-            availability_source.get("count_confidence") or 0.0
-        )
     except (TypeError, ValueError):
         available_count = -1
-        count_confidence = 0.0
     count_evidence = str(
         availability_source.get("count_evidence") or ""
     ).strip()[:160]
     if (
         available_count >= len(queue)
-        and count_confidence >= 0.8
         and count_evidence
     ):
         availability = {
             "available_job_count": available_count,
             "count_evidence": count_evidence,
-            "count_confidence": count_confidence,
         }
 
     return StateActionOutcome(

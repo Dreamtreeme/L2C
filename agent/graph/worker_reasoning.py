@@ -113,26 +113,6 @@ def reasoning_node(
     loop_warning, error_increment = _loop_warning(state)
 
     selector_request, selector_trace = select_job_cards(state)
-    if selector_trace.get("reason") == "screen_loading":
-        logger.info(
-            "Reasoning Node skipped while result screen is loading",
-            component="reasoning",
-            duration_sec=round(time.perf_counter() - started, 6),
-            reasoning_mode="loading_retry",
-        )
-        return {
-            "decision": {
-                "pending_action": None,
-                "job_card_selection_trace": selector_trace,
-            },
-            "replay": {
-                "reflex_trace": {
-                    "hit": False,
-                    "source": "screen_loading",
-                },
-            },
-        }
-
     if selector_request is not None:
         logger.info(
             "Reasoning Node completed",
@@ -168,7 +148,6 @@ def reasoning_node(
         build_reasoning_messages(
             state,
             loop_warning,
-            selector_trace,
         ),
         "vision_reasoning",
     )

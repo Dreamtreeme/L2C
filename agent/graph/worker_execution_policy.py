@@ -12,7 +12,7 @@ from agent.runtime.job_card_queue import (
 )
 
 
-def sensitive_action_reason(
+def blocked_action_reason(
     state: WorkerState,
     action_name: str,
     args: dict[str, Any],
@@ -34,8 +34,6 @@ def sensitive_action_reason(
         "scroll",
     }:
         return ""
-    if args.get("needs_user_confirmation") is True:
-        return "tool_args_requested_user_confirmation"
     if str(args.get("risk_level") or "").strip().lower() == "sensitive":
         return "tool_args_marked_sensitive"
     return ""
@@ -127,6 +125,6 @@ def repeats_no_effect_target(
 __all__ = [
     "compact_action_args",
     "repeats_no_effect_target",
-    "sensitive_action_reason",
+    "blocked_action_reason",
     "state_snapshot_for_action",
 ]

@@ -51,6 +51,7 @@ def _worker_data_services() -> WorkerDataServices:
         mark_existing_job_cards=mark_existing_job_cards,
         find_existing_job_url=existing_job_url_trace,
         load_site_recipes=recipe_store.get_site_recipes,
+        record_recipe_replay=recipe_store.record_replay_result,
     )
 
 

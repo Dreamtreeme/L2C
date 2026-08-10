@@ -150,24 +150,6 @@ def action_event_results(events: Sequence[ActionEvent]) -> list[dict[str, Any]]:
     ]
 
 
-def action_event_recipe_steps(
-    events: Sequence[ActionEvent],
-) -> list[RecordedRecipeStep]:
-    return [
-        event["recipe_step"]
-        for event in events or []
-        if event.get("recipe_step") is not None
-    ]
-
-
-def action_event_feedback(events: Sequence[ActionEvent]) -> list[FeedbackEpisode]:
-    return [
-        event["feedback_episode"]
-        for event in events or []
-        if event.get("feedback_episode") is not None
-    ]
-
-
 def action_event_transitions(
     events: Sequence[ActionEvent],
 ) -> list[dict[str, Any]]:
@@ -265,7 +247,6 @@ class TransitionRequest(TypedDict, total=False):
     before_screenshot: str
     started_at: float
     execution_failed: bool
-    failed_action: str
 
 
 class TransitionResult(TransitionRequest, total=False):
@@ -286,6 +267,7 @@ class WorkerRequestState(TypedDict, total=False):
     goal: str
     collection_intent: CollectionIntent
     recipe_inputs: dict[str, Any]
+    action_permission_contract: dict[str, Any]
 
 
 class ObservationState(TypedDict, total=False):
@@ -294,9 +276,7 @@ class ObservationState(TypedDict, total=False):
     observation_id: str
     observation_sequence: int
     current_screenshot: str
-    capture_quality: dict[str, Any]
     raw_screen_signature: dict[str, Any]
-    analysis_mode: str
     ocr_complete: bool
     previous_observation: dict[str, Any]
     ui_context: str
@@ -346,14 +326,6 @@ class JobCollectionState(TypedDict, total=False):
     job_detail_followup: dict[str, Any]
 
 
-class ActionSafetyState(TypedDict, total=False):
-    """작업 권한과 사용자 승인 대기 상태."""
-
-    action_permission_contract: dict[str, Any]
-    pending_human_approval: bool
-    human_approval_request: dict[str, Any]
-
-
 class WorkerLifecycleState(TypedDict, total=False):
     """작업자 반복 실행의 종료 상태."""
 
@@ -379,7 +351,6 @@ class WorkerState(TypedDict):
     replay: Annotated[RecipeReplayState, merge_worker_section]
     collection: Annotated[JobCollectionState, merge_worker_section]
     lifecycle: Annotated[WorkerLifecycleState, merge_worker_section]
-    safety: Annotated[ActionSafetyState, merge_worker_section]
 
 
 class WorkerStateUpdate(TypedDict, total=False):
@@ -392,7 +363,6 @@ class WorkerStateUpdate(TypedDict, total=False):
     replay: RecipeReplayState
     collection: JobCollectionState
     lifecycle: WorkerLifecycleState
-    safety: ActionSafetyState
 
 
 def apply_worker_state_update(
@@ -442,10 +412,6 @@ def apply_worker_state_update(
                 update.get("lifecycle"),
             ),
         ),
-        safety=cast(
-            ActionSafetyState,
-            merge_worker_section(state["safety"], update.get("safety")),
-        ),
     )
 
 
@@ -459,7 +425,6 @@ def create_worker_state(
     replay: Mapping[str, Any] | None = None,
     collection: Mapping[str, Any] | None = None,
     lifecycle: Mapping[str, Any] | None = None,
-    safety: Mapping[str, Any] | None = None,
 ) -> WorkerState:
     """모든 작업자 진입점에서 동일한 섹션 상태를 만든다."""
 
@@ -471,14 +436,13 @@ def create_worker_state(
                 required_fields=list(DEFAULT_JOB_COLLECTION_FIELDS)
             ),
             "recipe_inputs": {},
+            "action_permission_contract": {},
         },
         "observation": {
             "observation_id": "",
             "observation_sequence": 0,
             "current_screenshot": "",
-            "capture_quality": {},
             "raw_screen_signature": {},
-            "analysis_mode": "",
             "ocr_complete": False,
             "previous_observation": {},
             "ui_context": "",
@@ -519,11 +483,6 @@ def create_worker_state(
             "job_detail_followup": {},
         },
         "lifecycle": {"is_finished": False},
-        "safety": {
-            "action_permission_contract": {},
-            "pending_human_approval": False,
-            "human_approval_request": {},
-        },
     }
     return apply_worker_state_update(
         state,
@@ -535,7 +494,6 @@ def create_worker_state(
             "replay": cast(RecipeReplayState, dict(replay or {})),
             "collection": cast(JobCollectionState, dict(collection or {})),
             "lifecycle": cast(WorkerLifecycleState, dict(lifecycle or {})),
-            "safety": cast(ActionSafetyState, dict(safety or {})),
         },
     )
 
@@ -543,7 +501,6 @@ def create_worker_state(
 __all__ = [
     "ActionEvent",
     "ActionRequest",
-    "ActionSafetyState",
     "DecisionState",
     "WorkerState",
     "WorkerStateUpdate",
@@ -557,8 +514,6 @@ __all__ = [
     "TransitionResult",
     "TransitionState",
     "apply_worker_state_update",
-    "action_event_feedback",
-    "action_event_recipe_steps",
     "action_event_results",
     "action_event_transitions",
     "action_request_from_model_response",

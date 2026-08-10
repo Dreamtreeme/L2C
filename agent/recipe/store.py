@@ -12,7 +12,6 @@ from datetime import datetime
 from typing import Any
 
 from agent.runtime.site_context import normalize_page_role
-from agent.recipe.payload_sanitizer import strip_replay_runtime_fields
 from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
@@ -28,6 +27,26 @@ from shared.schema.skill_schema import RecipeSkillMetadata
 _RECIPE_KEY_VERSION = 6
 _RECIPE_KEY_PREFIX = "path6#"
 
+_REPLAY_RUNTIME_FIELDS = {
+    "worker_run_id",
+    "observation_sequence",
+    "observation_id",
+    "before_observation_id",
+    "after_observation_id",
+}
+
+
+def _strip_replay_runtime_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_replay_runtime_fields(child)
+            for key, child in value.items()
+            if key not in _REPLAY_RUNTIME_FIELDS
+        }
+    if isinstance(value, list):
+        return [_strip_replay_runtime_fields(item) for item in value]
+    return value
+
 
 class RecipeStore(SQLiteStore):
     def _ensure_schema(self) -> None:
@@ -40,7 +59,10 @@ class RecipeStore(SQLiteStore):
                     goal          TEXT,
                     path_json     TEXT NOT NULL,
                     metadata_json TEXT,
-                    success_count INTEGER NOT NULL DEFAULT 0,
+                    support_count INTEGER NOT NULL DEFAULT 0,
+                    replay_success_count INTEGER NOT NULL DEFAULT 0,
+                    replay_failure_count INTEGER NOT NULL DEFAULT 0,
+                    last_replayed_at TEXT,
                     created_at    TEXT NOT NULL,
                     updated_at    TEXT NOT NULL
                 )
@@ -50,18 +72,18 @@ class RecipeStore(SQLiteStore):
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS recipe_sources (
-                    recipe_key   TEXT NOT NULL,
-                    candidate_id TEXT NOT NULL,
-                    created_at   TEXT NOT NULL,
-                    PRIMARY KEY (recipe_key, candidate_id),
+                    recipe_key TEXT NOT NULL,
+                    run_id     TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (recipe_key, run_id),
                     FOREIGN KEY (recipe_key)
                         REFERENCES recipes(recipe_key) ON DELETE CASCADE
                 )
                 """
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_recipe_sources_candidate "
-                "ON recipe_sources(candidate_id)"
+                "CREATE INDEX IF NOT EXISTS idx_recipe_sources_run "
+                "ON recipe_sources(run_id)"
             )
 
     @staticmethod
@@ -70,7 +92,14 @@ class RecipeStore(SQLiteStore):
     ) -> bool:
         action = str(action_item.get("action") or "")
         if action in TARGET_REPLAY_ACTIONS:
-            return bool(action_item.get("target") and action_item.get("roi_signature"))
+            if not action_item.get("target") or not action_item.get("roi_signature"):
+                return False
+            if action == "type_in_marker":
+                return bool(
+                    action_item.get("replay_mode") == "parameterized"
+                    and action_item.get("slot_refs")
+                )
+            return True
         if action in CONTEXTUAL_REPLAY_ACTIONS:
             param = (
                 action_item.get("param")
@@ -219,7 +248,7 @@ class RecipeStore(SQLiteStore):
         goal: str,
         path: dict[str, Any],
         metadata: RecipeSkillMetadata | None = None,
-        candidate_id: str = "",
+        source_run_id: str = "",
     ) -> bool:
         """같은 의미의 전체 안정 경로를 저장하거나 갱신한다."""
 
@@ -227,7 +256,7 @@ class RecipeStore(SQLiteStore):
             return False
         try:
             replay_path = RecipePath.model_validate(
-                strip_replay_runtime_fields(path)
+                _strip_replay_runtime_fields(path)
             ).model_dump(mode="json")
         except (TypeError, ValueError):
             return False
@@ -268,18 +297,18 @@ class RecipeStore(SQLiteStore):
                 "SELECT 1 FROM recipes WHERE recipe_key=?", (recipe_key,)
             ).fetchone()
             source_exists = bool(
-                candidate_id
+                source_run_id
                 and conn.execute(
                     "SELECT 1 FROM recipe_sources "
-                    "WHERE recipe_key=? AND candidate_id=?",
-                    (recipe_key, candidate_id),
+                    "WHERE recipe_key=? AND run_id=?",
+                    (recipe_key, source_run_id),
                 ).fetchone()
             )
             if row:
                 conn.execute(
                     "UPDATE recipes "
                     "SET site=?, goal=?, path_json=?, metadata_json=?, "
-                    "success_count=success_count+?, updated_at=? "
+                    "support_count=support_count+?, updated_at=? "
                     "WHERE recipe_key=?",
                     (
                         site,
@@ -295,7 +324,7 @@ class RecipeStore(SQLiteStore):
                 conn.execute(
                     "INSERT INTO recipes "
                     "(recipe_key, site, goal, path_json, metadata_json, "
-                    "success_count, created_at, updated_at) "
+                    "support_count, created_at, updated_at) "
                     "VALUES (?,?,?,?,?,1,?,?)",
                     (
                         recipe_key,
@@ -307,11 +336,11 @@ class RecipeStore(SQLiteStore):
                         now,
                     ),
                 )
-            if candidate_id and not source_exists:
+            if source_run_id and not source_exists:
                 conn.execute(
                     "INSERT INTO recipe_sources "
-                    "(recipe_key, candidate_id, created_at) VALUES (?,?,?)",
-                    (recipe_key, candidate_id, now),
+                    "(recipe_key, run_id, created_at) VALUES (?,?,?)",
+                    (recipe_key, source_run_id, now),
                 )
         return True
 
@@ -321,7 +350,7 @@ class RecipeStore(SQLiteStore):
         goal: str,
         path: dict[str, Any],
         metadata: RecipeSkillMetadata | None = None,
-        candidate_id: str = "",
+        source_run_id: str = "",
     ) -> int:
         """성공 후보의 상태 전이 경로 하나를 저장한다."""
 
@@ -331,38 +360,38 @@ class RecipeStore(SQLiteStore):
                 goal,
                 path,
                 metadata=metadata,
-                candidate_id=candidate_id,
+                source_run_id=source_run_id,
             )
         )
 
-    def _detach_candidate_paths(self, candidate_id: str) -> None:
+    def _detach_run_paths(self, run_id: str) -> None:
         """후보 근거를 떼고 다른 근거가 없는 경로만 제거한다."""
 
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT recipe_key FROM recipe_sources WHERE candidate_id=?",
-                (candidate_id,),
+                "SELECT recipe_key FROM recipe_sources WHERE run_id=?",
+                (run_id,),
             ).fetchall()
             previous_keys = [
                 str(row["recipe_key"]) for row in rows if str(row["recipe_key"])
             ]
             conn.execute(
-                "DELETE FROM recipe_sources WHERE candidate_id=?",
-                (candidate_id,),
+                "DELETE FROM recipe_sources WHERE run_id=?",
+                (run_id,),
             )
             if not previous_keys:
                 return
             placeholders = ",".join("?" for _ in previous_keys)
             conn.execute(
                 "UPDATE recipes "
-                "SET success_count=MAX(0, success_count-1) "
+                "SET support_count=MAX(0, support_count-1) "
                 f"WHERE recipe_key IN ({placeholders})",
                 previous_keys,
             )
             conn.execute(
                 "DELETE FROM recipes "
                 f"WHERE recipe_key IN ({placeholders}) "
-                "AND success_count<=0 "
+                "AND support_count<=0 "
                 "AND NOT EXISTS ("
                 "SELECT 1 FROM recipe_sources "
                 "WHERE recipe_sources.recipe_key=recipes.recipe_key"
@@ -389,12 +418,12 @@ class RecipeStore(SQLiteStore):
         goal: str,
         recipe_paths: list[dict[str, Any]],
         metadata: RecipeSkillMetadata | None = None,
-        candidate_id: str = "",
+        source_run_id: str = "",
     ) -> int:
         """한 후보가 소유한 기존 경로만 지우고 새 안정 경로로 교체한다."""
 
-        if candidate_id:
-            self._detach_candidate_paths(candidate_id)
+        if source_run_id:
+            self._detach_run_paths(source_run_id)
 
         saved = 0
         for path in recipe_paths or []:
@@ -403,20 +432,36 @@ class RecipeStore(SQLiteStore):
                 goal,
                 path,
                 metadata=metadata,
-                candidate_id=candidate_id,
+                source_run_id=source_run_id,
             )
         return saved
+
+    def record_replay_result(self, recipe_key: str, succeeded: bool) -> bool:
+        """경험 기반 경로 전체의 실제 재생 결과를 누적한다."""
+
+        column = "replay_success_count" if succeeded else "replay_failure_count"
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as conn:
+            result = conn.execute(
+                f"UPDATE recipes SET {column}={column}+1, "
+                "last_replayed_at=?, updated_at=? WHERE recipe_key=?",
+                (now, now, recipe_key),
+            )
+        return bool(result.rowcount)
 
     def get_by_site(self, site: str):
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT recipe_key, site, goal, path_json, metadata_json, "
-                "success_count, "
+                "support_count, replay_success_count, replay_failure_count, "
+                "last_replayed_at, updated_at, "
                 "(SELECT COUNT(*) FROM recipe_sources "
                 "WHERE recipe_sources.recipe_key=recipes.recipe_key) "
                 "AS source_count FROM recipes "
                 "WHERE site=? "
-                "ORDER BY success_count DESC, updated_at DESC, recipe_key ASC",
+                "ORDER BY replay_success_count DESC, "
+                "replay_failure_count ASC, support_count DESC, "
+                "updated_at DESC, recipe_key ASC",
                 (site,),
             ).fetchall()
         out = []
@@ -451,7 +496,7 @@ class RecipeStore(SQLiteStore):
     def get_site_recipes(
         self, site: str, *, task_category: str | None = None
     ) -> list[tuple[str, SiteRecipe]]:
-        """같은 사이트의 활성 레시피를 성공 횟수 순으로 반환한다."""
+        """같은 사이트의 활성 레시피를 실제 재생 결과 순으로 반환한다."""
         candidates: list[tuple[str, SiteRecipe]] = []
         for item in self.get_by_site(site):
             transitions = list(item.get("transitions") or [])
@@ -467,7 +512,10 @@ class RecipeStore(SQLiteStore):
                 transitions=transitions,
                 completion_state=item.get("completion_state") or {},
                 skill_metadata=metadata,
-                success_count=item.get("success_count") or 0,
+                support_count=item.get("support_count") or 0,
+                replay_success_count=item.get("replay_success_count") or 0,
+                replay_failure_count=item.get("replay_failure_count") or 0,
+                updated_at=item.get("updated_at") or "",
             )
             candidates.append((item.get("recipe_key") or "", recipe))
         return candidates

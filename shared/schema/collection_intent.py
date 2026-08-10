@@ -59,9 +59,6 @@ class CollectionIntent(BaseModel):
         default=False, description="최신 공고 확인이 필요한지 여부"
     )
     purpose: CollectionPurpose = CollectionPurpose.COLLECT
-    analysis_goal: str = Field(
-        default="", description="비교·트렌드 등 수집 이후 분석 목적"
-    )
     task_category: str = Field(
         default="검색",
         min_length=1,
@@ -114,9 +111,7 @@ class CollectionResult(BaseModel):
     scope_exhausted: bool = False
     worker_finished: bool = False
     hit_recursion_limit: bool = False
-    submission_id: str = ""
     worker_run_id: str = ""
-    candidate_id: str = ""
 
 
 __all__ = [

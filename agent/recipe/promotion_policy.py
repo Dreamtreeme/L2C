@@ -17,7 +17,7 @@ from shared.schema.feedback_schema import (
     RecordedTransition,
 )
 
-_BLOCKING_FEEDBACK_LABELS = {"wrong_target", "no_effect", "loop_risk", "error"}
+_BLOCKING_FEEDBACK_LABELS = {"no_effect", "error"}
 _BLOCKING_RESULT_STATUSES = {"error", "skipped"}
 _BLOCKING_TRANSITION_REASONS = {
     "no_screen_change",
@@ -159,8 +159,6 @@ def _step_policy_reasons(step: RecordedRecipeStep) -> list[str]:
     reasons = []
     if step.risk_level.strip().casefold() == "sensitive":
         reasons.append("sensitive_action")
-    if step.needs_user_confirmation:
-        reasons.append("user_confirmation_required")
     return reasons
 
 

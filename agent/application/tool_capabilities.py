@@ -36,7 +36,7 @@ def _site_capability(profile: SiteProfile) -> ToolCapability:
         limitations=[
             "첫 번째 안정적인 검색 결과 화면에 보이는 공고를 기준으로 수집합니다.",
             "화면에 게시일 근거가 없으면 기간 조건을 검증할 수 없습니다.",
-            "로그인이나 인증이 필요한 흐름은 사용자 승인 없이 진행하지 않습니다.",
+            "로그인이나 인증이 필요한 흐름은 지원하지 않습니다.",
         ],
         expected_latency="브라우저·OCR·상세 공고 수에 따라 수십 초 이상",
     )

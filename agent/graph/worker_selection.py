@@ -188,17 +188,6 @@ def _replay_queued_card(
     return update
 
 
-def _defer_queue_replay(
-    transition_result: dict[str, Any],
-    *,
-    ocr_complete: bool,
-) -> bool:
-    reason = str(transition_result.get("reason") or "")
-    return reason == "queue_retry_no_screen_change" or (
-        reason == "queue_click_no_screen_change" and not ocr_complete
-    )
-
-
 def selection_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
@@ -252,12 +241,9 @@ def selection_node(
             )
 
     if transition_result.get("action"):
-        ocr_complete = bool(observation.get("ocr_complete"))
-        if _defer_queue_replay(
-            transition_result,
-            ocr_complete=ocr_complete,
-        ):
+        if transition_result.get("status") == "unknown":
             return {}
+        ocr_complete = bool(observation.get("ocr_complete"))
         markers = (
             list(observation.get("current_markers") or [])
             if ocr_complete

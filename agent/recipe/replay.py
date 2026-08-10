@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,7 +11,6 @@ from agent.recipe.phash_replay import (
     match_step_by_screen_signature,
     screen_context_signature_match,
 )
-from agent.runtime.action_validation import text_input_target_rejection
 from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
@@ -160,7 +160,6 @@ def _click_action_args(
     args: dict[str, Any] = {
         "marker_id": marker_id,
         **trace_args,
-        "needs_user_confirmation": bool(step.get("needs_user_confirmation")),
     }
     if step.get("risk_level"):
         args["risk_level"] = step.get("risk_level")
@@ -203,7 +202,6 @@ def _type_action_args(
         args["slot_name"] = slot_name
     if step.get("risk_level"):
         args["risk_level"] = step.get("risk_level")
-    args["needs_user_confirmation"] = bool(step.get("needs_user_confirmation"))
     return args
 
 
@@ -236,7 +234,6 @@ def _contextual_action_args(
         }
     )
     args["risk_level"] = step.get("risk_level") or "safe_navigation"
-    args["needs_user_confirmation"] = bool(step.get("needs_user_confirmation"))
     return args
 
 
@@ -265,7 +262,7 @@ def _missing_required_inputs(
     missing: list[str] = []
     for item in recipe.skill_metadata.inputs:
         value = params.get(item.name)
-        if item.required and item.name and (value is None or value == ""):
+        if item.name and (value is None or value == ""):
             missing.append(item.name)
     return missing
 
@@ -433,15 +430,6 @@ def _match_target_action_screen(
     trace["match_mode"] = phash_result.get("mode") or "roi_phash"
     if marker_id is None:
         return None, str(phash_result.get("reason") or "phash_check_failed")
-    if step.get("action") == "type_in_marker":
-        target_rejection = text_input_target_rejection(
-            context.markers,
-            marker_id,
-        )
-        if target_rejection:
-            return None, str(
-                target_rejection.get("reason") or "invalid_text_input_target"
-            )
     trace["marker_id"] = marker_id
     return marker_id, ""
 
@@ -537,9 +525,9 @@ def _bind_candidate(
                 trace,
             )
             return None
+        key_digest = hashlib.sha1(candidate.recipe_key.encode("utf-8")).hexdigest()[:12]
         call_id = (
-            f"reflex_{abs(hash(candidate.recipe_key))}_"
-            f"{candidate.transition_index}_{action_index}"
+            f"reflex_{key_digest}_{candidate.transition_index}_{action_index}"
         )
         tool_calls.append(
             {

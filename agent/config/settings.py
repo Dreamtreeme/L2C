@@ -233,12 +233,6 @@ class VisionSettings(SectionSettings):
         le=100,
         validation_alias="VISION_REASONING_IMAGE_QUALITY",
     )
-    reasoning_stale_phash_max_distance: int = Field(
-        10,
-        ge=0,
-        le=64,
-        validation_alias="VISION_REASONING_STALE_PHASH_MAX_DISTANCE",
-    )
     detail_action_marker_limit: int = Field(35, ge=1, le=500, validation_alias="VISION_DETAIL_ACTION_MARKER_LIMIT")
     detail_section_min_text_markers: int = Field(120, ge=1, le=2000, validation_alias="VISION_DETAIL_SECTION_MIN_TEXT_MARKERS")
     detail_ocr_max_lines: int = Field(90, ge=1, le=2000, validation_alias="VISION_DETAIL_OCR_MAX_LINES")
@@ -246,7 +240,6 @@ class VisionSettings(SectionSettings):
     detail_buffer_max_lines: int = Field(260, ge=1, le=5000, validation_alias="VISION_JOB_DETAIL_BUFFER_MAX_LINES")
     detail_buffer_max_line_chars: int = Field(220, ge=20, le=4000, validation_alias="VISION_JOB_DETAIL_BUFFER_MAX_LINE_CHARS")
     detail_final_ocr_max_chars: int = Field(16000, ge=1000, le=200000, validation_alias="VISION_DETAIL_FINAL_OCR_MAX_CHARS")
-    ui_analysis_cache_limit: int = Field(8, ge=0, le=128, validation_alias="VISION_UI_ANALYSIS_CACHE_LIMIT")
     content_top: str = Field("auto", validation_alias="VISION_CONTENT_TOP")
     capture_initial_wait_sec: float = Field(0.16, ge=0, le=10, validation_alias="VISION_CAPTURE_INITIAL_WAIT_SEC")
     content_bottom_ignore_px: int = Field(80, ge=0, le=2000, validation_alias="VISION_CONTENT_BOTTOM_IGNORE_PX")
@@ -355,7 +348,6 @@ class ReflexSettings(SectionSettings):
     )
     capture_width_tolerance_px: int = Field(32, ge=0, le=1000, validation_alias="REFLEX_CAPTURE_WIDTH_TOLERANCE_PX")
     capture_height_tolerance_px: int = Field(48, ge=0, le=1000, validation_alias="REFLEX_CAPTURE_HEIGHT_TOLERANCE_PX")
-    interactive_content_top_px: int = Field(180, ge=0, le=4000, validation_alias="VISION_INTERACTIVE_CONTENT_TOP_PX")
     idempotent_control_components: Annotated[tuple[str, ...], NoDecode] = Field(
         (
             "tab_button",

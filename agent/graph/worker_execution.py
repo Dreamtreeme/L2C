@@ -232,7 +232,6 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                     **dict(transition.get("transition_request", {}) or {}),
                     "source": "reflex",
                     "execution_failed": True,
-                    "failed_action": action_name,
                 }
             break
 

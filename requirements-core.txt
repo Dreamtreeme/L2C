@@ -5,8 +5,6 @@ pydantic==2.13.4
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
 Pillow==12.3.0
-beautifulsoup4==4.15.0
-requests==2.34.2
 
 # 브라우저·API
 playwright==1.61.0

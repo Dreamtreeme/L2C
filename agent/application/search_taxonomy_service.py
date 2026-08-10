@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
@@ -10,9 +9,7 @@ from typing import Any, Iterable
 from agent.application.search_taxonomy_import_service import normalize_term
 from agent.application.search_taxonomy_utils import (
     CORE_SOURCE_KEY,
-    CURATED_SOURCE_KEY,
     contains_taxonomy_alias,
-    taxonomy_timestamp,
 )
 from shared.schema.investigation_schema import (
     EvidenceRequirement,
@@ -71,31 +68,28 @@ class SearchTaxonomyService:
         try:
             rows = connection.execute(
                 """
-                SELECT c.concept_key, c.source_key, a.normalized_alias
+                SELECT c.concept_key, a.normalized_alias
                 FROM search_concepts AS c
                 JOIN search_aliases AS a ON a.concept_id = c.id
                 WHERE c.concept_type = 'occupation'
                   AND c.status = 'active'
+                  AND c.source_key = ?
+                  AND a.source_key = ?
                   AND a.active = 1
-                """
+                """,
+                (CORE_SOURCE_KEY, CORE_SOURCE_KEY),
             ).fetchall()
         finally:
             connection.close()
 
         exact_matches = [row for row in rows if text == str(row["normalized_alias"])]
         if exact_matches:
-            local_matches = [
-                row
-                for row in exact_matches
-                if str(row["source_key"]) in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-            ]
-            selected = local_matches or exact_matches
-            return list(dict.fromkeys(str(row["concept_key"]) for row in selected))
+            return list(
+                dict.fromkeys(str(row["concept_key"]) for row in exact_matches)
+            )
 
         matches: list[tuple[str, str]] = []
         for row in rows:
-            if str(row["source_key"]) not in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}:
-                continue
             alias = str(row["normalized_alias"])
             if contains_taxonomy_alias(text, alias):
                 matches.append((alias, str(row["concept_key"])))
@@ -118,11 +112,11 @@ class SearchTaxonomyService:
                 JOIN search_aliases AS aliases ON aliases.concept_id = concepts.id
                 WHERE concepts.concept_type = 'domain'
                   AND concepts.status = 'active'
-                  AND concepts.source_key IN (?, ?)
+                  AND concepts.source_key = ?
                   AND aliases.active = 1
                   AND aliases.normalized_alias = ?
                 """,
-                (CORE_SOURCE_KEY, CURATED_SOURCE_KEY, normalized),
+                (CORE_SOURCE_KEY, normalized),
             ).fetchall()
             return [str(row["concept_key"]) for row in rows]
         finally:
@@ -138,13 +132,16 @@ class SearchTaxonomyService:
         try:
             rows = connection.execute(
                 """
-                SELECT c.concept_key, c.source_key, a.normalized_alias
+                SELECT c.concept_key, a.normalized_alias
                 FROM search_concepts AS c
                 JOIN search_aliases AS a ON a.concept_id = c.id
                 WHERE c.concept_type = 'skill'
                   AND c.status = 'active'
+                  AND c.source_key = ?
+                  AND a.source_key = ?
                   AND a.active = 1
-                """
+                """,
+                (CORE_SOURCE_KEY, CORE_SOURCE_KEY),
             ).fetchall()
         finally:
             connection.close()
@@ -153,20 +150,13 @@ class SearchTaxonomyService:
             candidates = [
                 row for row in rows if str(row["normalized_alias"]) == term
             ]
-            local = [
-                row
-                for row in candidates
-                if row["source_key"] in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-            ]
-            selected = local or candidates
-            if selected:
-                resolved.extend(str(row["concept_key"]) for row in selected)
+            if candidates:
+                resolved.extend(str(row["concept_key"]) for row in candidates)
                 continue
             contained = [
                 (str(row["normalized_alias"]), str(row["concept_key"]))
                 for row in rows
-                if row["source_key"] in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-                and contains_taxonomy_alias(term, str(row["normalized_alias"]))
+                if contains_taxonomy_alias(term, str(row["normalized_alias"]))
             ]
             resolved.extend(self._specific_alias_concept_keys(contained))
         return list(dict.fromkeys(resolved))
@@ -330,10 +320,10 @@ class SearchTaxonomyService:
                   ON child.id = relations.source_concept_id
                 WHERE parent.concept_key = ?
                   AND child.status = 'active'
-                  AND child.source_key IN (?, ?)
+                  AND child.source_key = ?
                 ORDER BY COALESCE(child.preferred_label_ko, child.preferred_label_en)
                 """,
-                (concept_key, CORE_SOURCE_KEY, CURATED_SOURCE_KEY),
+                (concept_key, CORE_SOURCE_KEY),
             ).fetchall()
             return [
                 {
@@ -369,8 +359,9 @@ class SearchTaxonomyService:
                 JOIN descendants ON descendants.id = concepts.id
                 WHERE concepts.concept_type = 'occupation'
                   AND concepts.status = 'active'
+                  AND concepts.source_key = ?
                 """,
-                (concept_key,),
+                (concept_key, CORE_SOURCE_KEY),
             ).fetchone()
             return int(row["concept_count"] if row is not None else 0)
         finally:
@@ -417,13 +408,14 @@ class SearchTaxonomyService:
                 JOIN branch ON branch.id = concepts.id
                 WHERE concepts.concept_type = 'occupation'
                   AND concepts.status = 'active'
+                  AND concepts.source_key = ?
                 ORDER BY COALESCE(
                     concepts.preferred_label_ko,
                     concepts.preferred_label_en,
                     concepts.concept_key
                 )
                 """,
-                concept_ids,
+                [*concept_ids, CORE_SOURCE_KEY],
             ).fetchall()
             return [
                 {
@@ -435,45 +427,6 @@ class SearchTaxonomyService:
                 }
                 for row in rows
             ]
-        finally:
-            connection.close()
-
-    def record_occupation_candidate(
-        self,
-        term: str,
-        *,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """선택된 영역에서도 확정하지 못한 직무 표현을 검토 후보로 남긴다."""
-
-        normalized = normalize_term(term)
-        if not normalized:
-            return
-        now = taxonomy_timestamp()
-        connection = self._connect()
-        try:
-            with connection:
-                connection.execute(
-                    """
-                    INSERT INTO search_term_candidates (
-                        normalized_term, display_term, proposed_type, status,
-                        observation_count, first_seen_at, last_seen_at,
-                        sample_job_id, metadata_json
-                    ) VALUES (?, ?, 'occupation', 'candidate', 1, ?, ?, NULL, ?)
-                    ON CONFLICT(normalized_term, proposed_type) DO UPDATE SET
-                        display_term = excluded.display_term,
-                        observation_count = search_term_candidates.observation_count + 1,
-                        last_seen_at = excluded.last_seen_at,
-                        metadata_json = excluded.metadata_json
-                    """,
-                    (
-                        normalized,
-                        term.strip(),
-                        now,
-                        now,
-                        json.dumps(metadata or {}, ensure_ascii=False),
-                    ),
-                )
         finally:
             connection.close()
 
@@ -528,55 +481,11 @@ class SearchTaxonomyService:
     def enrich_requirement(
         self,
         requirement: EvidenceRequirement,
-        constraints: InvestigationConstraints,
     ) -> EvidenceRequirement:
-        """근거 집단을 확정된 조사 조건과 같은 사전 기준으로 정규화한다."""
+        """근거 집단의 단일 scope를 검색 사전 기준으로 정규화한다."""
 
-        domain_query = (
-            requirement.occupation_domain_query or constraints.occupation_domain_query
-        )
-        domain_keys = list(requirement.occupation_domain_concept_keys)
-        if not domain_keys:
-            domain_keys = list(constraints.occupation_domain_concept_keys)
-        if not domain_keys and domain_query:
-            domain_keys = self.resolve_domain_concepts(domain_query)
-        occupation_query = requirement.occupation_query or constraints.occupation_query
-        occupation_keys = list(requirement.occupation_concept_keys)
-        if not occupation_keys and occupation_query:
-            occupation_keys = self.resolve_occupation_concepts(occupation_query)
-        skill_queries = requirement.skill_queries or constraints.skill_queries
-        skill_keys = list(requirement.skill_concept_keys)
-        if not skill_keys and skill_queries:
-            skill_keys = self.resolve_skill_concepts(skill_queries)
         return requirement.model_copy(
-            update={
-                "occupation_domain_query": domain_query,
-                "occupation_domain_concept_keys": domain_keys,
-                "occupation_query": occupation_query,
-                "occupation_concept_keys": occupation_keys,
-                "collection_search_term": (
-                    requirement.collection_search_term
-                    or occupation_query
-                    or domain_query
-                    or constraints.collection_search_term
-                    or next(iter(skill_queries), "")
-                ),
-                "skill_queries": list(skill_queries),
-                "skill_concept_keys": skill_keys,
-                "skill_match_mode": (
-                    requirement.skill_match_mode
-                    if requirement.skill_queries or requirement.skill_concept_keys
-                    else constraints.skill_match_mode
-                ),
-                "skill_requirement_type": (
-                    requirement.skill_requirement_type
-                    if requirement.skill_queries or requirement.skill_concept_keys
-                    else constraints.skill_requirement_type
-                ),
-                "exact_text_groups": (
-                    requirement.exact_text_groups or constraints.exact_text_groups
-                ),
-            }
+            update={"scope": self.enrich_constraints(requirement.scope)}
         )
 
 

@@ -106,12 +106,12 @@ class RecipePromotionWorker:
         logger.info("Recipe promotion worker stop requested", stopped=stopped)
         return stopped
 
-    def process_one(self, candidate_id: str | None = None) -> dict[str, Any] | None:
+    def process_one(self, run_id: str | None = None) -> dict[str, Any] | None:
         store = RecipeCandidateStore(self.db_path)
-        candidate = store.claim_review(candidate_id)
+        candidate = store.claim_review(run_id)
         if candidate is None:
             return None
-        candidate_id = candidate.candidate_id
+        run_id = candidate.run_id
         attempts = candidate.review_attempts
         review_context = None
         try:
@@ -123,17 +123,17 @@ class RecipePromotionWorker:
 
             site = candidate.site
             with run_context(
-                query=f"recipe candidate {candidate_id}",
+                query=f"recipe candidate {run_id}",
                 prefix="recipe-promotion",
                 metadata={
-                    "candidate_id": candidate_id,
+                    "run_id": run_id,
                     "site": site,
                     "review_attempt": attempts,
                 },
                 tags=["recipe-promotion", f"site:{site}" if site else "site:unknown"],
             ) as (review_context, _created):
                 result = review_and_apply_candidate(
-                    candidate_id,
+                    run_id,
                     db_path=self.db_path,
                     mode="promote",
                     raise_on_critic_error=True,
@@ -142,13 +142,13 @@ class RecipePromotionWorker:
             review_metrics = _review_metric_summary(review_context.snapshot())
             result = {
                 **dict(result),
-                "candidate_id": candidate_id,
+                "run_id": run_id,
                 "review_attempts": attempts,
                 "review_metrics": review_metrics,
             }
             logger.info(
                 "Recipe candidate promotion reviewed",
-                candidate_id=candidate_id,
+                run_id=run_id,
                 decision=result.get("decision", ""),
                 promoted=bool((result.get("promotion") or {}).get("promoted")),
                 saved_count=int(
@@ -165,7 +165,7 @@ class RecipePromotionWorker:
             )
             terminal = attempts >= self.max_attempts
             store.defer_review(
-                candidate_id,
+                run_id,
                 str(exc),
                 retry_delay_sec=self.retry_delay_sec,
                 terminal=terminal,
@@ -174,7 +174,7 @@ class RecipePromotionWorker:
                 "Recipe candidate promotion deferred"
                 if not terminal
                 else "Recipe candidate promotion failed",
-                candidate_id=candidate_id,
+                run_id=run_id,
                 attempt=attempts,
                 terminal=terminal,
                 error=str(exc),
@@ -183,26 +183,26 @@ class RecipePromotionWorker:
                 estimated_cost=review_metrics["estimated_cost"],
             )
             return {
-                "candidate_id": candidate_id,
+                "run_id": run_id,
                 "status": "review_failed" if terminal else "pending_review",
                 "review_attempts": attempts,
                 "error": str(exc),
                 "review_metrics": review_metrics,
             }
 
-    def process_candidate_until_settled(
+    def process_run_until_settled(
         self,
-        candidate_id: str,
+        run_id: str,
         *,
         enqueue: bool = False,
     ) -> dict[str, Any]:
         """특정 후보만 설정된 횟수까지 처리하고 최종 DB 상태를 반환한다."""
 
         store = RecipeCandidateStore(self.db_path)
-        candidate = store.get_candidate(candidate_id)
+        candidate = store.get_candidate(run_id)
         if candidate is None:
             return {
-                "candidate_id": candidate_id,
+                "run_id": run_id,
                 "review_status": "not_found",
                 "review_attempts": 0,
                 "review_error": "",
@@ -213,8 +213,8 @@ class RecipePromotionWorker:
 
         status = candidate.status
         if status == "pending_replay" and enqueue:
-            store.enqueue_review(candidate_id)
-            refreshed_candidate = store.get_candidate(candidate_id)
+            store.enqueue_review(run_id)
+            refreshed_candidate = store.get_candidate(run_id)
             if refreshed_candidate is not None:
                 candidate = refreshed_candidate
             status = candidate.status
@@ -222,19 +222,19 @@ class RecipePromotionWorker:
         attempt_results: list[dict[str, Any]] = []
         if status in {"pending_review", "reviewing"}:
             for _attempt in range(self.max_attempts):
-                result = self.process_one(candidate_id)
+                result = self.process_one(run_id)
                 if result is None:
                     break
                 attempt_results.append(
                     {
-                        "candidate_id": str(result.get("candidate_id") or ""),
+                        "run_id": str(result.get("run_id") or ""),
                         "status": str(result.get("status") or ""),
                         "decision": str(result.get("decision") or ""),
                         "error": str(result.get("error") or "")[:300],
                         "review_metrics": dict(result.get("review_metrics") or {}),
                     }
                 )
-                refreshed_candidate = store.get_candidate(candidate_id)
+                refreshed_candidate = store.get_candidate(run_id)
                 if refreshed_candidate is None:
                     break
                 candidate = refreshed_candidate
@@ -242,10 +242,10 @@ class RecipePromotionWorker:
                 if status not in {"pending_review", "reviewing"}:
                     break
 
-        candidate = store.get_candidate(candidate_id)
+        candidate = store.get_candidate(run_id)
         if candidate is None:
             return {
-                "candidate_id": candidate_id,
+                "run_id": run_id,
                 "review_status": "not_found",
                 "review_attempts": 0,
                 "review_error": "",
@@ -254,7 +254,7 @@ class RecipePromotionWorker:
                 "review_metrics": _aggregate_review_metrics(attempt_results),
             }
         return {
-            "candidate_id": candidate_id,
+            "run_id": run_id,
             "review_status": candidate.status,
             "review_attempts": candidate.review_attempts,
             "review_error": candidate.review_error,

@@ -43,6 +43,9 @@ def route_after_start(state: WorkerState) -> str:
 def route_after_selection(state: WorkerState) -> str:
     """결정론적 정책, 선택적 OCR, Reflex, LLM 순서로 다음 경로를 고른다."""
 
+    if state["lifecycle"].get("is_finished", False):
+        logger.info("Task completed by selection policy. Ending workflow.")
+        return "end"
     if state["decision"].get("pending_action") is not None:
         return "execution"
     if state["observation"].get("low_information_screen"):
@@ -85,26 +88,11 @@ def route_after_reflex(state: WorkerState) -> str:
     )
 
 
-def route_after_reasoning(state: WorkerState) -> str:
-    """로딩 화면은 행동 없이 재관찰하고, 그 외 판단 결과만 실행한다."""
-
-    if (
-        state["decision"].get("pending_action") is None
-        and (state["decision"].get("job_card_selection_trace") or {}).get("reason")
-        == "screen_loading"
-    ):
-        return "capture"
-    return "execution"
-
-
 def route_after_execution(state: WorkerState) -> str:
     """원자 실행 뒤 종료, 후속 정책, 새 관찰 또는 새 판단을 선택한다."""
 
     if state["lifecycle"].get("is_finished", False):
         logger.info("Task marked as finished. Ending workflow.")
-        return "end"
-    if state["safety"].get("pending_human_approval", False):
-        logger.info("Human approval required. Ending worker loop.")
         return "end"
     if state["transition"].get("error_count", 0) >= 3:
         logger.error("Too many errors. Forcing workflow to end.")
@@ -148,10 +136,6 @@ def _instrument_node(
                 observation["action_names"] = [
                     str(call.name) for call in request.tool_calls if call.name
                 ]
-            if name == "ocr" and isinstance(result, dict):
-                observation["analysis_mode"] = str(
-                    (result.get("observation") or {}).get("analysis_mode") or "full"
-                )
             if name == "reflex" and isinstance(result, dict):
                 observation.update(reflex_selection_observation(result))
             if name == "transition" and isinstance(result, dict):
@@ -203,6 +187,7 @@ def build_graph():
             "ocr": "ocr",
             "reflex": "reflex",
             "reasoning": "reasoning",
+            "end": END,
         },
     )
     workflow.add_conditional_edges(
@@ -210,11 +195,7 @@ def build_graph():
         route_after_reflex,
         {"execution": "execution", "reasoning": "reasoning"},
     )
-    workflow.add_conditional_edges(
-        "reasoning",
-        route_after_reasoning,
-        {"execution": "execution", "capture": "capture"},
-    )
+    workflow.add_edge("reasoning", "execution")
     workflow.add_conditional_edges(
         "execution",
         route_after_execution,
@@ -233,7 +214,6 @@ def build_graph():
 __all__ = [
     "build_graph",
     "route_after_execution",
-    "route_after_reasoning",
     "route_after_reflex",
     "route_after_selection",
     "route_after_start",

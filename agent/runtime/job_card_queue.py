@@ -82,7 +82,6 @@ def _normalized_job_card(
         return None
     bbox_ratio, center_ratio = _card_geometry(marker, size)
     company = str(raw.get("company") or "").strip()
-    evidence_texts = [company] if company else []
     return {
         "queue_id": f"card-{len(queue) + 1}",
         "status": "pending",
@@ -91,13 +90,11 @@ def _normalized_job_card(
         "source_marker_id": marker_id,
         "bbox_ratio": bbox_ratio,
         "center_ratio": center_ratio,
-        "evidence_texts": evidence_texts,
         "target": {
             "text": str(marker.get("text") or label),
             "semantic_label": label,
             "bbox_ratio": bbox_ratio,
             "center_ratio": center_ratio,
-            "evidence_texts": evidence_texts,
             "marker_type": str(marker.get("type") or ""),
         },
     }
@@ -110,8 +107,6 @@ def _job_results_memory(
     return {
         "url": current_url or observation.get("current_url", "") or "",
         "screen_signature": dict(observation.get("screen_signature", {}) or {}),
-        "screenshot": str(observation.get("current_screenshot") or ""),
-        "marked_image": observation.get("marked_image", "") or "",
     }
 
 
@@ -230,16 +225,6 @@ def needs_job_results_navigation(state: WorkerState) -> bool:
     )
 
 
-def same_job_card(item: dict, args: dict) -> bool:
-    if args.get("queue_id") and str(args.get("queue_id")) == str(item.get("queue_id")):
-        return True
-    label = str(args.get("target_label") or "").strip()
-    if label and label == str(item.get("title") or "").strip():
-        return True
-    marker_id = args.get("marker_id")
-    return marker_id is not None and str(marker_id) == str(item.get("source_marker_id"))
-
-
 def active_job_card(queue: list[dict]) -> dict:
     """큐에서 현재 상세 화면과 연결된 활성 카드 하나를 반환한다."""
 
@@ -257,15 +242,13 @@ def job_detail_key_from_state(state: WorkerState) -> str:
     """활성 카드 기준으로 상세 OCR 버퍼의 식별자를 만든다."""
 
     card = active_job_card(list(state["collection"].get("job_card_queue", []) or []))
-    queue_id = str(card.get("queue_id") or "").strip()
-    if queue_id:
-        return queue_id
-    company = str(card.get("company") or "").strip()
-    title = str(card.get("title") or "").strip()
-    return "|".join(part for part in (company, title) if part)
+    return str(card.get("queue_id") or "").strip()
 
 
 def activate_job_card(queue: list[dict], args: dict) -> list[dict]:
+    queue_id = str(args.get("queue_id") or "").strip()
+    if not queue_id:
+        return queue
     updated = []
     activated = False
     for raw in queue or []:
@@ -273,7 +256,7 @@ def activate_job_card(queue: list[dict], args: dict) -> list[dict]:
         if (
             not activated
             and item.get("status") == "pending"
-            and same_job_card(item, args)
+            and queue_id == str(item.get("queue_id") or "")
         ):
             item["status"] = "active"
             activated = True
@@ -299,21 +282,10 @@ def release_active_job_card(queue: list[dict]) -> list[dict]:
 
 
 def job_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
-    if not queue:
-        return False
-    if args.get("queue_id"):
-        return True
-    component = str(args.get("target_component") or "")
-    role = str(args.get("target_role") or "")
-    if component in {"job_card", "job_card_title"} or role in {
-        "job_card",
-        "job_card_title",
-    }:
-        return True
-    label = str(args.get("target_label") or "").strip()
-    return bool(label) and any(
-        label == str(item.get("title") or "").strip()
-        for item in queue
+    queue_id = str(args.get("queue_id") or "").strip()
+    return bool(queue_id) and any(
+        queue_id == str(item.get("queue_id") or "")
+        for item in queue or []
         if isinstance(item, dict)
     )
 
@@ -432,7 +404,6 @@ def job_card_marker_for_item(
     target.setdefault("semantic_label", item.get("title", ""))
     target.setdefault("bbox_ratio", item.get("bbox_ratio") or [])
     target.setdefault("center_ratio", item.get("center_ratio") or [])
-    target.setdefault("evidence_texts", item.get("evidence_texts") or [])
     marker_id = match_target_by_ratio(
         target,
         markers,
@@ -583,6 +554,5 @@ __all__ = [
     "job_results_page_matches",
     "job_card_click_matches_queue",
     "job_card_entries_from_args",
-    "same_job_card",
     "skip_active_job_card",
 ]

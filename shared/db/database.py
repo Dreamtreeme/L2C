@@ -311,7 +311,9 @@ class Database:
     def load_jobs(self, job_ids: list[int]) -> list[StoredJob]:
         """SQLite 표현을 정규 공고 타입으로 복원해 반환한다."""
 
-        ids = sorted({int(job_id) for job_id in job_ids if int(job_id) > 0})
+        ids = list(
+            dict.fromkeys(int(job_id) for job_id in job_ids if int(job_id) > 0)
+        )
         if not ids:
             return []
         placeholders = ",".join("?" for _ in ids)
@@ -320,21 +322,24 @@ class Database:
                 f"SELECT * FROM jobs WHERE id IN ({placeholders})",
                 ids,
             ).fetchall()
-        documents: list[StoredJob] = []
+        documents_by_id: dict[int, StoredJob] = {}
         for row in rows:
             decoded = self._row_to_dict(row)
-            documents.append(
-                StoredJob.model_validate(
-                    {
-                        "id": decoded["id"],
-                        **{
-                            field: decoded.get(field)
-                            for field in JobPosting.model_fields
-                        },
-                    }
-                )
+            document = StoredJob.model_validate(
+                {
+                    "id": decoded["id"],
+                    **{
+                        field: decoded.get(field)
+                        for field in JobPosting.model_fields
+                    },
+                }
             )
-        return documents
+            documents_by_id[int(document.id)] = document
+        return [
+            documents_by_id[job_id]
+            for job_id in ids
+            if job_id in documents_by_id
+        ]
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:

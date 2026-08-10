@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from typing import Any
 
 from agent.observability.run_context import (
@@ -29,15 +28,8 @@ from agent.observability.run_contracts import (
 )
 from agent.observability.run_registry import RunRegistry, get_run_registry
 from agent.utils.logger import logger
-from shared.schema.investigation_schema import ClarificationAnswer
+from shared.schema.investigation_schema import ClarificationQuestion, GroundedAnswer
 from shared.schema.run_schema import RunStatus
-
-
-@dataclass(frozen=True, slots=True)
-class _ResolvedExecution:
-    investigation_id: str = ""
-    context_run_id: str = ""
-    clarification_answer: ClarificationAnswer | None = None
 
 
 class ChatService:
@@ -60,7 +52,8 @@ class ChatService:
         started: float,
         status: RunStatus,
         request: ChatRequest,
-        clarification: dict[str, Any] | None = None,
+        grounded_answer: GroundedAnswer | None = None,
+        clarification: ClarificationQuestion | None = None,
         investigation_id: str = "",
         resume_mode: str = "",
     ) -> ChatResult:
@@ -72,46 +65,12 @@ class ChatService:
             run_id=context.run_id,
             status=status,
             text=answer,
+            grounded_answer=grounded_answer,
             clarification=clarification,
             investigation_id=investigation_id or request.investigation_id,
-            resumed_from_run_id=request.resume_run_id,
             resume_mode=resume_mode,
             conversation_id=request.conversation_id,
             metrics=metrics,
-        )
-
-    def _resolve_execution(self, request: ChatRequest) -> _ResolvedExecution:
-        if request.investigation_id:
-            return _ResolvedExecution(
-                investigation_id=request.investigation_id,
-                clarification_answer=request.clarification_answer,
-            )
-        if not request.resume_run_id:
-            return _ResolvedExecution(
-                clarification_answer=request.clarification_answer,
-            )
-
-        previous = self._run_registry.get(request.resume_run_id)
-        if previous is None:
-            raise ValueError("재개할 실행을 찾을 수 없습니다.")
-        if previous.get("status") != RunStatus.WAITING_INPUT.value:
-            return _ResolvedExecution(
-                context_run_id=request.resume_run_id,
-                clarification_answer=request.clarification_answer,
-            )
-
-        previous_result = ChatResult.model_validate(previous.get("result"))
-        clarification = previous_result.clarification or {}
-        question_id = str(clarification.get("question_id") or "")
-        if not previous_result.investigation_id or not question_id:
-            raise ValueError("재개할 확인 질문의 상태가 올바르지 않습니다.")
-        answer = request.clarification_answer or ClarificationAnswer(
-            question_id=question_id,
-            custom_value=request.query.strip(),
-        )
-        return _ResolvedExecution(
-            investigation_id=previous_result.investigation_id,
-            clarification_answer=answer,
         )
 
     def execute(
@@ -133,9 +92,7 @@ class ChatService:
             metadata={
                 "conversation_id": request.conversation_id,
                 "investigation_id": request.investigation_id,
-                "resume_requested": bool(
-                    request.resume_run_id or request.investigation_id
-                ),
+                "resume_requested": bool(request.investigation_id),
             },
             tags=["chat-request"],
         ) as (context, _created):
@@ -160,13 +117,11 @@ class ChatService:
             logger.info("Executing investigation workflow")
             try:
                 raise_if_cancelled()
-                resolved = self._resolve_execution(request)
                 workflow_result = self._investigation_workflow.run(
                     query,
                     conversation_id=request.conversation_id,
-                    context_run_id=resolved.context_run_id,
-                    investigation_id=resolved.investigation_id,
-                    clarification_answer=resolved.clarification_answer,
+                    investigation_id=request.investigation_id,
+                    clarification_answer=request.clarification_answer,
                 )
                 return self._result(
                     workflow_result.final_answer,
@@ -174,6 +129,7 @@ class ChatService:
                     started=started,
                     status=workflow_result.run_status,
                     request=request,
+                    grounded_answer=workflow_result.grounded_answer,
                     clarification=workflow_result.clarification,
                     investigation_id=workflow_result.investigation.investigation_id,
                     resume_mode=workflow_result.resume_mode,
@@ -230,7 +186,6 @@ class ChatService:
             run_id,
             query,
             conversation_id=request.conversation_id,
-            user_query=query,
         )
         event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
         loop = asyncio.get_running_loop()

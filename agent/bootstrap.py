@@ -26,9 +26,6 @@ from agent.application.occupation_clarification_service import (
 )
 from agent.application.recipe_promotion_worker import RecipePromotionWorker
 from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
-from agent.application.search_taxonomy_review_service import (
-    SearchTaxonomyReviewService,
-)
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.tool_capabilities import build_collection_capabilities
 from agent.application.worker_execution_service import WorkerExecutionService
@@ -75,11 +72,9 @@ def build_investigation_workflow(
 
     resolved_db_path = Path(db_path)
     resolved_models = models or InvestigationModels()
-    taxonomy_review = SearchTaxonomyReviewService(resolved_db_path)
     occupation_clarification = OccupationClarificationService(
         taxonomy_model=resolved_models.taxonomy,
         taxonomy_service=taxonomy_service,
-        taxonomy_review_service=taxonomy_review,
     )
 
     def current_time() -> datetime:

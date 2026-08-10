@@ -116,8 +116,6 @@ def _compact_worker_execution(worker_submission: WorkerSubmission) -> dict[str, 
 
     keys = (
         "run_status",
-        "is_finished",
-        "hit_recursion_limit",
         "collected_count",
         "persisted_count",
     )
@@ -151,7 +149,7 @@ def _compact_feedback_evidence(
         item = {
             "seq": seq,
             "action": proposal.action or result.get("action") or "",
-            "expected_after": proposal.expected_after,
+            "expected_after": proposal.args.get("expected_after") or "",
             "before_url": before.get("url") or "",
             "after_url": after.get("url") or "",
             "screen_changed": bool(after.get("screen_changed", False)),
@@ -185,7 +183,6 @@ def _fallback_review(reason: str) -> dict[str, Any]:
         decision="revise",
         reasons=[reason],
         feedback_to_worker="Candidate review could not be completed. Re-submit with clearer worker evidence.",
-        confidence=0.0,
     ).model_dump(mode="json")
 
 
@@ -212,7 +209,7 @@ def build_candidate_review_payload(
         candidate.submission.collection_intent.task_category
     )
     return {
-        "candidate_id": candidate.candidate_id,
+        "run_id": candidate.run_id,
         "status": candidate.status,
         "site": candidate.site,
         "task_category": task_category,
@@ -328,7 +325,6 @@ def review_candidate(
             feedback_to_worker=(
                 "자율탐색 단계에 fixed 또는 parameterized 재사용 후보가 없습니다."
             ),
-            confidence=1.0,
         ).model_dump(mode="json")
     try:
         invoke_critic = critic or _llm_review_candidate
@@ -373,7 +369,7 @@ def _status_for_review(review: dict[str, Any]) -> str:
 
 
 def review_and_apply_candidate(
-    candidate_id: str,
+    run_id: str,
     db_path=None,
     critic: CriticFn | None = None,
     mode: str = "review",
@@ -382,9 +378,9 @@ def review_and_apply_candidate(
     from agent.recipe.candidate_store import RecipeCandidateStore
 
     candidate_store = RecipeCandidateStore(db_path)
-    candidate = candidate_store.get_candidate(candidate_id)
+    candidate = candidate_store.get_candidate(run_id)
     if not candidate:
-        return _fallback_review(f"candidate_not_found: {candidate_id}")
+        return _fallback_review(f"candidate_not_found: {run_id}")
 
     normalized_mode = _process_mode(mode)
     allow_promotion = normalized_mode == "promote"
@@ -413,10 +409,10 @@ def review_and_apply_candidate(
         "promotion": promotion,
     }
     candidate_store.update_status(
-        candidate_id, _status_for_review(review), validation=validation
+        run_id, _status_for_review(review), validation=validation
     )
     out = dict(review)
-    out["candidate_id"] = candidate_id
+    out["run_id"] = run_id
     out["promotion"] = promotion
     return out
 

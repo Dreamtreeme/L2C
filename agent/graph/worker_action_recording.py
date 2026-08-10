@@ -22,10 +22,7 @@ def _after_context(
     observation = state["observation"]
     return {
         "current_url": str(observation.get("current_url") or ""),
-        "current_url_stale": bool(observation.get("current_url_stale", True)),
         "screen_changed": screen_changed,
-        "job_capture_count": len(state["collection"].get("job_captures", [])),
-        "is_finished": bool(state["lifecycle"].get("is_finished", False)),
     }
 
 
@@ -73,24 +70,6 @@ def _enrich_action_result(
     return enriched
 
 
-def _record_state(
-    context: WorkerExecutionContext,
-    before_snapshot: dict[str, Any],
-) -> dict[str, Any]:
-    state = context.state
-    observation = state["observation"]
-    return {
-        "goal": state["request"].get("goal", ""),
-        "observation_id": str(before_snapshot.get("observation_id") or ""),
-        "current_markers": list(observation.get("current_markers", []) or []),
-        "current_url": before_snapshot.get("url", ""),
-        "current_page_role": observation.get("current_page_role", ""),
-        "screen_signature": dict(observation.get("screen_signature", {}) or {}),
-        "current_screenshot": str(observation.get("current_screenshot") or ""),
-        "marked_image": observation.get("marked_image", ""),
-    }
-
-
 def record_action_result(
     context: WorkerExecutionContext,
     *,
@@ -118,12 +97,11 @@ def record_action_result(
         tool_call_metadata=tool_call_metadata,
         action_source=action_source,
     )
-    record_state = _record_state(context, before_snapshot)
     recipe_steps: list[RecordedRecipeStep] = []
     if record_ui:
         record_ui_step(
             recipe_steps,
-            record_state,
+            context.state,
             action_name,
             args,
             action_sequence,
@@ -131,8 +109,7 @@ def record_action_result(
     feedback: list[FeedbackEpisode] = []
     record_action_episode(
         feedback,
-        record_state,
-        context.action_request,
+        context.state,
         action_name,
         args,
         enriched,

@@ -35,10 +35,11 @@ def _target_summary(
         recorded_step.target if recorded_step and recorded_step.target else {}
     )
     proposal = episode.proposal if episode else None
-    proposed_target = proposal.target if proposal and proposal.target else {}
+    result = episode.observation.result if episode else {}
+    proposed_target = result.get("target") if isinstance(result.get("target"), dict) else {}
     label = str(
         recorded_target.get("semantic_label")
-        or (proposal.target_label if proposal else "")
+        or ((proposal.args.get("target_label") or "") if proposal else "")
         or proposed_target.get("target_label")
         or ""
     )
@@ -146,7 +147,7 @@ def build_worker_trace(submission: StoredWorkerSubmission) -> dict[str, Any]:
                 "value": _step_value(recorded, episode),
                 "intent": str(
                     (recorded.intent if recorded else "")
-                    or (proposal.reason if proposal else "")
+                    or ((proposal.args.get("reason") or "") if proposal else "")
                     or ""
                 ),
                 "feedback_label": feedback.label if feedback else "",
@@ -164,7 +165,6 @@ def build_worker_trace(submission: StoredWorkerSubmission) -> dict[str, Any]:
         )
 
     return {
-        "submission_id": submission.submission_id,
         "run_id": payload.run_id or submission.run_id,
         "site": payload.collection_intent.site,
         "goal": payload.goal,
@@ -183,7 +183,6 @@ def render_worker_trace(trace: dict[str, Any]) -> str:
 
     lines = [
         f"실행 ID: {trace.get('run_id') or '-'}",
-        f"제출물 ID: {trace.get('submission_id') or '-'}",
         f"사이트: {trace.get('site') or '-'}",
         f"상태: {trace.get('run_status') or '-'}",
         (

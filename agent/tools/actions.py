@@ -196,6 +196,8 @@ class ActionTools:
 
         self._sleep(get_settings().browser.open_wait_sec)
         bound = self._bind_new_or_active_browser_window(before_ids)
+        if not bound:
+            raise RuntimeError("새로 연 브라우저 창을 자동화 대상으로 바인딩하지 못했습니다.")
         return {
             "opened": True,
             "url": url,
@@ -306,6 +308,51 @@ class ActionTools:
 
         return self._execute("type_in_marker", _type)
 
+    @staticmethod
+    def _validate_scroll_request(direction: str, amount: str) -> None:
+        if direction not in {"down", "up", "left", "right"}:
+            raise ValueError(f"Unsupported scroll direction: {direction}")
+        if amount not in {"small", "page"}:
+            raise ValueError(f"Unsupported scroll amount: {amount}")
+
+    def _move_to_scroll_target(self, bbox: List[int] | None) -> None:
+        if bbox:
+            x, y = self._get_absolute_coords(bbox)
+            pyautogui.moveTo(x, y, duration=self.move_duration_sec)
+            return
+        region = self.perception.last_region
+        if region:
+            pyautogui.moveTo(
+                region["left"] + region["width"] // 2,
+                region["top"] + region["height"] // 2,
+                duration=0,
+            )
+            return
+        win = gw.getActiveWindow()
+        if win:
+            pyautogui.moveTo(
+                win.left + win.width // 2,
+                win.top + win.height // 2,
+                duration=0,
+            )
+
+    @staticmethod
+    def _scroll_wheel(direction: str, wheel_delta: int) -> str:
+        if direction not in {"left", "right"}:
+            pyautogui.scroll(wheel_delta)
+            return "vertical wheel"
+        if platform.system() != "Windows":
+            pyautogui.hscroll(wheel_delta)
+            return "horizontal wheel"
+
+        # PyAutoGUI의 hscroll은 Windows에서 구현되지 않아 Shift+휠을 사용한다.
+        pyautogui.keyDown("shift")
+        try:
+            pyautogui.scroll(wheel_delta)
+        finally:
+            pyautogui.keyUp("shift")
+        return "shift+wheel"
+
     def scroll(
         self,
         direction: str = "down",
@@ -315,32 +362,8 @@ class ActionTools:
         """전체 페이지 또는 지정한 화면 영역을 물리적으로 스크롤합니다."""
 
         def _scroll():
-            if direction not in {"down", "up", "left", "right"}:
-                raise ValueError(f"Unsupported scroll direction: {direction}")
-            if amount not in {"small", "page"}:
-                raise ValueError(f"Unsupported scroll amount: {amount}")
-
-            if bbox:
-                x, y = self._get_absolute_coords(bbox)
-                pyautogui.moveTo(
-                    x,
-                    y,
-                    duration=self.move_duration_sec,
-                )
-            else:
-                region = self.perception.last_region
-                if region:
-                    x = region["left"] + region["width"] // 2
-                    y = region["top"] + region["height"] // 2
-                    pyautogui.moveTo(x, y, duration=0)
-                else:
-                    win = gw.getActiveWindow()
-                    if win:
-                        pyautogui.moveTo(
-                            win.left + win.width // 2,
-                            win.top + win.height // 2,
-                            duration=0,
-                        )
+            self._validate_scroll_request(direction, amount)
+            self._move_to_scroll_target(bbox)
 
             # 전체 페이지의 한 화면 이동은 기존 PageUp/PageDown 동작을 유지합니다.
             if bbox is None and amount == "page" and direction in {"down", "up"}:
@@ -363,21 +386,7 @@ class ActionTools:
                 if platform.system() == "Windows"
                 else signed_steps
             )
-            if direction in {"left", "right"}:
-                if platform.system() == "Windows":
-                    # PyAutoGUI의 hscroll은 Windows에서 구현되지 않아 Shift+휠을 사용합니다.
-                    pyautogui.keyDown("shift")
-                    try:
-                        pyautogui.scroll(wheel_delta)
-                    finally:
-                        pyautogui.keyUp("shift")
-                    method = "shift+wheel"
-                else:
-                    pyautogui.hscroll(wheel_delta)
-                    method = "horizontal wheel"
-            else:
-                pyautogui.scroll(wheel_delta)
-                method = "vertical wheel"
+            method = self._scroll_wheel(direction, wheel_delta)
             logger.info(
                 "Scrolled physical region",
                 direction=direction,

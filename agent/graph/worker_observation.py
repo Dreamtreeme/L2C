@@ -139,7 +139,6 @@ def _previous_observation(state: WorkerState) -> dict[str, Any]:
                 observation.get("screen_signature") or {}
             ),
             "page_role": str(observation.get("current_page_role") or ""),
-            "analysis_mode": str(observation.get("analysis_mode") or "full"),
         }
     return dict(observation.get("previous_observation") or {})
 
@@ -212,9 +211,7 @@ def capture_node(
         "observation_sequence": observation_sequence,
         "current_screenshot": str(image_path),
         "previous_observation": previous_observation,
-        "capture_quality": capture_quality,
         "raw_screen_signature": raw_signature,
-        "analysis_mode": "",
         "ocr_complete": False,
         "current_url": current_url,
         "current_url_stale": current_url_stale,
@@ -277,11 +274,9 @@ def ocr_node(
     if lightweight_image:
         marked_image = str(lightweight_image)
 
-    analysis_mode = str(analysis.get("analysis_mode") or "full")
     logger.info(
         "Worker screen OCR completed",
         marker_count=len(markers),
-        analysis_mode=analysis_mode,
     )
     observation = {
         "marked_image": marked_image,
@@ -289,7 +284,6 @@ def ocr_node(
         "ui_context": ui_context,
         "screen_signature": screen_signature,
         "current_page_role": page_role,
-        "analysis_mode": analysis_mode,
         "ocr_complete": True,
         "low_information_screen": False,
     }

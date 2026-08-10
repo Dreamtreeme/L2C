@@ -15,7 +15,6 @@ from agent.runtime.site_context import normalize_page_role
 from agent.runtime.job_card_queue import release_active_job_card
 from agent.runtime.worker_contracts import (
     WorkerState,
-    action_event_transitions,
     apply_worker_state_update,
     attach_action_transition,
 )
@@ -205,7 +204,6 @@ def _reused_observation(
         "marked_image": str(previous.get("marked_image") or ""),
         "screen_signature": signature,
         "current_page_role": str(previous.get("page_role") or ""),
-        "analysis_mode": str(previous.get("analysis_mode") or "full"),
         "ocr_complete": True,
         "previous_observation": current_observation,
     }
@@ -307,12 +305,46 @@ def _blocked_keys_after_decision(
     return keys
 
 
+def _record_replay_outcome(
+    state: WorkerState,
+    request: dict[str, Any],
+    *,
+    status: str,
+    record_replay_result,
+) -> None:
+    """경로가 끝났거나 실패했을 때 한 번만 실제 재생 결과를 저장한다."""
+
+    if str(request.get("source") or "") != "reflex":
+        return
+    active = dict(state["replay"].get("active_reflex_recipe", {}) or {})
+    recipe_key = str(active.get("recipe_key") or request.get("recipe_key") or "")
+    if not recipe_key:
+        return
+    current_index = int(active.get("current_transition_index") or 0)
+    pending_index = active.get("pending_transition_index")
+    if pending_index is None or int(pending_index) != current_index:
+        return
+    transition_count = int(active.get("transition_count") or 0)
+    succeeded = status == "ready"
+    if succeeded and current_index + 1 < transition_count:
+        return
+    try:
+        record_replay_result(recipe_key, succeeded)
+    except Exception as exc:
+        logger.warning(
+            "Recipe replay outcome persistence failed",
+            recipe_key=recipe_key,
+            error=str(exc),
+        )
+
+
 def _evaluate_before_ocr(
     state: WorkerState,
     request: dict[str, Any],
     *,
     visual_changed: bool,
     visual_ratio: float | None,
+    record_replay_result,
 ) -> dict[str, Any]:
     source = str(request.get("source") or "")
     if visual_changed:
@@ -329,105 +361,11 @@ def _evaluate_before_ocr(
             }
         }
 
-    if source == "job_card_queue":
-        prior_transitions = action_event_transitions(
-            state["transition"].get("action_events", []) or []
-        )
-        prior = dict(prior_transitions[-1]) if prior_transitions else {}
-        retried_with_current_ocr = bool(
-            prior.get("source") == "job_card_queue"
-            and prior.get("status") == "unknown"
-            and prior.get("reason") == "no_screen_change"
-        )
-        if retried_with_current_ocr:
-            reason = "queue_retry_no_screen_change"
-            observation_update = _reused_observation(state, request)
-            record_state = apply_worker_state_update(
-                state,
-                {"observation": observation_update},
-            )
-            record = _transition_record(
-                request,
-                status="unknown",
-                source=source,
-                reason=reason,
-                attempt=2,
-                state=record_state,
-                visual_change_ratio=visual_ratio,
-                ocr_skipped=True,
-            )
-            logger.info(
-                "Queue click retry had no effect; handing control to reasoning",
-                action=request.get("action", ""),
-                visual_change_ratio=visual_ratio,
-            )
-            return {
-                "transition": {
-                    "transition_request": {},
-                    "transition_result": _transition_result(
-                        request,
-                        status="unknown",
-                        reason=reason,
-                        visual_change_ratio=visual_ratio,
-                    ),
-                    "action_events": attach_action_transition(
-                        state["transition"].get("action_events", []) or [],
-                        record,
-                    ),
-                },
-                "observation": observation_update,
-                "collection": {
-                    "job_card_queue": release_active_job_card(
-                        list(
-                            state["collection"].get("job_card_queue", []) or []
-                        )
-                    ),
-                },
-            }
-
-        reason = "queue_click_no_screen_change"
-        record = _transition_record(
-            request,
-            status="needs_ocr",
-            source=source,
-            reason=reason,
-            attempt=1,
-            state=state,
-            visual_change_ratio=visual_ratio,
-            ocr_skipped=True,
-        )
-        logger.info(
-            "Queue click had no effect; refreshing OCR before retry",
-            action=request.get("action", ""),
-            visual_change_ratio=visual_ratio,
-        )
-        return {
-            "transition": {
-                "transition_result": _transition_result(
-                    request,
-                    status="needs_ocr",
-                    reason=reason,
-                    visual_change_ratio=visual_ratio,
-                    needs_ocr=True,
-                ),
-                "action_events": attach_action_transition(
-                    state["transition"].get("action_events", []) or [],
-                    record,
-                ),
-            },
-            "collection": {
-                "job_card_queue": release_active_job_card(
-                    list(state["collection"].get("job_card_queue", []) or [])
-                ),
-            },
-        }
-
     reason = (
         "reflex_no_screen_change"
         if source == "reflex"
         else "no_screen_change"
     )
-    attempt = 1
     observation_update = _reused_observation(state, request)
     record_state = apply_worker_state_update(
         state,
@@ -438,7 +376,7 @@ def _evaluate_before_ocr(
         status="unknown",
         source=source,
         reason=reason,
-        attempt=attempt,
+        attempt=1,
         state=record_state,
         visual_change_ratio=visual_ratio,
         ocr_skipped=True,
@@ -449,7 +387,13 @@ def _evaluate_before_ocr(
         action=request.get("action", ""),
         visual_change_ratio=visual_ratio,
     )
-    return {
+    _record_replay_outcome(
+        state,
+        request,
+        status="unknown",
+        record_replay_result=record_replay_result,
+    )
+    update = {
         "transition": {
             "transition_request": {},
             "transition_result": _transition_result(
@@ -477,6 +421,13 @@ def _evaluate_before_ocr(
         },
         "observation": observation_update,
     }
+    if source == "job_card_queue":
+        update["collection"] = {
+            "job_card_queue": release_active_job_card(
+                list(state["collection"].get("job_card_queue", []) or [])
+            )
+        }
+    return update
 
 
 def _evaluate_after_ocr(
@@ -485,6 +436,7 @@ def _evaluate_after_ocr(
     *,
     visual_changed: bool,
     visual_ratio: float | None,
+    record_replay_result,
 ) -> dict[str, Any]:
     source = str(request.get("source") or "")
     current_url = str(state["observation"].get("current_url") or "")
@@ -501,10 +453,14 @@ def _evaluate_after_ocr(
             request,
             state,
         )
-        request["after_state_match"] = after_state_match
+        evaluated_request = {
+            **request,
+            "after_state_match": after_state_match,
+        }
         status = "ready" if matched else "unknown"
         block_recipe = not matched
     elif markers and (url_changed or visual_changed):
+        evaluated_request = request
         status = "ready"
         reason = (
             "screen_change_pixels_matched"
@@ -513,17 +469,19 @@ def _evaluate_after_ocr(
         )
         block_recipe = False
     elif not url_changed and not visual_changed:
+        evaluated_request = request
         status = "unknown"
         reason = "no_screen_change"
         block_recipe = False
     else:
+        evaluated_request = request
         status = "unknown"
         reason = "transition_change_unverified"
         block_recipe = False
 
     attempt = 1
     record = _transition_record(
-        request,
+        evaluated_request,
         status=status,
         source=source,
         reason=reason,
@@ -538,11 +496,17 @@ def _evaluate_after_ocr(
         status=status,
         reason=reason,
     )
+    _record_replay_outcome(
+        state,
+        evaluated_request,
+        status=status,
+        record_replay_result=record_replay_result,
+    )
     return {
         "transition": {
             "transition_request": {},
             "transition_result": _transition_result(
-                request,
+                evaluated_request,
                 status=status,
                 reason=reason,
                 visual_change_detected=visual_changed,
@@ -591,12 +555,14 @@ def transition_node(
             request,
             visual_changed=visual_changed,
             visual_ratio=visual_ratio,
+            record_replay_result=runtime.context.data.record_recipe_replay,
         )
     return _evaluate_after_ocr(
         state,
         request,
         visual_changed=visual_changed,
         visual_ratio=visual_ratio,
+        record_replay_result=runtime.context.data.record_recipe_replay,
     )
 
 

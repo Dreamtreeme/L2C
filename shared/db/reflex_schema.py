@@ -2,8 +2,7 @@
 
 WORKER_SUBMISSIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS worker_submissions (
-    submission_id      TEXT PRIMARY KEY,
-    run_id             TEXT NOT NULL,
+    run_id             TEXT PRIMARY KEY,
     source             TEXT,
     payload_json       TEXT NOT NULL,
     created_at         TEXT NOT NULL,
@@ -11,14 +10,9 @@ CREATE TABLE IF NOT EXISTS worker_submissions (
 );
 """
 
-WORKER_SUBMISSIONS_INDEX_SQL = (
-    "CREATE INDEX IF NOT EXISTS idx_worker_submissions_run ON worker_submissions(run_id);",
-)
-
 RECIPE_CANDIDATES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS recipe_candidates (
-    candidate_id      TEXT PRIMARY KEY,
-    submission_id     TEXT NOT NULL UNIQUE,
+    run_id            TEXT PRIMARY KEY,
     status            TEXT NOT NULL DEFAULT 'pending_replay',
     validation_json   TEXT,
     review_attempts   INTEGER NOT NULL DEFAULT 0,
@@ -26,7 +20,8 @@ CREATE TABLE IF NOT EXISTS recipe_candidates (
     next_review_at    TEXT,
     review_error      TEXT,
     created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL
+    updated_at        TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES worker_submissions(run_id) ON DELETE CASCADE
 );
 """
 

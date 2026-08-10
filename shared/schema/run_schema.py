@@ -8,7 +8,6 @@ from enum import Enum
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
-    WAITING_APPROVAL = "waiting_approval"
     WAITING_INPUT = "waiting_input"
     COMPLETED = "completed"
     PARTIAL = "partial"

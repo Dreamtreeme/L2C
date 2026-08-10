@@ -14,10 +14,6 @@ from agent.application.worker_execution_service import (
 )
 from agent.config import get_settings
 from agent.runtime.worker_contracts import (
-    action_event_feedback,
-    action_event_recipe_steps,
-    action_event_results,
-    action_event_transitions,
     create_worker_state,
 )
 from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
@@ -31,7 +27,7 @@ from agent.sites import load_site_profile
 from agent.utils.job_fields import required_job_fields
 from shared.schema.collection_intent import CollectionIntent
 from shared.schema.collection_run import CollectionBatch
-from shared.schema.feedback_schema import WorkerSubmission
+from shared.schema.feedback_schema import RecordedActionEvent, WorkerSubmission
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +69,13 @@ def run_worker_once(
             "worker_run_id": run_id,
             "collection_intent": resolved_intent,
             "recipe_inputs": {"query": search_keyword},
+            "action_permission_contract": (
+                build_public_collection_permission_contract(
+                    site_profile,
+                    resolved_intent,
+                )
+            ),
         },
-    )
-    initial_state["safety"]["action_permission_contract"] = (
-        build_public_collection_permission_contract(
-            site_profile,
-            resolved_intent,
-        )
     )
 
     logger.info(
@@ -103,7 +99,10 @@ def run_worker_once(
     observation = final_state["observation"]
     transition = final_state["transition"]
     collection = final_state["collection"]
-    action_events = list(transition.get("action_events", []) or [])
+    action_events = [
+        RecordedActionEvent.model_validate(item)
+        for item in transition.get("action_events", []) or []
+    ]
     observed_job_ids = sorted(
         {
             int(item["job_id"])
@@ -118,21 +117,17 @@ def run_worker_once(
         run_id=run_id,
         goal=final_state["request"].get("goal", "") or "",
         run_status=run_status,
-        is_finished=is_finished,
-        hit_recursion_limit=hit_recursion_limit,
         collected_count=len(job_captures),
         observed_job_ids=observed_job_ids,
         persisted_count=0,
-        recorded_steps=action_event_recipe_steps(action_events),
-        feedback_episodes=action_event_feedback(action_events),
-        transition_records=action_event_transitions(action_events),
+        action_events=action_events,
         collection_intent=resolved_intent,
         extracted_summary={
             "has_data": bool(job_captures),
             "job_count": len(job_captures),
             "observed_job_count": len(observed_job_ids),
             "current_url": observation.get("current_url", "") or "",
-            "action_count": len(action_event_results(action_events)),
+            "action_count": len(action_events),
             "job_results_availability": dict(
                 collection.get("job_results_availability", {}) or {}
             ),

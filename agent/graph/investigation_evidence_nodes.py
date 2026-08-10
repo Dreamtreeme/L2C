@@ -22,11 +22,12 @@ from agent.graph.investigation_context import (
 )
 from agent.graph.investigation_evidence_policy import (
     apply_evidence_validation,
+    build_database_lookup_evidence_plan,
     build_evidence_validation_payload,
     compact_db_report,
     needs_semantic_evidence_validation,
-    normalize_collection_steps,
     normalize_evidence_requirements,
+    select_collection_steps,
 )
 from agent.prompts.investigation import (
     action_plan_prompt,
@@ -39,6 +40,7 @@ from shared.schema.investigation_schema import (
     EvidencePolicy,
     EvidenceValidation,
     InvestigationActionPlan,
+    InvestigationPurpose,
     ToolCapability,
 )
 
@@ -71,25 +73,34 @@ class InvestigationEvidenceNodes:
             RunPhase.PLANNING,
             "답변에 필요한 근거를 정리하고 있습니다.",
         )
-        plan = parse_model_payload(
-            invoke_with_metrics(
-                self.models.evidence(),
-                [
-                    SystemMessage(content=evidence_plan_prompt(self.now())),
-                    HumanMessage(
-                        content=json.dumps(
-                            {"request": build_request_prompt_context(investigation)},
-                            ensure_ascii=False,
-                        )
-                    ),
-                ],
-                "investigation_evidence_plan",
-            ),
-            EvidencePlan,
-        )
+        if (
+            investigation.evidence_policy == EvidencePolicy.DATABASE_ONLY
+            and investigation.purpose == InvestigationPurpose.LOOKUP
+        ):
+            plan = build_database_lookup_evidence_plan(investigation)
+        else:
+            plan = parse_model_payload(
+                invoke_with_metrics(
+                    self.models.evidence(),
+                    [
+                        SystemMessage(content=evidence_plan_prompt(self.now())),
+                        HumanMessage(
+                            content=json.dumps(
+                                {
+                                    "request": build_request_prompt_context(
+                                        investigation
+                                    )
+                                },
+                                ensure_ascii=False,
+                            )
+                        ),
+                    ],
+                    "investigation_evidence_plan",
+                ),
+                EvidencePlan,
+            )
         requirements = normalize_evidence_requirements(
             plan,
-            investigation,
             self.taxonomy_service,
         )
         return {
@@ -112,7 +123,6 @@ class InvestigationEvidenceNodes:
         )
         report = self.inspect_evidence_data(
             evidence.get("requirements", []),
-            investigation.constraints,
             document_scope_ids=(
                 execution.get("collection_document_ids", [])
                 if collected_web_evidence
@@ -148,7 +158,6 @@ class InvestigationEvidenceNodes:
             report = apply_evidence_validation(
                 report,
                 evidence.get("requirements", []),
-                investigation.constraints,
                 validation,
             )
         report["document_ids"] = list(report.get("document_ids", []))
@@ -212,9 +221,8 @@ class InvestigationEvidenceNodes:
             ),
             InvestigationActionPlan,
         )
-        allowed_steps = normalize_collection_steps(
+        allowed_steps = select_collection_steps(
             plan,
-            investigation,
             state["evidence"].get("requirements", []),
             self.collection_capabilities,
         )

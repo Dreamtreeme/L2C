@@ -8,9 +8,6 @@ from typing import Literal
 from agent.config import get_settings
 
 
-DEFAULT_COMMANDER_MODEL = "gemini-3.6-flash"
-DEFAULT_LIGHTWEIGHT_MODEL = "gemini-3.5-flash-lite"
-DEFAULT_WORKER_REASONING_THINKING_LEVEL = "low"
 ModelExecutionRole = Literal[
     "commander",
     "worker_reasoning",
@@ -50,7 +47,7 @@ def model_execution_policy(
 def commander_model_name() -> str:
     """복잡한 계획·화면 행동·검토에 사용할 지휘자 모델을 반환한다."""
 
-    return get_settings().models.commander_model or DEFAULT_COMMANDER_MODEL
+    return get_settings().models.commander_model
 
 
 def worker_reasoning_model_name() -> str:
@@ -68,13 +65,10 @@ def worker_reasoning_thinking_level() -> str:
 def lightweight_model_name() -> str:
     """구조화·요약·짧은 분류에 사용할 경량 모델을 반환한다."""
 
-    return get_settings().models.lightweight_model or DEFAULT_LIGHTWEIGHT_MODEL
+    return get_settings().models.lightweight_model
 
 
 __all__ = [
-    "DEFAULT_COMMANDER_MODEL",
-    "DEFAULT_LIGHTWEIGHT_MODEL",
-    "DEFAULT_WORKER_REASONING_THINKING_LEVEL",
     "ModelExecutionPolicy",
     "ModelExecutionRole",
     "commander_model_name",

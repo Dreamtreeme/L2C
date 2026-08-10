@@ -16,9 +16,7 @@ from shared.schema.collection_intent import CollectionIntent
 FeedbackLabel = Literal[
     "success",
     "partial",
-    "wrong_target",
     "no_effect",
-    "loop_risk",
     "error",
 ]
 
@@ -26,19 +24,16 @@ FeedbackLabel = Literal[
 class ActionProposal(BaseModel):
     """실행 전 행위자가 제안한 행동(action proposal)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     action: str
     args: Dict[str, Any] = Field(default_factory=dict)
-    llm_thought: str = ""
-    reason: str = ""
-    target: Optional[Dict[str, Any]] = None
-    target_label: Optional[str] = None
-    component_candidate: Optional[str] = None
-    target_role_candidate: Optional[str] = None
-    expected_after: str = ""
 
 
 class ActionObservation(BaseModel):
     """행동 실행 전후에 관찰된 사실(action observation)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     before: Dict[str, Any] = Field(default_factory=dict)
     after: Dict[str, Any] = Field(default_factory=dict)
@@ -48,17 +43,18 @@ class ActionObservation(BaseModel):
 class ActionFeedback(BaseModel):
     """실행된 행동에 대한 1차 피드백(action feedback)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     label: FeedbackLabel
     reason: str = ""
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
 
 
 class FeedbackEpisode(BaseModel):
     """제안 -> 실행 -> 관찰 -> 피드백 단위 기록(feedback episode)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     seq: int
-    goal: str = ""
-    site: str = ""
     proposal: ActionProposal
     observation: ActionObservation
     feedback: ActionFeedback
@@ -72,8 +68,6 @@ class RecordedRecipeStep(BaseModel):
     seq: int | None = None
     url_template: str = ""
     page_role: str = ""
-    observed_page_role: str = ""
-    declared_page_role: str = ""
     before_state: Dict[str, Any] = Field(default_factory=dict)
     action: str = ""
     target: Optional[Dict[str, Any]] = None
@@ -88,7 +82,6 @@ class RecordedRecipeStep(BaseModel):
     component: str = ""
     slot_refs: List[str] = Field(default_factory=list)
     risk_level: str = ""
-    needs_user_confirmation: bool = False
     replay_mode: Literal["fixed", "parameterized", "reasoning"] = "reasoning"
 
 
@@ -126,6 +119,19 @@ class RecordedTransition(BaseModel):
     after_state: Dict[str, Any] = Field(default_factory=dict)
 
 
+class RecordedActionEvent(BaseModel):
+    """행동 선택, 실행 결과와 화면 전환을 한 순번으로 묶은 기록."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seq: int
+    observation_id: str = ""
+    result: Dict[str, Any] = Field(default_factory=dict)
+    recipe_step: RecordedRecipeStep | None = None
+    feedback_episode: FeedbackEpisode | None = None
+    transition: RecordedTransition | None = None
+
+
 ReviewDecision = Literal["accept", "revise", "reject"]
 
 
@@ -137,16 +143,28 @@ class WorkerSubmission(BaseModel):
     run_id: str = ""
     goal: str = ""
     run_status: str = ""
-    is_finished: bool = False
-    hit_recursion_limit: bool = False
     collected_count: int = 0
     observed_job_ids: List[int] = Field(default_factory=list)
     persisted_count: int = 0
-    recorded_steps: List[RecordedRecipeStep] = Field(default_factory=list)
-    feedback_episodes: List[FeedbackEpisode] = Field(default_factory=list)
-    transition_records: List[RecordedTransition] = Field(default_factory=list)
+    action_events: List[RecordedActionEvent] = Field(default_factory=list)
     collection_intent: CollectionIntent = Field(default_factory=CollectionIntent)
     extracted_summary: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def recorded_steps(self) -> List[RecordedRecipeStep]:
+        return [event.recipe_step for event in self.action_events if event.recipe_step]
+
+    @property
+    def feedback_episodes(self) -> List[FeedbackEpisode]:
+        return [
+            event.feedback_episode
+            for event in self.action_events
+            if event.feedback_episode
+        ]
+
+    @property
+    def transition_records(self) -> List[RecordedTransition]:
+        return [event.transition for event in self.action_events if event.transition]
 
 
 class StoredWorkerSubmission(BaseModel):
@@ -154,7 +172,6 @@ class StoredWorkerSubmission(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    submission_id: str
     run_id: str
     source: str
     payload: WorkerSubmission
@@ -165,8 +182,7 @@ class RecipeCandidate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    candidate_id: str
-    submission_id: str
+    run_id: str
     status: str
     validation: Dict[str, Any] = Field(default_factory=dict)
     review_attempts: int = 0
@@ -211,4 +227,3 @@ class RecipeCandidateReview(BaseModel):
     reasons: List[str] = Field(default_factory=list)
     feedback_to_worker: str = ""
     step_verdicts: List[RecipeStepVerdict] = Field(default_factory=list)
-    confidence: float = Field(0.0, ge=0.0, le=1.0)

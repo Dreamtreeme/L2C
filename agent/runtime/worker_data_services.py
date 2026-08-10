@@ -16,6 +16,7 @@ ExistingJobCardMarker = Callable[
 ]
 ExistingJobUrlLookup = Callable[[str, Sequence[JobCapture]], dict[str, Any]]
 SiteRecipeLoader = Callable[..., list[tuple[str, SiteRecipe]]]
+RecipeReplayRecorder = Callable[[str, bool], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +26,7 @@ class WorkerDataServices:
     mark_existing_job_cards: ExistingJobCardMarker
     find_existing_job_url: ExistingJobUrlLookup
     load_site_recipes: SiteRecipeLoader
+    record_recipe_replay: RecipeReplayRecorder
 
 
 __all__ = ["WorkerDataServices"]

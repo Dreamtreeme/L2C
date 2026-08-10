@@ -65,7 +65,6 @@ class RecipeLearningResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str
-    candidate_id: str = ""
     reason: str = ""
     error: str = ""
 
@@ -75,7 +74,7 @@ class CollectionExperienceResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    submission_id: str
+    run_id: str
     recipe_learning: RecipeLearningResult
 
 

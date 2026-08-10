@@ -170,7 +170,7 @@ def attempt_reflex_replay(
             if len(selection.recipe.transitions) > 1
             else ""
         ),
-        when_to_use=selection.recipe.skill_metadata.when_to_use[:80],
+        goal=selection.recipe.goal[:80],
         duration=f"{elapsed:.3f}s",
     )
     return _hit_result(context, selection)

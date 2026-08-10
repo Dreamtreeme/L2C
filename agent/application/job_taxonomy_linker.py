@@ -11,7 +11,6 @@ from typing import Any, Iterable
 from agent.application.search_taxonomy_import_service import normalize_term
 from agent.application.search_taxonomy_utils import (
     CORE_SOURCE_KEY,
-    CURATED_SOURCE_KEY,
     contains_taxonomy_alias,
     taxonomy_timestamp,
 )
@@ -38,16 +37,17 @@ class JobTaxonomyLinker:
         if self._occupation_alias_cache is None:
             self._occupation_alias_cache = connection.execute(
                 """
-                SELECT c.id, c.concept_key, c.source_key,
-                       a.source_key AS alias_source_key,
-                       a.alias, a.normalized_alias
+                SELECT c.id, c.concept_key, a.alias, a.normalized_alias
                 FROM search_concepts AS c
                 JOIN search_aliases AS a ON a.concept_id = c.id
                 WHERE c.concept_type = 'occupation'
                   AND c.status = 'active'
+                  AND c.source_key = ?
+                  AND a.source_key = ?
                   AND a.active = 1
                 ORDER BY LENGTH(a.normalized_alias) DESC
-                """
+                """,
+                (CORE_SOURCE_KEY, CORE_SOURCE_KEY),
             ).fetchall()
         return self._occupation_alias_cache
 
@@ -80,73 +80,6 @@ class JobTaxonomyLinker:
             frontier = unseen
         return concept_ids - broader_ids
 
-    @staticmethod
-    def _record_term_candidate(
-        connection: sqlite3.Connection,
-        *,
-        term: str,
-        job_id: int,
-    ) -> bool:
-        normalized = normalize_term(term)
-        if not normalized:
-            return False
-        now = taxonomy_timestamp()
-        connection.execute(
-            """
-            INSERT INTO search_term_candidates (
-                normalized_term, display_term, proposed_type, status,
-                observation_count, first_seen_at, last_seen_at, sample_job_id,
-                metadata_json
-            ) VALUES (?, ?, 'skill', 'candidate', 1, ?, ?, ?, '{}')
-            ON CONFLICT(normalized_term, proposed_type) DO UPDATE SET
-                display_term = excluded.display_term,
-                last_seen_at = excluded.last_seen_at,
-                sample_job_id = COALESCE(
-                    search_term_candidates.sample_job_id,
-                    excluded.sample_job_id
-                )
-            """,
-            (normalized, term.strip(), now, now, job_id),
-        )
-        candidate = connection.execute(
-            """
-            SELECT id FROM search_term_candidates
-            WHERE normalized_term = ? AND proposed_type = 'skill'
-            """,
-            (normalized,),
-        ).fetchone()
-        if candidate is None:
-            return False
-        candidate_id = int(candidate["id"])
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO search_term_candidate_observations (
-                candidate_id, job_id, observed_at
-            ) VALUES (?, ?, ?)
-            """,
-            (candidate_id, job_id, now),
-        )
-        connection.execute(
-            """
-            UPDATE search_term_candidates
-            SET observation_count = (
-                SELECT COUNT(*)
-                FROM search_term_candidate_observations
-                WHERE candidate_id = search_term_candidates.id
-            )
-            WHERE id = ?
-            """,
-            (candidate_id,),
-        )
-        status = connection.execute(
-            "SELECT status FROM search_term_candidates WHERE id = ?",
-            (candidate_id,),
-        ).fetchone()
-        return bool(
-            status is not None
-            and status["status"] == "candidate"
-        )
-
     def _skill_alias_rows(
         self,
         connection: sqlite3.Connection,
@@ -154,15 +87,18 @@ class JobTaxonomyLinker:
         if self._skill_alias_cache is None:
             self._skill_alias_cache = connection.execute(
                 """
-                SELECT c.id, c.source_key, c.preferred_label_ko,
+                SELECT c.id, c.preferred_label_ko,
                        c.preferred_label_en, a.normalized_alias
                 FROM search_concepts AS c
                 JOIN search_aliases AS a ON a.concept_id = c.id
                 WHERE c.concept_type = 'skill'
                   AND c.status = 'active'
+                  AND c.source_key = ?
+                  AND a.source_key = ?
                   AND a.active = 1
                 ORDER BY LENGTH(a.normalized_alias) DESC
-                """
+                """,
+                (CORE_SOURCE_KEY, CORE_SOURCE_KEY),
             ).fetchall()
         return self._skill_alias_cache
 
@@ -181,20 +117,12 @@ class JobTaxonomyLinker:
         ]
 
     @staticmethod
-    def _preferred_skill_rows(
+    def _unique_skill_rows(
         rows: Iterable[sqlite3.Row],
     ) -> list[sqlite3.Row]:
-        candidates = list(rows)
-        local = [
-            row
-            for row in candidates
-            if str(row["source_key"])
-            in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-        ]
-        selected = local or candidates
         seen: set[int] = set()
         result: list[sqlite3.Row] = []
-        for row in selected:
+        for row in rows:
             concept_id = int(row["id"])
             if concept_id not in seen:
                 seen.add(concept_id)
@@ -235,12 +163,6 @@ class JobTaxonomyLinker:
         for alias_row in self._occupation_alias_rows(connection):
             concept_id = int(alias_row["id"])
             alias = str(alias_row["normalized_alias"])
-            is_reviewed_local = (
-                str(alias_row["source_key"])
-                in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-                or str(alias_row["alias_source_key"])
-                in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-            )
             if category and category == alias:
                 matches[concept_id] = (
                     "job_category",
@@ -255,10 +177,7 @@ class JobTaxonomyLinker:
                 )
             if position and (
                 position == alias
-                or (
-                    is_reviewed_local
-                    and contains_taxonomy_alias(position, alias)
-                )
+                or contains_taxonomy_alias(position, alias)
             ):
                 current = matches.get(concept_id)
                 confidence = 0.98 if position == alias else 0.9
@@ -268,21 +187,20 @@ class JobTaxonomyLinker:
                         position_text,
                         confidence,
                     )
-            if is_reviewed_local:
-                for main_task_text in main_task_texts:
-                    if not contains_taxonomy_alias(
-                        normalize_term(main_task_text),
-                        alias,
-                    ):
-                        continue
-                    current = matches.get(concept_id)
-                    if current is None or current[2] < 0.75:
-                        matches[concept_id] = (
-                            "main_tasks",
-                            main_task_text,
-                            0.75,
-                        )
-                    break
+            for main_task_text in main_task_texts:
+                if not contains_taxonomy_alias(
+                    normalize_term(main_task_text),
+                    alias,
+                ):
+                    continue
+                current = matches.get(concept_id)
+                if current is None or current[2] < 0.75:
+                    matches[concept_id] = (
+                        "main_tasks",
+                        main_task_text,
+                        0.75,
+                    )
+                break
         return matches
 
     def _save_occupation_links(
@@ -385,10 +303,10 @@ class JobTaxonomyLinker:
     ) -> list[sqlite3.Row]:
         normalized_text = normalize_term(evidence_text)
         if exact_only:
-            return self._preferred_skill_rows(
+            return self._unique_skill_rows(
                 aliases.get(normalized_text, [])
             )
-        return self._preferred_skill_rows(
+        return self._unique_skill_rows(
             row
             for alias, rows in aliases.items()
             if contains_taxonomy_alias(normalized_text, alias)
@@ -449,11 +367,10 @@ class JobTaxonomyLinker:
         job_id: int,
         job: sqlite3.Row,
         linked_at: str,
-    ) -> tuple[int, int]:
+    ) -> int:
         aliases = self._skill_alias_index(connection)
         inserted_links: set[tuple[int, str]] = set()
         skill_count = 0
-        candidate_count = 0
 
         for evidence_field, texts, requirement_type, exact_only in (
             self._skill_sections(job)
@@ -465,13 +382,6 @@ class JobTaxonomyLinker:
                     exact_only=exact_only,
                 )
                 if exact_only and not matched_rows:
-                    candidate_count += int(
-                        self._record_term_candidate(
-                            connection,
-                            term=evidence_text,
-                            job_id=job_id,
-                        )
-                    )
                     continue
                 for alias_row in matched_rows:
                     concept_id = int(alias_row["id"])
@@ -490,7 +400,7 @@ class JobTaxonomyLinker:
                         linked_at=linked_at,
                     )
                     skill_count += 1
-        return skill_count, candidate_count
+        return skill_count
 
     @staticmethod
     def _mark_indexed(
@@ -539,7 +449,6 @@ class JobTaxonomyLinker:
         counts = {
             "occupations": 0,
             "skills": 0,
-            "candidate_observations": 0,
         }
         try:
             with connection:
@@ -557,10 +466,7 @@ class JobTaxonomyLinker:
                     job=job,
                     linked_at=indexed_at,
                 )
-                (
-                    counts["skills"],
-                    counts["candidate_observations"],
-                ) = self._save_skill_links(
+                counts["skills"] = self._save_skill_links(
                     connection,
                     job_id=job_id,
                     job=job,
@@ -597,18 +503,11 @@ class JobTaxonomyLinker:
             "jobs": len(job_ids),
             "occupations": 0,
             "skills": 0,
-            "candidate_observations": 0,
-            "resolved_candidates": 0,
         }
         for job_id in job_ids:
             linked = self.link_job(job_id)
-            for key in (
-                "occupations",
-                "skills",
-                "candidate_observations",
-            ):
+            for key in ("occupations", "skills"):
                 totals[key] += int(linked[key])
-        totals["resolved_candidates"] = self.reconcile_candidates()
         return totals
 
     def relink_pending_jobs(
@@ -644,7 +543,6 @@ class JobTaxonomyLinker:
             "failed": 0,
             "occupations": 0,
             "skills": 0,
-            "candidate_observations": 0,
         }
         for job_id in job_ids:
             try:
@@ -653,81 +551,9 @@ class JobTaxonomyLinker:
                 totals["failed"] += 1
                 continue
             totals["indexed"] += 1
-            for key in (
-                "occupations",
-                "skills",
-                "candidate_observations",
-            ):
+            for key in ("occupations", "skills"):
                 totals[key] += int(linked[key])
         return totals
-
-    def reconcile_candidates(self) -> int:
-        """활성 사전의 단일 별칭과 일치하는 과거 후보를 해소한다."""
-
-        connection = self._connect()
-        resolved = 0
-        try:
-            with connection:
-                candidates = connection.execute(
-                    """
-                    SELECT id, normalized_term, proposed_type
-                    FROM search_term_candidates
-                    WHERE status = 'candidate'
-                    """
-                ).fetchall()
-                for candidate in candidates:
-                    matches = connection.execute(
-                        """
-                        SELECT DISTINCT
-                            concepts.concept_key,
-                            concepts.source_key
-                        FROM search_aliases AS aliases
-                        JOIN search_concepts AS concepts
-                          ON concepts.id = aliases.concept_id
-                        WHERE aliases.normalized_alias = ?
-                          AND aliases.active = 1
-                          AND concepts.status = 'active'
-                          AND concepts.concept_type = ?
-                        """,
-                        (
-                            str(candidate["normalized_term"]),
-                            str(candidate["proposed_type"]),
-                        ),
-                    ).fetchall()
-                    local_matches = [
-                        row
-                        for row in matches
-                        if str(row["source_key"])
-                        in {CORE_SOURCE_KEY, CURATED_SOURCE_KEY}
-                    ]
-                    selected = local_matches or matches
-                    concept_keys = {
-                        str(row["concept_key"])
-                        for row in selected
-                    }
-                    if len(concept_keys) != 1:
-                        continue
-                    concept_key = next(iter(concept_keys))
-                    connection.execute(
-                        """
-                        UPDATE search_term_candidates
-                        SET status = 'accepted',
-                            reviewed_at = ?,
-                            review_note = ?,
-                            accepted_concept_key = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            taxonomy_timestamp(),
-                            "활성 사전의 단일 별칭과 일치해 자동 해소",
-                            concept_key,
-                            int(candidate["id"]),
-                        ),
-                    )
-                    resolved += 1
-        finally:
-            connection.close()
-        return resolved
 
 
 __all__ = ["JobTaxonomyLinker"]

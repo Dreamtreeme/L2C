@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -183,6 +183,13 @@ class InvestigationConstraints(BaseModel):
         default_factory=list,
         description="검색 의미 사전에서 확정된 기술 개념 키.",
     )
+    occupation_skill_match_mode: Literal["all", "any"] = Field(
+        default="all",
+        description=(
+            "직무 조건과 기술 조건 사이의 관계. all은 모두 충족, "
+            "any는 둘 중 하나 충족이다."
+        ),
+    )
     skill_match_mode: Literal["all", "any"] = "all"
     skill_requirement_type: Literal["any", "required", "preferred", "mentioned"] = "any"
     sites: list[str] = Field(default_factory=list)
@@ -190,11 +197,60 @@ class InvestigationConstraints(BaseModel):
     posted_to: str = ""
     comparison_posted_from: str = ""
     comparison_posted_to: str = ""
-    count_mode: Literal["unspecified", "explicit", "visible_all"] = "unspecified"
-    target_count: int = Field(default=0, ge=0, le=100)
-    location: str = ""
-    experience: str = ""
-    employment_type: str = ""
+    count_mode: Literal["unspecified", "explicit", "visible_all"] = Field(
+        default="unspecified",
+        description="사용자가 요청한 채용공고 결과 수의 지정 방식.",
+    )
+    target_count: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description="사용자가 명시한 채용공고 결과 수. 답변 줄 수와 항목 수는 제외한다.",
+    )
+    result_limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="사용자가 최대·상위 N개로 지정한 최종 공고 표시 상한.",
+    )
+    location: str = Field(
+        default="",
+        description="사용자가 허용한 근무 지역과 제외 지역을 원문 의미대로 보존한다.",
+    )
+    experience: str = Field(
+        default="",
+        description="신입, 최소·최대 경력 등 사용자가 명시한 경력 조건.",
+    )
+    maximum_required_experience_years: int | None = Field(
+        default=None,
+        ge=0,
+        le=80,
+        description=(
+            "사용자가 허용한 공고의 최대 최소요구경력(년). "
+            "공고의 experience_min과 직접 비교한다."
+        ),
+    )
+    employment_type: str = Field(
+        default="",
+        description="사용자가 명시한 고용 형태 조건.",
+    )
+    semantic_filters: list[
+        Annotated[str, Field(min_length=1, max_length=300)]
+    ] = Field(
+        default_factory=list,
+        max_length=12,
+        description=(
+            "공고 본문의 여러 필드를 함께 읽어야 판정할 수 있는 포함·제외 조건. "
+            "각 항목은 독립된 필수 조건으로 적용한다."
+        ),
+    )
+    ranking_criteria: list[
+        Annotated[str, Field(min_length=1, max_length=300)]
+    ] = Field(
+        default_factory=list,
+        max_length=8,
+        description="필수 조건을 통과한 공고의 추천 순서를 정하는 의미 기준.",
+    )
     analysis_dimensions: list[Annotated[str, Field(min_length=1, max_length=80)]] = (
         Field(default_factory=list, max_length=12)
     )
@@ -231,41 +287,12 @@ class EvidenceRequirement(BaseModel):
 
     requirement_id: str = Field(min_length=1)
     description: str = Field(min_length=1)
-    occupation_domain_query: str = Field(
-        default="",
-        description="이 근거 집단이 속한 업무 기능 기준 직무 영역.",
+    scope: InvestigationConstraints = Field(
+        default_factory=InvestigationConstraints,
+        description="이 근거 집단을 조회하고 수집할 때 사용하는 단일 조건 계약.",
     )
-    occupation_domain_concept_keys: list[str] = Field(
-        default_factory=list,
-        description="이 근거 집단에 확정된 직무 영역 개념 키.",
-    )
-    occupation_query: str = Field(
-        default="",
-        description="이 근거 집단의 직무 표현. 코드가 직무 개념 키로 해석한다.",
-    )
-    occupation_concept_keys: list[str] = Field(
-        default_factory=list,
-        description="이 근거 집단에 확정된 직무 개념 키.",
-    )
-    collection_search_term: str = Field(
-        default="",
-        description="이 근거가 부족할 때 사이트 검색창에 입력할 검색어.",
-    )
-    skill_queries: list[str] = Field(default_factory=list)
-    skill_concept_keys: list[str] = Field(default_factory=list)
-    skill_match_mode: Literal["all", "any"] = "all"
-    skill_requirement_type: Literal["any", "required", "preferred", "mentioned"] = "any"
-    exact_text_groups: list[list[str]] = Field(
-        default_factory=list,
-        description=(
-            "문자열 자체가 조건일 때만 사용하는 표현 묶음. 직무·기술 판정은 사전 키를 사용한다."
-        ),
-    )
-    posted_from: str = ""
-    posted_to: str = ""
     required_fields: list[JobField] = Field(default_factory=list)
     minimum_count: int = Field(default=1, ge=0, le=1000)
-    required_sites: list[str] = Field(default_factory=list)
     reason: str = ""
 
 
@@ -286,19 +313,24 @@ class InvestigationPlanStep(BaseModel):
 
     step_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
-    arguments: CollectionIntent = Field(default_factory=CollectionIntent)
+    arguments: CollectionIntent
     purpose: str = ""
-    expected_evidence: list[str] = Field(default_factory=list)
+    expected_evidence: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_collection_arguments(self) -> "InvestigationPlanStep":
+        if not self.arguments.site.strip():
+            raise ValueError("수집 단계에는 site가 필요합니다.")
+        if not self.arguments.search_keyword.strip():
+            raise ValueError("수집 단계에는 search_keyword가 필요합니다.")
+        return self
 
 
-class InvestigationRequest(BaseModel):
-    """사용자와의 대화를 거쳐 확정한 조사 요청."""
+class InvestigationDefinition(BaseModel):
+    """요청 분석과 실행 요청이 공유하는 조사 의미."""
 
     model_config = ConfigDict(extra="forbid")
 
-    investigation_id: str = Field(min_length=1)
-    conversation_id: str = ""
-    original_query: str = Field(min_length=1)
     objective: str = ""
     deliverable: str = ""
     purpose: InvestigationPurpose = InvestigationPurpose.LOOKUP
@@ -308,14 +340,101 @@ class InvestigationRequest(BaseModel):
     )
     assumptions: list[str] = Field(default_factory=list)
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+
+
+class RequestAnalysis(InvestigationDefinition):
+    """도구를 사용하기 전에 수행하는 사용자 요청 해석 결과."""
+
+    objective: str = Field(min_length=1)
+    deliverable: str = Field(min_length=1)
+
+
+class InvestigationRequest(InvestigationDefinition):
+    """사용자와의 대화를 거쳐 확정한 조사 요청."""
+
+    investigation_id: str = Field(min_length=1)
+    conversation_id: str = ""
+    original_query: str = Field(min_length=1)
     clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
 
 
 InvestigationResumeMode = Literal[
     "",
     "checkpoint_resume",
-    "restart_from_request",
 ]
+
+
+class AnswerEvidenceRef(BaseModel):
+    """답변 문장을 뒷받침하는 DB 공고 필드의 위치."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    citation_id: int = Field(ge=1)
+    document_id: int = Field(ge=1)
+    field: JobField
+    item_index: int | None = Field(
+        default=None,
+        ge=0,
+        description="목록 필드에서 인용할 0부터 시작하는 항목 번호.",
+    )
+    evidence_text: str = Field(
+        default="",
+        description="코드가 DB 필드에서 읽어 붙인 실제 근거 값.",
+    )
+
+
+class AnswerEvidencePointer(BaseModel):
+    """모델이 답변 문장에 연결하는 DB 근거 위치."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: int = Field(ge=1)
+    field: JobField
+    item_index: int | None = Field(default=None, ge=0)
+
+
+class GroundedAnswerDraftLine(BaseModel):
+    """모델이 생성하는 원자 문장과 직접 근거 목록."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["overview", "detail", "caveat"] = "detail"
+    document_id: int | None = Field(default=None, ge=1)
+    title: str = ""
+    text: str = Field(min_length=1, max_length=600)
+    evidence: list[AnswerEvidencePointer] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+
+
+class GroundedAnswerDraft(BaseModel):
+    """Gemini 출력 제한에 맞춘 단일 객체 배열 답변 초안."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lines: list[GroundedAnswerDraftLine] = Field(default_factory=list)
+
+
+class GroundedAnswerLine(BaseModel):
+    """표시 위치와 근거 식별자를 가진 답변 한 줄."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["overview", "detail", "caveat"] = "detail"
+    document_id: int | None = Field(default=None, ge=1)
+    title: str = Field(default="", max_length=160)
+    text: str = Field(min_length=1, max_length=600)
+    citation_ids: list[int] = Field(default_factory=list, max_length=12)
+
+
+class GroundedAnswer(BaseModel):
+    """자유문장 대신 근거 위치를 함께 반환하는 최종 답변 계약."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lines: list[GroundedAnswerLine] = Field(default_factory=list, max_length=80)
+    citations: list[AnswerEvidenceRef] = Field(default_factory=list, max_length=120)
 
 
 class InvestigationOutcome(BaseModel):
@@ -326,22 +445,9 @@ class InvestigationOutcome(BaseModel):
     investigation: InvestigationRequest
     run_status: RunStatus
     final_answer: str = ""
-    clarification: dict[str, Any] | None = None
+    grounded_answer: GroundedAnswer | None = None
+    clarification: ClarificationQuestion | None = None
     resume_mode: InvestigationResumeMode = ""
-
-
-class RequestAnalysis(BaseModel):
-    """도구를 사용하기 전에 수행하는 사용자 요청 해석 결과."""
-
-    objective: str = Field(min_length=1)
-    deliverable: str = Field(min_length=1)
-    purpose: InvestigationPurpose = InvestigationPurpose.LOOKUP
-    evidence_policy: EvidencePolicy = EvidencePolicy.DATABASE_FIRST
-    constraints: InvestigationConstraints = Field(
-        default_factory=InvestigationConstraints
-    )
-    assumptions: list[str] = Field(default_factory=list)
-    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
 
 
 class TaxonomyResolution(BaseModel):
@@ -367,14 +473,14 @@ class InvestigationActionPlan(BaseModel):
 
 
 class RequirementEvidenceDecision(BaseModel):
-    """한 근거 집단에 실제로 포함되는 DB 문서 판단."""
+    """한 근거 집단의 의미 조건을 통과한 후보."""
+
+    model_config = ConfigDict(extra="forbid")
 
     requirement_id: str = Field(min_length=1)
     matching_document_ids: list[int] = Field(
         default_factory=list,
-        description=(
-            "사전으로 확정하지 못한 의미 조건을 만족하는 문서 ID. 제공된 후보 안에서만 반환한다."
-        ),
+        description="필수 조건을 모두 통과한 문서 ID.",
     )
 
 
@@ -385,6 +491,8 @@ class EvidenceValidation(BaseModel):
 
 
 __all__ = [
+    "AnswerEvidenceRef",
+    "AnswerEvidencePointer",
     "ClarificationAnswer",
     "ClarificationField",
     "ClarificationOption",
@@ -393,6 +501,7 @@ __all__ = [
     "EvidencePolicy",
     "EvidenceRequirement",
     "InvestigationConstraints",
+    "InvestigationDefinition",
     "InvestigationPlanStep",
     "InvestigationPurpose",
     "InvestigationRequest",
@@ -403,6 +512,10 @@ __all__ = [
     "RequestAnalysis",
     "TaxonomyResolution",
     "EvidenceValidation",
+    "GroundedAnswer",
+    "GroundedAnswerDraft",
+    "GroundedAnswerDraftLine",
+    "GroundedAnswerLine",
     "RequirementEvidenceDecision",
     "ToolCapability",
 ]
