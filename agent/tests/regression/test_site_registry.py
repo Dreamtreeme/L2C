@@ -319,7 +319,7 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
         "benefits",
         "posted_at",
     ]
-    assert captured["recipe_inputs"] == {"query": "iOS 개발자"}
+    assert captured["recipe_inputs"] == {"search_keyword": "iOS 개발자"}
     assert "required_record_shape" in captured["goal"]
     assert "Collect up to 2 distinct job postings" in captured["goal"]
     assert result.submission.collection_intent.search_keyword == "iOS 개발자"

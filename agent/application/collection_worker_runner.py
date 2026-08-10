@@ -68,7 +68,7 @@ def run_worker_once(
         request={
             "worker_run_id": run_id,
             "collection_intent": resolved_intent,
-            "recipe_inputs": {"query": search_keyword},
+            "recipe_inputs": {"search_keyword": search_keyword},
             "action_permission_contract": (
                 build_public_collection_permission_contract(
                     site_profile,
