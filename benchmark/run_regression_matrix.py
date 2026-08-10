@@ -234,8 +234,8 @@ def _scenario_environment(
     return env
 
 
-def _clear_jobs_for_experience_guided_run(db_path: Path) -> int:
-    """격리 DB의 레시피는 보존하고 공고만 지워 동일 작업량을 만든다."""
+def _clear_jobs_for_collection_run(db_path: Path) -> int:
+    """격리 DB의 레시피는 보존하고 공고만 지워 반복 작업량을 맞춘다."""
 
     if not db_path.exists():
         return 0
@@ -599,12 +599,7 @@ def _run_scenario_process(
     command: list[str],
     db_path: Path,
 ) -> dict[str, Any]:
-    execution_mode = str(scenario["execution_mode"])
-    reset_count = (
-        _clear_jobs_for_experience_guided_run(db_path)
-        if execution_mode == "experience_guided"
-        else 0
-    )
+    reset_count = _clear_jobs_for_collection_run(db_path)
     completed = subprocess.run(
         command,
         cwd=ROOT_DIR,
@@ -626,7 +621,7 @@ def _run_scenario_process(
         "summary_path": str(summary_path),
         "metrics": metrics,
         "promotion": promotion,
-        "experience_guided_reset_count": reset_count,
+        "job_reset_count": reset_count,
         "mode_contract_passed": _mode_contract_passed(
             scenario,
             metrics,
@@ -649,7 +644,7 @@ def _skipped_experience_guided_result(
             {},
         ),
         "promotion": {},
-        "experience_guided_reset_count": 0,
+        "job_reset_count": 0,
         "mode_contract_passed": False,
         "skipped_reason": "paired_autonomous_promotion_failed",
     }

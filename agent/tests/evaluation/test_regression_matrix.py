@@ -6,7 +6,7 @@ from benchmark.run_realtime_e2e import (
 )
 from benchmark.run_regression_matrix import (
     _attach_promotion_metrics,
-    _clear_jobs_for_experience_guided_run,
+    _clear_jobs_for_collection_run,
     _command,
     _metric_summary,
     _mode_pair_efficiency,
@@ -134,7 +134,7 @@ def test_scenario_environment_uses_isolated_database(tmp_path) -> None:
     assert environment["VISION_RECIPE_AUTO_PROMOTE"] == "0"
 
 
-def test_experience_guided_reset_keeps_recipes_and_removes_jobs(
+def test_collection_run_reset_keeps_recipes_and_removes_jobs(
     tmp_path,
 ) -> None:
     db_path = tmp_path / "regression.db"
@@ -144,7 +144,7 @@ def test_experience_guided_reset_keeps_recipes_and_removes_jobs(
         connection.execute("INSERT INTO jobs (title) VALUES ('iOS 개발자')")
         connection.execute("INSERT INTO recipes (recipe_key) VALUES ('roi2#search')")
 
-    assert _clear_jobs_for_experience_guided_run(db_path) == 1
+    assert _clear_jobs_for_collection_run(db_path) == 1
 
     with sqlite3.connect(db_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
