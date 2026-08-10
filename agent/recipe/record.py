@@ -33,6 +33,8 @@ def _recorded_replay_mode(
     mode = normalize_text(args.get("replay_mode")).casefold()
     if action_name not in REVIEWABLE_REPLAY_ACTIONS:
         return "reasoning"
+    if action_name == "type_in_marker" and slot_name:
+        return "parameterized" if mode in {"fixed", "parameterized"} else "reasoning"
     if mode == "parameterized":
         return (
             "parameterized"
