@@ -22,6 +22,7 @@ from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.runtime.transition_runtime import (
     build_transition_observation,
     transition_has_visual_change,
+    transition_marker_texts,
 )
 from agent.utils.logger import logger
 from agent.utils.text import recipe_url_scope_matches, url_template
@@ -338,6 +339,34 @@ def _record_replay_outcome(
         )
 
 
+def _input_text_confirmed_by_ocr(
+    state: WorkerState,
+    request: dict[str, Any],
+) -> bool:
+    """입력 문자열이 이전 화면에는 없고 현재 OCR에 나타났는지 확인한다."""
+
+    if request.get("action") != "type_in_marker":
+        return False
+    input_text = str(
+        ((request.get("step") or {}).get("args") or {}).get("text") or ""
+    ).casefold().replace(" ", "")
+    if not input_text:
+        return False
+    observation = state["observation"]
+    previous_markers = list(
+        (observation.get("previous_observation") or {}).get("markers") or []
+    )
+    previous_texts = transition_marker_texts(previous_markers)
+    current_texts = transition_marker_texts(
+        list(observation.get("current_markers") or [])
+    )
+
+    def contains_input(texts: list[str]) -> bool:
+        return any(input_text in text.casefold().replace(" ", "") for text in texts)
+
+    return contains_input(current_texts) and not contains_input(previous_texts)
+
+
 def _evaluate_before_ocr(
     state: WorkerState,
     request: dict[str, Any],
@@ -453,6 +482,7 @@ def _evaluate_after_ocr(
         and before_url != current_url
     )
     markers = list(state["observation"].get("current_markers") or [])
+    input_confirmed = _input_text_confirmed_by_ocr(state, request)
 
     if source == "reflex":
         matched, reason, after_state_match = _verify_reflex_after_state(
@@ -465,13 +495,17 @@ def _evaluate_after_ocr(
         }
         status = "ready" if matched else "unknown"
         block_recipe = not matched
-    elif markers and (url_changed or visual_changed):
+    elif markers and (url_changed or visual_changed or input_confirmed):
         evaluated_request = request
         status = "ready"
         reason = (
             "screen_change_pixels_matched"
             if visual_changed
-            else "screen_change_url_matched"
+            else (
+                "screen_change_url_matched"
+                if url_changed
+                else "input_text_ocr_matched"
+            )
         )
         block_recipe = False
     elif not url_changed and not visual_changed:

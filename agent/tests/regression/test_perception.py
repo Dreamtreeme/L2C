@@ -41,7 +41,9 @@ class FakeKeyboard:
     def __init__(self, clipboard, url_on_copy=0):
         self.clipboard = clipboard
         self.url_on_copy = url_on_copy
+        self.PAUSE = 0.1
         self.hotkeys = []
+        self.presses = []
         self.copy_count = 0
 
     def hotkey(self, *keys):
@@ -51,6 +53,9 @@ class FakeKeyboard:
         self.copy_count += 1
         if self.copy_count == self.url_on_copy:
             self.clipboard.value = "https://example.com/jobs/1"
+
+    def press(self, key):
+        self.presses.append(key)
 
 
 class MissingBrowserEngine(PerceptionEngine):
@@ -134,6 +139,11 @@ def test_address_bar_url_copy_retries_until_clipboard_changes(monkeypatch):
 
     assert url == "https://example.com/jobs/1"
     assert len(activations) == 2
+
+    monkeypatch.setattr("agent.tools.perception.pyautogui", keyboard)
+    engine.release_address_bar_focus(key_pause=0)
+    assert keyboard.presses == ["esc"]
+    assert keyboard.hotkeys[-1] == ("ctrl", "f6")
 
 
 def test_address_bar_url_copy_stops_after_attempt_limit(monkeypatch):

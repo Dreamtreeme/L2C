@@ -419,6 +419,7 @@ class PerceptionEngine:
         pyautogui.PAUSE = min(old_pause, key_pause)
         try:
             pyautogui.press("esc")
+            pyautogui.hotkey("ctrl", "f6")
         finally:
             pyautogui.PAUSE = old_pause
 

@@ -197,20 +197,26 @@ def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
         "transition_has_visual_change",
         lambda *_args: (False, 0.025),
     )
+    request = {
+        "action": "type_in_marker",
+        "action_seq": 11,
+        "source": "autonomous",
+        "before_observation_id": "observation:0010",
+        "before_screenshot": "search-overlay.png",
+        "before_url": "https://www.wanted.co.kr/",
+        "step": {
+            "action": "type_in_marker",
+            "args": {"text": "iOS 개발자"},
+        },
+        "started_at": time.time(),
+    }
     result = worker_transition.transition_node(
         worker_state(
             observation={
                 "current_screenshot": "search-suggestions.png",
                 "ocr_complete": False,
             },
-            transition={
-                "transition_request": {
-                    "action": "type_in_marker",
-                    "action_seq": 11,
-                    "source": "autonomous",
-                    "started_at": time.time(),
-                }
-            },
+            transition={"transition_request": request},
         ),
         node_runtime(),
     )
@@ -219,6 +225,33 @@ def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
     assert transition["status"] == "needs_ocr"
     assert transition["reason"] == "input_ocr_required"
     assert transition["needs_ocr"] is True
+
+    verified = worker_transition.transition_node(
+        worker_state(
+            observation={
+                "observation_id": "observation:0011",
+                "current_screenshot": "search-suggestions.png",
+                "current_url": "https://www.wanted.co.kr/",
+                "current_markers": [
+                    {"id": 1, "text": "iOS 개발자"},
+                    {"id": 10, "text": "iOS 개발자 · 직무"},
+                ],
+                "ocr_complete": True,
+                "previous_observation": {
+                    "observation_id": "observation:0010",
+                    "screenshot": "search-overlay.png",
+                    "current_url": "https://www.wanted.co.kr/",
+                    "markers": [{"id": 1, "text": "검색어를 입력해 주세요"}],
+                },
+            },
+            transition={"transition_request": request},
+        ),
+        node_runtime(),
+    )
+
+    verified_transition = verified["transition"]["transition_result"]
+    assert verified_transition["status"] == "ready"
+    assert verified_transition["reason"] == "input_text_ocr_matched"
 
 
 def test_reflex_transition_rejects_change_without_saved_after_state():
