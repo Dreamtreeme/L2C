@@ -28,6 +28,15 @@ from shared.schema.collection_run import CollectionBatch, PostprocessedCollectio
 from shared.schema.jd_schema import CollectedJob, JobCapture, JobPosting
 
 
+_EVIDENCE_BACKED_LIST_FIELDS = {
+    "tech_stack",
+    "main_tasks",
+    "requirements",
+    "preferred",
+    "benefits",
+}
+
+
 def detail_extraction_model_spec() -> str:
     return (
         get_settings().models.detail_final_extraction_model
@@ -141,11 +150,33 @@ def _missing_required_fields(
     )
 
 
+def _preserve_evidence_backed_lists(
+    capture: JobCapture,
+    posting: JobPosting,
+) -> JobPosting:
+    """정제 모델이 빠뜨린 목록 필드에 작업자가 확인한 근거를 보존한다."""
+
+    evidence = {
+        field.value: str(value).strip()
+        for field, value in capture.evidence.field_evidence.items()
+        if str(value).strip()
+    }
+    updates = {
+        field: [evidence[field]]
+        for field in _EVIDENCE_BACKED_LIST_FIELDS
+        if not getattr(posting, field) and evidence.get(field)
+    }
+    return posting.model_copy(update=updates) if updates else posting
+
+
 def _postprocess_capture(
     capture: JobCapture,
     collection_intent: CollectionIntent,
 ) -> CollectedJob:
-    posting = extract_job_from_capture(capture)
+    posting = _preserve_evidence_backed_lists(
+        capture,
+        extract_job_from_capture(capture),
+    )
     url = str(posting.url or "").strip()
     if capture.evidence.source_card_key and not looks_like_job_detail_url(url):
         url = url_with_source_card_key(url, capture.evidence.source_card_key)

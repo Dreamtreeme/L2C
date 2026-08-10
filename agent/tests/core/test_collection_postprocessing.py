@@ -155,7 +155,7 @@ def test_postprocessing_applies_requested_date_range(monkeypatch):
     assert "posted_at_before_range" in result.rejected_items[0]["issues"][0]
 
 
-def test_postprocessing_rejects_visible_but_unstructured_required_field(monkeypatch):
+def test_postprocessing_preserves_visible_required_field_evidence(monkeypatch):
     monkeypatch.setattr(
         service,
         "extract_job_from_capture",
@@ -167,15 +167,31 @@ def test_postprocessing_rejects_visible_but_unstructured_required_field(monkeypa
         ),
     )
 
-    for page_exhausted in (False, True):
-        result = service.postprocess_collection_batch(
-            _batch(_capture(page_exhausted=page_exhausted))
-        )
+    capture = _capture(page_exhausted=True)
+    result = service.postprocess_collection_batch(_batch(capture))
 
-        assert result.collected_jobs == []
-        assert "required_field_extraction_incomplete:main_tasks" in (
-            result.rejected_items[0]["issues"][0]
-        )
+    assert result.rejected_items == []
+    assert result.collected_jobs[0].posting.main_tasks == ["모델 운영"]
+
+    missing_evidence = capture.model_copy(
+        update={
+            "evidence": capture.evidence.model_copy(
+                update={
+                    "field_evidence": {
+                        key: value
+                        for key, value in capture.evidence.field_evidence.items()
+                        if key.value != "main_tasks"
+                    }
+                }
+            )
+        }
+    )
+    rejected = service.postprocess_collection_batch(_batch(missing_evidence))
+
+    assert rejected.collected_jobs == []
+    assert "required_field_extraction_incomplete:main_tasks" in (
+        rejected.rejected_items[0]["issues"][0]
+    )
 
 
 def test_model_timeout_stops_batch_instead_of_becoming_rejection(monkeypatch):
@@ -189,8 +205,23 @@ def test_model_timeout_stops_batch_instead_of_becoming_rejection(monkeypatch):
 
 
 def test_one_invalid_capture_does_not_discard_later_valid_capture(monkeypatch):
-    first = _capture()
-    second = first.model_copy(update={"url": "https://www.wanted.co.kr/wd/2"})
+    valid_capture = _capture()
+    first = valid_capture.model_copy(
+        update={
+            "evidence": valid_capture.evidence.model_copy(
+                update={
+                    "field_evidence": {
+                        key: value
+                        for key, value in valid_capture.evidence.field_evidence.items()
+                        if key.value != "main_tasks"
+                    }
+                }
+            )
+        }
+    )
+    second = valid_capture.model_copy(
+        update={"url": "https://www.wanted.co.kr/wd/2"}
+    )
     batch = _batch(first)
     batch.job_captures.append(second)
 
