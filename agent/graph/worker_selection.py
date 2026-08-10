@@ -188,6 +188,18 @@ def _replay_queued_card(
     return update
 
 
+def _queue_replay_waits_for_ocr(
+    transition_result: dict[str, Any],
+    *,
+    ocr_complete: bool,
+) -> bool:
+    status = str(transition_result.get("status") or "")
+    refresh = bool(transition_result.get("queue_marker_refresh"))
+    if status == "needs_ocr" and refresh:
+        return True
+    return status == "unknown" and not (refresh and ocr_complete)
+
+
 def selection_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
@@ -241,9 +253,12 @@ def selection_node(
             )
 
     if transition_result.get("action"):
-        if transition_result.get("status") == "unknown":
-            return {}
         ocr_complete = bool(observation.get("ocr_complete"))
+        if _queue_replay_waits_for_ocr(
+            transition_result,
+            ocr_complete=ocr_complete,
+        ):
+            return {}
         markers = (
             list(observation.get("current_markers") or [])
             if ocr_complete

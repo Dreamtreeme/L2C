@@ -367,6 +367,29 @@ def _input_text_confirmed_by_ocr(
     return contains_input(current_texts) and not contains_input(previous_texts)
 
 
+def _queue_click_used_cached_marker(
+    state: WorkerState,
+    request: dict[str, Any],
+) -> bool:
+    """현재 화면 OCR 없이 만든 큐 좌표를 클릭했는지 확인한다."""
+
+    if (
+        request.get("source") != "job_card_queue"
+        or request.get("action") != "click_marker"
+    ):
+        return False
+    step = request.get("step") if isinstance(request.get("step"), dict) else {}
+    args = step.get("args") if isinstance(step.get("args"), dict) else {}
+    marker_id = args.get("marker_id")
+    previous = dict(state["observation"].get("previous_observation") or {})
+    return any(
+        marker.get("id") == marker_id
+        and marker.get("type") == "queue_cached_card"
+        for marker in previous.get("markers", []) or []
+        if isinstance(marker, dict)
+    )
+
+
 def _evaluate_before_ocr(
     state: WorkerState,
     request: dict[str, Any],
@@ -378,6 +401,29 @@ def _evaluate_before_ocr(
     source = str(request.get("source") or "")
     action = str(request.get("action") or "")
     input_requires_ocr = action == "type_in_marker"
+    cached_queue_marker_failed = (
+        not visual_changed
+        and _queue_click_used_cached_marker(state, request)
+    )
+    if cached_queue_marker_failed:
+        refresh_request = {**request, "queue_marker_refresh": True}
+        return {
+            "transition": {
+                "transition_request": refresh_request,
+                "transition_result": _transition_result(
+                    refresh_request,
+                    status="needs_ocr",
+                    reason="queue_cached_marker_refresh_required",
+                    visual_change_ratio=visual_ratio,
+                    needs_ocr=True,
+                ),
+            },
+            "collection": {
+                "job_card_queue": release_active_job_card(
+                    list(state["collection"].get("job_card_queue", []) or [])
+                )
+            },
+        }
     if visual_changed or input_requires_ocr:
         return {
             "transition": {

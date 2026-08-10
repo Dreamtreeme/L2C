@@ -142,7 +142,7 @@ def test_queue_phash_mismatch_falls_through_to_ocr():
     assert route_after_selection(apply_update(state, result)) == "ocr"
 
 
-def test_queue_click_without_screen_change_returns_to_reasoning():
+def test_cached_queue_click_without_screen_change_refreshes_ocr():
     state = worker_state(
         observation={
             "observation_id": "observation:0010",
@@ -152,6 +152,24 @@ def test_queue_click_without_screen_change_returns_to_reasoning():
                 "phash": "0" * 16,
                 "size": [1000, 1000],
             },
+            "previous_observation": {
+                "observation_id": "observation:0009",
+                "screenshot": "same-list.png",
+                "current_url": "https://www.wanted.co.kr/search",
+                "markers": [
+                    {
+                        "id": 0,
+                        "bbox": [300, 400, 500, 450],
+                        "text": "두 번째 공고",
+                        "type": "queue_cached_card",
+                    }
+                ],
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
+                },
+                "page_role": "search",
+            },
         },
         transition={
             "transition_request": {
@@ -159,6 +177,10 @@ def test_queue_click_without_screen_change_returns_to_reasoning():
                 "action_seq": 10,
                 "source": "job_card_queue",
                 "started_at": time.time(),
+                "step": {
+                    "action": "click_marker",
+                    "args": {"marker_id": 0},
+                },
             },
         },
         collection={
@@ -184,11 +206,48 @@ def test_queue_click_without_screen_change_returns_to_reasoning():
     result = worker_transition.transition_node(state, node_runtime())
     updated = apply_update(state, result)
 
-    assert updated["transition"]["transition_request"] == {}
-    assert updated["transition"]["transition_result"]["reason"] == "no_screen_change"
+    assert updated["transition"]["transition_result"]["reason"] == (
+        "queue_cached_marker_refresh_required"
+    )
+    assert updated["transition"]["transition_result"]["needs_ocr"] is True
     assert updated["collection"]["job_card_queue"][0]["status"] == "pending"
     assert worker_selection.selection_node(updated, node_runtime()) == {}
-    assert route_after_selection(updated) == "reasoning"
+    assert route_after_selection(updated) == "ocr"
+
+    refreshed = apply_update(
+        updated,
+        {
+            "observation": {
+                "current_url": "https://www.wanted.co.kr/search",
+                "current_screenshot": "same-list.png",
+                "current_markers": [
+                    {
+                        "id": 29,
+                        "bbox": [300, 400, 500, 450],
+                        "text": "두 번째 공고",
+                        "type": "text",
+                    }
+                ],
+                "screen_signature": {
+                    "phash": "0" * 16,
+                    "size": [1000, 1000],
+                    "anchors": ["두 번째 공고"],
+                },
+                "current_page_role": "search",
+                "ocr_complete": True,
+            }
+        },
+    )
+    verified = apply_update(
+        refreshed,
+        worker_transition.transition_node(refreshed, node_runtime()),
+    )
+    replay = worker_selection.selection_node(verified, node_runtime())
+
+    assert verified["transition"]["transition_result"]["status"] == "unknown"
+    assert verified["transition"]["transition_result"]["queue_marker_refresh"] is True
+    assert replay["decision"]["pending_action"].source == "job_card_queue"
+    assert replay["decision"]["pending_action"].tool_calls[0].args["marker_id"] == 29
 
 
 def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
