@@ -73,7 +73,7 @@ def test_site_page_roles_use_declared_url_signals():
         looks_like_job_detail_url,
     )
 
-    cases = [
+    url_cases = [
         (
             "https://www.jobkorea.co.kr/Recruit/GI_Read/50000001",
             "job_detail",
@@ -87,10 +87,18 @@ def test_site_page_roles_use_declared_url_signals():
         ("https://www.saramin.co.kr/zf_user/", "home"),
     ]
 
-    for url, expected_role in cases:
+    for url, expected_role in url_cases:
         assert infer_site_page_role(url, []) == expected_role, url
         if expected_role == "job_detail":
             assert looks_like_job_detail_url(url) is True, url
+
+    assert (
+        infer_site_page_role(
+            "https://www.wanted.co.kr/",
+            ["검색 결과", "iOS 개발자 · 직무"],
+        )
+        == "search_overlay"
+    )
 
 
 def test_unregistered_site_does_not_use_generic_job_url_heuristic():

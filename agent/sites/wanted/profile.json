@@ -10,7 +10,7 @@
   "page_guidance": {
     "home": {"instructions": ["홈 화면의 보이는 검색 UI를 연다."]},
     "search_overlay": {
-      "visible_cues": ["검색어를 입력", "추천 검색어"],
+      "visible_cues": ["검색어를 입력", "추천 검색어", "검색 결과"],
       "minimum_visible_cues": 1,
       "instructions": ["검색어를 입력한 뒤 같은 검색어의 직무 검색 결과를 클릭해 공고 목록으로 이동한다. Enter는 검색 오버레이를 닫으므로 사용하지 않는다."]
     },
