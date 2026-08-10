@@ -3,7 +3,7 @@ title: "E2E 관측 환경"
 type: guide
 area: observability
 status: active
-updated: 2026-07-28
+updated: 2026-08-11
 tags:
   - l2c
   - docs/observability
@@ -59,6 +59,11 @@ python -m benchmark.run_realtime_e2e `
 ```
 
 실행 결과는 로그 옆의 `.summary.json`에도 남습니다. `git_commit`, 변경 파일 유무, 설정 fingerprint, 모델, 레시피 버전을 저장하므로 성능 변화가 코드와 설정 중 어디에서 발생했는지 비교할 수 있습니다.
+
+`experience_guided_preconditions.performance_comparable=true`인 실행만 경험 기반
+탐색 성능 표본으로 사용합니다. `active_roi_recipe_missing`처럼 사전조건이 실패한
+실행은 수집에 성공해도 자율 탐색 폴백으로 분류합니다. Reflex와 작업 목록 재생이
+모두 0회인 기록도 같은 기준으로 비교 대상에서 제외합니다.
 
 성능 비교의 단일 원본은 `.summary.json`입니다. 텍스트 로그는 화면·행동 원인을 조사할 때만 사용하며, 정규식으로 OCR·추론·Reflex 횟수나 시간을 다시 계산하지 않습니다.
 
