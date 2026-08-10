@@ -40,7 +40,7 @@ function StageIcon({
   if (event.status === "cancelled") {
     return <X size={14} />;
   }
-  if (event.status === "waiting_input" || event.status === "waiting_approval") {
+  if (event.status === "waiting_input") {
     return <Pause size={14} />;
   }
   if (active) {

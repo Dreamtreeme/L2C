@@ -26,7 +26,7 @@ describe("format helpers", () => {
     const runs = collapseInvestigationRuns([
       {
         run_id: "run-3",
-        user_query: "머신러닝 엔지니어",
+        query: "머신러닝 엔지니어",
         status: "completed",
         phase: "completed",
         updated_at: "2026-07-24T03:00:03Z",
@@ -34,7 +34,7 @@ describe("format helpers", () => {
       },
       {
         run_id: "run-2",
-        user_query: "IT·데이터",
+        query: "IT·데이터",
         status: "waiting_input",
         phase: "clarification",
         updated_at: "2026-07-24T03:00:02Z",
@@ -42,7 +42,7 @@ describe("format helpers", () => {
       },
       {
         run_id: "run-1",
-        user_query: "채용공고 찾아줘",
+        query: "채용공고 찾아줘",
         status: "waiting_input",
         phase: "clarification",
         updated_at: "2026-07-24T03:00:01Z",
@@ -53,7 +53,7 @@ describe("format helpers", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
       run_id: "run-3",
-      user_query: "채용공고 찾아줘",
+      query: "채용공고 찾아줘",
       status: "completed",
       updated_at: "2026-07-24T03:00:03Z",
     });

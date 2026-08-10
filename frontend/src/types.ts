@@ -1,7 +1,6 @@
 export type RunStatus =
   | "queued"
   | "running"
-  | "waiting_approval"
   | "waiting_input"
   | "completed"
   | "partial"
@@ -53,7 +52,6 @@ export interface ClarificationAnswer {
 
 export interface ChatRequest {
   query: string;
-  resume_run_id?: string | null;
   conversation_id: string;
   investigation_id?: string;
   clarification_answer?: ClarificationAnswer | null;
@@ -111,13 +109,34 @@ export interface RunMetrics {
   };
 }
 
+export interface AnswerEvidenceRef {
+  citation_id: number;
+  document_id: number;
+  field: string;
+  item_index?: number | null;
+  evidence_text: string;
+}
+
+export interface GroundedAnswerLine {
+  kind: "overview" | "detail" | "caveat";
+  document_id?: number | null;
+  title: string;
+  text: string;
+  citation_ids: number[];
+}
+
+export interface GroundedAnswer {
+  lines: GroundedAnswerLine[];
+  citations: AnswerEvidenceRef[];
+}
+
 export interface ChatFinalPayload {
   run_id: string;
   text: string;
   status: RunStatus;
+  grounded_answer?: GroundedAnswer | null;
   clarification?: ClarificationQuestion | null;
   investigation_id?: string;
-  resumed_from_run_id?: string | null;
   resume_mode?: string;
   conversation_id?: string;
   metrics?: RunMetrics;
@@ -148,7 +167,6 @@ export interface JobDetail {
 export interface RunRecord {
   run_id: string;
   query?: string;
-  user_query?: string;
   conversation_id?: string;
   status: RunStatus;
   phase: RunPhase;

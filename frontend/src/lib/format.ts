@@ -18,7 +18,6 @@ export const PHASE_LABELS: Record<RunPhase, string> = {
 export const STATUS_LABELS: Record<RunStatus, string> = {
   queued: "대기",
   running: "실행 중",
-  waiting_approval: "승인 대기",
   waiting_input: "사용자 선택 필요",
   completed: "완료",
   partial: "부분 완료",
@@ -119,7 +118,6 @@ export function collapseInvestigationRuns(runs: RunRecord[]): RunRecord[] {
     grouped.set(key, {
       ...latest,
       query: run.query || latest.query,
-      user_query: run.user_query || latest.user_query,
       created_at: run.created_at || latest.created_at,
     });
   }

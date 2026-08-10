@@ -333,7 +333,6 @@ export default function App() {
       const resume = state.pendingResume;
       const request: ChatRequest = {
         query: trimmed,
-        resume_run_id: resume?.runId || null,
         conversation_id: conversationId,
         investigation_id: resume?.investigationId || "",
         clarification_answer: clarificationAnswer,

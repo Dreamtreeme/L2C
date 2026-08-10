@@ -107,7 +107,7 @@ export function AppSidebar({
                   }`}
                   key={run.run_id}
                 >
-                  <p>{run.user_query || run.query || "제목 없는 조사"}</p>
+                  <p>{run.query || "제목 없는 조사"}</p>
                   <span>
                     {PHASE_LABELS[run.phase] || STATUS_LABELS[run.status]}
                     {run.updated_at ? ` · ${relativeDate(run.updated_at)}` : ""}

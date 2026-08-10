@@ -185,7 +185,7 @@ export function OperationsDrawer({
                         <i className={`is-${run.status}`} aria-hidden="true" />
                         <div>
                           <strong>
-                            {run.user_query || run.query || "제목 없는 조사"}
+                            {run.query || "제목 없는 조사"}
                           </strong>
                           <span>
                             {run.message ||

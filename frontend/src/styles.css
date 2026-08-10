@@ -651,8 +651,7 @@ button:disabled {
   background: var(--danger-soft);
 }
 
-.progress-stage.is-waiting_input .progress-icon,
-.progress-stage.is-waiting_approval .progress-icon {
+.progress-stage.is-waiting_input .progress-icon {
   color: var(--warning);
   background: var(--warning-soft);
 }
@@ -1484,8 +1483,7 @@ button:disabled {
   background: var(--danger);
 }
 
-.operations-run > i.is-waiting_input,
-.operations-run > i.is-waiting_approval {
+.operations-run > i.is-waiting_input {
   background: var(--warning);
 }
 
