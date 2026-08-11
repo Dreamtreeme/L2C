@@ -221,6 +221,93 @@ def _queue_replay_waits_for_ocr(
     return status == "unknown" and not (refresh and ocr_complete)
 
 
+def _select_duplicate_detail(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+    *,
+    current_url: str,
+    transition_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    active_card = active_job_card(
+        list(state["collection"].get("job_card_queue", []) or [])
+    )
+    if not active_card or not looks_like_job_detail_url(current_url):
+        return None
+    duplicate_trace = runtime.context.data.find_existing_job_url(
+        current_url,
+        list(state["collection"].get("job_captures", [])),
+    )
+    if not duplicate_trace.get("matched"):
+        return None
+    logger.info(
+        "Existing job detail selected for skip",
+        url=current_url,
+        source=duplicate_trace.get("source", ""),
+    )
+    return _skip_duplicate_detail(
+        state,
+        transition_result=transition_result,
+        current_url=current_url,
+        duplicate_trace=duplicate_trace,
+    )
+
+
+def _select_queued_card(
+    state: WorkerState,
+    *,
+    current_url: str,
+    transition_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not transition_result.get("action"):
+        return None
+    observation = state["observation"]
+    ocr_complete = bool(observation.get("ocr_complete"))
+    if _queue_replay_waits_for_ocr(
+        transition_result,
+        ocr_complete=ocr_complete,
+    ):
+        return None
+    markers = (
+        list(observation.get("current_markers") or [])
+        if ocr_complete
+        else []
+    )
+    signature_value = (
+        observation.get("screen_signature")
+        if ocr_complete
+        else observation.get("raw_screen_signature")
+    )
+    signature = dict(signature_value or {})
+    request, selected_markers, trace = replay_job_card_on_results(
+        state,
+        transition_result,
+        current_url,
+        markers,
+        signature,
+        require_anchors=ocr_complete,
+        current_image_path=str(observation.get("current_screenshot") or ""),
+    )
+    if request is None:
+        return None
+    memory = dict(state["collection"].get("job_results_memory", {}) or {})
+    saved_signature = dict(memory.get("screen_signature", {}) or {})
+    logger.info(
+        "Job card queue action selected",
+        queue_id=trace.get("queue_id", ""),
+        ocr_skipped=not ocr_complete,
+    )
+    return _replay_queued_card(
+        state,
+        request=request,
+        selected_markers=selected_markers,
+        trace=trace,
+        transition_result=transition_result,
+        signature=signature,
+        memory=memory,
+        saved_signature=saved_signature,
+    )
+
+
 def selection_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
@@ -231,7 +318,6 @@ def selection_node(
     observation = state["observation"]
     transition = state["transition"]
     replay = state["replay"]
-    collection = state["collection"]
     if decision.get("pending_action") is not None:
         return {}
 
@@ -255,77 +341,19 @@ def selection_node(
 
     transition_result = dict(transition.get("transition_result", {}) or {})
     current_url = str(observation.get("current_url") or "")
-    active_card = active_job_card(
-        list(collection.get("job_card_queue", []) or [])
+    duplicate_update = _select_duplicate_detail(
+        state,
+        runtime,
+        current_url=current_url,
+        transition_result=transition_result,
     )
-
-    if active_card and looks_like_job_detail_url(current_url):
-        duplicate_trace = runtime.context.data.find_existing_job_url(
-            current_url,
-            list(collection.get("job_captures", [])),
-        )
-        if duplicate_trace.get("matched"):
-            logger.info(
-                "Existing job detail selected for skip",
-                url=current_url,
-                source=duplicate_trace.get("source", ""),
-            )
-            return _skip_duplicate_detail(
-                state,
-                transition_result=transition_result,
-                current_url=current_url,
-                duplicate_trace=duplicate_trace,
-            )
-
-    if transition_result.get("action"):
-        ocr_complete = bool(observation.get("ocr_complete"))
-        if _queue_replay_waits_for_ocr(
-            transition_result,
-            ocr_complete=ocr_complete,
-        ):
-            return {}
-        markers = (
-            list(observation.get("current_markers") or [])
-            if ocr_complete
-            else []
-        )
-        signature_value = (
-            observation.get("screen_signature")
-            if ocr_complete
-            else observation.get("raw_screen_signature")
-        )
-        signature = dict(signature_value or {})
-        request, selected_markers, trace = replay_job_card_on_results(
-            state,
-            transition_result,
-            current_url,
-            markers,
-            signature,
-            require_anchors=ocr_complete,
-            current_image_path=str(
-                observation.get("current_screenshot") or ""
-            ),
-        )
-        memory = dict(collection.get("job_results_memory", {}) or {})
-        saved_signature = dict(memory.get("screen_signature", {}) or {})
-        if request is not None:
-            logger.info(
-                "Job card queue action selected",
-                queue_id=trace.get("queue_id", ""),
-                ocr_skipped=not ocr_complete,
-            )
-            return _replay_queued_card(
-                state,
-                request=request,
-                selected_markers=selected_markers,
-                trace=trace,
-                transition_result=transition_result,
-                signature=signature,
-                memory=memory,
-                saved_signature=saved_signature,
-            )
-
-    return {}
+    if duplicate_update is not None:
+        return duplicate_update
+    return _select_queued_card(
+        state,
+        current_url=current_url,
+        transition_result=transition_result,
+    ) or {}
 
 
 __all__ = ["selection_node"]

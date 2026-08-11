@@ -7,15 +7,13 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from agent.recipe.phash_replay import (
-    match_step_by_screen_signature,
-    screen_context_signature_match,
-)
+from agent.recipe.phash_replay import match_step_by_screen_signature
 from agent.runtime.site_context import (
     is_job_detail_context,
     normalize_page_role,
 )
 from agent.runtime.job_card_queue import release_active_job_card
+from agent.runtime.target_matching import screen_context_signature_match
 from agent.runtime.worker_contracts import (
     WorkerState,
     apply_worker_state_update,

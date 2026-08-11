@@ -70,7 +70,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
         {
             "marker_id": 1,
             "text": "AI 엔지니어",
-            "slot_name": "query",
+            "slot_name": "search_keyword",
             "replay_mode": "fixed",
         },
         1,
@@ -86,7 +86,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
     assert steps[0].page_role == "home"
     assert steps[0].roi_signature["algorithm"] == "roi-phash-dct64-v2"
     assert steps[1].replay_mode == "parameterized"
-    assert steps[1].slot_refs == ["query"]
+    assert steps[1].slot_refs == ["search_keyword"]
     assert marker_id == 7
     assert trace["matched"] is True
     assert trace["mode"] == "roi_phash"
@@ -113,7 +113,7 @@ def test_roi_replay_rejects_step_without_roi_signature():
 
 
 def test_contextual_step_records_and_matches_screen_context():
-    from agent.recipe.phash_replay import screen_context_signature_match
+    from agent.runtime.target_matching import screen_context_signature_match
     from agent.recipe.record import record_ui_step
 
     steps: list[dict] = []

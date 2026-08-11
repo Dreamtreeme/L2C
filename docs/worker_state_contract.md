@@ -3,7 +3,7 @@ title: "작업자 상태 계약"
 type: reference
 area: architecture
 status: active
-updated: 2026-08-09
+updated: 2026-08-11
 tags:
   - l2c
   - docs/architecture
@@ -17,7 +17,7 @@ Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`�
 
 | 구역 | 대표 필드 | 주 갱신 주체 |
 |---|---|---|
-| `request` | `goal`, `worker_run_id`, `collection_intent`, `recipe_inputs`, 행동 권한 계약 | 작업자 실행 진입점 |
+| `request` | `goal`, `worker_run_id`, `collection_intent`, 행동 권한 계약 | 작업자 실행 진입점 |
 | `observation` | 캡처 ID, 화면 파일, URL, OCR 마커, 화면 서명, 페이지 역할 | `capture_node()`, `ocr_node()` |
 | `decision` | `pending_action`, 카드 선택 trace | 선택·Reflex·추론 노드 |
 | `transition` | 행동 이벤트, 오류 수, 전환 요청과 판정 결과 | 실행·전환 노드 |
@@ -25,7 +25,9 @@ Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`�
 | `collection` | `job_captures`, 카드 큐, 목록 기억, 상세 OCR 버퍼와 판독 범위 | OCR·선택·실행 효과 |
 | `lifecycle` | `is_finished` | 실행 효과와 종료 정책 |
 
-`request`는 한 작업자 실행의 입력 계약이다. 나머지 구역은 그래프가 현재 캡처를 처리하면서 갱신하는 실행 상태다.
+`request`는 한 작업자 실행의 입력 계약이다. Reflex의 가변 검색어도 별도 상태로
+복사하지 않고 `collection_intent.search_keyword`에서 직접 가져온다. 나머지
+구역은 그래프가 현재 캡처를 처리하면서 갱신하는 실행 상태다.
 
 `collection.job_captures`는 `list[JobCapture]`이다. 작업자는 상세 URL, 누적 OCR 원문과 화면 근거만 보관한다. 구조화된 `CollectedJob`은 Investigation 그래프의 후처리 단계에서 생성되므로 비전 작업자 상태에 들어오지 않는다.
 

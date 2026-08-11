@@ -7,10 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.recipe.matcher import is_replayable_action
-from agent.recipe.phash_replay import (
-    match_step_by_screen_signature,
-    screen_context_signature_match,
-)
+from agent.recipe.phash_replay import match_step_by_screen_signature
+from agent.runtime.target_matching import screen_context_signature_match
 from agent.runtime.worker_actions import (
     CONTEXTUAL_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
@@ -278,8 +276,9 @@ def load_reflex_replay_context(
     replay = state["replay"]
     intent = request["collection_intent"]
     markers = list(observation.get("current_markers", []) or [])
-    params = dict(request.get("recipe_inputs") or {})
-    params.setdefault("goal", request.get("goal", ""))
+    params = {
+        "search_keyword": intent.search_keyword.strip(),
+    }
     task_category = intent.task_category.strip()
     site = intent.site.strip()
     current_image_path = str(observation.get("current_screenshot") or "")

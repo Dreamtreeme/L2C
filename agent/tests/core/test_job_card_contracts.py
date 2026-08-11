@@ -133,6 +133,11 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     scroll_properties = scroll_schema["function"]["parameters"]["properties"]
     assert "amount" not in scroll_properties
     assert scroll_properties["scroll_distance"]["enum"] == ["small", "page"]
+    input_schema = model_action_tool_schema("type_in_marker")
+    slot_options = input_schema["function"]["parameters"]["properties"][
+        "slot_name"
+    ]["anyOf"]
+    assert slot_options[0]["const"] == "search_keyword"
     normalized_scroll = action_request_from_model_response(
         SimpleNamespace(
             content="조금 아래를 읽습니다.",

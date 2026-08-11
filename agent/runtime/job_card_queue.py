@@ -5,13 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from agent.config import get_settings
-from agent.recipe.phash_replay import roi_signature_match
 from agent.runtime.worker_contracts import (
     ActionRequest,
     WorkerState,
     build_action_request,
 )
-from agent.runtime.target_matching import anchor_overlap, match_target_by_ratio
+from agent.runtime.target_matching import (
+    anchor_overlap,
+    match_target_by_ratio,
+    roi_signature_match,
+)
 from agent.utils.text import normalize_text
 from agent.runtime.site_context import looks_like_job_detail_url
 from agent.runtime.worker_state import target_count_from_state

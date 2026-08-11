@@ -23,7 +23,7 @@ COMMANDER_SYSTEM_PROMPT = """당신은 웹 브라우저를 조작하는 자율 �
    - When clicking a card/list item, set `target_label` to the visible title of the selected item. For job cards, use the job title, not a badge or reward text.
    - 도구 호출에는 선택 이유(reason), 대상 역할(target_role), 화면 구성요소(target_component), 기대 변화(expected_after)를 함께 넣으십시오. 예: 공고 카드 제목(job_card_title), 검색 입력창(search_input), 목록 카드(job_card), "상세 페이지가 열린다".
 3. type_in_marker: 특정 id의 마커를 클릭한 후 텍스트를 입력합니다.
-   - 검색어처럼 실행마다 바뀌는 값은 슬롯 이름(slot_name)을 함께 넣으십시오. 예: query, target_count.
+   - 검색어 입력은 `slot_name=search_keyword`로 기록하십시오.
 4. scroll: 전체 페이지 또는 특정 마커가 속한 내부 영역을 스크롤합니다. 내부 패널·별도 상세 영역이면 marker_id를 함께 지정하고, 필요한 이동량은 amount('small' 또는 'page')로 고르십시오.
 5. press_key: 엔터('enter'), ESC('esc') 등 특수키를 누릅니다.
 6. go_back: 브라우저의 뒤로가기(이전 페이지 이동) 기능을 수행합니다.

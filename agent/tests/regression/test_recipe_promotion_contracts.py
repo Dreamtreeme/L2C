@@ -224,8 +224,11 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
                     "replay_mode": "parameterized",
                     "component": "search_input",
                     "target": {"text": "검색어"},
-                    "param": {"text": "AI 엔지니어", "slot_name": "query"},
-                    "slot_refs": ["query"],
+                    "param": {
+                        "text": "AI 엔지니어",
+                        "slot_name": "search_keyword",
+                    },
+                    "slot_refs": ["search_keyword"],
                     "roi_signature": {
                         "phash": "1" * 16,
                         "crop_rect_ratio": [0.1, 0.1, 0.7, 0.2],
@@ -296,7 +299,10 @@ def test_type_and_enter_require_state_continuity(enter_observation, eligible):
                         "seq": 2,
                         "action": "type_in_marker",
                         "replay_mode": "parameterized",
-                        "param": {"slot_name": "query", "text": "iOS 개발자"},
+                        "param": {
+                            "slot_name": "search_keyword",
+                            "text": "iOS 개발자",
+                        },
                         "before_state": {
                             "observation_id": "observation:0002"
                         },

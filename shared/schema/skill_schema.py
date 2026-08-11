@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ReplayMode = Literal["fixed", "parameterized", "reasoning"]
+RecipeInputName = Literal["search_keyword"]
+RECIPE_INPUT_NAMES = frozenset({"search_keyword"})
 
 
 class SkillInputSlot(BaseModel):
@@ -15,7 +17,7 @@ class SkillInputSlot(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field("", description="슬롯 이름(slot name)")
+    name: RecipeInputName = Field(..., description="수집 요청에서 가져올 입력 이름")
 
 
 class RecipeSkillMetadata(BaseModel):

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from shared.schema.jd_schema import JOB_FIELDS, JobField
+from shared.schema.skill_schema import RecipeInputName
 
 
 # 행동 스키마 이름은 LLM에 노출되는 도구 이름과 같아야 하므로 소문자를 유지한다.
@@ -103,7 +104,10 @@ class type_in_marker(_ReplayProposal):
     )
     text: str = Field(..., description="입력할 텍스트")
     target_label: Optional[str] = Field(None, description="입력 영역의 보이는 라벨(target_label)")
-    slot_name: Optional[str] = Field(None, description="실행마다 바뀌는 입력 슬롯 이름(slot_name)")
+    slot_name: Optional[RecipeInputName] = Field(
+        None,
+        description="검색어를 재생할 때 사용하는 search_keyword 입력 이름",
+    )
     target_role: Optional[str] = Field(None, description="목표 기준 대상 역할(target_role)")
     target_component: Optional[str] = Field(None, description="화면 구성요소(target_component)")
     reason: Optional[str] = Field(None, description="이 입력을 수행한 이유(reason)")

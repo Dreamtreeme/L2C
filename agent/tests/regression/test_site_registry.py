@@ -278,7 +278,6 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
 
     def fake_execute(initial_state, _profile, _recursion_limit, **_kwargs):
         captured["collection_intent"] = initial_state["request"]["collection_intent"]
-        captured["recipe_inputs"] = initial_state["request"]["recipe_inputs"]
         captured["goal"] = initial_state["request"].get("goal", "")
         final_state = {
             **initial_state,
@@ -319,7 +318,6 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
         "benefits",
         "posted_at",
     ]
-    assert captured["recipe_inputs"] == {"search_keyword": "iOS 개발자"}
     assert "required_record_shape" in captured["goal"]
     assert "Collect up to 2 distinct job postings" in captured["goal"]
     assert result.submission.collection_intent.search_keyword == "iOS 개발자"

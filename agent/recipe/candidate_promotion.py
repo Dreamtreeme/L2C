@@ -16,7 +16,7 @@ from agent.runtime.worker_actions import (
     TARGET_REPLAY_ACTIONS,
 )
 from shared.schema.feedback_schema import RecipeCandidate
-from shared.schema.skill_schema import RecipeSkillMetadata
+from shared.schema.skill_schema import RECIPE_INPUT_NAMES, RecipeSkillMetadata
 
 
 def _step_seq(step: dict[str, Any]) -> int | None:
@@ -68,7 +68,7 @@ def _candidate_skill_metadata(
     for step in candidate.steps:
         for raw_name in step.slot_refs:
             name = str(raw_name or "").strip()
-            if name:
+            if name in RECIPE_INPUT_NAMES:
                 slots.add(name)
     return RecipeSkillMetadata(
         task_category=normalize_task_category(

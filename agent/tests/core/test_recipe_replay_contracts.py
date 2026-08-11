@@ -63,8 +63,8 @@ def test_reflex_replays_one_parameterized_roi_step(tmp_path):
                                         "bbox_ratio": [0.05, 0.0833, 0.35, 0.3333],
                                         "center_ratio": [0.2, 0.2083],
                                     },
-                                    param={"slot_name": "query"},
-                                    slot_refs=["query"],
+                                    param={"slot_name": "search_keyword"},
+                                    slot_refs=["search_keyword"],
                                 )
                             ],
                             after=RecipeCheckpoint(
@@ -107,7 +107,6 @@ def test_reflex_replays_one_parameterized_roi_step(tmp_path):
                     task_category="검색",
                     search_keyword="AI 엔지니어",
                 ),
-                "recipe_inputs": {"query": "AI 엔지니어"},
             },
         ),
         node_runtime(
@@ -212,8 +211,8 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                         replay_mode="parameterized",
                         roi_signature=input_roi,
                         target=input_target,
-                        param={"slot_name": "query"},
-                        slot_refs=["query"],
+                        param={"slot_name": "search_keyword"},
+                        slot_refs=["search_keyword"],
                     ),
                     RecipeAction(
                         source_seq=2,
@@ -270,7 +269,6 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                     task_category="검색",
                     search_keyword="AI 엔지니어",
                 ),
-                "recipe_inputs": {"query": "AI 엔지니어"},
             },
         ),
         replay_runtime,
@@ -348,7 +346,6 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                     task_category="검색",
                     search_keyword="AI 엔지니어",
                 ),
-                "recipe_inputs": {"query": "AI 엔지니어"},
             },
             replay={"active_reflex_recipe": verified["replay"]["active_reflex_recipe"]},
         ),

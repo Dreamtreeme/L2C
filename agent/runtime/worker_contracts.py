@@ -271,7 +271,6 @@ class WorkerRequestState(TypedDict, total=False):
     worker_run_id: str
     goal: str
     collection_intent: CollectionIntent
-    recipe_inputs: dict[str, Any]
     action_permission_contract: dict[str, Any]
 
 
@@ -442,7 +441,6 @@ def create_worker_state(
             "collection_intent": CollectionIntent(
                 required_fields=list(DEFAULT_JOB_COLLECTION_FIELDS)
             ),
-            "recipe_inputs": {},
             "action_permission_contract": {},
         },
         "observation": {
