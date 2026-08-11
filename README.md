@@ -396,7 +396,7 @@ python -m classic.main extract https://www.wanted.co.kr/wd/350432
 # 벤치마크와 품질 계산 검증
 .\scripts\test.cmd agent\tests\evaluation -q
 
-# 전체 235개
+# 전체 233개
 .\scripts\test.cmd agent\tests -q
 
 # Realtime E2E: 로그, 구조화 요약, 선택적 LangSmith trace를 함께 생성
@@ -426,9 +426,7 @@ OmniParser/PyTorch와 PaddleOCR/PaddlePaddle의 CUDA 런타임은 서로 다른 
 
 백엔드와 UI는 `127.0.0.1`에서만 실행됩니다. 설정에 외부 Host나 CORS 출처를 넣거나 원격 클라이언트가 직접 요청하면 시작 또는 요청 단계에서 거부합니다.
 
-웹 화면 오른쪽 위의 활동 아이콘에서 최근 실행 상태와 저장 현황을 확인할 수 있습니다. 만료 항목 정리는 먼저 삭제 후보와 예상 용량을 미리 계산하고, 사용자가 확인한 경우에만 오래된 로그·미참조 화면 산출물·감사 이력을 삭제합니다. 현재 공고, 활성 레시피, 공고가 참조하는 화면 파일은 정리 대상에서 제외합니다.
-
-기본 보존 기간은 로그 30일, 화면 산출물과 감사 이력 90일, 공고 변경 이력 180일입니다. 공고별 최신 변경 이력은 기간과 관계없이 5개를 남기며, `RETENTION_*` 환경변수로 기준을 조정할 수 있습니다.
+웹 화면 오른쪽 위의 활동 아이콘에서 최근 실행 상태를 확인할 수 있습니다.
 
 E2E 요약은 `run_id`, 실행시간, 실패 단계, 단계별 시간, 모델별 토큰, 비용 추정, 수집 품질을 한 파일에 기록합니다. LangSmith를 활성화하면 같은 실행의 trace와 결정론적 feedback도 함께 전송합니다. 설정과 대시보드 기준은 [`docs/e2e_observability.md`](./docs/e2e_observability.md), 고정 행렬과 사람 판정 절차는 [`docs/portfolio_evaluation.md`](./docs/portfolio_evaluation.md)를 참고하세요. 기본 모델 단가는 [`config/model_pricing.json`](./config/model_pricing.json)에서 관리하며, 별도 가격표가 필요할 때만 `LLM_PRICING_FILE`로 덮어씁니다. 가격이 등록되지 않은 모델은 비용을 추정하지 않고 토큰 원시값과 `unpriced_models`에 남깁니다.
 

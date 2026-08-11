@@ -42,20 +42,6 @@ export function formatNumber(value?: number): string {
   return new Intl.NumberFormat("ko-KR").format(Number(value || 0));
 }
 
-export function formatBytes(value?: number): string {
-  const bytes = Number(value || 0);
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 ** 2) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  if (bytes < 1024 ** 3) {
-    return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  }
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-}
-
 export function formatDate(value?: string | null): string {
   if (!value) {
     return "-";

@@ -3,13 +3,12 @@ from contextlib import asynccontextmanager
 from ipaddress import ip_address
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from agent.application.retention_service import run_retention
 from agent.bootstrap import ApplicationRuntime
 from agent.config import get_settings
 from agent.observability.run_contracts import (
@@ -86,7 +85,7 @@ app.add_middleware(
     allow_origins=cors_origins or list(DEFAULT_LOCAL_ORIGINS),
     allow_credentials=True,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-L2C-Operation"],
+    allow_headers=["Content-Type"],
 )
 
 frontend_dist_dir = Path(__file__).resolve().parents[1] / "frontend" / "dist"
@@ -168,35 +167,10 @@ async def cancel_run(run_id: str, request: Request):
 
 @app.get("/api/operations")
 async def get_operations_summary(request: Request):
-    """최근 실행 상태와 보존 만료 후보를 반환합니다."""
-    paths = get_settings().paths
-    retention = run_retention(
-        db_path=paths.db_path,
-        logs_dir=paths.log_dir,
-        screenshot_dir=paths.screenshot_dir,
-        dry_run=True,
-    )
+    """최근 실행 상태를 반환합니다."""
     return {
         "runs": _chat_service_for_app(request.app).list_runs(limit=20),
-        "retention": retention,
     }
-
-
-@app.post("/api/operations/retention")
-async def apply_retention(x_l2c_operation: str = Header(default="")):
-    """현재 보존 정책의 만료 후보를 실제로 정리합니다."""
-    if x_l2c_operation != "apply-retention":
-        raise HTTPException(
-            status_code=403, detail="Retention confirmation header required"
-        )
-
-    paths = get_settings().paths
-    return run_retention(
-        db_path=paths.db_path,
-        logs_dir=paths.log_dir,
-        screenshot_dir=paths.screenshot_dir,
-        dry_run=False,
-    )
 
 
 @app.post(

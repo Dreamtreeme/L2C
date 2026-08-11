@@ -5,7 +5,6 @@ import type {
   JobDetail,
   OperationsResponse,
   ProcessingPayload,
-  RetentionPreview,
   RunEvent,
   RunRecord,
 } from "../types";
@@ -177,17 +176,4 @@ export async function getOperations(): Promise<OperationsResponse> {
     throw new Error(await errorMessage(response));
   }
   return (await response.json()) as OperationsResponse;
-}
-
-export async function applyRetention(): Promise<RetentionPreview> {
-  const response = await fetch("/api/operations/retention", {
-    method: "POST",
-    headers: {
-      "X-L2C-Operation": "apply-retention",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(await errorMessage(response));
-  }
-  return (await response.json()) as RetentionPreview;
 }

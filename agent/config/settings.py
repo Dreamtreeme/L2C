@@ -404,13 +404,6 @@ class RecipeSettings(SectionSettings):
     promotion_max_attempts: int = Field(3, ge=1, le=100, validation_alias="VISION_RECIPE_PROMOTION_MAX_ATTEMPTS")
 
 
-class RetentionSettings(SectionSettings):
-    log_days: int = Field(30, ge=1, le=3650, validation_alias="RETENTION_LOG_DAYS")
-    artifact_days: int = Field(90, ge=1, le=3650, validation_alias="RETENTION_ARTIFACT_DAYS")
-    job_version_days: int = Field(180, ge=1, le=3650, validation_alias="RETENTION_JOB_VERSION_DAYS")
-    keep_job_versions: int = Field(5, ge=1, le=100, validation_alias="RETENTION_KEEP_JOB_VERSIONS")
-
-
 class ObservabilitySettings(SectionSettings):
     app_env: str = Field("development", validation_alias="APP_ENV")
     log_format: str = Field("console", validation_alias="LOG_FORMAT")
@@ -432,7 +425,6 @@ class AppSettings:
         self.ocr = OcrSettings()
         self.reflex = ReflexSettings()
         self.recipe = RecipeSettings()
-        self.retention = RetentionSettings()
         self.observability = ObservabilitySettings()
 
 
@@ -451,7 +443,6 @@ __all__ = [
     "ObservabilitySettings",
     "PathSettings",
     "RecipeSettings",
-    "RetentionSettings",
     "ReflexSettings",
     "VisionSettings",
     "get_settings",

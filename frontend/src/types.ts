@@ -178,20 +178,8 @@ export interface RunRecord {
   cancel_requested?: boolean;
 }
 
-export interface RetentionPreview {
-  inventory?: Record<string, number>;
-  files?: {
-    log_count?: number;
-    artifact_count?: number;
-    reclaimable_bytes?: number;
-  };
-  database?: Record<string, number>;
-  [key: string]: unknown;
-}
-
 export interface OperationsResponse {
   runs: RunRecord[];
-  retention: RetentionPreview;
 }
 
 export type ChatMessageState =
