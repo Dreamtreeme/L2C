@@ -59,11 +59,9 @@ tags:
 | `ARCHITECTURE.md` | 현재 구현된 시스템 구조의 단일 기준 |
 | `docs/index.md` | 모든 사람이 관리하는 문서의 탐색 진입점 |
 | `docs/design_decisions.md` | 채택한 결정과 트레이드오프 |
-| `docs/architecture_refactor_plan.md` | 아직 적용하지 않은 구조 변경 계획과 진행 상태 |
-| `troubleshooting.md` | 분할 전 문제 해결 기록의 원본과 목차 |
-| `benchmark/*.md` | 특정 실행에서 생성하거나 정리한 성능 결과 |
+| `troubleshooting.md` | 재현한 장애, 원인과 최종 해결 기록 |
 
-현재 구현과 계획을 같은 문장에서 섞지 않는다. `ARCHITECTURE.md`에는 현재 동작만 적고, 바꿀 내용은 계획 문서에 둔다.
+`ARCHITECTURE.md`에는 현재 동작만 기록하고 진행 중인 작업은 GitHub Issues에서 관리한다.
 
 ## Callout
 

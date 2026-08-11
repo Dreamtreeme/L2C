@@ -314,4 +314,4 @@ Reflex의 직접 성과는 먼저 생략한 추론 횟수로 보고, 실행시�
 - Critic 비용을 포함한 반복 횟수별 누적 손익분기점
 - 실제 사용자 과업의 답변 만족도
 
-실행 관측 방식은 [E2E 관측 환경](e2e_observability.md), 현재 시스템 경계는 [`ARCHITECTURE.md`](../ARCHITECTURE.md), 구조 변경 이력은 [아키텍처 리팩터링 계획](architecture_refactor_plan.md)을 참고합니다.
+실행 관측 방식은 [E2E 관측 환경](e2e_observability.md), 현재 시스템 경계는 [`ARCHITECTURE.md`](../ARCHITECTURE.md)를 참고합니다.

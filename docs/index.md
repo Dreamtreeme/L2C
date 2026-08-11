@@ -3,7 +3,7 @@ title: "L2C 문서 인덱스"
 type: hub
 area: documentation
 status: active
-updated: 2026-08-08
+updated: 2026-08-11
 tags:
   - l2c
   - docs/documentation
@@ -21,8 +21,6 @@ tags:
 | [`README.md`](../README.md) | 프로젝트 목적, 차별점, 검증 결과, 실행 방법 |
 | [`ARCHITECTURE.md`](../ARCHITECTURE.md) | 현재 구현된 시스템 구조 |
 | [제품 데모 및 검증](product_demo.md) | 실제 UI 실행, 재현 시나리오, 검증 수치 |
-| [아키텍처 리팩터링 계획](architecture_refactor_plan.md) | 다음 구조 변경 순서와 삭제 대상 |
-| [문서 정리 계획](documentation_plan.md) | 문서 분할과 검증 도입 진행 상태 |
 
 ## 아키텍처와 런타임
 
@@ -39,21 +37,18 @@ tags:
 | 문서 | 상태 | 내용 |
 |---|---|---|
 | [Reflex Recipe 구현 기준](reflex_recipe_plan.md) | 현재 | 후보 저장, Critic 검토, ROI 재생 흐름 |
-| [`troubleshooting.md`](../troubleshooting.md) | 분할 예정 | 실험 과정과 장애 해결 원본 기록 |
-| [트러블슈팅 및 교훈](lessons_learned.md) | 역사 기록 | 초기 GUI·VLM 구현에서 얻은 교훈 |
+| [`troubleshooting.md`](../troubleshooting.md) | 현재 | 실험 과정, 실패 원인과 해결 기록 |
 
 ## 검색과 사이트
 
 | 문서 | 상태 | 내용 |
 |---|---|---|
 | [검색 의미 사전](search_taxonomy.md) | 현재 | 직무·기술 개념과 별칭 관리 |
-| [사이트별 수집 특성 기록](site_characteristics.md) | 역사 기록 | Classic 경로 중심의 초기 사이트 조사 |
 | [`agent/sites/README.md`](../agent/sites/README.md) | 현재 | Realtime 사이트 프로필 구조와 공식 주소 |
 
 ## 문서 관리
 
 - [문서 작성 규칙](documentation_conventions.md)
-- [문서 정리 계획](documentation_plan.md)
 - [Obsidian 문서 대시보드](documentation.base)
 
-현재 동작은 [`ARCHITECTURE.md`](../ARCHITECTURE.md), 런타임 버전은 [런타임 호환 기준](runtime_compatibility.md)을 우선합니다. 역사 기록과 계획 문서는 현재 구현의 근거로 단독 사용하지 않습니다.
+현재 동작은 [`ARCHITECTURE.md`](../ARCHITECTURE.md), 런타임 버전은 [런타임 호환 기준](runtime_compatibility.md)을 우선합니다.
