@@ -9,7 +9,6 @@ from benchmark.site_adaptation_eval import (
     SiteAdaptationManifest,
     evaluate_site_adaptation,
 )
-from benchmark.user_study_eval import UserStudyManifest, evaluate_user_study
 
 
 def _collection(*, target=1, resolved=1, status="completed", items=None):
@@ -262,50 +261,3 @@ def test_site_adaptation_reports_common_runtime_work_and_validity():
     assert valid_result["vision_profile_only"] is False
     assert valid_result["comparison_valid"] is True
     assert incomplete_result["comparison_valid"] is False
-
-
-def _study_record(mode, task_id, *, total=100, active=80):
-    return {
-        "participant_id": "P1",
-        "task_id": task_id,
-        "mode": mode,
-        "order": 1,
-        "total_completion_sec": total,
-        "human_active_sec": active,
-        "result_review_sec": 10,
-        "suitable_job_count": 1,
-        "duplicate_count": 0,
-        "missing_field_count": 0,
-        "factual_error_count": 0,
-        "citation_link_rate": 1,
-        "usefulness_score": 4,
-        "trust_score": 4,
-        "correction_count": 0,
-    }
-
-
-def test_user_study_reports_efficiency_only_for_complete_crossover():
-    complete = UserStudyManifest.model_validate(
-        {
-            "study_contract": {},
-            "records": [
-                _study_record("manual", "T1", total=300, active=300),
-                _study_record("l2c", "T1", total=180, active=60),
-            ],
-        }
-    )
-    incomplete = UserStudyManifest.model_validate(
-        {
-            "study_contract": {"participants": 3, "tasks": ["T1", "T2"]},
-            "records": [
-                _study_record("manual", "T1"),
-                _study_record("l2c", "T2"),
-            ],
-        }
-    )
-
-    complete_result = evaluate_user_study(complete)
-    incomplete_result = evaluate_user_study(incomplete)
-    assert complete_result["human_activity_reduction_rate"] == 0.8
-    assert incomplete_result["design_complete"] is False
-    assert incomplete_result["human_activity_reduction_rate"] is None

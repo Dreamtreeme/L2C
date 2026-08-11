@@ -396,7 +396,7 @@ python -m classic.main extract https://www.wanted.co.kr/wd/350432
 # 벤치마크와 품질 계산 검증
 .\scripts\test.cmd agent\tests\evaluation -q
 
-# 전체 233개
+# 전체 232개
 .\scripts\test.cmd agent\tests -q
 
 # Realtime E2E: 로그, 구조화 요약, 선택적 LangSmith trace를 함께 생성

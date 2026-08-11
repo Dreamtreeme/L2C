@@ -7,7 +7,7 @@
 3. `core/test_collection_postprocessing.py`, `core/test_db_persistence.py`: 원문 구조화와 공고·근거 저장을 확인한다.
 4. `core/test_worker_graph_boundaries.py` 이하 작업자 테스트: 캡처, OCR, Reflex, 추론, 물리 행동과 화면 전환을 검증한다.
 5. `regression/`: 과거 장애, 환경 호환성, 검색 사전, 레시피 승격의 세부 회귀를 검증한다.
-6. `evaluation/`: 성공률, 실행 모드 비교, 사용자 연구와 비용 계산을 검증한다.
+6. `evaluation/`: 성공률, 실행 모드 비교와 비용 계산을 검증한다.
 
 기본 명령은 사용자 요청부터 화면 행동·DB·답변까지 핵심 계약 117개만 실행한다.
 

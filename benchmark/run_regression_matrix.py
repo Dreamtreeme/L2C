@@ -15,7 +15,6 @@ from statistics import median
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_MATRIX = Path(__file__).with_name("e2e_regression_matrix.json")
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -501,7 +500,7 @@ def _mode_pair_efficiency(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run L2C vision E2E scenarios sequentially.")
-    parser.add_argument("--matrix", default=str(DEFAULT_MATRIX))
+    parser.add_argument("--matrix", required=True)
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--db-path", default="")

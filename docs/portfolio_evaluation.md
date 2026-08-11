@@ -99,22 +99,6 @@ Vision에서 공통 Python 코드를 수정했다면 `common_runtime_code_lines`
 분류한다. Classic과 Vision이 각각 3회 모두 성공하고 모든 실행시간을
 기록한 경우에만 `comparison_valid=true`가 된다.
 
-## 사람 대비 업무 효율
-
-`benchmark/user_study_template.json` 형식으로 참여자 3명, 과제 2개의 교차
-수행 결과를 기록한다.
-
-```powershell
-.\.venv-app\Scripts\python.exe -m benchmark.user_study_eval `
-  logs\portfolio\user_study.json `
-  --output logs\portfolio\user_study_report.json
-```
-
-전체 완료시간과 사람이 직접 입력·검토한 시간을 분리한다. 활동시간 절감률은
-수동 조사와 L2C의 중앙 사람 활동시간으로 계산한다. 참여자마다 두 방식을
-수행하고 각 과제가 두 방식에 모두 배치된 경우에만 `design_complete=true`와
-활동시간 절감률을 출력한다.
-
 ## 자원 측정
 
 ```powershell

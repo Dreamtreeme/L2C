@@ -73,29 +73,13 @@ python -m benchmark.run_realtime_e2e `
 python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 ```
 
-기존 실행 기록 전체를 재사용할 때는 먼저 출처 수준과 비교 단위를 감사합니다.
-
-```powershell
-python -m benchmark.audit_e2e_history logs `
-  --json-output logs/e2e_history_audit.json `
-  --markdown-output benchmark/e2e_history_audit.md `
-  --minimum-group-size 2
-```
-
-감사 도구는 `git_commit`, 설정 fingerprint, 시나리오, 사이트, 실행 모드,
-질의와 목표 수가 같은 기록만 한 그룹으로 묶습니다. `git_dirty=true` 실행은
-코드 상태를 완전히 재현할 수 없으므로 최종 성능 기준이 아니라 개발 중 회귀와
-트러블슈팅 증거로 분리합니다. 표본이 작은 그룹에는 p95를 붙이지 않고 성공
-건수와 실행시간 최소·중앙·최대값을 그대로 표시합니다.
-현재 분류 결과는 [`benchmark/e2e_history_audit.md`](../benchmark/e2e_history_audit.md)에
-보관합니다.
-
 ### 자율 탐색과 경험 기반 탐색 회귀
 
 `benchmark.run_regression_matrix`는 격리 DB에서 같은 작업의 자율 탐색과 경험 기반 탐색을 순서대로 실행합니다.
 
 ```powershell
 python -m benchmark.run_regression_matrix `
+  --matrix benchmark/portfolio_reflex_matrix.json `
   --scenario wanted-ios-autonomous `
   --scenario wanted-ios-experience-guided
 ```
@@ -138,16 +122,6 @@ python -m benchmark.run_product_chat_matrix `
 인용처럼 코드로 결정할 수 있는 제품 계약만 자동 판정하고 답변의 의미 품질은
 사람이 검토합니다. 전체 SSE와 런타임 로그는 로그 파일에만 기록하며 콘솔에는
 요약을 출력합니다. 화면 진행을 같이 볼 때만 `--verbose`를 사용합니다.
-
-지휘자의 요청 이해만 빠르게 회귀할 때는 실제 12개 자연어 질문을 구조화 출력으로
-평가합니다.
-
-```powershell
-python -m benchmark.profile_investigation_planner `
-  --summary `
-  --failures-only `
-  --max-concurrency 3
-```
 
 ## Trace 구조
 
