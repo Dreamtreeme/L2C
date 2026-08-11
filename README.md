@@ -387,7 +387,7 @@ cd L2C
 # Classic 방식 — URL 직접 입력
 python -m classic.main extract https://www.wanted.co.kr/wd/350432
 
-# 핵심 제품 계약 118개
+# 핵심 제품 계약 117개
 .\scripts\test.cmd
 
 # 과거 장애와 세부 기능 회귀
@@ -396,7 +396,7 @@ python -m classic.main extract https://www.wanted.co.kr/wd/350432
 # 벤치마크와 품질 계산 검증
 .\scripts\test.cmd agent\tests\evaluation -q
 
-# 전체 242개
+# 전체 235개
 .\scripts\test.cmd agent\tests -q
 
 # Realtime E2E: 로그, 구조화 요약, 선택적 LangSmith trace를 함께 생성
