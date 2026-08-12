@@ -1,4 +1,4 @@
-"""단일 로컬 비전 작업자의 그래프 실행과 브라우저 생명주기를 관리한다."""
+"""수집 요청을 단일 로컬 비전 작업자 그래프에 연결한다."""
 
 from __future__ import annotations
 
@@ -178,7 +178,7 @@ def _build_collection_batch(
 
 
 class WorkerExecutionService:
-    """한 작업자의 잠금, 실행과 브라우저 정리를 한 경계에서 관리한다."""
+    """수집 요청을 작업자 그래프에 연결하고 결과 묶음을 구성한다."""
 
     def __init__(
         self,
@@ -193,21 +193,13 @@ class WorkerExecutionService:
         collection_intent: CollectionIntent,
         run_id: str | None = None,
     ) -> CollectionBatch:
-        """로컬 화면을 잠근 동안 작업자를 실행하고 브라우저를 정리한다."""
+        """비전 런타임의 실행 세션 안에서 수집 작업을 수행한다."""
 
         with self.worker_runtime.execution_session():
-            try:
-                return self._run_collection(
-                    collection_intent,
-                    run_id=run_id,
-                )
-            finally:
-                try:
-                    closed = self.worker_runtime.close_browser_after_run()
-                    if not closed:
-                        logger.warning("Browser cleanup did not close a browser")
-                except Exception as exc:
-                    logger.warning("Browser cleanup failed", error=str(exc))
+            return self._run_collection(
+                collection_intent,
+                run_id=run_id,
+            )
 
     def _run_collection(
         self,

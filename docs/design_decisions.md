@@ -59,7 +59,7 @@ Reflex의 효과는 hit 수가 아니라 동일 품질을 유지하면서 줄어
 
 ## 7. 로컬 단일 작업자 직렬화
 
-Realtime/Vision은 현재 화면과 물리 입력 장치를 공유하므로 병렬 worker를 실행하지 않습니다. `VisionWorkerRuntime.execution_session()`이 수집, 검토 재시도, 브라우저 정리 전체를 런타임별 잠금으로 직렬화합니다.
+Realtime/Vision은 현재 화면과 물리 입력 장치를 공유하므로 병렬 worker를 실행하지 않습니다. `VisionWorkerRuntime.execution_session()`이 수집 실행과 브라우저 정리를 런타임별 잠금으로 직렬화합니다.
 
 Perception, ActionTools, PaddleOCR subprocess, 컴파일된 작업자 그래프와 판단 모델은 요청 간 재사용합니다. 각 작업은 새 LangGraph state와 새 브라우저 창으로 시작하고 기본적으로 작업 종료 시 그 창만 닫습니다. OCR과 화면 모델은 애플리케이션 종료 때까지 유지하므로 서로 다른 요청의 목표·마커·카드 큐는 격리하면서 무거운 초기화 비용은 반복하지 않습니다.
 

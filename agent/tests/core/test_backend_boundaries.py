@@ -2,7 +2,6 @@
 
 import asyncio
 import threading
-from contextlib import contextmanager
 
 import pytest
 
@@ -507,113 +506,37 @@ def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
     assert calls[1:] == ["start", ("close", 0.5)]
 
 
-def test_browser_closes_by_default(monkeypatch):
-    from agent.application.worker_execution_service import (
-        WorkerExecutionService,
-    )
-    from agent.tests.worker_test_support import worker_data_services
+def test_worker_execution_session_closes_browser_after_failure():
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
-    from shared.schema.collection_intent import CollectionIntent
 
-    closed = []
+    events = []
 
     class FakeActionTools:
         def __init__(self, _perception):
             pass
 
         def close_browser(self):
-            closed.append(True)
+            events.append("browser_closed")
             return {"status": "success"}
 
     runtime = VisionWorkerRuntime(
         perception_factory=object,
         action_tools_factory=FakeActionTools,
     )
-    runtime.get_action_tools()
 
-    class StubWorkerExecutionService(WorkerExecutionService):
-        def _run_collection(self, _intent, *, run_id):
-            return {
-                "runtime": self.worker_runtime,
-                "data": self.data_services,
-            }
-
-    service = StubWorkerExecutionService(runtime, worker_data_services())
-    result = service.run(CollectionIntent())
-
-    assert closed == [True]
-    assert result["runtime"] is runtime
-    assert result["data"] is service.data_services
-
-
-def test_browser_cleanup_reports_returned_failure():
-    from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
-
-    class FakeActionTools:
-        def __init__(self, _perception):
-            pass
-
-        def close_browser(self):
-            return {
-                "status": "success",
-                "result": {
-                    "closed": False,
-                    "reason": "browser_not_found",
-                },
-            }
-
-    runtime = VisionWorkerRuntime(
-        perception_factory=object,
-        action_tools_factory=FakeActionTools,
-    )
-    runtime.get_action_tools()
-
-    assert runtime.close_browser_after_run() is False
-
-
-def test_worker_execution_service_closes_browser_after_worker_failure():
-    from agent.application.worker_execution_service import (
-        WorkerExecutionService,
-    )
-    from agent.tests.worker_test_support import worker_data_services
-    from shared.schema.collection_intent import CollectionIntent
-
-    events = []
-
-    class FakeRuntime:
-        @contextmanager
-        def execution_session(self):
-            events.append("lock_entered")
-            try:
-                yield
-            finally:
-                events.append("lock_released")
-
-        def close_browser_after_run(self):
-            events.append("browser_closed")
-
-    class FailingWorkerExecutionService(WorkerExecutionService):
-        def _run_collection(self, _intent, *, run_id):
+    with pytest.raises(RuntimeError, match="worker failed"):
+        with runtime.execution_session():
+            runtime.get_action_tools()
             events.append("worker_started")
             raise RuntimeError("worker failed")
 
-    service = FailingWorkerExecutionService(
-        FakeRuntime(),
-        worker_data_services(),
-    )
-
-    with pytest.raises(RuntimeError, match="worker failed"):
-        service.run(CollectionIntent())
-
     assert events == [
-        "lock_entered",
         "worker_started",
         "browser_closed",
-        "lock_released",
     ]
 
 
-def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch):
+def test_vision_runtime_reuses_ocr_worker_until_application_shutdown():
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 
     events = []
@@ -652,17 +575,20 @@ def test_vision_runtime_reuses_ocr_worker_until_application_shutdown(monkeypatch
             "graph_initialized": False,
         }
 
-    runtime.close_browser_after_run()
-
     with runtime.execution_session():
         assert runtime.get_perception() is first_perception
         assert runtime.get_action_tools() is first_actions
         assert runtime.ocr_worker_pid == 7007
 
-    assert events == ["browser_closed"]
+    assert events == ["browser_closed", "browser_closed"]
 
     runtime.close()
-    assert events == ["browser_closed", "perception_closed", "ocr_closed"]
+    assert events == [
+        "browser_closed",
+        "browser_closed",
+        "perception_closed",
+        "ocr_closed",
+    ]
 
 
 def test_application_runtime_keeps_vision_lazy_until_collection(monkeypatch, tmp_path):

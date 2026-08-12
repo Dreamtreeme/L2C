@@ -17,7 +17,8 @@ flowchart TD
     CLARIFY -->|예| DBQ[SQLite 근거 충분성 검사]
     DBQ -->|근거가 충분함| ANSWER[답변 및 인용 검증]
     DBQ -->|추가 수집 필요| COLLECTION[collect 노드]
-    COLLECTION --> LOCK[WorkerExecutionService 실행 세션]
+    COLLECTION --> SERVICE[WorkerExecutionService]
+    SERVICE --> LOCK[VisionWorkerRuntime 실행 세션]
     LOCK --> WG[Vision Worker LangGraph]
     WG --> WEB[브라우저 화면과 물리 입력]
     WG --> BATCH[CollectionBatch: JobCapture 원문]
@@ -137,7 +138,7 @@ flowchart TD
 
 - `ApplicationRuntime`은 FastAPI 시작 때 한 번 생성되고 E2E 실행기에서는 명시적인 컨텍스트로 관리됩니다.
 - Perception·ActionTools·OCR·컴파일된 작업자 그래프·판단 모델은 애플리케이션 수명 동안 재사용합니다.
-- `WorkerExecutionService.run()`이 `VisionWorkerRuntime.execution_session()` 안에서 브라우저 준비와 작업자 그래프를 실행하고 브라우저를 정리합니다. 제출물 검증과 SQLite 저장은 화면 잠금을 해제한 뒤 진행합니다.
+- `WorkerExecutionService.run()`은 수집 의도를 초기 상태로 만들고 `VisionWorkerRuntime.execution_session()` 안에서 작업자 그래프를 실행합니다. 실행 세션이 화면 잠금과 브라우저 정리를 소유하며, 제출물 검증과 SQLite 저장은 잠금을 해제한 뒤 진행합니다.
 - 브라우저 창은 수집 요청마다 열고 기본적으로 요청 종료 때 닫습니다. 이때 OCR worker는 유지됩니다.
 - PaddleOCR은 별도 subprocess를 요청 간 재사용합니다.
 - OCR subprocess는 요청 횟수로 재시작하지 않으며 실제 timeout이나 프로세스 실패 때만 한 번 복구합니다.

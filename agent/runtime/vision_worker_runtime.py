@@ -163,37 +163,42 @@ class VisionWorkerRuntime:
 
     @contextmanager
     def execution_session(self) -> Iterator[None]:
-        """한 로컬 화면에 대한 물리 입력을 요청 단위로 직렬화한다."""
+        """작업자 실행을 직렬화하고 종료 시 브라우저만 정리한다."""
 
         with self._execution_lock:
             self._require_open()
-            yield
+            try:
+                yield
+            finally:
+                try:
+                    self._close_browser()
+                except Exception as exc:
+                    logger.warning("Browser cleanup failed", error=str(exc))
 
-    def close_browser_after_run(self) -> bool:
-        """요청 종료에는 브라우저만 닫고 OCR 작업자는 유지한다."""
+    def _close_browser(self) -> None:
+        """브라우저만 닫고 OCR·모델·그래프 자원은 유지한다."""
 
         action_tools = self._action_tools
         if action_tools is None:
             logger.info(
                 "Browser cleanup skipped", reason="action_tools_not_initialized"
             )
-            return False
+            return
         result = action_tools.close_browser()
         if result.get("status") != "success":
             logger.warning(
                 "Browser cleanup failed",
                 error=result.get("error") or result.get("result"),
             )
-            return False
+            return
         payload = result.get("result")
         if isinstance(payload, dict) and payload.get("closed") is False:
             logger.warning(
                 "Browser cleanup incomplete",
                 reason=payload.get("reason") or "browser_not_closed",
             )
-            return False
+            return
         logger.info("Browser cleanup completed", result=result)
-        return True
 
     def close(self) -> None:
         """진행 중인 물리 입력이 끝난 뒤 브라우저, OCR, 캡처 자원을 닫는다."""
@@ -209,12 +214,7 @@ class VisionWorkerRuntime:
                 and perception.browser_window_id
             ):
                 try:
-                    result = action_tools.close_browser()
-                    if result.get("status") != "success":
-                        logger.warning(
-                            "Browser shutdown failed",
-                            error=result.get("error") or result.get("result"),
-                        )
+                    self._close_browser()
                 except Exception as exc:
                     logger.warning("Browser shutdown failed", error=str(exc))
             if perception is not None:

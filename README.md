@@ -146,8 +146,10 @@ Playwright로 DOM 구조를 직접 파싱합니다. 사이트별 마커와 셀�
   → 작업자 제출물과 레시피 후보를 별도 기록
   → SQLite 근거 재검사 → 최종 답변 및 job_id 인용 검증
     ↓
-[WorkerExecutionService — 단일 로컬 작업자 직렬화]
-  브라우저 준비·LangGraph 실행·정리를 하나의 잠금 범위로 실행
+[WorkerExecutionService — 수집 요청과 작업자 그래프 연결]
+    ↓
+[VisionWorkerRuntime.execution_session — 화면 잠금·브라우저 정리]
+  OCR·판단 모델·컴파일된 그래프는 요청 간 재사용
     ↓
 [Vision Worker LangGraph]
   시작 상태 확인 → capture → transition → selection
