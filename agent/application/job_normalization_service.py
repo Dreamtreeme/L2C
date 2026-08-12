@@ -76,7 +76,7 @@ def complete_extracted_job(
         update={
             "url": url or None,
             "raw_ocr_text": raw_ocr_text,
-            "source_platform": posting.source_platform or source_platform_for_url(url),
+            "source_platform": source_platform_for_url(url) or posting.source_platform,
         }
     )
     return completed.model_copy(

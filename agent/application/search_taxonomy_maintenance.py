@@ -6,6 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from agent.application.job_normalization_service import source_platform_for_url
 from agent.application.job_taxonomy_linker import JobTaxonomyLinker
 from agent.application.search_taxonomy_import_service import import_local_seed
 from agent.application.search_taxonomy_service import (
@@ -33,6 +34,25 @@ def _remove_relation_schema(db_path: Path) -> None:
         connection.execute("DROP TABLE IF EXISTS search_concept_relations")
 
 
+def _normalize_source_platforms(db_path: Path) -> None:
+    """기존 공고의 출처를 사이트 레지스트리의 저장값으로 맞춘다."""
+
+    with sqlite3.connect(db_path) as connection:
+        updates: list[tuple[str, int]] = []
+        rows = connection.execute("SELECT id, url, source_platform FROM jobs")
+        for job_id, url, stored_source in rows:
+            canonical_source = source_platform_for_url(str(url or ""))
+            if not canonical_source:
+                continue
+            if canonical_source == str(stored_source or "").strip():
+                continue
+            updates.append((canonical_source, int(job_id)))
+        connection.executemany(
+            "UPDATE jobs SET source_platform = ? WHERE id = ?",
+            updates,
+        )
+
+
 def prepare_search_taxonomy(
     db_path: str | Path,
     *,
@@ -43,6 +63,7 @@ def prepare_search_taxonomy(
     resolved_db_path = Path(db_path)
     resolved_seed_path = Path(seed_path)
     Database(resolved_db_path)
+    _normalize_source_platforms(resolved_db_path)
     _remove_relation_schema(resolved_db_path)
     service = SearchTaxonomyService(resolved_db_path)
     linker = JobTaxonomyLinker(resolved_db_path)

@@ -22,12 +22,13 @@ def test_job_posting_rejects_internal_field_aliases():
         )
 
 
-def test_extracted_job_is_completed_once_with_source_and_hash():
+def test_extracted_job_uses_registered_source_and_hash():
     posting = complete_extracted_job(
         JobPosting(
             company_name="Acme",
             position="AI Engineer",
             requirements=["Python"],
+            source_platform="원티드",
         ),
         current_url="https://www.wanted.co.kr/wd/123",
         raw_ocr_text="실제 OCR 원문",

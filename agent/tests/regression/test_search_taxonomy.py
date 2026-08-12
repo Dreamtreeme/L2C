@@ -56,8 +56,18 @@ def test_dictionary_resolves_occupation_and_skill_aliases(tmp_path):
     }
 
 
-def test_dictionary_import_keeps_only_flat_occupation_and_skill_concepts(tmp_path):
+def test_dictionary_prepare_normalizes_sources_and_keeps_flat_concepts(tmp_path):
     db_path = tmp_path / "jobs.db"
+    db = Database(db_path)
+    job_id = insert_job(
+        db,
+        "https://www.wanted.co.kr/wd/123",
+        {
+            "company_name": "예시회사",
+            "position": "iOS 개발자",
+            "source_platform": "원티드",
+        },
+    )
     _prepared_taxonomy(db_path)
 
     with sqlite3.connect(db_path) as connection:
@@ -72,9 +82,14 @@ def test_dictionary_import_keeps_only_flat_occupation_and_skill_concepts(tmp_pat
             "SELECT 1 FROM sqlite_master "
             "WHERE type='table' AND name='search_concept_relations'"
         ).fetchone()
+        source_platform = connection.execute(
+            "SELECT source_platform FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()[0]
 
     assert concept_types == {"occupation", "skill"}
     assert relation_table is None
+    assert source_platform == "Wanted"
 
 
 def test_missing_occupation_uses_one_direct_question(tmp_path):
