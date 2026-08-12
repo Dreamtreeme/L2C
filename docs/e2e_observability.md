@@ -134,23 +134,6 @@ python -m benchmark.run_product_chat_matrix `
 
 각 단계에는 `stage`, `component`, 성공 여부와 실패 코드가 붙습니다. `graph:reflex`의 `action_source=reflex`와 `graph:selection`의 `action_source=job_card_queue`가 각각 Reflex와 공고 카드 큐 hit의 기준입니다. 중간 실패 후 복구된 실행은 최종 성공으로 집계하고, 실패 이력은 `recovered_failure_count`와 `internal_failure_codes`에 남깁니다.
 
-## 작업자 실행 경로 조회
-
-`worker_submissions`에는 행동 순번별 화면 관찰, 실행 피드백, 다음 화면 전환이 함께 저장됩니다. 다음 명령은 가장 최근 제출물을 관찰 → 행동 → 다음 관찰 순서로 출력합니다.
-
-```powershell
-python scripts/inspect_worker_trace.py
-```
-
-특정 실행이나 정확한 제출물을 조회할 수도 있습니다.
-
-```powershell
-python scripts/inspect_worker_trace.py --run-id worker-20260723192058-c0cd94e8
-python scripts/inspect_worker_trace.py --submission-id worker-20260723192058-c0cd94e8 --json
-```
-
-텍스트 출력은 긴 실행 ID에서 `observation:0001`처럼 관찰 순번만 줄여 보여 줍니다. `--json` 출력은 실행 ID, 전체 관찰 ID, 스크린샷 경로를 그대로 유지하므로 실패 경로 분석이나 별도 시각화 입력으로 사용할 수 있습니다.
-
 ## 대시보드
 
 LangSmith에서 root run 이름 `l2c.e2e`를 기준으로 다음 지표를 구성합니다.

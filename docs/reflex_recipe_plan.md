@@ -3,7 +3,7 @@ title: "Reflex Recipe 구현 기준"
 type: plan
 area: reflex
 status: active
-updated: 2026-07-29
+updated: 2026-08-12
 tags:
   - l2c
   - docs/reflex
@@ -41,18 +41,17 @@ tags:
 활성 레시피는 한 성공 실행을 `시작 상태 + 상태 전이 목록 + 완료 상태`인
 `recipe_path` 하나로 저장한다. 각 `recipe_transition`은 `before + actions +
 after`를 가지며, 첫 전이의 첫 행동은 반드시 ROI로 다시 찾을 수 있는
-클릭/입력이어야 한다. 이후에는 ROI 클릭/입력과 화면 문맥이 있는 키 입력·
-뒤로가기·탭 전환을 같은 경로에 포함할 수 있다.
+클릭/입력이어야 한다. 이후 전이도 ROI 클릭·입력만 재생하며, 입력 직후
+Enter가 하나의 화면 전환을 만들 때만 두 행동을 같은 전이로 묶는다.
 
 - `site`: 사이트 식별자.
 - `task_category`: 검색, 로그인, 결제, 사이트 탐색 같은 작업 분류.
 - `page_role`: home, search, job_detail, popup 등 행동 당시의 설명용 화면 역할. 재생 차단 조건으로 사용하지 않는다.
 - `roi_signature`: target 주변 crop pHash와 crop 비율.
-- `screen_context_signature`: 키 입력·뒤로가기처럼 타깃 좌표가 없는 행동 직전의 전체 화면 pHash와 캡처 크기.
 - `target.center_ratio` 또는 `target.bbox_ratio`: 현재 OCR marker 재탐색용 비율 좌표.
-- `replay_mode`: 자율탐색이 `fixed` 또는 `parameterized`로 제안하고 Critic이 유지한 단계.
+- `replay_mode`: 실행된 도구와 입력 슬롯 계약에서 `fixed` 또는 `parameterized`로 계산되고 Critic이 유지한 단계.
 - `before` / `after`: 행동 묶음 전후의 검증 가능한 화면 체크포인트.
-- `actions`: 중간 화면 관찰 없이 실행해도 되는 행동 묶음. 현재는 단일 행동 또는 `검색어 입력 + Enter`만 허용한다.
+- `actions`: 중간 화면 관찰 없이 실행해도 되는 행동 묶음. 현재는 단일 클릭·입력 또는 `검색어 입력 + Enter`만 허용한다.
 
 Critic이 중간 행동을 제거했을 때 삭제 전후 체크포인트가 같다는 근거가 없으면
 그 지점에서 경로를 끝낸다. 뒤쪽 행동을 별도 레시피로 자동 생성하지 않는다.
@@ -63,8 +62,7 @@ Critic이 중간 행동을 제거했을 때 삭제 전후 체크포인트가 같
 `recipe_sources`에 후보별 근거를 따로 연결한다.
 
 `state_key`, Jaccard anchor 유사도와 코드 기반 화면 역할 분류는 active replay의
-기본 조회 기준이 아니다. 전체 화면 pHash는 타깃 좌표가 없는 단계의 행동 직전
-문맥을 확인할 때만 `screen_context_signature`로 사용한다.
+기본 조회 기준이 아니다.
 
 전체 경로 키는 `path6#` 버전을 사용한다. 단일 행동 목록을 저장하던 이전 활성
 행은 스키마 전환 때 폐기하지만 `recipe_candidates`는 보존한다.
@@ -78,10 +76,10 @@ Critic이 중간 행동을 제거했을 때 삭제 전후 체크포인트가 같
 4. 화면 역할 이름은 관측 로그에 남기되 재생 허용 여부에는 사용하지 않는다.
 5. ROI가 맞으면 저장된 target 비율에 가까운 현재 OCR marker를 찾는다.
 6. 첫 전이가 통과한 경로 하나를 선택하고 `active_reflex_recipe`에 현재 전이 번호를 저장한다. 이 시점에는 번호를 증가시키지 않는다.
-7. 현재 캡처에서 검증한 단일 행동 또는 `입력 + Enter` 행동 묶음을 `ActionRequest`로 실행한다.
+7. 현재 캡처에서 검증한 단일 클릭·입력 또는 `입력 + Enter` 행동 묶음을 `ActionRequest`로 실행한다.
 8. OpenCV 연속 프레임 비교로 화면 변화 시작과 렌더링 안정화를 기다린 뒤 OCR을 실행한다.
 9. 저장된 `after`의 ROI 앵커 또는 화면 문맥이 현재 화면과 일치할 때만 다음 전이 번호로 이동한다.
-10. 다음 전이의 ROI 대상은 현재 marker로 다시 찾고, 타깃 없는 행동은 저장한 `screen_context_signature`를 확인한다.
+10. 다음 전이의 ROI 대상도 현재 marker로 다시 찾는다.
 11. 마지막 전이의 도착 상태가 검증되면 활성 경로 상태를 지운다. 검증이 실패하면 경로 전체를 폐기하고 reasoning으로 폴백하며 같은 run 안에서 해당 `recipe_key`를 차단한다.
 
 ## 승격 정책
@@ -104,7 +102,6 @@ LLM이 한 번에 여러 행동을 생성하는 것은 허용하지 않는다. �
 ## 실패 처리
 
 - ROI pHash가 맞지 않으면 즉시 reasoning fallback.
-- 좌표 없는 행동의 `screen_context_signature`가 없거나 현재 화면 pHash와 다르면 즉시 reasoning fallback.
 - target marker 비율 매칭이 실패하면 즉시 reasoning fallback.
 - OpenCV 프레임 비교에서 화면 변화가 없거나 저장된 도착 체크포인트가 맞지 않으면 해당 `recipe_key`는 같은 run 안에서 재시도하지 않는다.
 
