@@ -3,7 +3,7 @@ title: "L2C 네이밍 규칙"
 type: reference
 area: architecture
 status: active
-updated: 2026-08-08
+updated: 2026-08-12
 tags:
   - l2c
   - docs/architecture
@@ -19,6 +19,8 @@ tags:
 - 같은 개념은 프로젝트 전체에서 같은 이름을 쓴다.
 - 후보, 검토, 승격, 실행 중 어느 단계의 데이터인지 이름에 드러낸다.
 - LLM이 의미 판단하는 영역과 코드가 결정론적으로 실행하는 영역을 이름으로 분리한다.
+- 조건 분기에 쓰는 값은 Pydantic 모델, Enum, Literal 또는 필드가 명시된 TypedDict로 정의한다.
+- `dict[str, Any]`는 OCR·CV·도구·LLM·DB 직렬화 경계에만 사용하고, 경계를 통과하면 도메인 계약으로 변환한다.
 - `data`, `info`, `item`, `metadata`, `result`, `recipe`처럼 단독으로는 넓은 이름을 피한다.
 
 ## 도메인 용어
@@ -26,16 +28,17 @@ tags:
 | 이름 | 의미 |
 |---|---|
 | `worker_submission` | 자율 탐색 worker가 끝난 뒤 지휘자/리뷰어에 제출하는 구조화 결과 |
-| `recorded_step` | 자율 탐색 중 실제 실행된 원본 행동 기록 |
+| `execution_event` | 자율탐색의 행동 결과와 완성된 화면 전이를 같은 순번에 보관한 실행 기록 |
 | `recipe_candidate` | 아직 active가 아닌 예비 레시피 후보 |
 | `candidate_review` | Critic이 후보를 검토한 결과 |
 | `promotion` | 후보를 active recipe로 승격하는 처리 결과 |
 | `active_recipe` | 경험 기반 탐색에서 실제 재생 가능한 활성 레시피 |
-| `recipe_action` | 한 화면 관찰을 근거로 실행할 물리 행동 |
-| `recipe_checkpoint` | 전이 전후에 다시 확인할 URL·화면 문맥·ROI 앵커 상태 |
-| `recipe_transition` | `before + actions + after`로 구성된 검증 가능한 실행 단위 |
-| `recipe_path` | 시작 상태, 순서가 보존된 전이 목록과 완료 상태를 담은 활성 레시피 경로 |
-| `active_reflex_recipe` | 선택한 경로 키, 현재 전이 번호, 검증 대기 전이 번호와 전체 전이 수를 보관하는 작업 상태 |
+| `physical_action` | 한 화면 관찰을 근거로 실제 실행한 물리 행동 |
+| `screen_checkpoint` | 전이 전후에 관찰한 URL·화면 문맥·ROI 앵커 상태 |
+| `experience_transition` | `before + actions + after + evidence`로 구성된 자율탐색 실행 단위 |
+| `experience_path` | 순서가 보존된 전이 목록. 시작·완료 화면은 첫·마지막 전이에서 계산 |
+| `site_experience` | 사이트·목표·작업 분류와 재생 통계를 붙인 활성 경험 경로 |
+| `replay_session` | 선택한 경로 키, 현재 전이 번호, 검증 대기 전이 번호와 전체 전이 수를 보관하는 작업 상태 |
 | `task_category` | 검색, 로그인, 결제, 사이트 탐색 같은 작업 카테고리 |
 | `page_role` | home, search, job_detail, popup처럼 행동 당시 화면을 설명하는 관측 메타데이터 |
 | `recipe_key` | active recipe row의 DB 식별자. `site`, `task_category`와 전체 단계의 순서·의미로 계산 |
@@ -49,8 +52,7 @@ tags:
 | `job_detail_buffer` | 공고 상세 화면에서 누적한 OCR 본문 |
 | `transition_request` | 직전 행동 묶음이 요청한 화면 전환과 저장된 도착 상태 |
 | `transition_result` | 화면 전환 검증의 현재 결과 |
-| `action_event` | 행동 결과, 레시피 단계, 피드백 근거와 전환 판정을 같은 순번으로 묶은 기록 |
-| `action_events` | 작업자 상태가 보관하는 순서화된 `ActionEvent` 목록 |
+| `action_events` | 작업자 상태가 보관하는 순서화된 `ExecutionEvent` 목록 |
 | `pending_action` | 아직 실행하지 않은 검증된 `ActionRequest` |
 | `tool_call_metadata` | 큐 ID, 전환 출처처럼 물리 도구 인자가 아닌 실행 추적값 |
 | `observation_id` | 화면 파일, OCR, 마커와 화면 서명을 함께 묶는 실행 내 관찰 식별자 |
@@ -157,7 +159,7 @@ tags:
 
 ## 피해야 할 이름
 
-- `recipe`: 단독 사용 금지. `recipe_candidate`, `active_recipe`, `site_recipe`, `recipe_step` 중 하나를 쓴다.
+- `recipe`: 단독 사용 금지. DB·승격 개념은 `recipe_candidate`, `active_recipe`, `recipe_key`로, 실행 의미는 `physical_action`, `experience_transition`, `experience_path`, `replay_session`으로 구분한다.
 - `metadata`: 단독 사용 지양. `skill_metadata`, `target_metadata`, `promotion_metadata`처럼 범위를 붙인다.
 - `signature`: 단독 사용 지양. `screen_signature`, `roi_signature`로 구분한다.
 - `state_key`: 새 active recipe 코드에서 사용하지 않는다. 저장/조회는 `recipe_key`, `site`, `task_category`, URL 범위와 단계별 `roi_signature` 또는 `screen_context_signature`를 기준으로 한다.
@@ -169,11 +171,12 @@ tags:
 실행 방식은 `autonomous`(자율 탐색)와 `experience_guided`(경험 기반 탐색)로 구분한다. 두 실행의 공통 Recipe 단계 이름은 아래와 같다.
 
 ```text
-recorded_step
+screen_checkpoint + physical_action
+-> experience_transition
 -> worker_submission
 -> recipe_candidate
 -> candidate_review
--> recipe_transition
+-> experience_path
 -> active_recipe
 -> reflex_replay
 ```

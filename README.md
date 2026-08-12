@@ -279,20 +279,21 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
     - [x] OpenCV 연속 프레임 비교로 화면 변화 시작과 렌더링 안정화를 판단하고, pHash는 저장 상태 확인에 사용
     - [ ] 같은 카드 반복 클릭, 화면 변화 없음, 팝업/승인창 개입 등 오염 신호 탐지
   - [x] 3. Critic 피드백 루프 추가
-    - [x] success / partial / no_effect / error 라벨 부여
-    - [ ] 공고 카드 클릭 후 상세 페이지 진입, 상세 수집 후 DB 적재, go_back 후 목록 복귀 같은 목표 전이를 기준으로 판단
-  - [ ] 4. Recipe Memory 승격 정책
+    - [x] `ExecutionEvent`에 행동 결과, 직전 화면과 완성된 `ExperienceTransition`을 같은 순번으로 기록
+    - [x] Critic은 후보 전체의 `accept / revise / reject`와 단계별 `keep`만 반환
+    - [x] 실행 결과와 전후 화면 근거가 있는 단계만 결정론적 승격 검사를 통과
+  - [x] 4. Recipe Memory 승격 정책
     - [ ] 브라우저 툴바, 시스템 대화상자, 광고/팝업처럼 사이트 고유 동작이 아닌 요소는 승격 금지
     - [x] 자율탐색이 각 단계를 `fixed / parameterized / reasoning`으로 제안하고 Critic은 유지/제거만 판정
     - [x] Critic이 행동·파라미터·슬롯·화면 역할·전환 조건을 덮어쓰지 못하도록 스키마 축소
-    - [ ] 승인된 후보를 활성 Recipe Memory에 반영하는 수동/승인 정책 결정
+    - [x] 사용자 답변과 분리된 SQLite 대기열·백그라운드 작업자로 후보 검토와 활성 경로 승격
   - [x] 5. 슬롯 기반 Reflex 실행기
     - [x] 검색어가 바뀌면 `query` 슬롯만 교체하고 고정 UI 절차는 유지
     - [x] 행동 후 저장된 도착 ROI 또는 화면 문맥을 확인하고, 불일치나 시간 초과 시 자율탐색으로 폴백
     - [x] 검색 결과의 현재 공고 제목은 동적 대상으로 취급하여 과거 제목을 재생하지 않고, 작업자가 미방문 카드를 선택
     - [x] 상위 N개 요청은 `최초 카드 큐 생성 → 상세 수집 → 목록 화면 확인 → 저장된 다음 카드 좌표 실행` 루프를 반복
   - [x] 6. pHash 기반 경험 탐색 정량 검증
-    - [x] 화면 pHash, OCR anchor, target bbox 비율을 결합해 replay 후보를 검증
+    - [x] 대상 주변 ROI pHash와 target bbox/center 비율을 결합해 replay 후보를 검증
     - [x] `ios 개발자 공고 2개`에서 기존 자율 탐색과 동일한 2건 저장 확인
     - [x] reasoning 횟수 24회 → 9회, reasoning 시간 141.92초 → 64.94초 감소 확인
     - [x] pHash/OCR 검증 실패 시 무리하게 실행하지 않고 reasoning으로 폴백하는 로그 확인
