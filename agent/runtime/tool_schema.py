@@ -78,6 +78,22 @@ class click_marker(_DetailObservation):
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
 
 
+class focus_marker(BaseModel):
+    """마커를 마우스로 클릭해 키보드·스크롤 포커스를 옮깁니다."""
+
+    marker_id: int = Field(..., description="포커스를 옮길 마커의 ID")
+    target_label: Optional[str] = Field(None, description="포커스 대상의 보이는 라벨(target_label)")
+    target_role: Optional[str] = Field(None, description="포커스 대상 역할(target_role)")
+    target_component: Optional[str] = Field(None, description="포커스를 받을 화면 구성요소(target_component)")
+    reason: Optional[str] = Field(None, description="이 구성요소에 포커스를 옮기는 이유(reason)")
+    expected_after: Optional[str] = Field(
+        None,
+        description="포커스 후 이어서 수행할 키보드 또는 스크롤 행동(expected_after)",
+    )
+    page_role: Optional[str] = Field(None, description="Current page role.")
+    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+
+
 class type_in_marker(BaseModel):
     """특정 ID의 마커를 클릭한 후 텍스트를 입력합니다."""
 
@@ -248,6 +264,7 @@ ACTION_TOOL_SCHEMAS = {
     schema.__name__: schema
     for schema in (
         click_marker,
+        focus_marker,
         type_in_marker,
         scroll,
         press_key,
@@ -263,6 +280,7 @@ ACTION_TOOL_SCHEMAS = {
 
 DETAIL_ACTION_TOOL_NAMES = (
     "click_marker",
+    "focus_marker",
     "scroll",
     "press_key",
     "finish_detail_reading",
@@ -273,6 +291,7 @@ DETAIL_ACTION_TOOL_NAMES = (
 )
 NAVIGATION_ACTION_TOOL_NAMES = (
     "click_marker",
+    "focus_marker",
     "type_in_marker",
     "scroll",
     "press_key",
@@ -282,9 +301,9 @@ NAVIGATION_ACTION_TOOL_NAMES = (
     "finish_task",
 )
 UNKNOWN_ACTION_TOOL_NAMES = (
-    *NAVIGATION_ACTION_TOOL_NAMES[:4],
+    *NAVIGATION_ACTION_TOOL_NAMES[:5],
     "open_browser",
-    *NAVIGATION_ACTION_TOOL_NAMES[4:],
+    *NAVIGATION_ACTION_TOOL_NAMES[5:],
     "finish_detail_reading",
 )
 
@@ -331,6 +350,7 @@ __all__ = [
     "VisibleJobCard",
     "click_marker",
     "close_current_tab",
+    "focus_marker",
     "finish_detail_reading",
     "finish_task",
     "go_back",

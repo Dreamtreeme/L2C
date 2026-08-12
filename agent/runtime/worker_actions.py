@@ -23,7 +23,7 @@ STATE_UPDATE_ACTIONS = frozenset(
 
 TERMINAL_ACTIONS = frozenset({"finish_task"})
 
-URL_STALE_ACTIONS = UI_ACTIONS - {"type_in_marker", "scroll"}
+URL_STALE_ACTIONS = UI_ACTIONS - {"focus_marker", "type_in_marker", "scroll"}
 
 DIRECT_SCREEN_ACTION_SOURCES = frozenset(
     {

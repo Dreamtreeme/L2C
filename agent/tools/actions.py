@@ -275,12 +275,27 @@ class ActionTools:
         """마커(UI 요소)의 중앙을 클릭합니다."""
 
         def _click():
-            x, y = self._get_absolute_coords(bbox)
-            pyautogui.moveTo(x, y, duration=self.move_duration_sec)
-            pyautogui.click()
+            x, y = self._click_bbox_center(bbox)
             return f"Clicked at ({x}, {y})"
 
         return self._execute("click_marker", _click)
+
+    def _click_bbox_center(self, bbox: List[int]) -> tuple[int, int]:
+        """마커 중앙으로 포인터를 이동한 뒤 한 번 클릭합니다."""
+
+        x, y = self._get_absolute_coords(bbox)
+        pyautogui.moveTo(x, y, duration=self.move_duration_sec)
+        pyautogui.click()
+        return x, y
+
+    def focus_marker(self, bbox: List[int]) -> Dict[str, Any]:
+        """마커를 클릭해 해당 입력·스크롤 구성요소에 포커스를 옮깁니다."""
+
+        def _focus():
+            x, y = self._click_bbox_center(bbox)
+            return f"Focused component at ({x}, {y})"
+
+        return self._execute("focus_marker", _focus)
 
     def type_in_marker(self, bbox: List[int], text: str) -> Dict[str, Any]:
         """마커를 클릭한 후, 기존 텍스트를 지우고 pyperclip을 통해 안전하게 한글/영문 텍스트를 붙여넣습니다."""

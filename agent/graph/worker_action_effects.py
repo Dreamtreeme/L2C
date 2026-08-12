@@ -61,7 +61,7 @@ def execute_ui_action(
         current_url=current_url,
     )
     raise_for_action_failure(result)
-    screen_changed = True
+    screen_changed = action_name != "focus_marker"
     if action_name == "open_browser":
         raw_result_payload = result.get("result")
         result_payload = (

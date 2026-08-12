@@ -15,6 +15,7 @@ from agent.vision.marker_geometry import (
 TARGET_MARKER_ACTIONS = frozenset(
     {
         "click_marker",
+        "focus_marker",
         "type_in_marker",
         "scroll",
     }

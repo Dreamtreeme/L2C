@@ -15,6 +15,7 @@ from shared.schema.skill_schema import (
 
 PhysicalActionName = Literal[
     "click_marker",
+    "focus_marker",
     "type_in_marker",
     "press_key",
     "scroll",
@@ -48,7 +49,7 @@ RECIPE_COMMIT_ACTIONS = frozenset({"press_key"})
 REVIEWABLE_REPLAY_ACTIONS = TARGET_REPLAY_ACTIONS | RECIPE_COMMIT_ACTIONS
 NAVIGATION_ACTIONS = frozenset({"go_back", "close_current_tab", "switch_tab"})
 TRAJECTORY_ACTIONS = REVIEWABLE_REPLAY_ACTIONS | NAVIGATION_ACTIONS | {"scroll"}
-UI_ACTIONS = TRAJECTORY_ACTIONS | {"open_browser"}
+UI_ACTIONS = TRAJECTORY_ACTIONS | {"focus_marker", "open_browser"}
 
 
 class ActionParameters(BaseModel):

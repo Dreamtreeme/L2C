@@ -56,6 +56,8 @@ def dispatch_ui_action(
 
     if action_name == "click_marker":
         return action_tools.click_marker(get_bbox(args["marker_id"]))
+    if action_name == "focus_marker":
+        return action_tools.focus_marker(get_bbox(args["marker_id"]))
     if action_name == "type_in_marker":
         return action_tools.type_in_marker(
             get_bbox(args["marker_id"]),

@@ -418,6 +418,64 @@ def test_execution_records_one_complete_action_event(monkeypatch):
     assert result["transition"]["error_count"] == 0
 
 
+def test_focus_marker_clicks_component_without_requesting_screen_transition():
+    focused_bboxes: list[list[int]] = []
+
+    class FocusActionTools:
+        def focus_marker(self, bbox):
+            focused_bboxes.append(bbox)
+            return {
+                "action": "focus_marker",
+                "status": "success",
+                "result": "focused",
+            }
+
+    class FocusVisionRuntime(_FakeVisionRuntime):
+        def get_action_tools(self):
+            return FocusActionTools()
+
+    request = _request(
+        "llm",
+        [
+            {
+                "name": "focus_marker",
+                "args": {
+                    "marker_id": 7,
+                    "target_label": "검색 결과 목록",
+                    "target_component": "scroll_panel",
+                },
+                "id": "focus",
+            }
+        ],
+    )
+    state = _execution_state(
+        request,
+        current_markers=[
+            {
+                "id": 7,
+                "bbox": [10, 20, 110, 220],
+                "text": "검색 결과 목록",
+            }
+        ],
+    )
+
+    update = worker_execution.execution_node(
+        state,
+        node_runtime(FocusVisionRuntime()),
+    )
+    result = apply_update(state, update)
+    action_result = action_event_results(
+        result["transition"]["action_events"]
+    )[0]
+
+    assert focused_bboxes == [[10, 20, 110, 220]]
+    assert action_result["action"] == "focus_marker"
+    assert action_result["screen_change_expected"] is False
+    assert action_result["target"]["marker_id"] == 7
+    assert result["transition"].get("transition_request") is None
+    assert route_after_execution(result) == "reasoning"
+
+
 def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     monkeypatch.setattr(
         worker_execution_dispatch,
