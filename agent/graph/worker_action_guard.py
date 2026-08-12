@@ -104,6 +104,26 @@ def guard_ui_action(
         return True
 
     no_effect_transition = latest_no_effect_transition(state)
+    if (
+        action_name == "close_current_tab"
+        and no_effect_transition.get("action") != "go_back"
+    ):
+        _record_guard_result(
+            context,
+            action_name,
+            args,
+            before_snapshot,
+            status="skipped",
+            reason="close_tab_requires_failed_go_back",
+            message=(
+                "Blocked close_current_tab before a go_back attempt was confirmed "
+                "to have no effect."
+            ),
+            step_started=step_started,
+            increments_error=True,
+        )
+        return True
+
     if repeats_no_effect_target(
         no_effect_transition,
         action_name,

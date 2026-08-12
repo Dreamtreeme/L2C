@@ -436,42 +436,26 @@ class ActionTools:
         )
         return self._execute("open_browser", _open)
 
-    def _find_browser_window(self):
+    def _find_bound_browser_window(self):
         preferred_id = self.perception.browser_window_id
-        if preferred_id:
-            for window in self._browser_windows():
-                if self._window_id(window) == preferred_id:
-                    return window
-            logger.info(
-                "Bound browser window disappeared; refusing to close another window",
-                window_id=preferred_id,
-            )
-            self.perception.clear_browser_window()
+        if not preferred_id:
             return None
 
-        active_window = gw.getActiveWindow()
-        if (
-            active_window
-            and self.perception._looks_like_browser_window(active_window)
-            and not bool(getattr(active_window, "isMinimized", False))
-        ):
-            return active_window
-
-        for window in gw.getAllWindows():
-            if not self.perception._looks_like_browser_window(window):
-                continue
-            if getattr(window, "isMinimized", False):
-                continue
-            if getattr(window, "width", 1) <= 0 or getattr(window, "height", 1) <= 0:
-                continue
-            return window
+        for window in self._browser_windows():
+            if self._window_id(window) == preferred_id:
+                return window
+        logger.info(
+            "Bound browser window disappeared; refusing to close another window",
+            window_id=preferred_id,
+        )
+        self.perception.clear_browser_window()
         return None
 
     def close_browser(self) -> Dict[str, Any]:
         """바인딩된 자동화 브라우저 창을 닫습니다."""
 
         def _close():
-            window = self._find_browser_window()
+            window = self._find_bound_browser_window()
             if not window:
                 return {"closed": False, "reason": "browser_not_found"}
 

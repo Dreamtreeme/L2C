@@ -3,6 +3,7 @@ import time
 import pytest
 
 from agent.graph import (
+    worker_action_guard,
     worker_execution,
     worker_execution_dispatch,
     worker_observation,
@@ -473,6 +474,45 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     assert action_result["status"] == "skipped"
     assert action_result["reason"] == "same_screen_no_effect_action_blocked"
     assert result["transition"]["error_count"] == 1
+
+    close_request = _request(
+        "llm",
+        [
+            {
+                "name": "close_current_tab",
+                "args": {"risk_level": "safe_navigation"},
+                "id": "close-tab",
+            }
+        ],
+    )
+    close_result = _run_execution(_execution_state(close_request))
+    close_action = action_event_results(
+        close_result["transition"]["action_events"]
+    )[-1]
+
+    assert close_action["status"] == "skipped"
+    assert close_action["reason"] == "close_tab_requires_failed_go_back"
+
+    monkeypatch.setattr(
+        worker_action_guard,
+        "latest_no_effect_transition",
+        lambda _state: {"action": "go_back"},
+    )
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        lambda action_name, *_args, **_kwargs: {
+            "action": action_name,
+            "status": "success",
+            "result": "closed",
+        },
+    )
+    close_after_back = _run_execution(_execution_state(close_request))
+    allowed_close_action = action_event_results(
+        close_after_back["transition"]["action_events"]
+    )[-1]
+
+    assert allowed_close_action["status"] == "success"
 
     stopped = worker_selection.selection_node(
         worker_state(transition={"no_effect_count": 3}),

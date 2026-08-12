@@ -506,7 +506,12 @@ def test_web_lifespan_manages_recipe_promotion_worker(monkeypatch):
     assert calls[1:] == ["start", ("close", 0.5)]
 
 
-def test_worker_execution_session_closes_browser_after_failure():
+def test_worker_execution_session_closes_browser_after_failure_without_touching_unbound_window(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from agent.tools.actions import ActionTools
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 
     events = []
@@ -534,6 +539,29 @@ def test_worker_execution_session_closes_browser_after_failure():
         "worker_started",
         "browser_closed",
     ]
+
+    user_window_closed = []
+    user_window = SimpleNamespace(
+        isMinimized=False,
+        close=lambda: user_window_closed.append(True),
+    )
+    monkeypatch.setattr(
+        "agent.tools.actions.gw.getActiveWindow",
+        lambda: user_window,
+    )
+    monkeypatch.setattr(
+        "agent.tools.actions.gw.getAllWindows",
+        lambda: [user_window],
+    )
+    tools = ActionTools(SimpleNamespace(browser_window_id=None))
+
+    cleanup = tools.close_browser()
+
+    assert cleanup["result"] == {
+        "closed": False,
+        "reason": "browser_not_found",
+    }
+    assert user_window_closed == []
 
 
 def test_vision_runtime_reuses_ocr_worker_until_application_shutdown():
