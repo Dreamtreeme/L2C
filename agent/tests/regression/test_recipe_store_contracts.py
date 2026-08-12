@@ -310,6 +310,64 @@ def test_recipe_path_accepts_page_role_change_without_full_screen_hash(
     )
 
 
+def test_recipe_path_validates_screen_changing_targets_on_separate_screens():
+    from agent.recipe.path_builder import build_recipe_path
+
+    def state(observation_id: str, role: str, phash: str) -> dict:
+        return {
+            "observation_id": observation_id,
+            "url_template": "example.com/",
+            "page_role": role,
+            "screen_context_signature": {
+                "phash": phash,
+                "size": [1920, 1080],
+            },
+        }
+
+    type_step = {
+        "seq": 1,
+        "action": "type_in_marker",
+        "replay_mode": "parameterized",
+        "param": {"slot_name": "search_keyword"},
+        "slot_refs": ["search_keyword"],
+        "target": {"text": "검색어", "center_ratio": [0.5, 0.1]},
+        "roi_signature": {"phash": "1" * 16},
+        "before_state": state("observation:0001", "home", "1" * 16),
+    }
+    click_step = {
+        "seq": 2,
+        "action": "click_marker",
+        "replay_mode": "fixed",
+        "target": {"text": "검색", "center_ratio": [0.9, 0.1]},
+        "roi_signature": {"phash": "2" * 16},
+        "before_state": state("observation:0002", "search_overlay", "2" * 16),
+    }
+    candidate = _recipe_candidate(
+        [type_step, click_step],
+        [
+            {
+                "action_seq": 1,
+                "after_state": state(
+                    "observation:0002", "search_overlay", "2" * 16
+                ),
+            },
+            {
+                "action_seq": 2,
+                "after_state": state("observation:0003", "search", "3" * 16),
+            },
+        ],
+    )
+
+    path, issues = build_recipe_path(candidate, [type_step, click_step])
+
+    assert issues == []
+    assert [
+        [action["action"] for action in transition["actions"]]
+        for transition in path["transitions"]
+    ] == [["type_in_marker"], ["click_marker"]]
+    assert path["transitions"][0]["after"]["anchor_target"] == click_step["target"]
+
+
 def test_recipe_store_preserves_two_paths_with_overlapping_steps(tmp_path):
     from agent.recipe.store import RecipeStore
 

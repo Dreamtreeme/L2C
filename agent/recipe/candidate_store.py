@@ -188,22 +188,6 @@ class RecipeCandidateStore(SQLiteStore):
             )
             return result.rowcount > 0
 
-    def list_recent(
-        self,
-        limit: int = 20,
-        status: str | None = None,
-    ) -> list[RecipeCandidate]:
-        where = " WHERE c.status=?" if status else ""
-        params: tuple[Any, ...] = (status, limit) if status else (limit,)
-        with self._conn() as conn:
-            rows = conn.execute(
-                _CANDIDATE_SELECT
-                + where
-                + " ORDER BY c.updated_at DESC, c.run_id DESC LIMIT ?",
-                params,
-            ).fetchall()
-        return [self._row_to_item(row) for row in rows]
-
     def _row_to_item(self, row) -> RecipeCandidate:
         item = dict(row)
         submission = WorkerSubmission.model_validate(

@@ -51,35 +51,6 @@ class JobTaxonomyLinker:
             ).fetchall()
         return self._occupation_alias_cache
 
-    @staticmethod
-    def _most_specific_matches(
-        connection: sqlite3.Connection,
-        concept_ids: set[int],
-    ) -> set[int]:
-        if len(concept_ids) < 2:
-            return concept_ids
-        broader_ids: set[int] = set()
-        frontier = set(concept_ids)
-        while frontier:
-            placeholders = ",".join("?" for _ in frontier)
-            rows = connection.execute(
-                f"""
-                SELECT source_concept_id, target_concept_id
-                FROM search_concept_relations
-                WHERE relation_type = 'broader'
-                  AND source_concept_id IN ({placeholders})
-                """,
-                list(frontier),
-            ).fetchall()
-            next_frontier = {
-                int(row["target_concept_id"])
-                for row in rows
-            }
-            unseen = next_frontier - broader_ids
-            broader_ids.update(next_frontier)
-            frontier = unseen
-        return concept_ids - broader_ids
-
     def _skill_alias_rows(
         self,
         connection: sqlite3.Connection,
@@ -212,11 +183,7 @@ class JobTaxonomyLinker:
         linked_at: str,
     ) -> int:
         matches = self._match_occupations(connection, job)
-        selected_ids = self._most_specific_matches(
-            connection,
-            set(matches),
-        )
-        for concept_id in selected_ids:
+        for concept_id in matches:
             evidence_field, evidence_text, confidence = matches[concept_id]
             connection.execute(
                 """
@@ -248,7 +215,7 @@ class JobTaxonomyLinker:
                     linked_at,
                 ),
             )
-        return len(selected_ids)
+        return len(matches)
 
     @classmethod
     def _skill_sections(

@@ -40,6 +40,7 @@ def submission_commit(monkeypatch):
 def test_experience_records_submission_and_reusable_candidate(
     monkeypatch,
     submission_commit,
+    tmp_path,
 ):
     monkeypatch.setattr(
         "agent.recipe.candidate_store.RecipeCandidateStore.commit_candidate",
@@ -53,14 +54,22 @@ def test_experience_records_submission_and_reusable_candidate(
         persisted_items=[{"job_id": 1, "operation": "created"}]
     )
 
-    result = service.record_collection_experience(_batch(), persistence)
+    result = service.record_collection_experience(
+        _batch(),
+        persistence,
+        db_path=tmp_path / "jobs.db",
+    )
 
     assert result.run_id == "worker-1"
     assert submission_commit[0][0].persisted_count == 1
     assert result.recipe_learning.status == "queued"
 
 
-def test_incomplete_run_is_not_recipe_candidate(monkeypatch, submission_commit):
+def test_incomplete_run_is_not_recipe_candidate(
+    monkeypatch,
+    submission_commit,
+    tmp_path,
+):
     monkeypatch.setattr(
         "agent.recipe.candidate_store.RecipeCandidateStore.commit_candidate",
         lambda *args, **kwargs: pytest.fail("후보가 생성되면 안 됩니다."),
@@ -69,18 +78,23 @@ def test_incomplete_run_is_not_recipe_candidate(monkeypatch, submission_commit):
     result = service.record_collection_experience(
         _batch(finished=False),
         PersistenceReport(persisted_items=[{"job_id": 1}]),
+        db_path=tmp_path / "jobs.db",
     )
 
     assert result.recipe_learning.status == "not_eligible"
 
 
-def test_submission_failure_is_returned_without_raising(monkeypatch):
+def test_submission_failure_is_returned_without_raising(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "agent.recipe.submission_store.SubmissionStore.commit_submission",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db unavailable")),
     )
 
-    result = service.record_collection_experience(_batch(), PersistenceReport())
+    result = service.record_collection_experience(
+        _batch(),
+        PersistenceReport(),
+        db_path=tmp_path / "jobs.db",
+    )
 
     assert result.run_id == ""
     assert result.recipe_learning.reason == "submission_registration_failed"
@@ -89,6 +103,7 @@ def test_submission_failure_is_returned_without_raising(monkeypatch):
 def test_candidate_storage_failure_does_not_fail_submission(
     monkeypatch,
     submission_commit,
+    tmp_path,
 ):
     monkeypatch.setattr(
         "agent.recipe.candidate_store.RecipeCandidateStore.commit_candidate",
@@ -98,6 +113,7 @@ def test_candidate_storage_failure_does_not_fail_submission(
     result = service.record_collection_experience(
         _batch(),
         PersistenceReport(persisted_items=[{"job_id": 1}]),
+        db_path=tmp_path / "jobs.db",
     )
 
     assert result.run_id == "worker-1"

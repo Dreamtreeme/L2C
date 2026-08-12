@@ -40,9 +40,6 @@ def evaluate_investigation_analysis(
             analysis.constraints.occupation_scope_required
             == scenario.expected_scope_required
         ),
-        "occupation_domain_query": not bool(
-            analysis.constraints.occupation_domain_query
-        ),
         "sites": set(analysis.constraints.sites) == set(scenario.expected_sites),
     }
     if scenario.expected_occupation_query:

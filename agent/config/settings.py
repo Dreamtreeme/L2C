@@ -264,6 +264,12 @@ class VisionSettings(SectionSettings):
     loading_blank_max_stddev: float = Field(12.0, ge=0, le=255, validation_alias="VISION_LOADING_BLANK_MAX_STDDEV")
     loading_blank_max_edge_mean: float = Field(3.0, ge=0, le=255, validation_alias="VISION_LOADING_BLANK_MAX_EDGE_MEAN")
     loading_blank_min_dominant_ratio: float = Field(0.97, ge=0, le=1, validation_alias="VISION_LOADING_BLANK_MIN_DOMINANT_RATIO")
+    loading_min_content_components: int = Field(
+        4,
+        ge=1,
+        le=1000,
+        validation_alias="VISION_LOADING_MIN_CONTENT_COMPONENTS",
+    )
     loading_timeout_sec: float = Field(15.0, gt=0, le=300, validation_alias="VISION_LOADING_TIMEOUT_SEC")
     low_information_max_capture_cycles: int = Field(
         2,
@@ -397,7 +403,7 @@ class ReflexSettings(SectionSettings):
 
 class RecipeSettings(SectionSettings):
     auto_promote: bool = Field(True, validation_alias="VISION_RECIPE_AUTO_PROMOTE")
-    critic_evidence_text_limit: int = Field(60, ge=1, le=500, validation_alias="VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT")
+    critic_evidence_text_limit: int = Field(12, ge=1, le=100, validation_alias="VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT")
     critic_timeout_sec: float = Field(30.0, gt=0, le=300, validation_alias="VISION_RECIPE_CRITIC_TIMEOUT_SEC")
     promotion_poll_sec: float = Field(1.0, ge=0.1, le=300, validation_alias="VISION_RECIPE_PROMOTION_POLL_SEC")
     promotion_retry_delay_sec: float = Field(30.0, ge=0, le=3600, validation_alias="VISION_RECIPE_PROMOTION_RETRY_DELAY_SEC")

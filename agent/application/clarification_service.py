@@ -8,7 +8,6 @@ from datetime import date, timedelta
 
 from shared.schema.investigation_schema import (
     ClarificationAnswer,
-    ClarificationOption,
     ClarificationQuestion,
     InvestigationConstraints,
     InvestigationPurpose,
@@ -72,21 +71,6 @@ def _selected_value(
         if option.option_id == answer.selected_option_id:
             return option.value
     raise ValueError("질문의 선택지와 일치하는 답변을 찾을 수 없습니다.")
-
-
-def _selected_option(
-    question: ClarificationQuestion,
-    answer: ClarificationAnswer,
-) -> ClarificationOption | None:
-    return next(
-        (
-            option
-            for option in question.options
-            if option.option_id == answer.selected_option_id
-            or (answer.value.strip() and option.value == answer.value.strip())
-        ),
-        None,
-    )
 
 
 def _apply_period_answer(
@@ -154,61 +138,6 @@ def _apply_collection_scope_answer(
     return True
 
 
-def _apply_occupation_answer(
-    constraints: InvestigationConstraints,
-    question: ClarificationQuestion,
-    answer: ClarificationAnswer,
-    selected_value: str,
-) -> bool:
-    """직무 도메인·직무 선택을 정규화된 검색 조건으로 반영한다."""
-
-    option = _selected_option(question, answer)
-    custom_value = bool(answer.custom_value.strip())
-    if question.field == "occupation_domain_concept_keys":
-        if custom_value:
-            constraints.occupation_domain_query = ""
-            constraints.occupation_domain_concept_keys = []
-            constraints.occupation_query = selected_value
-            constraints.collection_search_term = selected_value
-            constraints.occupation_concept_keys = []
-            constraints.occupation_scope_required = False
-            constraints.occupation_scope_mode = "unspecified"
-            constraints.occupation_resolution = "unresolved"
-        else:
-            constraints.occupation_domain_concept_keys = [selected_value]
-            if option is not None and option.collection_search_term:
-                constraints.occupation_domain_query = option.collection_search_term
-        return True
-
-    if question.field != "occupation_concept_keys":
-        return False
-    if custom_value:
-        constraints.occupation_query = selected_value
-        constraints.collection_search_term = selected_value
-        constraints.occupation_concept_keys = []
-        constraints.occupation_scope_mode = "unspecified"
-        constraints.occupation_resolution = "unresolved"
-        return True
-
-    constraints.occupation_concept_keys = [selected_value]
-    selected_all = answer.selected_option_id == "all-descendants"
-    constraints.occupation_scope_mode = "all" if selected_all else "selected"
-    constraints.occupation_resolution = (
-        "reviewed_alias"
-        if question.facet_type == "semantic_occupation"
-        else "user_selected"
-    )
-    if (
-        question.facet_type != "semantic_occupation"
-        and not selected_all
-        and option is not None
-        and option.collection_search_term
-    ):
-        constraints.collection_search_term = option.collection_search_term
-        constraints.occupation_query = option.collection_search_term
-    return True
-
-
 def _apply_direct_constraint_answer(
     constraints: InvestigationConstraints,
     field: str,
@@ -233,8 +162,6 @@ def _apply_direct_constraint_answer(
         constraints.collection_search_term = selected_value
         constraints.occupation_concept_keys = []
         constraints.occupation_scope_required = False
-        constraints.occupation_scope_mode = "unspecified"
-        constraints.occupation_resolution = "unresolved"
     elif field in list_fields:
         setattr(constraints, field, [selected_value])
         if field == "skill_queries":
@@ -247,7 +174,6 @@ def _apply_constraint_answer(
     constraints: InvestigationConstraints,
     investigation: InvestigationRequest,
     question: ClarificationQuestion,
-    answer: ClarificationAnswer,
     selected_value: str,
     today: date,
 ) -> None:
@@ -260,13 +186,6 @@ def _apply_constraint_answer(
     ):
         return
     if _apply_collection_scope_answer(constraints, question, selected_value):
-        return
-    if _apply_occupation_answer(
-        constraints,
-        question,
-        answer,
-        selected_value,
-    ):
         return
     _apply_direct_constraint_answer(
         constraints,
@@ -308,7 +227,6 @@ def apply_clarification_answer(
         constraints,
         investigation,
         question,
-        answer,
         selected_value,
         today or date.today(),
     )

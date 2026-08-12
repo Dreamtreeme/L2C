@@ -38,13 +38,13 @@ class InvestigationRequestNodes:
         self,
         *,
         models: InvestigationModels,
-        occupation_clarification: Any,
+        search_constraints: Any,
         apply_clarification: Callable[..., InvestigationRequest],
         load_conversation_context: Callable[..., list[ConversationTurn]],
         now: Callable[[], datetime],
     ) -> None:
         self.models = models
-        self.occupation_clarification = occupation_clarification
+        self.search_constraints = search_constraints
         self.apply_clarification = apply_clarification
         self.load_conversation_context = load_conversation_context
         self.now = now
@@ -84,7 +84,7 @@ class InvestigationRequestNodes:
             ),
             RequestAnalysis,
         )
-        constraints = self.occupation_clarification.enrich_constraints(
+        constraints = self.search_constraints.enrich(
             normalize_site_slugs(analysis.constraints)
         )
         questions = [
@@ -95,7 +95,7 @@ class InvestigationRequestNodes:
                 and constraints.occupation_concept_keys
             )
         ]
-        constraints, questions = self.occupation_clarification.prepare_questions(
+        questions = self.search_constraints.prepare_questions(
             constraints,
             questions,
         )
@@ -134,18 +134,16 @@ class InvestigationRequestNodes:
             answer,
             today=self.now().date(),
         )
-        constraints = self.occupation_clarification.enrich_constraints(
+        constraints = self.search_constraints.enrich(
             updated.constraints
         )
         answered_question_ids = [
             item.question_id for item in updated.clarification_answers
         ]
-        constraints, remaining_questions = (
-            self.occupation_clarification.prepare_questions(
-                constraints,
-                updated.clarification_questions,
-                answered_question_ids=answered_question_ids,
-            )
+        remaining_questions = self.search_constraints.prepare_questions(
+            constraints,
+            updated.clarification_questions,
+            answered_question_ids=answered_question_ids,
         )
         updated = updated.model_copy(
             update={

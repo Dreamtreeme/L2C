@@ -6,7 +6,6 @@ from datetime import datetime
 
 
 CORE_SOURCE_KEY = "l2c_ko_core"
-OCCUPATION_DOMAIN_ROOT_KEY = "l2c:domain:occupation"
 
 
 def taxonomy_timestamp() -> str:
@@ -39,7 +38,6 @@ def contains_taxonomy_alias(text: str, alias: str) -> bool:
 
 __all__ = [
     "CORE_SOURCE_KEY",
-    "OCCUPATION_DOMAIN_ROOT_KEY",
     "contains_taxonomy_alias",
     "taxonomy_timestamp",
 ]

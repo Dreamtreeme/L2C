@@ -20,15 +20,13 @@ NAVIGATION_ACTIONS = frozenset(
     }
 )
 
-CONTEXTUAL_REPLAY_ACTIONS = NAVIGATION_ACTIONS | {"press_key"}
-REVIEWABLE_REPLAY_ACTIONS = (
-    TARGET_REPLAY_ACTIONS | CONTEXTUAL_REPLAY_ACTIONS
+RECIPE_COMMIT_ACTIONS = frozenset({"press_key"})
+REVIEWABLE_REPLAY_ACTIONS = TARGET_REPLAY_ACTIONS | RECIPE_COMMIT_ACTIONS
+TRAJECTORY_ACTIONS = frozenset(
+    REVIEWABLE_REPLAY_ACTIONS | NAVIGATION_ACTIONS | {"scroll"}
 )
-RECORDED_REPLAY_ACTIONS = REVIEWABLE_REPLAY_ACTIONS | {"scroll"}
 
-UI_ACTIONS = frozenset(
-    RECORDED_REPLAY_ACTIONS | {"open_browser"}
-)
+UI_ACTIONS = TRAJECTORY_ACTIONS | {"open_browser"}
 
 STATE_UPDATE_ACTIONS = frozenset(
     {
@@ -61,14 +59,18 @@ def is_supported_recipe_action_group(actions: list[Any]) -> bool:
     """중간 화면 관찰 없이 실행할 수 있는 행동 묶음인지 확인한다."""
 
     if len(actions) == 1:
-        return str(_action_value(actions[0], "action") or "") in REVIEWABLE_REPLAY_ACTIONS
+        return str(_action_value(actions[0], "action") or "") in TARGET_REPLAY_ACTIONS
     if len(actions) != 2:
         return False
     first, second = actions
     if (
         str(_action_value(first, "action") or "") != "type_in_marker"
-        or str(_action_value(second, "action") or "") != "press_key"
     ):
+        return False
+    second_action = str(_action_value(second, "action") or "")
+    if second_action == "click_marker":
+        return True
+    if second_action != "press_key":
         return False
     param = _action_value(second, "param", {})
     if not isinstance(param, dict):
@@ -80,14 +82,14 @@ def is_supported_recipe_action_group(actions: list[Any]) -> bool:
 
 
 __all__ = [
-    "CONTEXTUAL_REPLAY_ACTIONS",
     "DIRECT_SCREEN_ACTION_SOURCES",
-    "RECORDED_REPLAY_ACTIONS",
     "NAVIGATION_ACTIONS",
+    "RECIPE_COMMIT_ACTIONS",
     "REVIEWABLE_REPLAY_ACTIONS",
     "STATE_UPDATE_ACTIONS",
     "TARGET_REPLAY_ACTIONS",
     "TERMINAL_ACTIONS",
+    "TRAJECTORY_ACTIONS",
     "UI_ACTIONS",
     "URL_STALE_ACTIONS",
     "is_supported_recipe_action_group",

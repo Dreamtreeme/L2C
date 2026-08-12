@@ -133,6 +133,8 @@ def _apply_execution_mode_environment(execution_mode: str) -> None:
 def _experience_guided_preconditions(
     execution_mode: str,
     site: str,
+    *,
+    db_path: Path,
 ) -> dict[str, object]:
     """경험 기반 탐색에 필요한 활성 레시피 상태를 실행 전에 고정한다."""
 
@@ -145,7 +147,7 @@ def _experience_guided_preconditions(
     try:
         from agent.recipe.store import RecipeStore
 
-        counts = RecipeStore().active_counts(site)
+        counts = RecipeStore(db_path).active_counts(site)
     except Exception as exc:
         return {
             "required": True,
@@ -254,6 +256,8 @@ def _execute_collection(
     args: argparse.Namespace,
     worker_service: object,
     context: object,
+    *,
+    db_path: Path,
 ) -> dict[str, object]:
     from agent.application.collection_experience import record_collection_experience
     from agent.application.collection_postprocessing import postprocess_collection_batch
@@ -279,8 +283,12 @@ def _execute_collection(
         )
         batch = worker_service.run(intent)
         processed = postprocess_collection_batch(batch)
-        persistence = store_postprocessed_collection(processed)
-        experience = record_collection_experience(batch, persistence)
+        persistence = store_postprocessed_collection(processed, db_path=db_path)
+        experience = record_collection_experience(
+            batch,
+            persistence,
+            db_path=db_path,
+        )
         result = build_collection_result(batch, persistence, experience)
         parsed_result = result.model_dump(mode="json")
         quality = evaluate_collection_summary(parsed_result)
@@ -327,7 +335,12 @@ def _execute_collection(
     }
 
 
-def _recipe_promotion(result: dict[str, object], status: str) -> dict[str, object]:
+def _recipe_promotion(
+    result: dict[str, object],
+    status: str,
+    *,
+    db_path: Path,
+) -> dict[str, object]:
     if status != "completed":
         return {}
     run_id = str(result.get("worker_run_id") or "")
@@ -335,7 +348,7 @@ def _recipe_promotion(result: dict[str, object], status: str) -> dict[str, objec
         return {}
     from agent.recipe.candidate_store import RecipeCandidateStore
 
-    candidate = RecipeCandidateStore().get_candidate(run_id)
+    candidate = RecipeCandidateStore(db_path).get_candidate(run_id)
     promotion = (
         {
             "run_id": candidate.run_id,
@@ -419,7 +432,10 @@ def _write_summary(summary: dict[str, object], summary_path: Path) -> None:
 
 def _run_e2e(args: argparse.Namespace, log_path: Path, summary_path: Path) -> int:
     from agent.application.collection_worker_runner import run_worker_once
-    from agent.application.worker_execution_service import WorkerExecutionService
+    from agent.application.worker_execution_service import (
+        WorkerExecutionService,
+        build_worker_data_services,
+    )
     from agent.config import get_settings
     from agent.graph.workflow import build_graph
     from agent.observability.run_context import run_context
@@ -427,15 +443,24 @@ def _run_e2e(args: argparse.Namespace, log_path: Path, summary_path: Path) -> in
     from shared.db.database import Database
 
     identity = _execution_identity(args)
-    preconditions = _experience_guided_preconditions(args.execution_mode, args.site)
+    db_path = get_settings().paths.db_path
+    preconditions = _experience_guided_preconditions(
+        args.execution_mode,
+        args.site,
+        db_path=db_path,
+    )
     print(
         "EXPERIENCE_GUIDED_PRECONDITIONS="
         + json.dumps(preconditions, ensure_ascii=False)
     )
-    Database(get_settings().paths.db_path)
+    Database(db_path)
     vision_runtime = VisionWorkerRuntime(graph_factory=build_graph)
     try:
-        worker_service = WorkerExecutionService(vision_runtime, run_worker_once)
+        worker_service = WorkerExecutionService(
+            vision_runtime,
+            run_worker_once,
+            build_worker_data_services(db_path),
+        )
         events = []
         started_at = datetime.now(timezone.utc).isoformat()
         with run_context(
@@ -462,10 +487,19 @@ def _run_e2e(args: argparse.Namespace, log_path: Path, summary_path: Path) -> in
                 f"mode:{args.execution_mode}",
             ],
         ) as (context, _created):
-            execution = _execute_collection(args, worker_service, context)
+            execution = _execute_collection(
+                args,
+                worker_service,
+                context,
+                db_path=db_path,
+            )
             metrics = context.snapshot()
         result = dict(execution["result"])
-        promotion = _recipe_promotion(result, str(execution["status"]))
+        promotion = _recipe_promotion(
+            result,
+            str(execution["status"]),
+            db_path=db_path,
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         print(f"EXECUTION_TIME_SEC={float(execution['elapsed']):.3f}")
         print(f"LOG_TARGET={log_path}")

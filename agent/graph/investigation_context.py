@@ -20,7 +20,6 @@ from shared.schema.investigation_schema import (
     InvestigationPlanStep,
     InvestigationRequest,
     RequestAnalysis,
-    TaxonomyResolution,
 )
 from shared.schema.collection_intent import CollectionResult
 from shared.schema.collection_run import CollectionBatch, PostprocessedCollection
@@ -109,14 +108,12 @@ class InvestigationModels:
         self,
         *,
         analysis_model: Any = None,
-        taxonomy_model: Any = None,
         evidence_model: Any = None,
         action_model: Any = None,
         validation_model: Any = None,
         answer_model: Any = None,
     ):
         self.analysis_model = analysis_model
-        self.taxonomy_model = taxonomy_model
         self.evidence_model = evidence_model
         self.action_model = action_model
         self.validation_model = validation_model
@@ -150,9 +147,6 @@ class InvestigationModels:
 
     def evidence(self) -> Any:
         return self._structured(self.evidence_model, EvidencePlan)
-
-    def taxonomy(self) -> Any:
-        return self._structured(self.taxonomy_model, TaxonomyResolution)
 
     def action(self) -> Any:
         return self._structured(self.action_model, InvestigationActionPlan)

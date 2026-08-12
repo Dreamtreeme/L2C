@@ -21,14 +21,13 @@ from agent.application.evidence_service import (
     inspect_job_evidence,
     load_stored_jobs,
 )
-from agent.application.occupation_clarification_service import (
-    OccupationClarificationService,
-)
+from agent.application.search_constraint_service import SearchConstraintService
 from agent.application.recipe_promotion_worker import RecipePromotionWorker
 from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
 from agent.application.search_taxonomy_service import SearchTaxonomyService
 from agent.application.tool_capabilities import build_collection_capabilities
 from agent.application.worker_execution_service import WorkerExecutionService
+from agent.application.worker_execution_service import build_worker_data_services
 from agent.config import get_settings
 from agent.graph.investigation_answer_nodes import InvestigationAnswerNodes
 from agent.graph.investigation_collection_nodes import (
@@ -72,10 +71,7 @@ def build_investigation_workflow(
 
     resolved_db_path = Path(db_path)
     resolved_models = models or InvestigationModels()
-    occupation_clarification = OccupationClarificationService(
-        taxonomy_model=resolved_models.taxonomy,
-        taxonomy_service=taxonomy_service,
-    )
+    search_constraints = SearchConstraintService(taxonomy_service)
 
     def current_time() -> datetime:
         return datetime.now().astimezone()
@@ -90,7 +86,7 @@ def build_investigation_workflow(
         checkpointer=checkpoint_runtime.saver,
         request_nodes=InvestigationRequestNodes(
             models=resolved_models,
-            occupation_clarification=occupation_clarification,
+            search_constraints=search_constraints,
             apply_clarification=apply_clarification_answer,
             load_conversation_context=(
                 conversation_context_loader or load_default_conversation_context
@@ -148,6 +144,7 @@ class ApplicationRuntime:
         self.worker_execution_service = WorkerExecutionService(
             self.vision_runtime,
             run_worker_once,
+            build_worker_data_services(self.db_path),
         )
         self.investigation_workflow = (
             investigation_workflow
@@ -160,7 +157,10 @@ class ApplicationRuntime:
                     store_postprocessed_collection,
                     db_path=self.db_path,
                 ),
-                record_experience=record_collection_experience,
+                record_experience=partial(
+                    record_collection_experience,
+                    db_path=self.db_path,
+                ),
                 taxonomy_service=self.taxonomy_service,
             )
         )

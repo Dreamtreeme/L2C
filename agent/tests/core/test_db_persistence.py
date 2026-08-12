@@ -122,34 +122,6 @@ def test_experience_minimum_uses_mandatory_text_evidence():
     assert range_start.experience_min == 5
 
 
-def test_database_records_only_meaningful_job_versions(tmp_path):
-    db = Database(tmp_path / "versioned_jobs.db")
-    first = JobPosting(
-        url="https://example.com/jobs/versioned",
-        company_name="Acme",
-        position="Data Engineer",
-        requirements=["Python"],
-        benefits=["장비 지원"],
-        raw_ocr_text="첫 번째 공고 원문",
-        source_platform="Example",
-    )
-
-    job_id = db.upsert(first)
-    db.upsert(first)
-    db.upsert(
-        first.model_copy(
-            update={
-                "benefits": ["장비 지원", "재택근무"],
-                "raw_ocr_text": "변경된 공고 원문",
-            }
-        )
-    )
-    versions = db.list_versions(job_id)
-
-    assert [item["version_number"] for item in versions] == [2, 1]
-    assert {"benefits", "raw_ocr_text"} <= set(versions[0]["changed_fields"])
-
-
 def test_database_preserves_collection_evidence_outside_posting(tmp_path):
     db = Database(tmp_path / "evidence_jobs.db")
     posting = JobPosting(

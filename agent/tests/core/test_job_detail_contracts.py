@@ -3,6 +3,7 @@
 from agent.graph import worker_execution_dispatch
 from agent.graph.worker_execution_policy import compact_action_args
 from agent.runtime.job_field_contract import merge_job_detail_coverage
+from agent.runtime.tool_schema import scroll
 from agent.tests.worker_test_support import worker_data_services, worker_state
 from shared.schema.collection_intent import CollectionIntent
 
@@ -24,6 +25,12 @@ def _detail_state(current_url: str, required_fields: list[str]):
             }
         },
     )
+
+
+def test_detail_observation_treats_null_as_no_evidence():
+    action = scroll.model_validate({"direction": "down", "observed_fields": None})
+
+    assert action.observed_fields == {}
 
 
 def test_detail_finish_captures_raw_ocr_and_clears_buffer():
@@ -48,9 +55,10 @@ def test_detail_finish_captures_raw_ocr_and_clears_buffer():
     )
 
     assert outcome.result["status"] == "success"
-    assert outcome.state_update.job_detail_buffer == {}
-    assert len(outcome.job_captures) == 1
-    capture = outcome.job_captures[0]
+    collection_update = outcome.state_update["collection"]
+    assert collection_update["job_detail_buffer"] == {}
+    assert len(collection_update["job_captures"]) == 1
+    capture = collection_update["job_captures"][0]
     assert capture.url == current_url
     assert "자격 요건 Python" in capture.raw_ocr_text
     assert capture.evidence.screenshot_path == "detail.png"
@@ -76,7 +84,7 @@ def test_detail_finish_waits_for_required_screen_evidence():
         "position",
         "requirements",
     }
-    assert outcome.job_captures == []
+    assert "job_captures" not in outcome.state_update["collection"]
 
 
 def test_detail_finish_preserves_confirmed_unavailable_field():
@@ -87,6 +95,7 @@ def test_detail_finish_preserves_confirmed_unavailable_field():
             "observed_fields": {
                 "company_name": "예시회사",
                 "position": "백엔드 개발자",
+                "benefits": "확인 필요",
             },
             "page_exhausted": True,
             "unavailable_fields": ["benefits"],
@@ -101,9 +110,11 @@ def test_detail_finish_preserves_confirmed_unavailable_field():
     )
 
     assert outcome.result["status"] == "success"
-    assert [
-        field.value for field in outcome.job_captures[0].evidence.unavailable_fields
-    ] == ["benefits"]
+    capture = outcome.state_update["collection"]["job_captures"][0]
+    assert [field.value for field in capture.evidence.unavailable_fields] == [
+        "benefits"
+    ]
+    assert "benefits" not in capture.evidence.field_evidence
 
 
 def test_card_queue_identity_does_not_overwrite_detail_ocr_evidence():

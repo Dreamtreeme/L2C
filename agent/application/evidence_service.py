@@ -32,7 +32,6 @@ class RequirementEvidence:
 
     requirement: EvidenceRequirement
     matched_rows: list[sqlite3.Row]
-    occupation_domain_keys: list[str]
     occupation_keys: list[str]
     skill_keys: list[str]
     semantic_review_required: bool
@@ -166,17 +165,15 @@ def _match_requirement_evidence(
     candidate_sets: list[set[int]] = []
     semantic_occupation_ids: set[int] = set()
     occupation_keys = list(scope.occupation_concept_keys)
-    occupation_domain_keys = list(scope.occupation_domain_concept_keys)
-    occupation_filter_keys = occupation_keys or occupation_domain_keys
-    if occupation_filter_keys:
+    if occupation_keys:
         occupation_job_ids = taxonomy.matching_occupation_job_ids(
-            occupation_filter_keys,
+            occupation_keys,
             taxonomy_scope,
         )
         candidate_sets.append(occupation_job_ids)
         semantic_occupation_ids = (
             taxonomy.matching_occupation_job_ids(
-                occupation_filter_keys,
+                occupation_keys,
                 taxonomy_scope,
                 evidence_fields=("main_tasks",),
             )
@@ -215,7 +212,6 @@ def _match_requirement_evidence(
         force_semantic_review
         or semantic_occupation_ids & matched_row_ids
         or (scope.occupation_query and not occupation_keys)
-        or (scope.occupation_domain_query and not occupation_domain_keys)
         or (scope.skill_queries and not skill_keys)
         or scope.location
         or scope.experience
@@ -225,7 +221,6 @@ def _match_requirement_evidence(
     return RequirementEvidence(
         requirement=requirement,
         matched_rows=matched_rows,
-        occupation_domain_keys=occupation_domain_keys,
         occupation_keys=occupation_keys,
         skill_keys=skill_keys,
         semantic_review_required=semantic_review_required,
@@ -262,8 +257,6 @@ def _requirement_report(evidence: RequirementEvidence) -> dict[str, Any]:
     return {
         "requirement_id": requirement.requirement_id,
         "description": requirement.description,
-        "occupation_domain_query": scope.occupation_domain_query,
-        "occupation_domain_concept_keys": evidence.occupation_domain_keys,
         "occupation_query": scope.occupation_query,
         "occupation_concept_keys": evidence.occupation_keys,
         "skill_queries": list(scope.skill_queries),

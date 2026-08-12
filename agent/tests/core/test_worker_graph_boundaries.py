@@ -15,10 +15,7 @@ from agent.graph.workflow import (
     route_after_reflex,
     route_after_selection,
 )
-from agent.graph.worker_execution_dispatch import (
-    StateActionOutcome,
-    StateActionUpdate,
-)
+from agent.graph.worker_execution_dispatch import StateActionOutcome
 from agent.tests.worker_test_support import (
     apply_update,
     node_runtime,
@@ -108,11 +105,22 @@ def test_action_request_allows_only_supported_reflex_action_group():
     with pytest.raises(ValueError):
         build_action_request("llm", "잘못된 복수 행동", calls)
 
+    click_group = build_action_request(
+        "reflex",
+        "검색어 입력 후 검색 버튼 클릭",
+        calls,
+        metadata={"execution_unit": "recipe_transition"},
+    )
+    assert [call.name for call in click_group.tool_calls] == [
+        "type_in_marker",
+        "click_marker",
+    ]
+
     with pytest.raises(ValueError):
         build_action_request(
             "reflex",
-            "두 타깃 행동은 중간 화면 관찰이 필요함",
-            calls,
+            "두 클릭 사이에는 화면 확인이 필요함",
+            [calls[1], calls[1]],
             metadata={"execution_unit": "recipe_transition"},
         )
 
@@ -667,7 +675,6 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
                 "status": "error",
                 "result": "invalid payload",
             },
-            job_captures=[],
         ),
     )
     request = _request(
@@ -715,12 +722,13 @@ def test_stored_job_card_queue_schedules_first_card(monkeypatch):
                 "status": "success",
                 "result": "stored",
             },
-            job_captures=[],
-            state_update=StateActionUpdate(
-                job_card_queue=[queued_card],
-                job_results_memory={"url": "https://example.com/jobs"},
-                job_results_availability={},
-            ),
+            state_update={
+                "collection": {
+                    "job_card_queue": [queued_card],
+                    "job_results_memory": {"url": "https://example.com/jobs"},
+                    "job_results_availability": {},
+                }
+            },
         )
 
     monkeypatch.setattr(
@@ -774,12 +782,13 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
                 "status": "success",
                 "result": "stored",
             },
-            job_captures=[],
-            state_update=StateActionUpdate(
-                job_card_queue=existing_cards,
-                job_results_memory={"url": "https://example.com/jobs"},
-                job_results_availability={},
-            ),
+            state_update={
+                "collection": {
+                    "job_card_queue": existing_cards,
+                    "job_results_memory": {"url": "https://example.com/jobs"},
+                    "job_results_availability": {},
+                }
+            },
         )
 
     monkeypatch.setattr(
@@ -864,6 +873,8 @@ def test_graph_custom_event_is_shared_by_metrics_and_sse():
     ]
     assert budget["call_count"] == 1
     assert budget["estimated_cost_usd"] > 0
+    assert snapshot["llm"]["totals"]["total_tokens"] == 1100
+    assert snapshot["llm"]["by_model"]["gemini-3.6-flash"]["total_tokens"] == 1100
 
 
 def test_worker_graph_forwards_custom_stream_and_preserves_values(monkeypatch):
@@ -896,6 +907,7 @@ def test_worker_graph_forwards_custom_stream_and_preserves_values(monkeypatch):
         worker_state(),
         60,
         worker_runtime=vision_runtime,
+        data_services=worker_data_services(),
     )
 
     assert forwarded == [{"event": "graph_step_started", "stage": "capture"}]

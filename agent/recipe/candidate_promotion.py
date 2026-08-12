@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.recipe.candidate_store import RecipeCandidateStore
-from agent.recipe.path_builder import build_recipe_path
+from agent.recipe.path_builder import build_recipe_paths
 from agent.recipe.promotion_policy import evaluate_candidate_step_evidence
 from agent.recipe.store import RecipeStore
 from agent.recipe.task_category import normalize_task_category
 from agent.runtime.site_context import infer_site_page_role, normalize_page_role
 from agent.runtime.worker_actions import (
-    CONTEXTUAL_REPLAY_ACTIONS,
+    RECIPE_COMMIT_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
+    is_supported_recipe_action_group,
 )
 from shared.schema.feedback_schema import RecipeCandidate
 from shared.schema.skill_schema import RECIPE_INPUT_NAMES, RecipeSkillMetadata
@@ -158,20 +158,32 @@ def _target_promotion_rejection(
     return ""
 
 
-def _contextual_promotion_rejection(
+def _commit_promotion_rejection(
     step: dict[str, Any],
     mode: str,
 ) -> str:
     if mode != "fixed":
-        return "contextual_action_not_fixed"
-    if not step.get("screen_context_signature"):
-        return "screen_context_signature_missing"
+        return "commit_action_not_fixed"
     param = step.get("param") if isinstance(step.get("param"), dict) else {}
-    if step.get("action") == "press_key" and not param.get("key"):
+    if not param.get("key"):
         return "key_missing"
-    if step.get("action") == "switch_tab" and not param.get("direction"):
-        return "tab_direction_missing"
     return ""
+
+
+def _remove_ungrouped_commit_actions(
+    steps: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: list[dict[str, Any]] = []
+    for step in steps:
+        if step.get("action") not in RECIPE_COMMIT_ACTIONS:
+            grouped.append(step)
+            continue
+        if grouped and is_supported_recipe_action_group([grouped[-1], step]):
+            grouped.append(step)
+            continue
+        _skip(skipped, step, "commit_action_without_target_input")
+    return grouped
 
 
 def _promotable_steps(
@@ -226,14 +238,14 @@ def _promotable_steps(
             promoted.append(step)
             continue
 
-        if action in CONTEXTUAL_REPLAY_ACTIONS:
-            reason = _contextual_promotion_rejection(step, mode)
+        if action in RECIPE_COMMIT_ACTIONS:
+            reason = _commit_promotion_rejection(step, mode)
             if reason:
                 _skip(skipped, step, reason)
                 continue
             promoted.append(step)
 
-    return promoted, skipped
+    return _remove_ungrouped_commit_actions(promoted, skipped), skipped
 
 
 def apply_candidate_promotion(
@@ -249,12 +261,11 @@ def apply_candidate_promotion(
         review,
         metadata,
     )
-    recipe_path, path_issues = build_recipe_path(
+    recipe_paths, path_issues = build_recipe_paths(
         candidate,
         replay_steps,
     )
     skipped_steps.extend(path_issues)
-    recipe_paths = [recipe_path] if recipe_path else []
     saved_count = RecipeStore(db_path).replace_recipe_paths(
         candidate.site,
         candidate.goal,
@@ -279,39 +290,4 @@ def apply_candidate_promotion(
     }
 
 
-def reapply_reviewed_candidate_promotion(
-    run_id: str,
-    db_path=None,
-) -> dict[str, Any]:
-    """저장된 가지치기 판정을 현재 결정론 정책으로 다시 적용한다."""
-
-    candidate = RecipeCandidateStore(db_path).get_candidate(run_id)
-    if not candidate:
-        return {
-            "run_id": run_id,
-            "promoted": False,
-            "reason": "candidate_not_found",
-        }
-    validation = dict(candidate.validation)
-    review = dict(validation.get("review", {}) or {})
-    if review.get("decision") != "accept" or not any(
-        isinstance(item, dict) and item.get("keep")
-        for item in review.get("step_verdicts") or []
-    ):
-        return {
-            "run_id": run_id,
-            "promoted": False,
-            "reason": "stored_review_not_promotable",
-        }
-    promotion = apply_candidate_promotion(
-        candidate,
-        review,
-        db_path=db_path,
-    )
-    return {"run_id": run_id, **promotion}
-
-
-__all__ = [
-    "apply_candidate_promotion",
-    "reapply_reviewed_candidate_promotion",
-]
+__all__ = ["apply_candidate_promotion"]

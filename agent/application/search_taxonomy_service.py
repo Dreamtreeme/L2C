@@ -52,12 +52,6 @@ class SearchTaxonomyService:
             )
         )
 
-    @staticmethod
-    def _concept_label(row: sqlite3.Row) -> str:
-        return str(
-            row["preferred_label_ko"] or row["preferred_label_en"] or row["concept_key"]
-        )
-
     def resolve_occupation_concepts(self, occupation_query: str) -> list[str]:
         """사용자 표현에서 서로 독립적인 구체 직무를 모두 찾는다."""
 
@@ -96,31 +90,6 @@ class SearchTaxonomyService:
         if not matches:
             return []
         return self._specific_alias_concept_keys(matches)
-
-    def resolve_domain_concepts(self, domain_query: str) -> list[str]:
-        """명시된 업무 영역 표현을 검토된 정확 별칭으로 해석한다."""
-
-        normalized = normalize_term(domain_query)
-        if not normalized:
-            return []
-        connection = self._connect()
-        try:
-            rows = connection.execute(
-                """
-                SELECT DISTINCT concepts.concept_key
-                FROM search_concepts AS concepts
-                JOIN search_aliases AS aliases ON aliases.concept_id = concepts.id
-                WHERE concepts.concept_type = 'domain'
-                  AND concepts.status = 'active'
-                  AND concepts.source_key = ?
-                  AND aliases.active = 1
-                  AND aliases.normalized_alias = ?
-                """,
-                (CORE_SOURCE_KEY, normalized),
-            ).fetchall()
-            return [str(row["concept_key"]) for row in rows]
-        finally:
-            connection.close()
 
     def resolve_skill_concepts(self, skill_queries: Iterable[str]) -> list[str]:
         """기술 표현 안의 구체적인 활성 별칭을 해석한다."""
@@ -209,7 +178,7 @@ class SearchTaxonomyService:
         *,
         evidence_fields: Iterable[str] | None = None,
     ) -> set[int]:
-        """선택한 직무와 모든 하위 직무에 연결된 공고 ID를 반환한다."""
+        """선택한 직무 별칭에 연결된 공고 ID를 반환한다."""
 
         connection = self._connect()
         try:
@@ -236,20 +205,11 @@ class SearchTaxonomyService:
             params.extend(filter_params)
             rows = connection.execute(
                 f"""
-                WITH RECURSIVE selected_concepts(id) AS (
-                    SELECT id FROM search_concepts WHERE id IN ({placeholders})
-                    UNION
-                    SELECT relations.source_concept_id
-                    FROM search_concept_relations AS relations
-                    JOIN selected_concepts
-                      ON relations.target_concept_id = selected_concepts.id
-                    WHERE relations.relation_type = 'broader'
-                )
                 SELECT DISTINCT jobs.id
                 FROM jobs
                 JOIN job_concept_links AS links ON links.job_id = jobs.id
-                JOIN selected_concepts ON selected_concepts.id = links.concept_id
-                WHERE {" AND ".join(where)}
+                WHERE links.concept_id IN ({placeholders})
+                  AND {" AND ".join(where)}
                 """,
                 params,
             ).fetchall()
@@ -304,146 +264,6 @@ class SearchTaxonomyService:
         finally:
             connection.close()
 
-    def list_direct_children(self, concept_key: str) -> list[dict[str, str]]:
-        connection = self._connect()
-        try:
-            rows = connection.execute(
-                """
-                SELECT child.concept_key, child.preferred_label_ko,
-                       child.preferred_label_en, child.concept_type,
-                       child.definition, child.source_key
-                FROM search_concepts AS parent
-                JOIN search_concept_relations AS relations
-                  ON relations.target_concept_id = parent.id
-                 AND relations.relation_type = 'broader'
-                JOIN search_concepts AS child
-                  ON child.id = relations.source_concept_id
-                WHERE parent.concept_key = ?
-                  AND child.status = 'active'
-                  AND child.source_key = ?
-                ORDER BY COALESCE(child.preferred_label_ko, child.preferred_label_en)
-                """,
-                (concept_key, CORE_SOURCE_KEY),
-            ).fetchall()
-            return [
-                {
-                    "concept_key": str(row["concept_key"]),
-                    "label": self._concept_label(row),
-                    "concept_type": str(row["concept_type"]),
-                    "definition": str(row["definition"] or ""),
-                    "source": str(row["source_key"]),
-                }
-                for row in rows
-            ]
-        finally:
-            connection.close()
-
-    def occupation_descendant_count(self, concept_key: str) -> int:
-        """선택한 노드 아래의 활성 직무 개념 수를 반환한다."""
-
-        connection = self._connect()
-        try:
-            row = connection.execute(
-                """
-                WITH RECURSIVE descendants(id) AS (
-                    SELECT id FROM search_concepts WHERE concept_key = ?
-                    UNION
-                    SELECT relations.source_concept_id
-                    FROM search_concept_relations AS relations
-                    JOIN descendants
-                      ON relations.target_concept_id = descendants.id
-                    WHERE relations.relation_type = 'broader'
-                )
-                SELECT COUNT(*) AS concept_count
-                FROM search_concepts AS concepts
-                JOIN descendants ON descendants.id = concepts.id
-                WHERE concepts.concept_type = 'occupation'
-                  AND concepts.status = 'active'
-                  AND concepts.source_key = ?
-                """,
-                (concept_key, CORE_SOURCE_KEY),
-            ).fetchone()
-            return int(row["concept_count"] if row is not None else 0)
-        finally:
-            connection.close()
-
-    def occupation_resolution_candidates(
-        self,
-        domain_concept_keys: Iterable[str],
-    ) -> list[dict[str, Any]]:
-        """선택된 업무 영역 아래의 활성 직무만 의미 판정 후보로 반환한다."""
-
-        keys = list(dict.fromkeys(str(key) for key in domain_concept_keys if str(key)))
-        if not keys:
-            return []
-        connection = self._connect()
-        try:
-            concept_ids = self._concept_ids(connection, keys)
-            if not concept_ids:
-                return []
-            placeholders = ",".join("?" for _ in concept_ids)
-            rows = connection.execute(
-                f"""
-                WITH RECURSIVE branch(id) AS (
-                    SELECT id FROM search_concepts WHERE id IN ({placeholders})
-                    UNION
-                    SELECT relations.source_concept_id
-                    FROM search_concept_relations AS relations
-                    JOIN branch ON relations.target_concept_id = branch.id
-                    WHERE relations.relation_type = 'broader'
-                )
-                SELECT concepts.concept_key, concepts.preferred_label_ko,
-                       concepts.preferred_label_en, concepts.definition,
-                       concepts.source_key,
-                       EXISTS (
-                           SELECT 1
-                           FROM search_concept_relations AS child_relations
-                           JOIN search_concepts AS child
-                             ON child.id = child_relations.source_concept_id
-                           WHERE child_relations.target_concept_id = concepts.id
-                             AND child_relations.relation_type = 'broader'
-                             AND child.status = 'active'
-                       ) AS is_group
-                FROM search_concepts AS concepts
-                JOIN branch ON branch.id = concepts.id
-                WHERE concepts.concept_type = 'occupation'
-                  AND concepts.status = 'active'
-                  AND concepts.source_key = ?
-                ORDER BY COALESCE(
-                    concepts.preferred_label_ko,
-                    concepts.preferred_label_en,
-                    concepts.concept_key
-                )
-                """,
-                [*concept_ids, CORE_SOURCE_KEY],
-            ).fetchall()
-            return [
-                {
-                    "concept_key": str(row["concept_key"]),
-                    "label": self._concept_label(row),
-                    "definition": str(row["definition"] or ""),
-                    "source": str(row["source_key"]),
-                    "is_group": bool(row["is_group"]),
-                }
-                for row in rows
-            ]
-        finally:
-            connection.close()
-
-    def concept_label(self, concept_key: str) -> str:
-        connection = self._connect()
-        try:
-            row = connection.execute(
-                """
-                SELECT concept_key, preferred_label_ko, preferred_label_en
-                FROM search_concepts WHERE concept_key = ?
-                """,
-                (concept_key,),
-            ).fetchone()
-            return self._concept_label(row) if row is not None else concept_key
-        finally:
-            connection.close()
-
     def enrich_constraints(
         self, constraints: InvestigationConstraints
     ) -> InvestigationConstraints:
@@ -453,25 +273,16 @@ class SearchTaxonomyService:
         if not constraints.collection_search_term:
             collection_term = (
                 constraints.occupation_query
-                or constraints.occupation_domain_query
                 or next(iter(constraints.skill_queries), "")
             )
             if collection_term:
                 updates["collection_search_term"] = collection_term
-        if (
-            not constraints.occupation_domain_concept_keys
-            and constraints.occupation_domain_query
-        ):
-            updates["occupation_domain_concept_keys"] = self.resolve_domain_concepts(
-                constraints.occupation_domain_query
-            )
         if not constraints.occupation_concept_keys and constraints.occupation_query:
             occupation_keys = self.resolve_occupation_concepts(
                 constraints.occupation_query
             )
             if occupation_keys:
                 updates["occupation_concept_keys"] = occupation_keys
-                updates["occupation_resolution"] = "exact_alias"
         if not constraints.skill_concept_keys and constraints.skill_queries:
             updates["skill_concept_keys"] = self.resolve_skill_concepts(
                 constraints.skill_queries

@@ -112,6 +112,8 @@ def merge_job_detail_coverage(
         if observed.get("page_exhausted") is True
         else current.get("unavailable_fields")
     )
+    for field in unavailable:
+        evidence.pop(field, None)
     return {
         "url": current_url,
         "detail_key": detail_key,

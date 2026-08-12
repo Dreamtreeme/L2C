@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 from agent.runtime.worker_actions import (
-    CONTEXTUAL_REPLAY_ACTIONS,
+    RECIPE_COMMIT_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
 )
@@ -168,7 +168,7 @@ def _missing_evidence_reasons(
     transition_items: list[RecordedTransition],
     transition_statuses: list[str],
 ) -> list[str]:
-    if action not in CONTEXTUAL_REPLAY_ACTIONS:
+    if action not in RECIPE_COMMIT_ACTIONS:
         return (
             ["action_evidence_missing"]
             if not feedback_items and not transition_items

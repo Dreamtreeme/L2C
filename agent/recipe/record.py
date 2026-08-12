@@ -7,10 +7,10 @@ from __future__ import annotations
 from agent.recipe.matcher import marker_region
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
-    CONTEXTUAL_REPLAY_ACTIONS,
-    RECORDED_REPLAY_ACTIONS,
+    RECIPE_COMMIT_ACTIONS,
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
+    TRAJECTORY_ACTIONS,
 )
 from agent.runtime.worker_contracts import WorkerState
 from agent.utils.text import normalize_text, url_template
@@ -28,20 +28,16 @@ def _recorded_replay_mode(
     args: dict,
     slot_name: str,
 ) -> str:
-    """모델이 선언한 재사용 방식이 행동 계약과 맞을 때만 보존한다."""
+    """실제 도구와 입력 슬롯으로 재사용 방식을 계산한다."""
 
-    mode = normalize_text(args.get("replay_mode")).casefold()
     if action_name not in REVIEWABLE_REPLAY_ACTIONS:
         return "reasoning"
-    if action_name == "type_in_marker" and slot_name:
-        return "parameterized" if mode in {"fixed", "parameterized"} else "reasoning"
-    if mode == "parameterized":
-        return (
-            "parameterized"
-            if action_name == "type_in_marker" and slot_name
-            else "reasoning"
-        )
-    return "fixed" if mode == "fixed" else "reasoning"
+    if action_name == "type_in_marker":
+        return "parameterized" if slot_name else "reasoning"
+    if action_name == "press_key":
+        key = normalize_text(args.get("key")).casefold()
+        return "fixed" if key in {"enter", "return"} else "reasoning"
+    return "fixed"
 
 
 def _new_recorded_step(
@@ -78,6 +74,7 @@ def _new_recorded_step(
         "slot_refs": [slot_name] if slot_name else [],
         "risk_level": normalize_text(args.get("risk_level")),
         "replay_mode": _recorded_replay_mode(action_name, args, slot_name),
+        "screen_context_signature": context_signature,
     }
 
 
@@ -141,13 +138,6 @@ def _record_target_parameters(
         if slot_name:
             step["param"]["slot_name"] = slot_name
         step["is_param"] = bool(slot_name)
-    elif action_name == "scroll":
-        step["value"] = args.get("direction", "down")
-        step["param"] = {
-            "direction": step["value"],
-            "amount": args.get("amount", "page"),
-            "targeted": True,
-        }
 
 
 def _record_target_action(
@@ -175,40 +165,52 @@ def _record_target_action(
     return True
 
 
-def _record_contextual_parameters(
+def _record_action_parameters(
     step: dict,
     action_name: str,
     args: dict,
 ) -> None:
-    keys = {
-        "scroll": ("direction", "down"),
-        "press_key": ("key", None),
-        "switch_tab": ("direction", None),
+    parameter_names = {
+        "press_key": ("key",),
+        "scroll": ("direction", "amount"),
+        "switch_tab": ("direction",),
     }
-    key_and_default = keys.get(action_name)
-    if key_and_default is None:
+    names = parameter_names.get(action_name)
+    if not names:
         return
-    key, default = key_and_default
-    value = args.get(key, default)
-    step["value"] = value
-    step["param"] = {key: value}
+    params = {
+        name: args.get(name)
+        for name in names
+        if args.get(name) not in (None, "")
+    }
     if action_name == "scroll":
-        step["param"]["amount"] = args.get("amount", "page")
+        params.setdefault("direction", "down")
+        params.setdefault("amount", "page")
+    step["param"] = params
+    step["value"] = next(iter(params.values()), None)
 
 
-def record_ui_step(
-    recorded_steps: list[RecordedRecipeStep],
+def build_recorded_recipe_step(
     state: WorkerState,
     action_name: str,
     args: dict,
     seq: int,
-) -> None:
-    """UI 액션 디스패치 직후 재생 후보 단계를 기록한다."""
+) -> RecordedRecipeStep | None:
+    """UI 행동에서 재생 후보 단계 하나를 만든다."""
 
-    if action_name not in RECORDED_REPLAY_ACTIONS:
-        return
+    if action_name not in TRAJECTORY_ACTIONS:
+        return None
     observation = state["observation"]
     slot_name = normalize_text(args.get("slot_name"))
+    if action_name == "type_in_marker" and not slot_name:
+        intent = state["request"].get("collection_intent")
+        search_keyword = normalize_text(
+            intent.get("search_keyword", "")
+            if isinstance(intent, dict)
+            else getattr(intent, "search_keyword", "")
+        )
+        if search_keyword and normalize_text(args.get("text")) == search_keyword:
+            slot_name = "search_keyword"
     screen_signature = dict(observation.get("screen_signature", {}) or {})
     context_signature = compact_screen_context_signature(screen_signature)
     step = _new_recorded_step(
@@ -219,10 +221,7 @@ def record_ui_step(
         slot_name,
         context_signature,
     )
-    targeted_action = action_name in TARGET_REPLAY_ACTIONS or (
-        action_name == "scroll" and args.get("marker_id") is not None
-    )
-    if targeted_action:
+    if action_name in TARGET_REPLAY_ACTIONS:
         if not _record_target_action(
             step,
             observation,
@@ -231,9 +230,24 @@ def record_ui_step(
             slot_name,
             screen_signature,
         ):
-            return
-    else:
-        _record_contextual_parameters(step, action_name, args)
-    if action_name in CONTEXTUAL_REPLAY_ACTIONS and context_signature:
-        step["screen_context_signature"] = context_signature
-    recorded_steps.append(RecordedRecipeStep.model_validate(step))
+            return None
+    elif action_name == "scroll" and args.get("marker_id") is not None:
+        if not _record_target_action(
+            step,
+            observation,
+            action_name,
+            args,
+            slot_name,
+            screen_signature,
+        ):
+            return None
+        _record_action_parameters(step, action_name, args)
+    elif action_name in RECIPE_COMMIT_ACTIONS or action_name in {
+        "scroll",
+        "switch_tab",
+    }:
+        _record_action_parameters(step, action_name, args)
+    return RecordedRecipeStep.model_validate(step)
+
+
+__all__ = ["build_recorded_recipe_step"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_contracts import WorkerState, WorkerStateUpdate
 from agent.runtime.worker_data_services import WorkerDataServices
 from agent.runtime.detail_runtime import detail_buffer_text, detail_evidence_screenshot
 from agent.runtime.job_capture import store_job_capture
@@ -24,24 +24,11 @@ from shared.schema.jd_schema import JobCapture, JobCollectionEvidence
 
 
 @dataclass(frozen=True)
-class StateActionUpdate:
-    """상태 행동이 선택적으로 갱신하는 작업자 필드."""
-
-    job_card_queue: list[dict[str, Any]] | None = None
-    job_results_memory: dict[str, Any] | None = None
-    job_results_availability: dict[str, Any] | None = None
-    job_detail_buffer: dict[str, Any] | None = None
-    job_detail_coverage: dict[str, Any] | None = None
-    job_detail_followup: dict[str, Any] | None = None
-
-
-@dataclass(frozen=True)
 class StateActionOutcome:
     """상태 행동의 결과와 작업자 상태 변경."""
 
     result: dict[str, Any]
-    job_captures: list[JobCapture]
-    state_update: StateActionUpdate = field(default_factory=StateActionUpdate)
+    state_update: WorkerStateUpdate = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -163,19 +150,21 @@ def _detail_retry_update(
     current_url: str,
     reason: str,
     missing_fields: list[str],
-) -> StateActionUpdate:
-    return StateActionUpdate(
-        job_detail_buffer=dict(
-            state["collection"].get("job_detail_buffer", {}) or {}
-        ),
-        job_detail_coverage=assessment.coverage,
-        job_detail_followup=_detail_followup(
-            state,
-            current_url=current_url,
-            reason=reason,
-            missing_fields=missing_fields,
-        ),
-    )
+) -> WorkerStateUpdate:
+    return {
+        "collection": {
+            "job_detail_buffer": dict(
+                state["collection"].get("job_detail_buffer", {}) or {}
+            ),
+            "job_detail_coverage": assessment.coverage,
+            "job_detail_followup": _detail_followup(
+                state,
+                current_url=current_url,
+                reason=reason,
+                missing_fields=missing_fields,
+            ),
+        }
+    }
 
 
 def _incomplete_detail_evidence_outcome(
@@ -197,7 +186,6 @@ def _incomplete_detail_evidence_outcome(
             "required_fields": assessment.required_fields,
             "field_coverage": assessment.coverage_status,
         },
-        job_captures=current_captures,
         state_update=_detail_retry_update(
             state,
             assessment,
@@ -218,11 +206,12 @@ def _empty_detail_outcome(
             "result": "No accumulated detail OCR text to extract.",
             "reason": "empty_job_detail_buffer",
         },
-        job_captures=current_captures,
-        state_update=StateActionUpdate(
-            job_detail_buffer={},
-            job_detail_coverage={},
-        ),
+        state_update={
+            "collection": {
+                "job_detail_buffer": {},
+                "job_detail_coverage": {},
+            }
+        },
     )
 
 
@@ -265,12 +254,14 @@ def _merge_completed_detail(
             "total_captures": len(merged_captures),
             "ocr_chars": len(capture.raw_ocr_text),
         },
-        job_captures=merged_captures,
-        state_update=StateActionUpdate(
-            job_detail_buffer={},
-            job_detail_coverage={},
-            job_detail_followup={},
-        ),
+        state_update={
+            "collection": {
+                "job_captures": merged_captures,
+                "job_detail_buffer": {},
+                "job_detail_coverage": {},
+                "job_detail_followup": {},
+            }
+        },
     )
 
 
@@ -312,7 +303,6 @@ def _finish_detail_reading(
                 "status": "error",
                 "result": f"Failed to extract detail OCR buffer: {exc}",
             },
-            job_captures=current_captures,
         )
 
 
@@ -368,12 +358,13 @@ def _set_job_card_queue(
             "existing_card_count": len(existing_cards),
             "existing_cards": existing_cards,
         },
-        job_captures=current_captures,
-        state_update=StateActionUpdate(
-            job_card_queue=queue,
-            job_results_memory=memory,
-            job_results_availability=availability,
-        ),
+        state_update={
+            "collection": {
+                "job_card_queue": queue,
+                "job_results_memory": memory,
+                "job_results_availability": availability,
+            }
+        },
     )
 
 
@@ -409,7 +400,6 @@ def dispatch_state_action(
 
 __all__ = [
     "StateActionOutcome",
-    "StateActionUpdate",
     "dispatch_state_action",
     "dispatch_ui_action",
 ]

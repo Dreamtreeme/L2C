@@ -4,6 +4,7 @@ from agent.graph import (
     worker_observation,
     worker_transition,
 )
+from agent.recipe.record import build_recorded_recipe_step
 from agent.runtime.worker_contracts import action_event_transitions
 from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.tests.worker_test_support import (
@@ -13,11 +14,16 @@ from agent.tests.worker_test_support import (
 )
 
 
+def _append_recorded_step(steps, state, action_name, args, seq):
+    step = build_recorded_recipe_step(state, action_name, args, seq)
+    if step is not None:
+        steps.append(step)
+
+
 def test_roi_record_and_replay_uses_target_crop(tmp_path):
     from PIL import Image, ImageDraw
 
     from agent.recipe.phash_replay import match_step_by_screen_signature
-    from agent.recipe.record import record_ui_step
 
     saved = tmp_path / "saved.png"
     current = tmp_path / "current.png"
@@ -30,7 +36,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
         image.save(path)
 
     steps: list[dict] = []
-    record_ui_step(
+    _append_recorded_step(
         steps,
         worker_state(
             request={"goal": "검색"},
@@ -52,7 +58,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
         },
         0,
     )
-    record_ui_step(
+    _append_recorded_step(
         steps,
         worker_state(
             request={"goal": "검색"},
@@ -85,6 +91,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
 
     assert steps[0].page_role == "home"
     assert steps[0].roi_signature["algorithm"] == "roi-phash-dct64-v2"
+    assert steps[0].replay_mode == "fixed"
     assert steps[1].replay_mode == "parameterized"
     assert steps[1].slot_refs == ["search_keyword"]
     assert marker_id == 7
@@ -112,48 +119,49 @@ def test_roi_replay_rejects_step_without_roi_signature():
     assert trace["reason"] == "roi_signature_missing"
 
 
-def test_contextual_step_records_and_matches_screen_context():
-    from agent.runtime.target_matching import screen_context_signature_match
-    from agent.recipe.record import record_ui_step
+def test_trajectory_records_context_actions_without_promoting_them():
+    from agent.runtime.worker_actions import is_supported_recipe_action_group
 
     steps: list[dict] = []
-    record_ui_step(
-        steps,
-        worker_state(
-            observation={
-                "current_url": "https://www.wanted.co.kr",
-                "current_page_role": "search_overlay",
-                "screen_signature": {
-                    "algorithm": "phash-dct64-v1",
-                    "phash": "a" * 16,
-                    "size": [1921, 2088],
-                },
-                "current_markers": [],
+    state = worker_state(
+        observation={
+            "current_url": "https://www.wanted.co.kr",
+            "current_page_role": "search_overlay",
+            "screen_signature": {
+                "algorithm": "phash-dct64-v1",
+                "phash": "a" * 16,
+                "size": [1921, 2088],
             },
-        ),
+            "current_markers": [],
+        },
+    )
+    _append_recorded_step(
+        steps,
+        state,
         "press_key",
-        {"key": "enter", "page_role": "search_overlay"},
+        {"key": "enter", "replay_mode": "fixed"},
         2,
     )
+    _append_recorded_step(steps, state, "scroll", {"direction": "down"}, 3)
+    _append_recorded_step(steps, state, "go_back", {}, 4)
 
-    saved = steps[0].screen_context_signature
-    matched = screen_context_signature_match(
-        saved,
-        {"phash": "a" * 16, "size": [1921, 2088]},
-    )
-    rejected = screen_context_signature_match(
-        saved,
-        {"phash": "5" * 16, "size": [1921, 2088]},
-    )
+    assert [step.action for step in steps] == ["press_key", "scroll", "go_back"]
+    assert [step.replay_mode for step in steps] == [
+        "fixed",
+        "reasoning",
+        "reasoning",
+    ]
+    assert steps[0].screen_context_signature["phash"] == "a" * 16
+    assert is_supported_recipe_action_group(steps) is False
+    assert is_supported_recipe_action_group(
+        [
+            {"action": "type_in_marker"},
+            {"action": "press_key", "param": {"key": "enter"}},
+        ]
+    ) is True
 
-    assert saved["phash"] == "a" * 16
-    assert matched["matched"] is True
-    assert rejected["matched"] is False
-    assert rejected["reason"] == "screen_context_phash_distance"
 
-
-def test_replay_mode_requires_autonomous_declaration():
-    from agent.recipe.record import record_ui_step
+def test_replay_mode_is_derived_from_executed_tool_contract():
 
     state = worker_state(
         observation={
@@ -168,23 +176,31 @@ def test_replay_mode_requires_autonomous_declaration():
     )
     steps: list[dict] = []
 
-    record_ui_step(
+    _append_recorded_step(
         steps,
         state,
         "press_key",
         {"key": "enter"},
         1,
     )
-    record_ui_step(
+    _append_recorded_step(
         steps,
         state,
         "press_key",
         {"key": "enter", "replay_mode": "fixed"},
         2,
     )
+    _append_recorded_step(
+        steps,
+        state,
+        "press_key",
+        {"key": "escape", "replay_mode": "fixed"},
+        3,
+    )
 
-    assert steps[0].replay_mode == "reasoning"
+    assert steps[0].replay_mode == "fixed"
     assert steps[1].replay_mode == "fixed"
+    assert steps[2].replay_mode == "reasoning"
 
 
 def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):

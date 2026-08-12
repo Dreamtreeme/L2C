@@ -79,12 +79,23 @@ def frame_quality(frame: Any) -> dict[str, Any]:
     stddev = float(np.std(content))
     edges = cv2.Laplacian(content, cv2.CV_32F)
     edge_mean = float(np.mean(np.abs(edges)))
+    structure_edges = cv2.Canny(content, 20, 60)
+    component_count, _, component_stats, _ = cv2.connectedComponentsWithStats(
+        structure_edges,
+        connectivity=8,
+    )
+    compact_component_count = sum(
+        1
+        for _, _, width, height, area in component_stats[1:component_count]
+        if 2 <= area <= 120 and width <= 40 and height <= 25
+    )
     histogram = cv2.calcHist([content], [0], None, [256], [0, 256])
     dominant_ratio = float(histogram.max()) / float(max(1, content.size))
     low_information = (
         stddev <= settings.loading_blank_max_stddev
         and edge_mean <= settings.loading_blank_max_edge_mean
         and dominant_ratio >= settings.loading_blank_min_dominant_ratio
+        and compact_component_count < settings.loading_min_content_components
     )
     return {
         "low_information": low_information,
@@ -95,6 +106,7 @@ def frame_quality(frame: Any) -> dict[str, Any]:
         "stddev": round(stddev, 3),
         "edge_mean": round(edge_mean, 3),
         "dominant_ratio": round(dominant_ratio, 4),
+        "compact_component_count": compact_component_count,
     }
 
 

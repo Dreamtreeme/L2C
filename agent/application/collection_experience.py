@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from agent.config import get_settings
 from agent.recipe.candidate_store import RecipeCandidateStore
@@ -47,11 +48,12 @@ def _record_recipe_candidate(
     submission: WorkerSubmission,
     persistence: PersistenceReport,
     run_id: str,
+    db_path: str | Path,
 ) -> RecipeLearningResult:
     if not _run_is_reusable(submission, persistence):
         return _learning_result("not_eligible")
     try:
-        candidate_store = RecipeCandidateStore()
+        candidate_store = RecipeCandidateStore(db_path)
         recorded_run_id = candidate_store.commit_candidate(
             submission,
             run_id=run_id,
@@ -77,6 +79,7 @@ def record_collection_experience(
     persistence: PersistenceReport,
     *,
     source: str = "realtime_scraping",
+    db_path: str | Path,
 ) -> CollectionExperienceResult:
     """정보 저장 결과와 무관하게 실행 이력과 레시피 후보를 기록한다."""
 
@@ -84,7 +87,7 @@ def record_collection_experience(
         update={"persisted_count": persistence.persisted_count}
     )
     try:
-        run_id = SubmissionStore().commit_submission(submission, source=source)
+        run_id = SubmissionStore(db_path).commit_submission(submission, source=source)
     except Exception as exc:
         logger.warning("작업자 제출물 저장 실패: %s", exc)
         return CollectionExperienceResult(
@@ -101,6 +104,7 @@ def record_collection_experience(
             submission,
             persistence,
             run_id,
+            db_path,
         ),
     )
 

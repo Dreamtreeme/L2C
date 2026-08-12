@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
-    CONTEXTUAL_REPLAY_ACTIONS,
+    RECIPE_COMMIT_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
 from agent.utils.text import normalize_text
@@ -49,16 +49,14 @@ def is_replayable_action(action_item: dict) -> bool:
     action = action_item.get("action")
     if not normalize_page_role(action_item.get("page_role", "")):
         return False
-    if action in CONTEXTUAL_REPLAY_ACTIONS:
+    if action in RECIPE_COMMIT_ACTIONS:
         param = action_item.get("param", {})
         if not isinstance(param, dict):
             return False
-        if action == "press_key" and not param.get("key"):
-            return False
-        if action == "switch_tab" and not param.get("direction"):
-            return False
         return bool(
-            action_item.get("screen_context_signature")
+            action_item.get("replay_mode") == "fixed"
+            and str(param.get("key") or "").strip().casefold()
+            in {"enter", "return"}
         )
     if action not in TARGET_REPLAY_ACTIONS:
         return False

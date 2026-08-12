@@ -27,7 +27,6 @@ export interface ClarificationOption {
   value: string;
   collection_search_term?: string;
   matching_count?: number;
-  concept_count?: number;
   description?: string;
 }
 
@@ -38,9 +37,6 @@ export interface ClarificationQuestion {
   options: ClarificationOption[];
   allow_custom: boolean;
   reason?: string;
-  candidate_count?: number;
-  concept_count?: number;
-  facet_type?: string;
 }
 
 export interface ClarificationAnswer {

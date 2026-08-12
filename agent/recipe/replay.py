@@ -8,9 +8,8 @@ from typing import Any
 
 from agent.recipe.matcher import is_replayable_action
 from agent.recipe.phash_replay import match_step_by_screen_signature
-from agent.runtime.target_matching import screen_context_signature_match
 from agent.runtime.worker_actions import (
-    CONTEXTUAL_REPLAY_ACTIONS,
+    RECIPE_COMMIT_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
 from agent.runtime.site_context import normalize_page_role
@@ -22,9 +21,7 @@ from shared.schema.recipe_schema import RecipeTransition, SiteRecipe
 
 _REJECT_REASON_PRIORITY = {
     "capture_size_mismatch": 100,
-    "screen_context_signature_missing": 100,
     "roi_phash_distance": 90,
-    "screen_context_phash_distance": 90,
     "target_ratio_miss": 75,
     "url_scope_mismatch": 65,
 }
@@ -203,27 +200,15 @@ def _type_action_args(
     return args
 
 
-def _contextual_action_args(
+def _commit_action_args(
     step: dict[str, Any],
     trace_args: dict[str, str],
 ) -> dict[str, Any] | None:
-    action = str(step.get("action") or "")
     param = dict(step.get("param") or {})
-    allowed_param_keys = {
-        "press_key": {"key"},
-        "go_back": set(),
-        "close_current_tab": set(),
-        "switch_tab": {"direction"},
-    }[action]
-    args = {
-        key: item
-        for key, item in param.items()
-        if key in allowed_param_keys and item not in (None, "")
-    }
-    if action == "press_key" and not args.get("key"):
+    key = str(param.get("key") or "").strip()
+    if key.casefold() not in {"enter", "return"}:
         return None
-    if action == "switch_tab" and not args.get("direction"):
-        return None
+    args = {"key": key}
     args.update(
         {
             key: item
@@ -248,9 +233,9 @@ def build_reflex_action_args(
         return _click_action_args(step, marker_id, trace_args)
     if action == "type_in_marker":
         return _type_action_args(step, marker_id, params, trace_args)
-    if action not in CONTEXTUAL_REPLAY_ACTIONS:
+    if action not in RECIPE_COMMIT_ACTIONS:
         return None
-    return _contextual_action_args(step, trace_args)
+    return _commit_action_args(step, trace_args)
 
 
 def _missing_required_inputs(
@@ -390,29 +375,6 @@ def _step_trace(
     }
 
 
-def _match_contextual_action_screen(
-    observation: dict[str, Any],
-    context: ReflexReplayContext,
-    step: dict[str, Any],
-    trace: dict[str, Any],
-    action_index: int,
-) -> str:
-    action = step.get("action")
-    if action_index != 0 or action not in CONTEXTUAL_REPLAY_ACTIONS:
-        return ""
-    context_match = screen_context_signature_match(
-        dict(step.get("screen_context_signature") or {}),
-        dict(observation.get("screen_signature") or {}),
-    )
-    trace["phash"] = context_match
-    trace["match_mode"] = context_match.get("mode") or "screen_context_phash"
-    if not context_match.get("matched"):
-        return str(context_match.get("reason") or "screen_context_mismatch")
-    if not context.active_recipe_key:
-        return "recipe_must_start_with_roi"
-    return ""
-
-
 def _match_target_action_screen(
     observation: dict[str, Any],
     context: ReflexReplayContext,
@@ -450,15 +412,6 @@ def _match_action_screen(
     if not recipe_url_scope_matches(step.get("url_template", ""), context.current_url):
         return None, "url_scope_mismatch"
 
-    contextual_rejection = _match_contextual_action_screen(
-        observation,
-        context,
-        step,
-        trace,
-        action_index,
-    )
-    if contextual_rejection:
-        return None, contextual_rejection
     if action in TARGET_REPLAY_ACTIONS:
         return _match_target_action_screen(
             observation,
@@ -467,11 +420,10 @@ def _match_action_screen(
             trace,
         )
 
-    if trace["match_mode"] == "none":
-        trace["match_mode"] = (
-            "grouped_recipe_action" if action_index > 0 else "active_recipe_context"
-        )
-    return None, ""
+    if action in RECIPE_COMMIT_ACTIONS and action_index > 0:
+        trace["match_mode"] = "grouped_recipe_action"
+        return None, ""
+    return None, "commit_action_without_target_input"
 
 
 def _bind_candidate(
@@ -491,10 +443,6 @@ def _bind_candidate(
             {
                 "page_role": before_state.get("page_role", ""),
                 "url_template": before_state.get("url_template", ""),
-                "screen_context_signature": before_state.get(
-                    "screen_context_signature",
-                    {},
-                ),
                 "expected_after": candidate.transition.expected_after,
                 "intent": step.get("intent") or candidate.transition.intent,
             }

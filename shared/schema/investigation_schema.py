@@ -51,11 +51,6 @@ class ClarificationOption(BaseModel):
     value: str = Field(min_length=1)
     collection_search_term: str = ""
     matching_count: int = Field(default=0, ge=0)
-    concept_count: int = Field(
-        default=0,
-        ge=0,
-        description="이 선택지 아래에 포함된 활성 직무 개념 수.",
-    )
     description: str = ""
 
 
@@ -64,8 +59,6 @@ ClarificationField = Literal[
     "comparison_period",
     "site_scope",
     "target_count",
-    "occupation_domain_concept_keys",
-    "occupation_concept_keys",
     "occupation_query",
     "skill_queries",
     "analysis_dimensions",
@@ -89,9 +82,6 @@ class ClarificationQuestion(BaseModel):
     options: list[ClarificationOption] = Field(default_factory=list)
     allow_custom: bool = True
     reason: str = ""
-    candidate_count: int = Field(default=0, ge=0)
-    concept_count: int = Field(default=0, ge=0)
-    facet_type: str = ""
 
     @model_validator(mode="after")
     def validate_choices(self) -> "ClarificationQuestion":
@@ -129,16 +119,6 @@ class InvestigationConstraints(BaseModel):
             "공고 조사 목표를 정하려면 사용자가 업무 영역이나 직무를 선택해야 하는지 여부."
         ),
     )
-    occupation_domain_query: str = Field(
-        default="",
-        description=(
-            "사용자가 명시한 업무 기능 기준의 넓은 직무 영역. 회사의 산업 분류와 구분한다."
-        ),
-    )
-    occupation_domain_concept_keys: list[str] = Field(
-        default_factory=list,
-        description="검색 의미 사전에서 확정된 직무 영역 개념 키.",
-    )
     occupation_query: str = Field(
         default="",
         description="사용자가 요청한 직무 표현. 사전 해석과 미분류 직무 판정에만 사용한다.",
@@ -157,23 +137,6 @@ class InvestigationConstraints(BaseModel):
     occupation_concept_keys: list[str] = Field(
         default_factory=list,
         description="검색 의미 사전에서 확정된 직무 개념 키. 여러 값은 OR로 평가한다.",
-    )
-    occupation_resolution: Literal[
-        "unresolved",
-        "exact_alias",
-        "user_selected",
-        "reviewed_alias",
-        "semantic_no_match",
-    ] = Field(
-        default="unresolved",
-        description="직무 표현이 현재 개념 키로 확정된 경로.",
-    )
-    occupation_scope_mode: Literal["unspecified", "all", "selected"] = Field(
-        default="unspecified",
-        description=(
-            "unspecified는 카디널리티 질문 가능, all은 사용자가 전체 하위 직무를 "
-            "명시, selected는 객관식으로 범위를 확정한 상태다."
-        ),
     )
     skill_queries: list[str] = Field(
         default_factory=list,
@@ -259,8 +222,6 @@ class InvestigationConstraints(BaseModel):
     def normalize_occupation_scope_requirement(self) -> "InvestigationConstraints":
         has_occupation_scope = any(
             (
-                self.occupation_domain_query.strip(),
-                self.occupation_domain_concept_keys,
                 self.occupation_query.strip(),
                 self.occupation_concept_keys,
             )
@@ -450,15 +411,6 @@ class InvestigationOutcome(BaseModel):
     resume_mode: InvestigationResumeMode = ""
 
 
-class TaxonomyResolution(BaseModel):
-    """선택된 직무 영역 안에서 사용자 표현을 사전 개념에 대응한 결과."""
-
-    decision: Literal["match", "ambiguous", "no_match"] = "no_match"
-    selected_concept_key: str = ""
-    alternative_concept_keys: list[str] = Field(default_factory=list)
-    reason: str = ""
-
-
 class EvidencePlan(BaseModel):
     """확정된 요청에 답하기 위해 필요한 근거 목록."""
 
@@ -510,7 +462,6 @@ __all__ = [
     "InvestigationActionPlan",
     "EvidencePlan",
     "RequestAnalysis",
-    "TaxonomyResolution",
     "EvidenceValidation",
     "GroundedAnswer",
     "GroundedAnswerDraft",

@@ -8,12 +8,11 @@ from typing import Any, Callable
 from agent.config import get_settings
 from agent.recipe.candidate_promotion import apply_candidate_promotion
 from agent.recipe.promotion_policy import compact_step_evidence_verdicts
-from agent.runtime.worker_actions import (
-    CONTEXTUAL_REPLAY_ACTIONS,
-    REVIEWABLE_REPLAY_ACTIONS,
-)
 from agent.recipe.task_category import normalize_task_category
+from agent.runtime.worker_actions import REVIEWABLE_REPLAY_ACTIONS
+from agent.utils.text import normalize_text, url_template
 from shared.schema.feedback_schema import (
+    RecordedActionEvent,
     RecipeCandidate,
     RecipeCandidateReview,
     RecordedRecipeStep,
@@ -31,7 +30,7 @@ def _critic_evidence_text_limit() -> int:
 def _reviewable_action_specs(
     steps: list[RecordedRecipeStep],
 ) -> list[dict[str, Any]]:
-    """자율탐색이 재사용 후보로 명시한 단계만 Critic 검토 대상으로 삼는다."""
+    """도구 계약으로 재생 방식이 확정된 단계만 Critic 검토 대상으로 삼는다."""
 
     specs: list[dict[str, Any]] = []
     for step in steps:
@@ -45,70 +44,238 @@ def _reviewable_action_specs(
     return specs
 
 
-def _feedback_evidence_seqs(
-    worker_submission: WorkerSubmission,
-    steps: list[RecordedRecipeStep],
-    reviewable_seqs: set[int],
-) -> set[int]:
-    """후속 행동에는 바로 앞 행동의 성공 문맥도 Critic 증거로 포함한다."""
-
-    contextual_seqs = {
-        int(step.seq)
-        for step in steps
-        if (
-            step.action in CONTEXTUAL_REPLAY_ACTIONS
-            and step.seq is not None
-            and step.seq in reviewable_seqs
-        )
+def _without_empty_values(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item
+        for key, item in value.items()
+        if item not in (None, "", [], {})
     }
-    episode_seqs = sorted(
-        {episode.seq for episode in worker_submission.feedback_episodes}
-    )
-    out = set(reviewable_seqs)
-    for seq in contextual_seqs:
-        previous = [item for item in episode_seqs if item < seq]
-        if previous:
-            out.add(previous[-1])
-    return out
 
 
-def _compact_transition_records(
-    worker_submission: WorkerSubmission,
-    target_seqs: set[int],
-) -> list[dict[str, Any]]:
-    """승격 가능한 대상 행동의 전환 결과만 제한된 OCR 증거와 함께 남긴다."""
+def _compact_observation_id(value: Any) -> str:
+    observation_id = str(value or "")
+    marker = ":observation:"
+    if marker in observation_id:
+        return "observation:" + observation_id.rsplit(marker, 1)[-1]
+    return observation_id
 
-    text_limit = _critic_evidence_text_limit()
-    evidence: list[dict[str, Any]] = []
-    keys = (
-        "action_seq",
-        "action",
-        "expected_after",
-        "source",
-        "attempt",
-        "elapsed_sec",
-        "status",
-        "outcome",
-        "reason",
-        "phash_distance",
-        "ocr_skipped",
-        "marker_count",
-    )
-    for observation in worker_submission.transition_records:
-        seq = observation.action_seq
-        if seq is None:
-            continue
-        if seq not in target_seqs:
-            continue
-        observation_data = observation.model_dump(mode="json")
-        item = {
-            key: observation_data.get(key)
-            for key in keys
-            if observation_data.get(key) not in (None, "", [], {})
+
+def _compact_checkpoint(value: dict[str, Any] | None) -> dict[str, Any]:
+    checkpoint = dict(value or {})
+    raw_url = str(checkpoint.get("url_template") or checkpoint.get("url") or "")
+    return _without_empty_values(
+        {
+            "observation_id": _compact_observation_id(
+                checkpoint.get("observation_id")
+            ),
+            "url_template": url_template(raw_url),
+            "page_role": checkpoint.get("page_role"),
         }
-        item["marker_texts"] = observation.marker_texts[:text_limit]
-        evidence.append(item)
-    return evidence
+    )
+
+
+def _compact_target(step: RecordedRecipeStep) -> dict[str, Any]:
+    target = dict(step.target or {})
+    return _without_empty_values(
+        {
+            "text": target.get("text"),
+            "semantic_label": target.get("semantic_label"),
+            "marker_type": target.get("marker_type"),
+            "region": target.get("region"),
+            "center_ratio": target.get("center_ratio"),
+        }
+    )
+
+
+def _compact_step_param(step: RecordedRecipeStep) -> dict[str, Any]:
+    param = dict(step.param or {})
+    if step.action == "type_in_marker":
+        return _without_empty_values(
+            {"slot_name": param.get("slot_name") or param.get("slot")}
+        )
+    if step.action == "press_key":
+        return _without_empty_values({"key": param.get("key")})
+    return {}
+
+
+def _compact_candidate_step(step: RecordedRecipeStep) -> dict[str, Any]:
+    roi = dict(step.roi_signature or {})
+    return _without_empty_values(
+        {
+            "seq": step.seq,
+            "action": step.action,
+            "replay_mode": step.replay_mode,
+            "before": _compact_checkpoint(step.before_state),
+            "target": _compact_target(step),
+            "roi": _without_empty_values(
+                {
+                    "available": bool(roi.get("phash")),
+                    "algorithm": roi.get("algorithm"),
+                    "crop_rect_ratio": roi.get("crop_rect_ratio"),
+                    "target_center_ratio": roi.get("target_center_ratio"),
+                }
+            ),
+            "param": _compact_step_param(step),
+            "slot_refs": list(step.slot_refs),
+            "expected_after": step.expected_after,
+            "intent": step.intent,
+            "target_role": step.target_role,
+            "component": step.component,
+            "risk_level": step.risk_level,
+        }
+    )
+
+
+def _normalized_marker_texts(values: list[Any]) -> list[str]:
+    texts: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = normalize_text(value)
+        key = text.casefold().replace(" ", "")
+        if len(key) < 2 or key in seen:
+            continue
+        seen.add(key)
+        texts.append(text)
+    return texts
+
+
+def _local_marker_context(
+    values: list[Any],
+    step: RecordedRecipeStep | None,
+) -> list[str]:
+    """전체 OCR 대신 대상 주변의 짧은 화면 문맥만 남긴다."""
+
+    texts = _normalized_marker_texts(values)
+    limit = _critic_evidence_text_limit()
+    if len(texts) <= limit:
+        return texts
+    target = dict(step.target or {}) if step else {}
+    labels = {
+        normalize_text(target.get(key)).casefold().replace(" ", "")
+        for key in ("semantic_label", "text")
+        if normalize_text(target.get(key))
+    }
+    index = next(
+        (
+            position
+            for position, text in enumerate(texts)
+            if text.casefold().replace(" ", "") in labels
+        ),
+        None,
+    )
+    if index is None:
+        return texts[:limit]
+    start = max(0, min(index - limit // 2, len(texts) - limit))
+    return texts[start : start + limit]
+
+
+def _compact_transition(
+    event: RecordedActionEvent,
+    *,
+    include_text: bool,
+) -> dict[str, Any]:
+    transition = event.transition
+    if transition is None:
+        return {}
+    match = dict(transition.after_state_match or {})
+    item = {
+        "status": transition.status,
+        "outcome": transition.outcome,
+        "reason": transition.reason,
+        "visual_change_ratio": transition.visual_change_ratio,
+        "after": _without_empty_values(
+            {"page_role": transition.after_state.get("page_role")}
+        ),
+    }
+    if include_text:
+        item.update(
+            {
+                "before_observation_id": _compact_observation_id(
+                    transition.before_observation_id
+                ),
+                "after_observation_id": _compact_observation_id(
+                    transition.after_observation_id
+                ),
+                "phash_distance": transition.phash_distance,
+                "transition_actions": list(transition.transition_actions),
+                "after_state_match": _without_empty_values(
+                    {
+                        "matched": match.get("matched"),
+                        "reason": match.get("reason"),
+                        "mode": match.get("mode"),
+                        "distance": match.get("distance"),
+                    }
+                ),
+                "after": _compact_checkpoint(transition.after_state),
+                "after_text_sample": _normalized_marker_texts(
+                    list(transition.marker_texts)
+                )[: _critic_evidence_text_limit()],
+            }
+        )
+    return _without_empty_values(item)
+
+
+def _compact_trajectory_event(
+    event: RecordedActionEvent,
+    reviewable_seqs: set[int],
+) -> dict[str, Any]:
+    step = event.recipe_step
+    episode = event.feedback_episode
+    result = dict(event.result or {})
+    before = dict(episode.observation.before or {}) if episode else {}
+    feedback = episode.feedback if episode else None
+    action = (
+        step.action
+        if step
+        else episode.proposal.action
+        if episode
+        else str(result.get("action") or result.get("requested_action") or "")
+    )
+    is_candidate = event.seq in reviewable_seqs
+    before_checkpoint = _compact_checkpoint(step.before_state if step else before)
+    if not is_candidate:
+        before_checkpoint = _without_empty_values(
+            {"page_role": before_checkpoint.get("page_role")}
+        )
+    feedback_payload = {}
+    if feedback and feedback.label in {"no_effect", "error"}:
+        feedback_payload = _without_empty_values(
+            {"label": feedback.label, "reason": feedback.reason}
+        )
+    item = {
+        "seq": event.seq,
+        "action": action,
+        "candidate": is_candidate,
+        "source": result.get("action_source")
+        or (event.transition.source if event.transition else ""),
+        "before": before_checkpoint,
+        "result": _without_empty_values(
+            {
+                "status": result.get("status"),
+                "reason": result.get("reason") or result.get("error"),
+            }
+        ),
+        "feedback": feedback_payload,
+        "transition": _compact_transition(event, include_text=is_candidate),
+    }
+    if is_candidate:
+        item["before_text_context"] = _local_marker_context(
+            list(before.get("marker_texts") or []),
+            step,
+        )
+    return _without_empty_values(item)
+
+
+def _compact_trajectory(
+    worker_submission: WorkerSubmission,
+    reviewable_seqs: set[int],
+) -> list[dict[str, Any]]:
+    """성공·실패 분기를 포함한 실행 순서를 짧은 인과 기록으로 만든다."""
+
+    return [
+        _compact_trajectory_event(event, reviewable_seqs)
+        for event in worker_submission.action_events
+    ]
 
 
 def _compact_worker_execution(worker_submission: WorkerSubmission) -> dict[str, Any]:
@@ -124,51 +291,7 @@ def _compact_worker_execution(worker_submission: WorkerSubmission) -> dict[str, 
         for key in keys
         if getattr(worker_submission, key) not in (None, "", [], {})
     }
-    execution["extracted_summary"] = dict(worker_submission.extracted_summary)
     return execution
-
-
-def _compact_feedback_evidence(
-    worker_submission: WorkerSubmission,
-    target_seqs: set[int],
-) -> list[dict[str, Any]]:
-    """행동별 이전 화면과 실행 결과를 Critic이 비교할 수 있게 축약한다."""
-
-    text_limit = _critic_evidence_text_limit()
-    evidence: list[dict[str, Any]] = []
-    for episode in worker_submission.feedback_episodes:
-        seq = episode.seq
-        if seq not in target_seqs:
-            continue
-        proposal = episode.proposal
-        observation = episode.observation
-        before = observation.before
-        after = observation.after
-        result = observation.result
-        feedback = episode.feedback
-        item = {
-            "seq": seq,
-            "action": proposal.action or result.get("action") or "",
-            "expected_after": proposal.args.get("expected_after") or "",
-            "before_url": before.get("url") or "",
-            "after_url": after.get("url") or "",
-            "screen_changed": bool(after.get("screen_changed", False)),
-            "before_marker_texts": list(before.get("marker_texts", []) or [])[
-                :text_limit
-            ],
-            "result_status": result.get("status") or "",
-            "result_reason": result.get("reason") or "",
-            "feedback_label": feedback.label,
-            "feedback_reason": feedback.reason,
-        }
-        evidence.append(
-            {
-                key: value
-                for key, value in item.items()
-                if value not in (None, "", [], {})
-            }
-        )
-    return evidence
 
 
 def _coerce_review(raw: dict[str, Any] | RecipeCandidateReview) -> dict[str, Any]:
@@ -192,38 +315,45 @@ def _serialize_candidate_review_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def _compact_collection_request(candidate: RecipeCandidate) -> dict[str, Any]:
+    intent = candidate.submission.collection_intent.model_dump(mode="json")
+    return _without_empty_values(
+        {
+            "site": candidate.site,
+            "task_category": normalize_task_category(intent.get("task_category")),
+            "search_keyword": intent.get("search_keyword"),
+            "count_mode": intent.get("count_mode"),
+            "target_count": intent.get("target_count"),
+            "filters": _without_empty_values(dict(intent.get("filters") or {})),
+            "purpose": intent.get("purpose"),
+            "required_fields": list(intent.get("required_fields") or []),
+        }
+    )
+
+
 def build_candidate_review_payload(
     candidate: RecipeCandidate,
 ) -> dict[str, Any]:
-    """후보 증거(candidate evidence)를 의미 판단 없이 비평가(Critic)에게 전달한다."""
+    """전체 실행 순서와 재생 후보의 인과 증거만 Critic에게 전달한다."""
+
     worker_submission = candidate.submission
     steps = candidate.steps
-    reviewable_seqs = {item["seq"] for item in _reviewable_action_specs(steps)}
-    evidence_seqs = _feedback_evidence_seqs(
-        worker_submission,
-        steps,
-        reviewable_seqs,
-    )
     required_step_verdicts = _reviewable_action_specs(steps)
-    task_category = normalize_task_category(
-        candidate.submission.collection_intent.task_category
-    )
+    reviewable_seqs = {item["seq"] for item in required_step_verdicts}
+    candidate_steps = [
+        _compact_candidate_step(step)
+        for step in steps
+        if step.seq in reviewable_seqs
+    ]
     return {
         "run_id": candidate.run_id,
         "status": candidate.status,
-        "site": candidate.site,
-        "task_category": task_category,
-        "goal": candidate.goal,
-        "keyword": candidate.keyword,
-        "steps": [step.model_dump(mode="json") for step in steps],
-        "transition_records": _compact_transition_records(
+        "request": _compact_collection_request(candidate),
+        "trajectory": _compact_trajectory(
             worker_submission,
             reviewable_seqs,
         ),
-        "feedback_evidence": _compact_feedback_evidence(
-            worker_submission,
-            evidence_seqs,
-        ),
+        "candidate_steps": candidate_steps,
         "deterministic_step_validation": compact_step_evidence_verdicts(candidate),
         "required_step_verdicts": required_step_verdicts,
         "worker_execution": _compact_worker_execution(worker_submission),
@@ -249,18 +379,25 @@ def _llm_review_candidate(payload: dict[str, Any]) -> dict[str, Any]:
         SystemMessage(
             content=(
                 external_content_contract_en()
-                + "\nYou are the Reflex Recipe Critic. Autonomous exploration already chose every action, argument, "
-                "input slot, target, page context, and replay_mode. You have pruning authority only. "
+                + "\nYou are the Reflex Recipe Critic. The recorder preserved the ordered execution trajectory and "
+                "derived candidate replay modes from executed tool contracts. You have pruning authority only. "
                 "Return only RecipeCandidateReview and never rewrite or synthesize executable metadata. "
                 "For every item in required_step_verdicts, return exactly one step_verdict with the same seq. "
+                "Use trajectory to distinguish the successful route from abandoned, recovery, or variable-choice "
+                "branches. candidate_steps contains the only actions eligible for promotion. "
                 "Set keep=false for wrong targets, no-op actions, abandoned or recovery branches, unstable "
                 "state-dependent choices, and steps whose expected result is not supported by the evidence. "
+                "Keep an eligible step when its after observation is the before observation of a later kept "
+                "step: that continuity is evidence that it prepared the next target or state. Do not call a "
+                "step redundant merely because it did not reach the final page. Prune such a bridge only when "
+                "the trajectory explicitly shows that it failed, was reverted, or belonged to an abandoned "
+                "branch. "
                 "A successful overall run does not make every step reusable. Evaluate deterministic_step_validation "
                 "first; eligible=false must always be keep=false. When execution_group_seqs is present, evaluate "
                 "the listed actions as one transition: a deferred_group_effect action is valid only because the "
                 "final group member verified the saved after-state. Do not reject that action merely because it "
                 "did not change the screen by itself. Preserve only steps that causally contributed to success and "
-                "can safely reuse the autonomous replay proposal. Pruning with keep=false does not by itself require "
+                "can safely reuse the recorded action. Pruning with keep=false does not by itself require "
                 "decision=revise; return decision=accept when the kept subset still forms a safe causal path. Use "
                 "decision=revise only when the recorded evidence or metadata cannot produce a valid path. "
                 "Do not repair a bad step, change "

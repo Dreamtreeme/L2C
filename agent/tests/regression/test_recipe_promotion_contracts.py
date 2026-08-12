@@ -1,6 +1,9 @@
+import json
+
 import pytest
 
 from agent.application.recipe_candidate_review_service import (
+    build_candidate_review_payload,
     review_and_apply_candidate,
 )
 from agent.recipe.candidate_store import RecipeCandidateStore
@@ -34,12 +37,21 @@ def _feedback(seq, action, label="partial", *, marker_texts=None):
     }
 
 
-def _transition(seq, observation_id, role, phash, *, status="ready"):
+def _transition(
+    seq,
+    observation_id,
+    role,
+    phash,
+    *,
+    status="ready",
+    source="autonomous",
+):
     return {
         "action_seq": seq,
-        "source": "autonomous",
+        "source": source,
         "status": status,
         "reason": "screen_change_pixels_matched",
+        "visual_change_ratio": 0.42,
         "after_state": _state(observation_id, role, phash),
     }
 
@@ -206,6 +218,103 @@ def test_critic_cannot_rewrite_autonomous_recipe_fields(tmp_path):
     assert "transition_contract" not in action
     assert recipe["skill_metadata"]["task_category"] == "검색"
     assert "skill_metadata" not in result
+
+
+def test_critic_payload_keeps_causal_trajectory_without_raw_blobs():
+    submission = _candidate_submission()
+    submission["goal"] = "전체 사이트 지침 " * 500
+    candidate = RecipeCandidate(
+        run_id="worker-compact",
+        status="pending_replay",
+        submission=WorkerSubmission.model_validate(submission),
+    )
+
+    payload = build_candidate_review_payload(candidate)
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert "goal" not in payload
+    assert "steps" not in payload
+    assert "feedback_evidence" not in payload
+    assert "transition_records" not in payload
+    assert payload["required_step_verdicts"] == [
+        {"seq": 0, "action": "click_marker"}
+    ]
+    assert payload["candidate_steps"][0]["roi"]["available"] is True
+    assert payload["trajectory"][0]["transition"]["visual_change_ratio"] == 0.42
+    assert "1" * 16 not in serialized
+    assert "전체 사이트 지침" not in serialized
+
+
+def test_variable_action_boundary_creates_separate_recipe_paths(tmp_path):
+    submission = _candidate_submission()
+    submission["action_events"].extend(
+        [
+            {
+                "seq": 1,
+                "recipe_step": {
+                    "seq": 1,
+                    "url_template": "wanted.co.kr/search",
+                    "page_role": "search",
+                    "before_state": _state(
+                        "observation:0002", "search", "2" * 16
+                    ),
+                    "action": "click_marker",
+                    "replay_mode": "fixed",
+                    "component": "job_card_title",
+                    "target": {"text": "매번 달라지는 공고"},
+                    "roi_signature": {"phash": "3" * 16},
+                },
+                "feedback_episode": _feedback(1, "click_marker"),
+                "transition": _transition(
+                    1,
+                    "observation:0003",
+                    "job_detail",
+                    "3" * 16,
+                    source="job_card_queue",
+                ),
+            },
+            {
+                "seq": 2,
+                "recipe_step": {
+                    "seq": 2,
+                    "url_template": "wanted.co.kr/wd/{id}",
+                    "page_role": "job_detail",
+                    "before_state": _state(
+                        "observation:0003",
+                        "job_detail",
+                        "3" * 16,
+                        "wanted.co.kr/wd/{id}",
+                    ),
+                    "action": "click_marker",
+                    "replay_mode": "fixed",
+                    "component": "expand_detail",
+                    "target": {"text": "상세 정보 더 보기"},
+                    "roi_signature": {"phash": "4" * 16},
+                },
+                "feedback_episode": _feedback(2, "click_marker"),
+                "transition": _transition(
+                    2,
+                    "observation:0004",
+                    "job_detail",
+                    "4" * 16,
+                ),
+            },
+        ]
+    )
+
+    result = _promote(
+        tmp_path / "segmented-paths.db",
+        submission,
+        [{"seq": seq, "keep": True} for seq in (0, 1, 2)],
+    )
+    recipes = RecipeStore(tmp_path / "segmented-paths.db").get_by_site("wanted")
+
+    assert result["promotion"]["promoted_path_count"] == 2
+    assert len(recipes) == 2
+    assert sorted(
+        recipe["transitions"][0]["actions"][0]["component"]
+        for recipe in recipes
+    ) == ["expand_detail", "search_button"]
 
 
 def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):

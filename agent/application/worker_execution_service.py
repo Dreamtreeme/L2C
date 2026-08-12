@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from functools import partial
+from pathlib import Path
 from typing import Any, Callable
 
 from langgraph.errors import GraphRecursionError
@@ -43,13 +45,13 @@ class WorkerStartScreenError(RuntimeError):
     """브라우저 첫 화면을 유효한 작업자 상태로 준비하지 못한 경우."""
 
 
-def _worker_data_services() -> WorkerDataServices:
+def build_worker_data_services(db_path: str | Path) -> WorkerDataServices:
     """작업자 그래프의 데이터 포트를 애플리케이션 구현에 연결한다."""
 
-    recipe_store = RecipeStore()
+    recipe_store = RecipeStore(db_path)
     return WorkerDataServices(
-        mark_existing_job_cards=mark_existing_job_cards,
-        find_existing_job_url=existing_job_url_trace,
+        mark_existing_job_cards=partial(mark_existing_job_cards, db_path=db_path),
+        find_existing_job_url=partial(existing_job_url_trace, db_path=db_path),
         load_site_recipes=recipe_store.get_site_recipes,
         record_recipe_replay=recipe_store.record_replay_result,
     )
@@ -62,9 +64,11 @@ class WorkerExecutionService:
         self,
         worker_runtime: VisionWorkerRuntime,
         worker_runner: Callable[..., CollectionBatch],
+        data_services: WorkerDataServices,
     ) -> None:
         self.worker_runtime = worker_runtime
         self.worker_runner = worker_runner
+        self.data_services = data_services
 
     def run(self, collection_intent: CollectionIntent) -> CollectionBatch:
         """로컬 화면을 잠근 동안 작업자를 실행하고 브라우저를 정리한다."""
@@ -74,6 +78,7 @@ class WorkerExecutionService:
                 return self.worker_runner(
                     collection_intent,
                     worker_runtime=self.worker_runtime,
+                    data_services=self.data_services,
                 )
             finally:
                 try:
@@ -151,6 +156,7 @@ def run_graph_with_last_state(
     recursion_limit: int,
     *,
     worker_runtime: VisionWorkerRuntime,
+    data_services: WorkerDataServices,
 ) -> tuple[dict, bool]:
     """재귀 제한 예외가 발생해도 마지막 부분 상태를 보존한다."""
 
@@ -161,7 +167,7 @@ def run_graph_with_last_state(
             config={"recursion_limit": recursion_limit},
             context=WorkerDependencies(
                 vision=worker_runtime,
-                data=_worker_data_services(),
+                data=data_services,
             ),
             stream_mode=["values", "custom"],
         ):
@@ -249,6 +255,7 @@ def execute_worker_graph(
     recursion_limit: int,
     *,
     worker_runtime: Any,
+    data_services: WorkerDataServices,
 ) -> tuple[dict, bool]:
     """그래프 구성, 시작 화면 준비, 실행을 하나의 작업자 경계로 묶는다."""
 
@@ -275,10 +282,12 @@ def execute_worker_graph(
             prepared_state,
             recursion_limit,
             worker_runtime=worker_runtime,
+            data_services=data_services,
         )
 
 
 __all__ = [
+    "build_worker_data_services",
     "execute_worker_graph",
     "OcrWorkerReadinessError",
     "prepare_worker_start_screen",

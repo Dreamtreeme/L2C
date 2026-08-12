@@ -7,7 +7,7 @@ from agent.recipe.sqlite_store import SQLiteStore
 from shared.db.reflex_schema import (
     WORKER_SUBMISSIONS_TABLE_SQL,
 )
-from shared.schema.feedback_schema import StoredWorkerSubmission, WorkerSubmission
+from shared.schema.feedback_schema import WorkerSubmission
 
 
 class SubmissionStore(SQLiteStore):
@@ -45,27 +45,3 @@ class SubmissionStore(SQLiteStore):
                 ),
             )
         return run_id
-
-    def find_submission(
-        self,
-        *,
-        run_id: str = "",
-    ) -> StoredWorkerSubmission | None:
-        if run_id:
-            where, params = "run_id=?", (run_id,)
-        else:
-            where, params = "1=1", ()
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT run_id, source, payload_json "
-                f"FROM worker_submissions WHERE {where} "
-                "ORDER BY updated_at DESC LIMIT 1",
-                params,
-            ).fetchone()
-        if row is None:
-            return None
-        item = dict(row)
-        item["payload"] = WorkerSubmission.model_validate(
-            self.load_json(item.pop("payload_json"), {})
-        )
-        return StoredWorkerSubmission.model_validate(item)

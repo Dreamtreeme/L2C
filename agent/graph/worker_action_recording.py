@@ -6,11 +6,10 @@ from typing import Any
 
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.graph.worker_execution_policy import compact_action_args
-from agent.recipe.feedback import record_action_episode
-from agent.recipe.record import record_ui_step
+from agent.recipe.feedback import build_action_episode
+from agent.recipe.record import build_recorded_recipe_step
 from agent.runtime.worker_contracts import build_action_event
 from agent.vision.target_snapshot import build_action_target_snapshot
-from shared.schema.feedback_schema import FeedbackEpisode, RecordedRecipeStep
 
 
 def _after_context(
@@ -97,18 +96,17 @@ def record_action_result(
         tool_call_metadata=tool_call_metadata,
         action_source=action_source,
     )
-    recipe_steps: list[RecordedRecipeStep] = []
-    if record_ui:
-        record_ui_step(
-            recipe_steps,
+    recipe_step = (
+        build_recorded_recipe_step(
             context.state,
             action_name,
             args,
             action_sequence,
         )
-    feedback: list[FeedbackEpisode] = []
-    record_action_episode(
-        feedback,
+        if record_ui
+        else None
+    )
+    feedback_episode = build_action_episode(
         context.state,
         action_name,
         args,
@@ -123,8 +121,8 @@ def record_action_result(
             action_sequence,
             enriched,
             observation_id=context.action_request.observation_id,
-            recipe_step=recipe_steps[0] if recipe_steps else None,
-            feedback_episode=feedback[0] if feedback else None,
+            recipe_step=recipe_step,
+            feedback_episode=feedback_episode,
         )
     )
     return enriched

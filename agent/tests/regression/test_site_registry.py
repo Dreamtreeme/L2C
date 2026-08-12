@@ -272,6 +272,7 @@ def test_realtime_scraping_wanted_starts_from_home_without_query_url():
 
 def test_worker_receives_structured_collection_intent(monkeypatch):
     from agent.application import collection_worker_runner as rt
+    from agent.tests.worker_test_support import worker_data_services
     from shared.schema.collection_intent import CollectionIntent
 
     captured = {}
@@ -300,6 +301,7 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
             required_fields=["posted_at"],
         ),
         worker_runtime=object(),
+        data_services=worker_data_services(),
     )
 
     assert result.submission.collection_intent.target_count == 2

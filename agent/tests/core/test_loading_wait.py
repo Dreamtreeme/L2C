@@ -39,16 +39,22 @@ def test_frame_quality_keeps_sparse_search_controls(monkeypatch):
     image = Image.new("RGB", (800, 900), "white")
     image.paste((45, 58, 65), (0, 0, 800, 185))
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((290, 220, 510, 260), radius=8, fill=(245, 245, 245))
-    draw.rectangle((300, 232, 400, 240), fill=(150, 150, 150))
+    draw.rounded_rectangle((290, 220, 510, 260), radius=8, fill=(248, 248, 248))
+    draw.rectangle((300, 232, 400, 240), fill=(180, 180, 180))
     for row in range(4):
         y = 300 + row * 35
-        draw.rectangle((300, y, 360, y + 7), fill=(80, 80, 80))
-        draw.rectangle((440, y, 500, y + 7), fill=(80, 80, 80))
+        draw.rectangle((300, y, 360, y + 7), fill=(170, 170, 170))
+        draw.rectangle((440, y, 500, y + 7), fill=(170, 170, 170))
 
     monkeypatch.delenv("VISION_CONTENT_TOP", raising=False)
 
-    assert frame_quality(image)["low_information"] is False
+    quality = frame_quality(image)
+
+    assert quality["stddev"] <= 12.0
+    assert quality["edge_mean"] <= 3.0
+    assert quality["dominant_ratio"] >= 0.97
+    assert quality["compact_component_count"] >= 4
+    assert quality["low_information"] is False
 
 
 def test_content_boundary_excludes_browser_chrome():
@@ -75,6 +81,7 @@ def test_frame_quality_rejects_low_contrast_loading_shell(monkeypatch):
     quality = frame_quality(image)
 
     assert quality["stddev"] <= 12.0
+    assert quality["compact_component_count"] < 4
     assert quality["low_information"] is True
 
 

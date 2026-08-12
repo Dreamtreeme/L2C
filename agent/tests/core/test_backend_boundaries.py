@@ -511,6 +511,7 @@ def test_browser_closes_by_default(monkeypatch):
     from agent.application.worker_execution_service import (
         WorkerExecutionService,
     )
+    from agent.tests.worker_test_support import worker_data_services
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
     from shared.schema.collection_intent import CollectionIntent
 
@@ -532,12 +533,17 @@ def test_browser_closes_by_default(monkeypatch):
 
     service = WorkerExecutionService(
         runtime,
-        lambda _intent, *, worker_runtime: {"runtime": worker_runtime},
+        lambda _intent, *, worker_runtime, data_services: {
+            "runtime": worker_runtime,
+            "data": data_services,
+        },
+        worker_data_services(),
     )
     result = service.run(CollectionIntent())
 
     assert closed == [True]
     assert result["runtime"] is runtime
+    assert result["data"] is service.data_services
 
 
 def test_browser_cleanup_reports_returned_failure():
@@ -569,6 +575,7 @@ def test_worker_execution_service_closes_browser_after_worker_failure():
     from agent.application.worker_execution_service import (
         WorkerExecutionService,
     )
+    from agent.tests.worker_test_support import worker_data_services
     from shared.schema.collection_intent import CollectionIntent
 
     events = []
@@ -589,7 +596,11 @@ def test_worker_execution_service_closes_browser_after_worker_failure():
         events.append("worker_started")
         raise RuntimeError("worker failed")
 
-    service = WorkerExecutionService(FakeRuntime(), fail_worker)
+    service = WorkerExecutionService(
+        FakeRuntime(),
+        fail_worker,
+        worker_data_services(),
+    )
 
     with pytest.raises(RuntimeError, match="worker failed"):
         service.run(CollectionIntent())

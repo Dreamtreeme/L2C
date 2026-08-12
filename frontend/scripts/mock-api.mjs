@@ -44,7 +44,6 @@ const server = createServer(async (request, response) => {
       retention: {
         inventory: {
           job_postings: 34,
-          job_versions: 51,
           recipe_candidates: 8,
           active_recipes: 5,
         },
@@ -149,37 +148,15 @@ const server = createServer(async (request, response) => {
         writeFrame(response, "[EVENT]", clarificationEvent);
         writeFrame(response, "[FINAL]", {
           run_id: runId,
-          text: "어떤 업무 영역의 공고를 찾을지 선택해 주세요.",
+          text: "찾을 직무를 입력해 주세요.",
           status: "waiting_input",
           clarification: {
-            question_id: "occupation-domain",
-            field: "occupation_domain",
-            question: "어떤 업무 영역의 채용공고를 찾을까요?",
-            reason: "검색 범위가 넓어 업무 영역을 확정해야 합니다.",
+            question_id: "occupation_query",
+            field: "occupation_query",
+            question: "어떤 직무의 채용공고를 찾을까요?",
+            reason: "채용공고를 검색할 직무가 필요합니다.",
             allow_custom: true,
-            options: [
-              {
-                option_id: "office",
-                label: "사무·기획",
-                value: "office",
-                description: "경영, 기획, 마케팅, 재무 직무",
-                matching_count: 18,
-              },
-              {
-                option_id: "software",
-                label: "IT·소프트웨어",
-                value: "software",
-                description: "개발, 데이터, AI, 보안 직무",
-                matching_count: 34,
-              },
-              {
-                option_id: "manufacturing",
-                label: "제조·생산",
-                value: "manufacturing",
-                description: "생산, 품질, 설비, 공정 직무",
-                matching_count: 12,
-              },
-            ],
+            options: [],
           },
           investigation_id: "mock-investigation-clarification",
           conversation_id: payload.conversation_id || "",

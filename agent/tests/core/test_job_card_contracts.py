@@ -132,8 +132,10 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     scroll_schema = model_action_tool_schema("scroll")
     scroll_properties = scroll_schema["function"]["parameters"]["properties"]
     assert "amount" not in scroll_properties
+    assert "replay_mode" not in scroll_properties
     assert scroll_properties["scroll_distance"]["enum"] == ["small", "page"]
     input_schema = model_action_tool_schema("type_in_marker")
+    assert "replay_mode" not in input_schema["function"]["parameters"]["properties"]
     slot_options = input_schema["function"]["parameters"]["properties"][
         "slot_name"
     ]["anyOf"]

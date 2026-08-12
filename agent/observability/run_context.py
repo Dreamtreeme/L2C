@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from langchain_core.callbacks.usage import get_usage_metadata_callback
 from langchain_core.messages import BaseMessageChunk
 from structlog.contextvars import bound_contextvars
 
@@ -113,7 +112,6 @@ class RunContext:
     cancel_requested: Callable[[str], bool] | None = None
     started_at: float = field(default_factory=time.perf_counter)
     deadline_monotonic: float | None = None
-    usage_callback: UsageMetadataCallbackHandler | None = None
     trace_metadata: dict[str, Any] = field(default_factory=dict)
     trace_tags: list[str] = field(default_factory=list)
     step_metrics: list[dict[str, Any]] = field(default_factory=list)
@@ -253,50 +251,21 @@ class RunContext:
         }
 
     def snapshot(self) -> dict[str, Any]:
-        langchain_by_model = {
-            str(model): normalize_usage(dict(usage or {}))
-            for model, usage in dict(
-                getattr(self.usage_callback, "usage_metadata", {}) or {}
-            ).items()
-        }
-        custom_by_model: dict[str, dict[str, Any]] = {}
-        call_langchain_by_model: dict[str, dict[str, Any]] = {}
         with self._lock:
             steps = [dict(item) for item in self.step_metrics]
             calls = [dict(item) for item in self.llm_calls]
+
+        by_model: dict[str, dict[str, Any]] = {}
         for call in calls:
-            if call.get("provider") == "langchain":
-                _merge_usage(
-                    call_langchain_by_model.setdefault(
-                        call.get("model") or "unknown", {}
-                    ),
-                    call,
-                )
+            if not normalize_usage(call)["total_tokens"]:
                 continue
-            model_usage = custom_by_model.setdefault(call.get("model") or "unknown", {})
-            _merge_usage(model_usage, call)
+            _merge_usage(
+                by_model.setdefault(str(call.get("model") or "unknown"), {}),
+                call,
+            )
 
         totals: dict[str, Any] = {}
-        billable_by_model: dict[str, dict[str, Any]] = {}
-        observed_langchain_models = set(langchain_by_model) | set(
-            call_langchain_by_model
-        )
-        for model in observed_langchain_models:
-            outer_usage = langchain_by_model.get(model, {})
-            local_usage = call_langchain_by_model.get(model, {})
-            usage = (
-                outer_usage
-                if normalize_usage(outer_usage)["total_tokens"]
-                else local_usage
-            )
-            if not normalize_usage(usage)["total_tokens"]:
-                continue
-            _merge_usage(billable_by_model.setdefault(model, {}), usage)
-        for model, usage in custom_by_model.items():
-            if not normalize_usage(usage)["total_tokens"]:
-                continue
-            _merge_usage(billable_by_model.setdefault(model, {}), usage)
-        for usage in billable_by_model.values():
+        for usage in by_model.values():
             _merge_usage(totals, usage)
         return {
             "run_id": self.run_id,
@@ -312,10 +281,8 @@ class RunContext:
             "steps": steps,
             "llm": {
                 "totals": normalize_usage(totals),
-                "by_model": langchain_by_model,
-                "custom_by_model": custom_by_model,
-                "billable_by_model": billable_by_model,
-                "cost": estimate_llm_cost(billable_by_model),
+                "by_model": by_model,
+                "cost": estimate_llm_cost(by_model),
                 "calls": calls,
             },
             "outcome": {
@@ -382,82 +349,80 @@ def run_context(
     if deadline_sec is None:
         deadline_sec = get_settings().execution.run_deadline_sec
     resolved_deadline_sec = max(0.0, float(deadline_sec))
-    with get_usage_metadata_callback() as usage_callback:
-        context = RunContext(
-            run_id=resolved_run_id,
-            query=query,
-            event_sink=event_sink,
-            cancel_requested=cancel_requested,
-            usage_callback=usage_callback,
-            deadline_monotonic=(
-                time.perf_counter() + resolved_deadline_sec
-                if resolved_deadline_sec > 0
-                else None
-            ),
-            trace_metadata=dict(metadata or {}),
-            trace_tags=[str(tag) for tag in (tags or []) if str(tag)],
-        )
-        root_metadata = {
-            "run_id": resolved_run_id,
-            "run_kind": prefix,
-            **context.trace_metadata,
-        }
-        root_tags = ["l2c", prefix, *context.trace_tags]
-        with langsmith_trace(
-            f"l2c.{prefix}",
-            run_type="chain",
-            inputs={"query": query},
-            metadata=root_metadata,
-            tags=root_tags,
-        ) as root_trace:
-            if root_trace is not None:
-                context.langsmith_trace_id = str(
-                    getattr(root_trace, "trace_id", None)
-                    or getattr(root_trace, "id", "")
+    context = RunContext(
+        run_id=resolved_run_id,
+        query=query,
+        event_sink=event_sink,
+        cancel_requested=cancel_requested,
+        deadline_monotonic=(
+            time.perf_counter() + resolved_deadline_sec
+            if resolved_deadline_sec > 0
+            else None
+        ),
+        trace_metadata=dict(metadata or {}),
+        trace_tags=[str(tag) for tag in (tags or []) if str(tag)],
+    )
+    root_metadata = {
+        "run_id": resolved_run_id,
+        "run_kind": prefix,
+        **context.trace_metadata,
+    }
+    root_tags = ["l2c", prefix, *context.trace_tags]
+    with langsmith_trace(
+        f"l2c.{prefix}",
+        run_type="chain",
+        inputs={"query": query},
+        metadata=root_metadata,
+        tags=root_tags,
+    ) as root_trace:
+        if root_trace is not None:
+            context.langsmith_trace_id = str(
+                getattr(root_trace, "trace_id", None)
+                or getattr(root_trace, "id", "")
+            )
+        token = _CURRENT_RUN_CONTEXT.set(context)
+        with bound_contextvars(run_id=resolved_run_id):
+            context.emit(
+                "run_started",
+                RunPhase.RECEIVED,
+                "요청을 접수했습니다.",
+                data={"query": query},
+            )
+            try:
+                yield context, True
+            except BaseException as exc:
+                context.set_outcome(
+                    RunStatus.CANCELLED
+                    if isinstance(exc, RunCancelled)
+                    else RunStatus.FAILED,
+                    failure_stage=context.failure_stage or context.last_phase,
+                    failure_code=context.failure_code or _failure_code(exc),
                 )
-            token = _CURRENT_RUN_CONTEXT.set(context)
-            with bound_contextvars(run_id=resolved_run_id):
-                context.emit(
-                    "run_started",
-                    RunPhase.RECEIVED,
-                    "요청을 접수했습니다.",
-                    data={"query": query},
+                raise
+            finally:
+                snapshot = context.snapshot()
+                totals = dict((snapshot.get("llm") or {}).get("totals") or {})
+                finish_langsmith_trace(
+                    root_trace,
+                    outputs={
+                        "run_id": resolved_run_id,
+                        "status": context.outcome_status,
+                        "duration_sec": snapshot.get("duration_sec", 0.0),
+                        "step_count": len(snapshot.get("steps") or []),
+                        "llm_call_count": len(
+                            (snapshot.get("llm") or {}).get("calls") or []
+                        ),
+                        "total_tokens": int(totals.get("total_tokens") or 0),
+                    },
+                    metadata={
+                        **context.trace_metadata,
+                        "outcome": context.outcome_status,
+                        "last_phase": context.last_phase,
+                        "failure_stage": context.failure_stage,
+                        "failure_code": context.failure_code,
+                    },
                 )
-                try:
-                    yield context, True
-                except BaseException as exc:
-                    context.set_outcome(
-                        RunStatus.CANCELLED
-                        if isinstance(exc, RunCancelled)
-                        else RunStatus.FAILED,
-                        failure_stage=context.failure_stage or context.last_phase,
-                        failure_code=context.failure_code or _failure_code(exc),
-                    )
-                    raise
-                finally:
-                    snapshot = context.snapshot()
-                    totals = dict((snapshot.get("llm") or {}).get("totals") or {})
-                    finish_langsmith_trace(
-                        root_trace,
-                        outputs={
-                            "run_id": resolved_run_id,
-                            "status": context.outcome_status,
-                            "duration_sec": snapshot.get("duration_sec", 0.0),
-                            "step_count": len(snapshot.get("steps") or []),
-                            "llm_call_count": len(
-                                (snapshot.get("llm") or {}).get("calls") or []
-                            ),
-                            "total_tokens": int(totals.get("total_tokens") or 0),
-                        },
-                        metadata={
-                            **context.trace_metadata,
-                            "outcome": context.outcome_status,
-                            "last_phase": context.last_phase,
-                            "failure_stage": context.failure_stage,
-                            "failure_code": context.failure_code,
-                        },
-                    )
-                    _CURRENT_RUN_CONTEXT.reset(token)
+                _CURRENT_RUN_CONTEXT.reset(token)
 
 
 @dataclass

@@ -6,7 +6,11 @@ from typing import Any
 
 from agent.graph import worker_execution_dispatch
 from agent.graph.worker_transition_recording import set_transition_request
-from agent.runtime.worker_contracts import ActionRequest, build_action_request
+from agent.runtime.worker_contracts import (
+    ActionRequest,
+    apply_worker_state_update,
+    build_action_request,
+)
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.runtime.worker_state import (
     job_capture_count,
@@ -175,27 +179,6 @@ def _apply_job_card_queue_result(
     return None
 
 
-def _apply_state_action_update(
-    context: WorkerExecutionContext,
-    update: worker_execution_dispatch.StateActionUpdate,
-) -> None:
-    """명시된 필드만 실행 문맥에 반영한다."""
-
-    collection = context.state["collection"]
-    if update.job_card_queue is not None:
-        collection["job_card_queue"] = list(update.job_card_queue)
-    if update.job_results_memory is not None:
-        collection["job_results_memory"] = dict(update.job_results_memory)
-    if update.job_results_availability is not None:
-        collection["job_results_availability"] = dict(update.job_results_availability)
-    if update.job_detail_buffer is not None:
-        collection["job_detail_buffer"] = dict(update.job_detail_buffer)
-    if update.job_detail_coverage is not None:
-        collection["job_detail_coverage"] = dict(update.job_detail_coverage)
-    if update.job_detail_followup is not None:
-        collection["job_detail_followup"] = dict(update.job_detail_followup)
-
-
 def _apply_job_detail_completion(
     context: WorkerExecutionContext,
     result: dict[str, Any],
@@ -273,8 +256,7 @@ def execute_state_action(
         data_services=context.data_services,
     )
     raise_for_action_failure(outcome.result)
-    collection["job_captures"] = list(outcome.job_captures)
-    _apply_state_action_update(context, outcome.state_update)
+    context.state = apply_worker_state_update(context.state, outcome.state_update)
     result = outcome.result
     follow_up: ActionRequest | None = None
     if action_name == "set_job_card_queue":
@@ -285,8 +267,6 @@ def execute_state_action(
     )
     if is_successful_detail_update:
         _apply_job_detail_completion(context, result)
-
-    if action_name == "finish_detail_reading" and result.get("status") == "success":
         _apply_collection_target_completion(context, result)
     return result, follow_up
 

@@ -28,6 +28,11 @@ def _installed_seed_version(db_path: Path) -> str:
     return str(row[0]) if row is not None else ""
 
 
+def _remove_relation_schema(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("DROP TABLE IF EXISTS search_concept_relations")
+
+
 def prepare_search_taxonomy(
     db_path: str | Path,
     *,
@@ -38,6 +43,7 @@ def prepare_search_taxonomy(
     resolved_db_path = Path(db_path)
     resolved_seed_path = Path(seed_path)
     Database(resolved_db_path)
+    _remove_relation_schema(resolved_db_path)
     service = SearchTaxonomyService(resolved_db_path)
     linker = JobTaxonomyLinker(resolved_db_path)
 

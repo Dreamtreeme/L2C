@@ -17,6 +17,7 @@ from agent.runtime.worker_contracts import (
     create_worker_state,
 )
 from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
+from agent.runtime.worker_data_services import WorkerDataServices
 from agent.recipe.task_category import (
     normalize_task_category,
 )
@@ -37,6 +38,7 @@ def run_worker_once(
     run_id: str | None = None,
     *,
     worker_runtime: VisionWorkerRuntime,
+    data_services: WorkerDataServices,
 ) -> CollectionBatch:
     """비전 작업자 한 번을 실행하고 검토 전 제출물을 반환한다."""
 
@@ -86,6 +88,7 @@ def run_worker_once(
         site_profile,
         recursion_limit,
         worker_runtime=worker_runtime,
+        data_services=data_services,
     )
     job_captures = list(final_state["collection"].get("job_captures", []))
     is_finished = bool(final_state["lifecycle"].get("is_finished", False))

@@ -150,35 +150,19 @@ def _upsert_alias(
     return True
 
 
-def _upsert_broader_relation(
-    connection: sqlite3.Connection,
-    *,
-    concept_id: int,
-    broader_id: int,
-    source_key: str,
-) -> None:
-    connection.execute(
-        """
-        INSERT INTO search_concept_relations (
-            source_concept_id, target_concept_id, relation_type,
-            source_key, metadata_json, created_at
-        ) VALUES (?, ?, 'broader', ?, '{}', ?)
-        ON CONFLICT(source_concept_id, target_concept_id, relation_type, source_key)
-        DO UPDATE SET metadata_json = excluded.metadata_json
-        """,
-        (concept_id, broader_id, source_key, _now()),
-    )
-
-
 def import_local_seed(db_path: str | Path, seed_path: str | Path) -> dict[str, int]:
-    """검토된 로컬 직무 계층과 기술 별칭을 적재한다."""
+    """검토된 로컬 직무·기술 별칭을 적재한다."""
 
     seed = Path(seed_path)
     payload = json.loads(seed.read_text(encoding="utf-8"))
     source = dict(payload["source"])
     source_key = str(source["source_key"])
-    concepts = list(payload.get("concepts") or [])
-    counts = {"concepts": 0, "aliases": 0, "relations": 0}
+    concepts = [
+        item
+        for item in payload.get("concepts") or []
+        if item.get("concept_type") in {"occupation", "skill"}
+    ]
+    counts = {"concepts": 0, "aliases": 0}
 
     connection = _connect(db_path)
     try:
@@ -200,12 +184,6 @@ def import_local_seed(db_path: str | Path, seed_path: str | Path) -> dict[str, i
                 "UPDATE search_concepts SET status = 'deprecated' WHERE source_key = ?",
                 (source_key,),
             )
-            connection.execute(
-                "DELETE FROM search_concept_relations WHERE source_key = ?",
-                (source_key,),
-            )
-
-            concept_ids: dict[str, int] = {}
             for item in concepts:
                 concept_key = str(item["concept_key"])
                 concept_id = _upsert_concept(
@@ -217,7 +195,6 @@ def import_local_seed(db_path: str | Path, seed_path: str | Path) -> dict[str, i
                     preferred_label_en=str(item.get("preferred_label_en") or ""),
                     definition=str(item.get("definition") or ""),
                 )
-                concept_ids[concept_key] = concept_id
                 for language, label in (
                     ("ko", item.get("preferred_label_ko")),
                     ("en", item.get("preferred_label_en")),
@@ -247,17 +224,6 @@ def import_local_seed(db_path: str | Path, seed_path: str | Path) -> dict[str, i
                         counts["aliases"] += 1
                 counts["concepts"] += 1
 
-            for item in concepts:
-                broader_key = str(item.get("broader") or "")
-                if not broader_key:
-                    continue
-                _upsert_broader_relation(
-                    connection,
-                    concept_id=concept_ids[str(item["concept_key"])],
-                    broader_id=concept_ids[broader_key],
-                    source_key=source_key,
-                )
-                counts["relations"] += 1
     finally:
         connection.close()
     return counts
@@ -274,7 +240,6 @@ def taxonomy_counts(db_path: str | Path) -> dict[str, int]:
                 "taxonomy_sources",
                 "search_concepts",
                 "search_aliases",
-                "search_concept_relations",
                 "job_concept_links",
             )
         }

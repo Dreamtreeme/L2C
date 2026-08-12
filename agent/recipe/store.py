@@ -13,7 +13,7 @@ from typing import Any
 
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
-    CONTEXTUAL_REPLAY_ACTIONS,
+    RECIPE_COMMIT_ACTIONS,
     TARGET_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
 )
@@ -100,7 +100,7 @@ class RecipeStore(SQLiteStore):
                     and action_item.get("slot_refs")
                 )
             return True
-        if action in CONTEXTUAL_REPLAY_ACTIONS:
+        if action in RECIPE_COMMIT_ACTIONS:
             param = (
                 action_item.get("param")
                 if isinstance(action_item.get("param"), dict)
@@ -108,11 +108,7 @@ class RecipeStore(SQLiteStore):
             )
             if str(action_item.get("replay_mode") or "") != "fixed":
                 return False
-            if action == "press_key":
-                return bool(param.get("key"))
-            if action == "switch_tab":
-                return bool(param.get("direction"))
-            return True
+            return bool(param.get("key"))
         return False
 
     @classmethod
@@ -176,10 +172,8 @@ class RecipeStore(SQLiteStore):
                 fixed_param["text"] = normalize_text(
                     param.get("text") or action_item.get("value")
                 )
-            elif action == "press_key":
+            elif action in RECIPE_COMMIT_ACTIONS:
                 fixed_param["key"] = str(param.get("key") or "")
-            elif action == "switch_tab":
-                fixed_param["direction"] = str(param.get("direction") or "")
         return {
             "action": action,
             "component": action_item.get("component") or "",

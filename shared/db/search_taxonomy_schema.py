@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS search_concepts (
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     FOREIGN KEY(source_key) REFERENCES taxonomy_sources(source_key),
-    CHECK(concept_type IN ('occupation', 'skill', 'domain', 'employment_type', 'experience_level')),
+    CHECK(concept_type IN ('occupation', 'skill')),
     CHECK(status IN ('candidate', 'active', 'deprecated'))
 );
 
@@ -51,23 +51,6 @@ CREATE TABLE IF NOT EXISTS search_aliases (
 CREATE INDEX IF NOT EXISTS idx_search_aliases_normalized
 ON search_aliases(normalized_alias, active);
 
-CREATE TABLE IF NOT EXISTS search_concept_relations (
-    source_concept_id   INTEGER NOT NULL,
-    target_concept_id   INTEGER NOT NULL,
-    relation_type       TEXT NOT NULL,
-    source_key          TEXT NOT NULL,
-    metadata_json       TEXT,
-    created_at          TEXT NOT NULL,
-    PRIMARY KEY(source_concept_id, target_concept_id, relation_type, source_key),
-    FOREIGN KEY(source_concept_id) REFERENCES search_concepts(id) ON DELETE CASCADE,
-    FOREIGN KEY(target_concept_id) REFERENCES search_concepts(id) ON DELETE CASCADE,
-    FOREIGN KEY(source_key) REFERENCES taxonomy_sources(source_key),
-    CHECK(relation_type IN ('broader', 'related', 'occupation_skill'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_search_relations_target
-ON search_concept_relations(target_concept_id, relation_type);
-
 CREATE TABLE IF NOT EXISTS job_concept_links (
     job_id              INTEGER NOT NULL,
     concept_id          INTEGER NOT NULL,
@@ -83,7 +66,7 @@ CREATE TABLE IF NOT EXISTS job_concept_links (
     PRIMARY KEY(job_id, concept_id, link_type, evidence_field),
     FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE,
     FOREIGN KEY(concept_id) REFERENCES search_concepts(id) ON DELETE CASCADE,
-    CHECK(link_type IN ('occupation', 'skill', 'domain')),
+    CHECK(link_type IN ('occupation', 'skill')),
     CHECK(requirement_type IN ('required', 'preferred', 'mentioned')),
     CHECK(confidence >= 0.0 AND confidence <= 1.0)
 );

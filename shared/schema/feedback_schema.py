@@ -191,7 +191,6 @@ class RecipeCandidate(BaseModel):
     review_error: str = ""
     created_at: str = ""
     updated_at: str = ""
-    run_id: str = ""
     source: str = ""
     submission: WorkerSubmission
 

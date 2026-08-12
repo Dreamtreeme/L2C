@@ -7,6 +7,7 @@ from typing import Any
 
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
+    RECIPE_COMMIT_ACTIONS,
     TARGET_REPLAY_ACTIONS,
     is_supported_recipe_action_group,
 )
@@ -101,7 +102,7 @@ def _has_verifiable_identity(
 def _merge_commit_actions(
     transitions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """입력 뒤 Enter처럼 코드가 허용한 단일 조합만 한 전이로 묶는다."""
+    """별도 화면 검증이 불가능한 Enter만 앞선 입력과 한 전이로 묶는다."""
 
     merged: list[dict[str, Any]] = []
     index = 0
@@ -110,9 +111,11 @@ def _merge_commit_actions(
         if index + 1 < len(transitions):
             following = transitions[index + 1]
             actions = list(current["actions"]) + list(following["actions"])
-            if is_supported_recipe_action_group(actions) and _states_match(
-                current["after"],
-                following["before"],
+            following_action = str(following["actions"][0].get("action") or "")
+            if (
+                following_action in RECIPE_COMMIT_ACTIONS
+                and is_supported_recipe_action_group(actions)
+                and _states_match(current["after"], following["before"])
             ):
                 current["actions"] = actions
                 current["after"] = deepcopy(following["after"])
@@ -132,6 +135,18 @@ def _merge_commit_actions(
     for transition_index, transition in enumerate(merged):
         transition["seq"] = transition_index
     return merged
+
+
+def _link_next_action_anchors(transitions: list[dict[str, Any]]) -> None:
+    """현재 행동의 도착 화면을 다음 행동 대상 ROI로 검증하게 연결한다."""
+
+    for current, following in zip(transitions, transitions[1:]):
+        if not _states_match(current["after"], following["before"]):
+            continue
+        for key in ("anchor_target", "anchor_roi_signature"):
+            value = following["before"].get(key)
+            if value:
+                current["after"][key] = deepcopy(value)
 
 
 def _ordered_replay_steps(
@@ -264,9 +279,9 @@ def build_recipe_path(
     _remove_invalid_path_prefix(ordered, issues)
     if not ordered:
         return None, issues
-    transitions = _merge_commit_actions(
-        _build_atomic_transitions(candidate, ordered, issues)
-    )
+    atomic_transitions = _build_atomic_transitions(candidate, ordered, issues)
+    _link_next_action_anchors(atomic_transitions)
+    transitions = _merge_commit_actions(atomic_transitions)
     _remove_unverifiable_tail(transitions, issues)
     if not transitions:
         return None, issues
@@ -277,4 +292,59 @@ def build_recipe_path(
     }, issues
 
 
-__all__ = ["build_recipe_path"]
+def _continuous_step_groups(
+    candidate: RecipeCandidate,
+    replay_steps: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """가변 판단이나 제거된 행동을 경계로 연속된 재생 구간을 나눈다."""
+
+    ordered = _ordered_replay_steps(replay_steps)
+    after_states = _transition_after_states(candidate)
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    previous_after: dict[str, Any] | None = None
+    for step in ordered:
+        seq = int(step["seq"])
+        before = _checkpoint_from_step(step)
+        after = deepcopy(after_states.get(seq) or {})
+        if not before or not after:
+            if current:
+                groups.append(current)
+                current = []
+            issues.append(
+                {
+                    "seq": seq,
+                    "action": step.get("action"),
+                    "reason": "recorded_transition_missing",
+                }
+            )
+            previous_after = None
+            continue
+        if previous_after is not None and not _states_match(previous_after, before):
+            groups.append(current)
+            current = []
+        current.append(step)
+        previous_after = after
+    if current:
+        groups.append(current)
+    return groups
+
+
+def build_recipe_paths(
+    candidate: RecipeCandidate,
+    replay_steps: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """성공 궤적에서 상태가 연속되는 재생 경로 구간을 모두 만든다."""
+
+    paths: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    for group in _continuous_step_groups(candidate, replay_steps, issues):
+        path, group_issues = build_recipe_path(candidate, group)
+        issues.extend(group_issues)
+        if path:
+            paths.append(path)
+    return paths, issues
+
+
+__all__ = ["build_recipe_path", "build_recipe_paths"]

@@ -62,24 +62,6 @@ CREATE TABLE IF NOT EXISTS jobs {JOBS_COLUMNS_SQL};
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_name);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
 
-CREATE TABLE IF NOT EXISTS job_versions (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id              INTEGER NOT NULL,
-    version_number      INTEGER NOT NULL,
-    observed_at         TEXT NOT NULL,
-    source_url          TEXT NOT NULL,
-    source_platform     TEXT,
-    evidence_hash       TEXT NOT NULL,
-    changed_fields_json TEXT NOT NULL,
-    content_json        TEXT NOT NULL,
-    UNIQUE(job_id, version_number),
-    UNIQUE(job_id, evidence_hash),
-    FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_job_versions_job ON job_versions(job_id, version_number DESC);
-CREATE INDEX IF NOT EXISTS idx_job_versions_observed ON job_versions(observed_at);
-
 {SEARCH_TAXONOMY_SCHEMA}
 """
 
@@ -171,7 +153,7 @@ class Database:
 
         with self._conn() as conn:
             existing = conn.execute(
-                "SELECT id, raw_json, evidence_hash FROM jobs WHERE url = ?",
+                "SELECT id FROM jobs WHERE url = ?",
                 (url,),
             ).fetchone()
 
@@ -180,16 +162,6 @@ class Database:
                 conn.execute(
                     f"UPDATE jobs SET {cols} WHERE id = {existing['id']}", payload
                 )
-                if existing["evidence_hash"] != evidence_hash:
-                    self._insert_job_version(
-                        conn,
-                        job_id=int(existing["id"]),
-                        observed_at=now,
-                        url=url,
-                        data=canonical_data,
-                        evidence_hash=evidence_hash,
-                        previous_raw_json=existing["raw_json"],
-                    )
                 logger.info(
                     f"DB UPDATE id={existing['id']} url={url} (hash={payload.get('content_hash')})"
                 )
@@ -203,92 +175,10 @@ class Database:
                 payload,
             )
             new_id = cur.lastrowid
-            self._insert_job_version(
-                conn,
-                job_id=int(new_id),
-                observed_at=now,
-                url=url,
-                data=canonical_data,
-                evidence_hash=evidence_hash,
-                previous_raw_json=None,
-            )
             logger.info(
                 f"DB INSERT id={new_id} url={url} company={data.get('company_name')!r}"
             )
             return new_id
-
-    @staticmethod
-    def _changed_fields(
-        previous_raw_json: str | None, data: dict[str, Any]
-    ) -> list[str]:
-        if not previous_raw_json:
-            return sorted(str(key) for key in data)
-        try:
-            previous = json.loads(previous_raw_json)
-        except (TypeError, json.JSONDecodeError):
-            previous = {}
-        return sorted(
-            str(key)
-            for key in set(previous) | set(data)
-            if previous.get(key) != data.get(key)
-        )
-
-    def _insert_job_version(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        job_id: int,
-        observed_at: str,
-        url: str,
-        data: dict[str, Any],
-        evidence_hash: str,
-        previous_raw_json: str | None,
-    ) -> None:
-        """새로운 출처 증거일 때만 변경 스냅샷을 추가한다."""
-
-        row = conn.execute(
-            "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version "
-            "FROM job_versions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
-        version_number = int(row["next_version"] if row else 1)
-        conn.execute(
-            "INSERT OR IGNORE INTO job_versions ("
-            "job_id, version_number, observed_at, source_url, source_platform, "
-            "evidence_hash, changed_fields_json, content_json"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                job_id,
-                version_number,
-                observed_at,
-                url,
-                data.get("source_platform"),
-                evidence_hash,
-                json.dumps(
-                    self._changed_fields(previous_raw_json, data), ensure_ascii=False
-                ),
-                json.dumps(data, ensure_ascii=False),
-            ),
-        )
-
-    def list_versions(self, job_id: int) -> list[dict[str, Any]]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT id, job_id, version_number, observed_at, source_url, "
-                "source_platform, evidence_hash, changed_fields_json, content_json "
-                "FROM job_versions WHERE job_id = ? ORDER BY version_number DESC",
-                (job_id,),
-            ).fetchall()
-        versions: list[dict[str, Any]] = []
-        for row in rows:
-            item = dict(row)
-            for field in ("changed_fields_json", "content_json"):
-                try:
-                    item[field.removesuffix("_json")] = json.loads(item.pop(field))
-                except (TypeError, json.JSONDecodeError):
-                    item[field.removesuffix("_json")] = item.pop(field)
-            versions.append(item)
-        return versions
 
     def _fetch_one(self, where_clause: str, param: Any) -> dict | None:
         """WHERE 절 하나로 단일 행을 조회하는 공통 헬퍼."""

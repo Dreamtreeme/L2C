@@ -63,8 +63,7 @@ def _feedback_label(
     )
 
 
-def record_action_episode(
-    episodes: list[FeedbackEpisode],
+def build_action_episode(
     state: WorkerState,
     action_name: str,
     args: dict[str, Any],
@@ -72,8 +71,8 @@ def record_action_episode(
     before_snapshot: dict[str, Any],
     after_context: dict[str, Any],
     seq: int,
-) -> None:
-    """피드백 기록을 하나 추가한다."""
+) -> FeedbackEpisode:
+    """행동 전후 관찰과 결과를 피드백 기록 하나로 만든다."""
 
     observation_state = state["observation"]
     proposal = ActionProposal(
@@ -101,10 +100,12 @@ def record_action_episode(
         result=dict(enriched_result),
     )
     feedback = _feedback_label(action_name, enriched_result, after)
-    episode = FeedbackEpisode(
+    return FeedbackEpisode(
         seq=seq,
         proposal=proposal,
         observation=observation,
         feedback=feedback,
     )
-    episodes.append(episode)
+
+
+__all__ = ["build_action_episode"]
