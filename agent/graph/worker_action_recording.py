@@ -6,23 +6,10 @@ from typing import Any
 
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.graph.worker_execution_policy import compact_action_args
-from agent.recipe.feedback import build_action_episode
-from agent.recipe.record import build_recorded_recipe_step
+from agent.recipe.record import build_physical_action, build_screen_checkpoint
 from agent.runtime.worker_contracts import build_action_event
+from agent.utils.text import normalize_text
 from agent.vision.target_snapshot import build_action_target_snapshot
-
-
-def _after_context(
-    context: WorkerExecutionContext,
-    *,
-    screen_changed: bool,
-) -> dict[str, Any]:
-    state = context.state
-    observation = state["observation"]
-    return {
-        "current_url": str(observation.get("current_url") or ""),
-        "screen_changed": screen_changed,
-    }
 
 
 def _enrich_action_result(
@@ -96,8 +83,8 @@ def record_action_result(
         tool_call_metadata=tool_call_metadata,
         action_source=action_source,
     )
-    recipe_step = (
-        build_recorded_recipe_step(
+    candidate_action = (
+        build_physical_action(
             context.state,
             action_name,
             args,
@@ -106,23 +93,31 @@ def record_action_result(
         if record_ui
         else None
     )
-    feedback_episode = build_action_episode(
-        context.state,
-        action_name,
-        args,
-        enriched,
-        before_snapshot,
-        _after_context(context, screen_changed=screen_changed),
-        action_sequence,
+    before_checkpoint = (
+        build_screen_checkpoint(
+            context.state,
+            observation_id=str(before_snapshot.get("observation_id") or ""),
+            current_url=str(before_snapshot.get("url") or ""),
+        )
+        if candidate_action
+        else None
     )
+    before_marker_texts = [
+        str(marker.get("text") or "")
+        for marker in context.state["observation"].get("current_markers", []) or []
+        if isinstance(marker, dict) and marker.get("text")
+    ]
     context.new_actions.append(enriched)
     context.new_events.append(
         build_action_event(
             action_sequence,
             enriched,
             observation_id=context.action_request.observation_id,
-            recipe_step=recipe_step,
-            feedback_episode=feedback_episode,
+            candidate_action=candidate_action,
+            before_checkpoint=before_checkpoint,
+            before_marker_texts=before_marker_texts,
+            expected_after=normalize_text(args.get("expected_after")),
+            intent=normalize_text(args.get("reason")),
         )
     )
     return enriched

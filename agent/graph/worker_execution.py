@@ -13,6 +13,7 @@ from agent.runtime.worker_contracts import (
     WorkerState,
     build_action_event,
 )
+from shared.schema.feedback_schema import ExecutionEvent
 from agent.graph.worker_action_effects import (
     activate_clicked_job_card,
     execute_state_action,
@@ -260,9 +261,8 @@ def _missing_action_update(
         "action_source": request.source if request else "unknown",
     }
     prior_events = [
-        dict(event)
+        ExecutionEvent.model_validate(event)
         for event in (state["transition"].get("action_events", []) or [])
-        if isinstance(event, dict)
     ]
     return {
         "decision": {"pending_action": None},

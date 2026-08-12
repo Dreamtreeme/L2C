@@ -9,6 +9,7 @@ from agent.runtime.worker_actions import (
 )
 from agent.utils.text import normalize_text
 from agent.vision.marker_geometry import marker_center
+from shared.schema.recipe_schema import PhysicalAction, ScreenCheckpoint
 
 
 def marker_region(marker: dict, markers: list[dict]) -> str:
@@ -41,27 +42,21 @@ def marker_region(marker: dict, markers: list[dict]) -> str:
     return f"{band(y, min_y, max_y, ('top', 'middle', 'bottom'))}-{band(x, min_x, max_x, ('left', 'center', 'right'))}"
 
 
-def is_replayable_action(action_item: dict) -> bool:
+def is_replayable_action(
+    action: PhysicalAction,
+    checkpoint: ScreenCheckpoint,
+) -> bool:
     """저장된 물리 행동이 결정론적 재생 계약을 갖췄는지 확인한다."""
 
-    if action_item.get("replay_mode", "reasoning") == "reasoning":
+    if not normalize_page_role(checkpoint.page_role):
         return False
-    action = action_item.get("action")
-    if not normalize_page_role(action_item.get("page_role", "")):
+    if not action.is_supported_replay_action():
         return False
-    if action in RECIPE_COMMIT_ACTIONS:
-        param = action_item.get("param", {})
-        if not isinstance(param, dict):
-            return False
-        return bool(
-            action_item.get("replay_mode") == "fixed"
-            and str(param.get("key") or "").strip().casefold()
-            in {"enter", "return"}
-        )
-    if action not in TARGET_REPLAY_ACTIONS:
+    if action.action in RECIPE_COMMIT_ACTIONS:
+        return True
+    if action.action not in TARGET_REPLAY_ACTIONS or action.target is None:
         return False
-    target = action_item.get("target") or {}
-    return isinstance(target, dict) and bool(
-        normalize_text(target.get("text"))
-        or normalize_text(target.get("semantic_label"))
+    return bool(
+        normalize_text(action.target.text)
+        or normalize_text(action.target.semantic_label)
     )

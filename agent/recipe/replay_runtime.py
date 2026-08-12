@@ -16,6 +16,7 @@ from agent.recipe.replay import (
     select_reflex_replay,
 )
 from agent.utils.logger import logger
+from shared.schema.recipe_schema import ReplaySession
 
 
 def _miss_result(
@@ -32,23 +33,26 @@ def _miss_result(
             "reason": reason,
         }
     )
-    active_recipe = dict(state["replay"].get("active_reflex_recipe", {}) or {})
+    raw_session = state["replay"].get("replay_session")
+    replay_session = (
+        raw_session
+        if isinstance(raw_session, ReplaySession)
+        else ReplaySession.model_validate(raw_session)
+        if raw_session
+        else None
+    )
     blocked_keys = [
         str(key)
         for key in (state["replay"].get("reflex_blocked_recipe_keys") or [])
         if str(key)
     ]
-    active_recipe_key = str(active_recipe.get("recipe_key") or "")
+    active_recipe_key = replay_session.recipe_key if replay_session else ""
     if active_recipe_key:
         reflex_trace.update(
             {
                 "recipe_key": active_recipe_key,
-                "recipe_transition_index": int(
-                    active_recipe.get("current_transition_index") or 0
-                ),
-                "recipe_transition_count": int(
-                    active_recipe.get("transition_count") or 0
-                ),
+                "recipe_transition_index": replay_session.current_transition_index,
+                "recipe_transition_count": replay_session.transition_count,
                 "path_failed": True,
             }
         )
@@ -57,7 +61,7 @@ def _miss_result(
     return {
         "replay": {
             "reflex_trace": reflex_trace,
-            "active_reflex_recipe": {},
+            "replay_session": None,
             "reflex_blocked_recipe_keys": blocked_keys,
         },
     }
@@ -92,16 +96,16 @@ def _hit_result(
     """요청, 활성 경로 상태와 관측 trace를 함께 만든다."""
 
     transition_count = len(selection.recipe.transitions)
-    active_recipe_state = {
-        "recipe_key": selection.recipe_key,
-        "current_transition_index": selection.transition_index,
-        "pending_transition_index": selection.transition_index,
-        "transition_count": transition_count,
-        "actions": [
+    replay_session = ReplaySession(
+        recipe_key=selection.recipe_key,
+        current_transition_index=selection.transition_index,
+        pending_transition_index=selection.transition_index,
+        transition_count=transition_count,
+        actions=[
             [str(action.action) for action in transition.actions]
             for transition in selection.recipe.transitions
         ],
-    }
+    )
     return {
         "decision": {"pending_action": _build_request(selection)},
         "replay": {
@@ -115,7 +119,7 @@ def _hit_result(
                 "recipe_transition_index": selection.transition_index,
                 "recipe_transition_count": transition_count,
             },
-            "active_reflex_recipe": active_recipe_state,
+            "replay_session": replay_session,
         },
     }
 

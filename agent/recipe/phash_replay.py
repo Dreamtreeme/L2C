@@ -8,15 +8,18 @@ from agent.runtime.target_matching import (
     match_target_by_ratio,
     roi_signature_match,
 )
+from shared.schema.recipe_schema import ActionTarget, PhysicalAction
 
 
-def match_step_by_screen_signature(
-    step: dict[str, Any],
+def match_target_by_screen_signature(
+    target: ActionTarget | None,
+    saved_roi_signature: dict[str, Any],
     current_signature: dict[str, Any],
     markers: list[dict[str, Any]],
     current_image_path: str = "",
 ) -> tuple[int | None, dict[str, Any]]:
-    saved_roi_signature = dict(step.get("roi_signature") or {})
+    """저장된 ROI와 대상 좌표를 현재 화면의 마커에 대응시킨다."""
+
     if not saved_roi_signature:
         return None, {
             "matched": False,
@@ -33,10 +36,32 @@ def match_step_by_screen_signature(
     if not signature_result.get("matched"):
         return None, signature_result
 
-    marker_id = match_target_by_ratio(step.get("target"), markers, screen_size)
+    target_payload = target.model_dump(mode="json") if target else None
+    marker_id = match_target_by_ratio(target_payload, markers, screen_size)
     if marker_id is None:
         signature_result = dict(signature_result)
         signature_result["matched"] = False
         signature_result["reason"] = "target_ratio_miss"
         return None, signature_result
     return marker_id, signature_result
+
+
+def match_step_by_screen_signature(
+    step: PhysicalAction,
+    current_signature: dict[str, Any],
+    markers: list[dict[str, Any]],
+    current_image_path: str = "",
+) -> tuple[int | None, dict[str, Any]]:
+    return match_target_by_screen_signature(
+        step.target,
+        step.roi_signature,
+        current_signature,
+        markers,
+        current_image_path,
+    )
+
+
+__all__ = [
+    "match_step_by_screen_signature",
+    "match_target_by_screen_signature",
+]

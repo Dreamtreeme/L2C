@@ -202,7 +202,7 @@ def test_action_permissions_require_declared_risk_and_default_scroll_to_safe_rea
     )
 
 
-def test_explicit_sensitive_recipe_step_is_not_promotion_eligible():
+def test_explicit_sensitive_action_is_not_promotion_eligible():
     from agent.recipe.promotion_policy import (
         evaluate_candidate_step_evidence,
     )
@@ -214,30 +214,41 @@ def test_explicit_sensitive_recipe_step_is_not_promotion_eligible():
         action_events=[
             {
                 "seq": 1,
-                "recipe_step": {
-                    "seq": 1,
+                "candidate_action": {
+                    "source_seq": 1,
                     "action": "click_marker",
                     "risk_level": "sensitive",
                 },
-                "feedback_episode": {
+                "transition": {
                     "seq": 1,
-                    "proposal": {"action": "click_marker", "args": {}},
-                    "feedback": {"label": "success"},
-                    "observation": {"result": {"status": "success"}},
+                    "before": {"observation_id": "observation:1"},
+                    "actions": [
+                        {
+                            "source_seq": 1,
+                            "action": "click_marker",
+                            "risk_level": "sensitive",
+                        }
+                    ],
+                    "after": {"observation_id": "observation:2"},
+                    "evidence": {
+                        "source": "autonomous",
+                        "result_status": "success",
+                        "status": "ready",
+                    },
                 },
             }
         ],
     )
-    candidate = RecipeCandidate(
+    candidate = RecipeCandidate.from_submission(
+        submission,
         run_id="worker-sensitive",
         status="pending_replay",
-        submission=submission,
     )
 
     verdict = evaluate_candidate_step_evidence(candidate)[1]
 
-    assert verdict["eligible"] is False
-    assert "sensitive_action" in verdict["blocking_reasons"]
+    assert verdict.eligible is False
+    assert "sensitive_action" in verdict.blocking_reasons
 
 
 def test_run_deadline_stops_before_next_external_step():

@@ -28,7 +28,7 @@ from agent.sites import load_site_profile
 from agent.utils.job_fields import required_job_fields
 from shared.schema.collection_intent import CollectionIntent
 from shared.schema.collection_run import CollectionBatch
-from shared.schema.feedback_schema import RecordedActionEvent, WorkerSubmission
+from shared.schema.feedback_schema import ExecutionEvent, WorkerSubmission
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ def run_worker_once(
     transition = final_state["transition"]
     collection = final_state["collection"]
     action_events = [
-        RecordedActionEvent.model_validate(item)
+        ExecutionEvent.model_validate(item)
         for item in transition.get("action_events", []) or []
     ]
     observed_job_ids = sorted(

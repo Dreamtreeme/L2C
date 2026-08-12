@@ -336,7 +336,7 @@ def selection_node(
             return _low_information_stop()
         return {}
 
-    if replay.get("active_reflex_recipe"):
+    if replay.get("replay_session"):
         return {}
 
     transition_result = dict(transition.get("transition_result", {}) or {})

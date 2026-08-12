@@ -16,7 +16,24 @@ def _batch(*, finished: bool = True) -> CollectionBatch:
             action_events=[
                 {
                     "seq": 1,
-                    "recipe_step": {"seq": 1, "action": "click_marker"},
+                    "candidate_action": {
+                        "source_seq": 1,
+                        "action": "click_marker",
+                    },
+                    "before_checkpoint": {"observation_id": "observation:1"},
+                    "transition": {
+                        "seq": 1,
+                        "before": {"observation_id": "observation:1"},
+                        "actions": [
+                            {"source_seq": 1, "action": "click_marker"}
+                        ],
+                        "after": {"observation_id": "observation:2"},
+                        "evidence": {
+                            "source": "autonomous",
+                            "result_status": "success",
+                            "status": "ready",
+                        },
+                    },
                 }
             ],
             collection_intent=CollectionIntent(site="wanted"),

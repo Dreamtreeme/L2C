@@ -286,7 +286,17 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
             action_events=[
                 {
                     "seq": 0,
-                    "recipe_step": {"seq": 0, "action": "click_marker"},
+                    "candidate_action": {
+                        "source_seq": 0,
+                        "action": "click_marker",
+                    },
+                    "transition": {
+                        "seq": 0,
+                        "before": {"observation_id": "other:1"},
+                        "actions": [{"source_seq": 0, "action": "click_marker"}],
+                        "after": {"observation_id": "other:2"},
+                        "evidence": {"result_status": "success", "status": "ready"},
+                    },
                 }
             ],
         ),
@@ -304,12 +314,25 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
             action_events=[
                 {
                     "seq": 0,
-                    "recipe_step": {
-                        "seq": 0,
+                    "candidate_action": {
+                        "source_seq": 0,
                         "action": "type_in_marker",
-                        "page_role": "home",
                         "roi_signature": {"phash": "0" * 16},
                         "target": {"text": "검색"},
+                    },
+                    "transition": {
+                        "seq": 0,
+                        "before": {"observation_id": "autonomous:1"},
+                        "actions": [
+                            {
+                                "source_seq": 0,
+                                "action": "type_in_marker",
+                                "roi_signature": {"phash": "0" * 16},
+                                "target": {"text": "검색"},
+                            }
+                        ],
+                        "after": {"observation_id": "autonomous:2"},
+                        "evidence": {"result_status": "success", "status": "ready"},
                     },
                 }
             ],

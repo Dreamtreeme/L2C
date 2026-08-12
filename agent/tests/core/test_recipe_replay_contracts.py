@@ -17,10 +17,10 @@ def test_reflex_replays_one_parameterized_roi_step(tmp_path):
 
     from agent.vision.screen_signature import compute_target_roi_signature
     from shared.schema.recipe_schema import (
-        RecipeAction,
-        RecipeCheckpoint,
-        RecipeTransition,
-        SiteRecipe,
+        ExperienceTransition,
+        PhysicalAction,
+        ScreenCheckpoint,
+        SiteExperience,
     )
 
     screenshot = tmp_path / "screen.png"
@@ -38,22 +38,18 @@ def test_reflex_replays_one_parameterized_roi_step(tmp_path):
         return [
             (
                 "recipe-search",
-                SiteRecipe(
+                SiteExperience(
                     site="wanted",
                     goal="검색",
-                    start_state=RecipeCheckpoint(
-                        url_template="wanted.co.kr/",
-                        page_role="home",
-                    ),
                     transitions=[
-                        RecipeTransition(
+                        ExperienceTransition(
                             seq=0,
-                            before=RecipeCheckpoint(
+                            before=ScreenCheckpoint(
                                 url_template="wanted.co.kr/",
                                 page_role="home",
                             ),
                             actions=[
-                                RecipeAction(
+                                PhysicalAction(
                                     source_seq=0,
                                     action="type_in_marker",
                                     replay_mode="parameterized",
@@ -67,7 +63,7 @@ def test_reflex_replays_one_parameterized_roi_step(tmp_path):
                                     slot_refs=["search_keyword"],
                                 )
                             ],
-                            after=RecipeCheckpoint(
+                            after=ScreenCheckpoint(
                                 url_template="wanted.co.kr/search",
                                 page_role="search_results",
                                 screen_context_signature={
@@ -77,14 +73,6 @@ def test_reflex_replays_one_parameterized_roi_step(tmp_path):
                             ),
                         )
                     ],
-                    completion_state=RecipeCheckpoint(
-                        url_template="wanted.co.kr/search",
-                        page_role="search_results",
-                        screen_context_signature={
-                            "phash": "f" * 16,
-                            "size": [200, 120],
-                        },
-                    ),
                 ),
             )
         ]
@@ -134,10 +122,10 @@ def test_reflex_replays_action_group_then_advances_after_verification(
         compute_target_roi_signature,
     )
     from shared.schema.recipe_schema import (
-        RecipeAction,
-        RecipeCheckpoint,
-        RecipeTransition,
-        SiteRecipe,
+        ExperienceTransition,
+        PhysicalAction,
+        ScreenCheckpoint,
+        SiteExperience,
     )
 
     input_screen = tmp_path / "recipe-input.png"
@@ -177,35 +165,34 @@ def test_reflex_replays_action_group_then_advances_after_verification(
         "bbox_ratio": [0.6667, 0.0833, 0.9167, 0.3333],
         "center_ratio": [0.7917, 0.2083],
     }
-    before = RecipeCheckpoint(
+    before = ScreenCheckpoint(
         url_template="saramin.co.kr/zf_user/",
         page_role="home",
         screen_context_signature=input_context,
         anchor_target=input_target,
         anchor_roi_signature=input_roi,
     )
-    result_state = RecipeCheckpoint(
+    result_state = ScreenCheckpoint(
         url_template="saramin.co.kr/zf_user/",
         page_role="search_results",
         screen_context_signature=result_context,
         anchor_target=result_target,
         anchor_roi_signature=result_roi,
     )
-    completion = RecipeCheckpoint(
+    completion = ScreenCheckpoint(
         url_template="saramin.co.kr/zf_user/search",
         page_role="search_results",
         screen_context_signature=result_context,
     )
-    recipe = SiteRecipe(
+    recipe = SiteExperience(
         site="saramin",
         goal="검색",
-        start_state=before,
         transitions=[
-            RecipeTransition(
+            ExperienceTransition(
                 seq=0,
                 before=before,
                 actions=[
-                    RecipeAction(
+                    PhysicalAction(
                         source_seq=1,
                         action="type_in_marker",
                         replay_mode="parameterized",
@@ -214,7 +201,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                         param={"slot_name": "search_keyword"},
                         slot_refs=["search_keyword"],
                     ),
-                    RecipeAction(
+                    PhysicalAction(
                         source_seq=2,
                         action="press_key",
                         replay_mode="fixed",
@@ -223,11 +210,11 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 ],
                 after=result_state,
             ),
-            RecipeTransition(
+            ExperienceTransition(
                 seq=1,
                 before=result_state,
                 actions=[
-                    RecipeAction(
+                    PhysicalAction(
                         source_seq=3,
                         action="click_marker",
                         replay_mode="fixed",
@@ -238,7 +225,6 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                 after=completion,
             ),
         ],
-        completion_state=completion,
     )
 
     def load_site_recipes(_site, *, task_category=None):
@@ -283,8 +269,8 @@ def test_reflex_replays_action_group_then_advances_after_verification(
     assert (
         first["decision"]["pending_action"].tool_calls[0].args["text"] == "AI 엔지니어"
     )
-    assert first["replay"]["active_reflex_recipe"]["current_transition_index"] == 0
-    assert first["replay"]["active_reflex_recipe"]["pending_transition_index"] == 0
+    assert first["replay"]["replay_session"].current_transition_index == 0
+    assert first["replay"]["replay_session"].pending_transition_index == 0
 
     verified = worker_transition.transition_node(
         worker_state(
@@ -315,14 +301,14 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                     "started_at": time.time(),
                 }
             },
-            replay={"active_reflex_recipe": first["replay"]["active_reflex_recipe"]},
+            replay={"replay_session": first["replay"]["replay_session"]},
         ),
         replay_runtime,
     )
 
     assert verified["transition"]["transition_result"]["status"] == "ready"
-    assert verified["replay"]["active_reflex_recipe"]["current_transition_index"] == 1
-    assert "pending_transition_index" not in verified["replay"]["active_reflex_recipe"]
+    assert verified["replay"]["replay_session"].current_transition_index == 1
+    assert verified["replay"]["replay_session"].pending_transition_index is None
 
     second = reflex_node(
         worker_state(
@@ -347,7 +333,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                     search_keyword="AI 엔지니어",
                 ),
             },
-            replay={"active_reflex_recipe": verified["replay"]["active_reflex_recipe"]},
+            replay={"replay_session": verified["replay"]["replay_session"]},
         ),
         replay_runtime,
     )
@@ -356,7 +342,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
     assert len(second["decision"]["pending_action"].tool_calls) == 1
     assert second["decision"]["pending_action"].tool_calls[0].name == "click_marker"
     assert second["decision"]["pending_action"].tool_calls[0].args["marker_id"] == 8
-    assert second["replay"]["active_reflex_recipe"]["current_transition_index"] == 1
+    assert second["replay"]["replay_session"].current_transition_index == 1
 
 
 def test_replay_success_is_recorded_only_after_final_transition():
@@ -403,7 +389,7 @@ def test_replay_success_is_recorded_only_after_final_transition():
             observation=observation,
             transition={"transition_request": transition_request},
             replay={
-                "active_reflex_recipe": {
+                "replay_session": {
                     "recipe_key": "recipe-search-set",
                     "current_transition_index": 1,
                     "pending_transition_index": 1,
@@ -418,7 +404,7 @@ def test_replay_success_is_recorded_only_after_final_transition():
             observation=observation,
             transition={"transition_request": transition_request},
             replay={
-                "active_reflex_recipe": {
+                "replay_session": {
                     "recipe_key": "recipe-search-set",
                     "current_transition_index": 2,
                     "pending_transition_index": 2,
@@ -431,8 +417,8 @@ def test_replay_success_is_recorded_only_after_final_transition():
 
     assert intermediate["transition"]["transition_result"]["status"] == "ready"
     assert (
-        intermediate["replay"]["active_reflex_recipe"]["current_transition_index"] == 2
+        intermediate["replay"]["replay_session"].current_transition_index == 2
     )
     assert completed["transition"]["transition_result"]["status"] == "ready"
-    assert completed["replay"]["active_reflex_recipe"] == {}
+    assert completed["replay"]["replay_session"] is None
     assert replay_results == [("recipe-search-set", True)]

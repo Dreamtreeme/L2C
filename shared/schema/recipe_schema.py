@@ -1,115 +1,284 @@
-"""경험 기반 탐색 레시피 스키마.
-
-레시피는 단일 행동 목록이 아니라 검증 가능한 화면 상태 전이의 연속으로 저장한다.
-DOM, Playwright selector, 절대좌표는 저장하지 않는다.
-"""
+"""자율탐색에서 기록하고 경험 기반 탐색에서 재사용하는 공통 계약."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.schema.skill_schema import RecipeSkillMetadata, ReplayMode
+from shared.schema.skill_schema import (
+    RecipeInputName,
+    RecipeSkillMetadata,
+    ReplayMode,
+)
 
 
-class RecipeTarget(BaseModel):
-    """클릭/입력 대상 마커(target marker)를 다시 찾기 위한 정보."""
+PhysicalActionName = Literal[
+    "click_marker",
+    "type_in_marker",
+    "press_key",
+    "scroll",
+    "go_back",
+    "close_current_tab",
+    "switch_tab",
+    "open_browser",
+]
+ActionDirection = Literal[
+    "down",
+    "up",
+    "left",
+    "right",
+    "next",
+    "previous",
+]
+ScrollAmount = Literal["small", "page"]
+ActionResultStatus = Literal["", "success", "error", "skipped"]
+TransitionStatus = Literal[
+    "",
+    "idle",
+    "waiting_capture",
+    "pending",
+    "needs_ocr",
+    "ready",
+    "unknown",
+]
 
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field("", description="정규화된 OCR 텍스트(OCR text)")
-    semantic_label: Optional[str] = Field(None, description="LLM이 보정한 대상 라벨(semantic label)")
-    region: Optional[str] = Field(None, description="화면 내 대략적 위치(region)")
-    marker_type: str = Field("", description="OCR/아이콘 마커 유형(marker type)")
-    bbox_ratio: List[float] = Field(default_factory=list, description="화면 크기 대비 대상 bbox 비율(bbox ratio)")
-    center_ratio: List[float] = Field(default_factory=list, description="화면 크기 대비 대상 중심 비율(center ratio)")
-
-
-class RecipeCheckpoint(BaseModel):
-    """전이 전후에 다시 확인할 화면 상태."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    observation_id: str = Field(
-        "",
-        description="자율탐색 당시 화면 관찰 식별자(observation id)",
-    )
-    url_template: str = Field("", description="URL 템플릿(url template)")
-    page_role: str = Field("", description="관찰된 화면 역할(page role)")
-    screen_context_signature: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="타깃이 없는 상태를 확인하는 화면 서명(screen context signature)",
-    )
-    anchor_target: Optional[RecipeTarget] = Field(
-        None,
-        description="해당 상태에서 확인할 다음 행동의 타깃(anchor target)",
-    )
-    anchor_roi_signature: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="앵커 타깃 주변 ROI pHash 서명(anchor ROI signature)",
-    )
-
-
-class RecipeAction(BaseModel):
-    """한 화면 관찰을 근거로 연속 실행할 수 있는 물리 행동."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    source_seq: int = Field(..., description="자율탐색 원본 행동 번호(source sequence)")
-    action: str = Field(..., description="도구 이름(tool action)")
-    target: Optional[RecipeTarget] = Field(None, description="클릭/입력 대상(target)")
-    roi_signature: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="타깃 주변 ROI pHash 서명(ROI signature)",
-    )
-    value: Optional[str] = Field(None, description="입력값 또는 부가 값(value)")
-    param: Dict[str, Any] = Field(default_factory=dict, description="재생 시 넘길 인자(param)")
-    is_param: bool = Field(False, description="값이 실행마다 바뀌는 파라미터인지 여부(is_param)")
-    intent: str = Field("", description="LLM이 남긴 행동 의도(intent)")
-    target_role: str = Field("", description="대상 역할(target_role)")
-    component: str = Field("", description="화면 구성요소(component)")
-    slot_refs: List[str] = Field(default_factory=list, description="참조하는 입력 슬롯(slot_refs)")
-    risk_level: str = Field(
-        "",
-        description="자율 탐색 실행 당시 위험도 선언(risk level)",
-    )
-    replay_mode: ReplayMode = Field(
-        "reasoning",
-        description="이 단계를 그대로 재생할지, 파라미터화할지, 추론할지(replay mode)",
-    )
+TARGET_REPLAY_ACTIONS = frozenset({"click_marker", "type_in_marker"})
+RECIPE_COMMIT_ACTIONS = frozenset({"press_key"})
+REVIEWABLE_REPLAY_ACTIONS = TARGET_REPLAY_ACTIONS | RECIPE_COMMIT_ACTIONS
+NAVIGATION_ACTIONS = frozenset({"go_back", "close_current_tab", "switch_tab"})
+TRAJECTORY_ACTIONS = REVIEWABLE_REPLAY_ACTIONS | NAVIGATION_ACTIONS | {"scroll"}
+UI_ACTIONS = TRAJECTORY_ACTIONS | {"open_browser"}
 
 
-class RecipeTransition(BaseModel):
-    """검증된 이전 상태에서 행동 묶음을 수행해 다음 상태로 이동하는 단위."""
+class ActionParameters(BaseModel):
+    """기록 가능한 물리 행동의 제한된 인자 집합."""
 
     model_config = ConfigDict(extra="forbid")
 
-    seq: int = Field(..., description="레시피 전이 순서(transition index)")
-    before: RecipeCheckpoint
-    actions: List[RecipeAction] = Field(min_length=1)
-    after: RecipeCheckpoint
-    expected_after: str = Field("", description="행동 후 기대 결과(expected after)")
-    intent: str = Field("", description="전이 목적(transition intent)")
+    text: str = ""
+    slot_name: RecipeInputName | None = None
+    key: str = ""
+    direction: ActionDirection | None = None
+    amount: ScrollAmount | None = None
+    url: str = ""
 
 
-class RecipePath(BaseModel):
-    """검증 가능한 시작·전이·완료 상태로 구성된 실행 경로."""
+class ActionTarget(BaseModel):
+    """화면에서 물리 행동 대상을 다시 찾기 위한 정보."""
 
     model_config = ConfigDict(extra="forbid")
 
-    start_state: RecipeCheckpoint
-    transitions: List[RecipeTransition] = Field(min_length=1)
-    completion_state: RecipeCheckpoint
+    text: str = ""
+    semantic_label: Optional[str] = None
+    region: Optional[str] = None
+    marker_type: str = ""
+    bbox_ratio: List[float] = Field(default_factory=list)
+    center_ratio: List[float] = Field(default_factory=list)
 
 
-class SiteRecipe(RecipePath):
-    """특정 사이트와 목표에서 순서대로 재사용할 검증된 상태 전이 경로."""
+class ScreenCheckpoint(BaseModel):
+    """행동 전후에 관찰한 화면 상태."""
 
-    site: str = Field(..., description="사이트 식별자(site)")
-    goal: str = Field("", description="학습 당시 사용자 목표(goal)")
+    model_config = ConfigDict(extra="forbid")
+
+    observation_id: str = ""
+    url_template: str = ""
+    page_role: str = ""
+    screen_context_signature: Dict[str, Any] = Field(default_factory=dict)
+    anchor_target: Optional[ActionTarget] = None
+    anchor_roi_signature: Dict[str, Any] = Field(default_factory=dict)
+
+    def has_anchor(self) -> bool:
+        return self.anchor_target is not None and bool(self.anchor_roi_signature)
+
+    def has_context_phash(self) -> bool:
+        return bool(self.screen_context_signature.get("phash"))
+
+    def same_observation_as(self, other: "ScreenCheckpoint") -> bool:
+        return bool(
+            self.observation_id
+            and other.observation_id
+            and self.observation_id == other.observation_id
+        )
+
+    def with_action_anchor(self, action: "PhysicalAction") -> "ScreenCheckpoint":
+        if not action.has_replay_target():
+            return self.model_copy(deep=True)
+        return self.model_copy(
+            deep=True,
+            update={
+                "anchor_target": action.target.model_copy(deep=True),
+                "anchor_roi_signature": dict(action.roi_signature),
+            },
+        )
+
+
+class PhysicalAction(BaseModel):
+    """한 화면 관찰을 근거로 실행한 물리 행동."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_seq: int
+    action: PhysicalActionName
+    target: Optional[ActionTarget] = None
+    roi_signature: Dict[str, Any] = Field(default_factory=dict)
+    param: ActionParameters = Field(default_factory=ActionParameters)
+    intent: str = ""
+    target_role: str = ""
+    component: str = ""
+    slot_refs: List[str] = Field(default_factory=list)
+    risk_level: str = ""
+    replay_mode: ReplayMode = "reasoning"
+
+    def has_replay_target(self) -> bool:
+        return (
+            self.action in TARGET_REPLAY_ACTIONS
+            and self.target is not None
+            and bool(self.roi_signature)
+        )
+
+    def parameter_slot(self) -> str:
+        if self.param.slot_name:
+            return self.param.slot_name
+        return self.slot_refs[0] if self.slot_refs else ""
+
+    def is_supported_replay_action(self) -> bool:
+        if self.replay_mode == "reasoning":
+            return False
+        if self.action in TARGET_REPLAY_ACTIONS:
+            if not self.has_replay_target():
+                return False
+            if self.action == "type_in_marker":
+                if self.replay_mode == "parameterized":
+                    return bool(
+                        self.parameter_slot()
+                        and self.parameter_slot() in self.slot_refs
+                    )
+                return bool(self.replay_mode == "fixed" and self.param.text)
+            return self.replay_mode == "fixed"
+        if self.action in RECIPE_COMMIT_ACTIONS:
+            return bool(
+                self.replay_mode == "fixed"
+                and self.param.key.strip().casefold() in {"enter", "return"}
+            )
+        return False
+
+
+class TransitionEvidence(BaseModel):
+    """전이가 실제로 일어났는지 판단할 때 사용한 실행·화면 근거."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = ""
+    result_status: ActionResultStatus = ""
+    result_reason: str = ""
+    status: TransitionStatus = ""
+    outcome: str = ""
+    reason: str = ""
+    recipe_key: str = ""
+    recipe_transition_index: int | None = None
+    recipe_transition_count: int | None = None
+    transition_actions: List[str] = Field(default_factory=list)
+    after_state_match: Dict[str, Any] = Field(default_factory=dict)
+    attempt: int = 0
+    elapsed_sec: float = 0.0
+    phash_distance: int | None = None
+    visual_change_ratio: float | None = None
+    ocr_skipped: bool = False
+    before_marker_texts: List[str] = Field(default_factory=list)
+    after_marker_texts: List[str] = Field(default_factory=list)
+    screenshot: str = ""
+    marked_image: str = ""
+
+
+class ExperienceTransition(BaseModel):
+    """한 화면에서 행동 묶음을 수행해 다음 화면으로 이동한 기록."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seq: int
+    before: ScreenCheckpoint
+    actions: List[PhysicalAction] = Field(min_length=1)
+    after: ScreenCheckpoint
+    expected_after: str = ""
+    intent: str = ""
+    evidence: TransitionEvidence | None = None
+
+
+class ExperiencePath(BaseModel):
+    """검증 가능한 화면 전이를 순서대로 연결한 경험 경로."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transitions: List[ExperienceTransition] = Field(min_length=1)
+
+    @property
+    def start_state(self) -> ScreenCheckpoint:
+        return self.transitions[0].before
+
+    @property
+    def completion_state(self) -> ScreenCheckpoint:
+        return self.transitions[-1].after
+
+
+class SiteExperience(ExperiencePath):
+    """특정 사이트와 목표에서 재사용할 수 있도록 승격된 경험 경로."""
+
+    site: str
+    goal: str = ""
     skill_metadata: RecipeSkillMetadata = Field(default_factory=RecipeSkillMetadata)
-    support_count: int = Field(1, description="같은 경로를 지지한 자율탐색 후보 수")
-    replay_success_count: int = Field(0, description="실제 재생 성공 횟수")
-    replay_failure_count: int = Field(0, description="실제 재생 실패 횟수")
-    updated_at: str = Field("", description="마지막 갱신 시각(updated_at)")
+    support_count: int = 1
+    replay_success_count: int = 0
+    replay_failure_count: int = 0
+    updated_at: str = ""
+
+
+class ReplaySession(BaseModel):
+    """현재 실행 중인 경험 경로의 진행 위치."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipe_key: str
+    current_transition_index: int = Field(ge=0)
+    pending_transition_index: int | None = Field(default=None, ge=0)
+    transition_count: int = Field(gt=0)
+    actions: List[List[str]] = Field(default_factory=list)
+
+    def pending_is_current(self) -> bool:
+        return self.pending_transition_index == self.current_transition_index
+
+    def is_last_transition(self) -> bool:
+        return self.current_transition_index + 1 >= self.transition_count
+
+    def advance(self) -> ReplaySession | None:
+        if not self.pending_is_current() or self.is_last_transition():
+            return None
+        return self.model_copy(
+            update={
+                "current_transition_index": self.current_transition_index + 1,
+                "pending_transition_index": None,
+            }
+        )
+
+
+__all__ = [
+    "ActionParameters",
+    "ActionResultStatus",
+    "ActionTarget",
+    "NAVIGATION_ACTIONS",
+    "ExperiencePath",
+    "ExperienceTransition",
+    "PhysicalAction",
+    "PhysicalActionName",
+    "RECIPE_COMMIT_ACTIONS",
+    "REVIEWABLE_REPLAY_ACTIONS",
+    "ReplaySession",
+    "ScreenCheckpoint",
+    "SiteExperience",
+    "TARGET_REPLAY_ACTIONS",
+    "TRAJECTORY_ACTIONS",
+    "TransitionEvidence",
+    "TransitionStatus",
+    "UI_ACTIONS",
+]

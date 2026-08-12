@@ -4,7 +4,7 @@ from agent.graph import (
     worker_observation,
     worker_transition,
 )
-from agent.recipe.record import build_recorded_recipe_step
+from agent.recipe.record import build_physical_action, build_screen_checkpoint
 from agent.runtime.worker_contracts import action_event_transitions
 from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.tests.worker_test_support import (
@@ -12,10 +12,11 @@ from agent.tests.worker_test_support import (
     node_runtime,
     worker_state,
 )
+from shared.schema.recipe_schema import ActionTarget, PhysicalAction
 
 
 def _append_recorded_step(steps, state, action_name, args, seq):
-    step = build_recorded_recipe_step(state, action_name, args, seq)
+    step = build_physical_action(state, action_name, args, seq)
     if step is not None:
         steps.append(step)
 
@@ -35,7 +36,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
             draw.rectangle([0, 120, 200, 200], fill="black")
         image.save(path)
 
-    steps: list[dict] = []
+    steps: list[PhysicalAction] = []
     _append_recorded_step(
         steps,
         worker_state(
@@ -83,13 +84,20 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
     )
 
     marker_id, trace = match_step_by_screen_signature(
-        steps[0].model_dump(mode="json"),
+        steps[0],
         {"phash": "0" * 16, "size": [200, 200]},
         [{"id": 7, "bbox": [150, 20, 170, 40], "text": "검색"}],
         current_image_path=str(current),
     )
 
-    assert steps[0].page_role == "home"
+    assert build_screen_checkpoint(
+        worker_state(
+            observation={
+                "current_url": "https://www.wanted.co.kr",
+                "current_page_role": "home",
+            }
+        )
+    ).page_role == "home"
     assert steps[0].roi_signature["algorithm"] == "roi-phash-dct64-v2"
     assert steps[0].replay_mode == "fixed"
     assert steps[1].replay_mode == "parameterized"
@@ -103,14 +111,16 @@ def test_roi_replay_rejects_step_without_roi_signature():
     from agent.recipe.phash_replay import match_step_by_screen_signature
 
     marker_id, trace = match_step_by_screen_signature(
-        {
-            "screen_signature": {"phash": "0" * 16, "size": [1000, 1000]},
-            "target": {
-                "text": "검색",
-                "bbox_ratio": [0.79, 0.08, 0.83, 0.12],
-                "center_ratio": [0.81, 0.1],
-            },
-        },
+        PhysicalAction(
+            source_seq=0,
+            action="click_marker",
+            replay_mode="fixed",
+            target=ActionTarget(
+                text="검색",
+                bbox_ratio=[0.79, 0.08, 0.83, 0.12],
+                center_ratio=[0.81, 0.1],
+            ),
+        ),
         {"phash": "0" * 16, "size": [1000, 1000]},
         [{"id": 3, "bbox": [790, 80, 830, 120], "text": "검색"}],
     )
@@ -122,7 +132,7 @@ def test_roi_replay_rejects_step_without_roi_signature():
 def test_trajectory_records_context_actions_without_promoting_them():
     from agent.runtime.worker_actions import is_supported_recipe_action_group
 
-    steps: list[dict] = []
+    steps: list[PhysicalAction] = []
     state = worker_state(
         observation={
             "current_url": "https://www.wanted.co.kr",
@@ -151,12 +161,16 @@ def test_trajectory_records_context_actions_without_promoting_them():
         "reasoning",
         "reasoning",
     ]
-    assert steps[0].screen_context_signature["phash"] == "a" * 16
+    assert build_screen_checkpoint(state).screen_context_signature["phash"] == "a" * 16
     assert is_supported_recipe_action_group(steps) is False
     assert is_supported_recipe_action_group(
         [
-            {"action": "type_in_marker"},
-            {"action": "press_key", "param": {"key": "enter"}},
+            PhysicalAction(source_seq=1, action="type_in_marker"),
+            PhysicalAction(
+                source_seq=2,
+                action="press_key",
+                param={"key": "enter"},
+            ),
         ]
     ) is True
 
@@ -174,7 +188,7 @@ def test_replay_mode_is_derived_from_executed_tool_contract():
             "current_markers": [],
         },
     )
-    steps: list[dict] = []
+    steps: list[PhysicalAction] = []
 
     _append_recorded_step(
         steps,
@@ -319,13 +333,21 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                     "started_at": time.time(),
                 },
                 "action_events": [
-                    {
-                        "seq": 0,
-                        "result": {
-                            "action": "click_marker",
-                            "status": "success",
-                        },
-                    }
+                        {
+                            "seq": 0,
+                            "result": {
+                                "action": "click_marker",
+                                "status": "success",
+                            },
+                            "candidate_action": {
+                                "source_seq": 0,
+                                "action": "click_marker",
+                            },
+                            "before_checkpoint": {
+                                "observation_id": "worker-test:observation:0002",
+                                "url_template": "example.com/jobs",
+                            },
+                        }
                 ],
             },
         ),
@@ -334,10 +356,10 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
 
     assert stale.get("observation", {}).get("ocr_complete") is None
     assert (
-        action_event_transitions(stale["transition"]["action_events"])[0][
-            "marker_count"
-        ]
-        == 0
+        action_event_transitions(
+            stale["transition"]["action_events"]
+        )[0].evidence.after_marker_texts
+        == []
     )
     stale_state = apply_update(
         worker_state(

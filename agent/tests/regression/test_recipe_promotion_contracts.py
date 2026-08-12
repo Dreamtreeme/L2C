@@ -22,38 +22,48 @@ def _state(observation_id, role, phash, url="wanted.co.kr/search"):
     }
 
 
-def _feedback(seq, action, label="partial", *, marker_texts=None):
+def _action(seq, action, **values):
     return {
-        "seq": seq,
-        "proposal": {"action": action, "args": {}},
-        "feedback": {"label": label},
-        "observation": {
-            "before": {
-                "url": "https://www.wanted.co.kr/search",
-                "marker_texts": marker_texts or [],
-            },
-            "result": {"status": "success"},
-        },
+        "source_seq": seq,
+        "action": action,
+        **values,
     }
 
 
-def _transition(
+def _event(
     seq,
-    observation_id,
-    role,
-    phash,
+    before,
+    action,
     *,
-    status="ready",
+    after=None,
     source="autonomous",
+    status="ready",
+    reason="screen_change_pixels_matched",
+    result_status="success",
+    marker_texts=None,
 ):
-    return {
-        "action_seq": seq,
-        "source": source,
-        "status": status,
-        "reason": "screen_change_pixels_matched",
-        "visual_change_ratio": 0.42,
-        "after_state": _state(observation_id, role, phash),
+    event = {
+        "seq": seq,
+        "result": {"action": action["action"], "status": result_status},
+        "candidate_action": action,
+        "before_checkpoint": before,
+        "before_marker_texts": marker_texts or [],
     }
+    if after:
+        event["transition"] = {
+            "seq": seq,
+            "before": before,
+            "actions": [action],
+            "after": after,
+            "evidence": {
+                "source": source,
+                "result_status": result_status,
+                "status": status,
+                "reason": reason,
+                "visual_change_ratio": 0.42,
+            },
+        }
+    return event
 
 
 def _candidate_submission():
@@ -66,40 +76,29 @@ def _candidate_submission():
             "task_category": "검색",
         },
         "action_events": [
-            {
-                "seq": 0,
-                "recipe_step": {
-                    "seq": 0,
-                    "url_template": "wanted.co.kr/",
-                    "page_role": "home",
-                    "before_state": _state(
-                        "observation:0001", "home", "1" * 16, "wanted.co.kr/"
-                    ),
-                    "action": "click_marker",
-                    "replay_mode": "fixed",
-                    "component": "search_button",
-                    "target": {
+            _event(
+                0,
+                _state("observation:0001", "home", "1" * 16, "wanted.co.kr/"),
+                _action(
+                    0,
+                    "click_marker",
+                    replay_mode="fixed",
+                    component="search_button",
+                    target={
                         "text": "검색",
                         "bbox_ratio": [0.75, 0.1, 0.85, 0.2],
                         "center_ratio": [0.8, 0.15],
                     },
-                    "roi_signature": {
+                    roi_signature={
                         "algorithm": "roi-phash-dct64-v2",
                         "phash": "0" * 16,
                         "crop_rect_ratio": [0.7, 0.0, 0.9, 0.3],
                         "target_center_ratio": [0.8, 0.15],
                     },
-                },
-                "transition": _transition(
-                    0, "observation:0002", "search_overlay", "2" * 16
                 ),
-                "feedback_episode": _feedback(
-                    0,
-                    "click_marker",
-                    "success",
-                    marker_texts=["채용", "검색"],
-                ),
-            }
+                after=_state("observation:0002", "search_overlay", "2" * 16),
+                marker_texts=["채용", "검색"],
+            )
         ],
     }
 
@@ -135,29 +134,30 @@ def test_candidate_promotion_keeps_only_safe_roi_target(tmp_path):
     submission = _candidate_submission()
     submission["action_events"].extend(
         [
-            {
-                "seq": 1,
-                "recipe_step": {
-                    "seq": 1,
-                    "page_role": "search",
-                    "action": "click_marker",
-                    "component": "job_card_title",
-                    "target": {"text": "실행마다 달라지는 공고"},
-                    "roi_signature": {
+            _event(
+                1,
+                _state("observation:0002", "search", "2" * 16),
+                _action(
+                    1,
+                    "click_marker",
+                    component="job_card_title",
+                    target={"text": "실행마다 달라지는 공고"},
+                    roi_signature={
                         "phash": "f" * 16,
                         "crop_rect_ratio": [0.1, 0.2, 0.6, 0.4],
                     },
-                },
-            },
-            {
-                "seq": 2,
-                "recipe_step": {
-                    "seq": 2,
-                    "action": "press_key",
-                    "replay_mode": "fixed",
-                    "param": {"key": "enter"},
-                },
-            },
+                ),
+            ),
+            _event(
+                2,
+                _state("observation:0002", "search", "2" * 16),
+                _action(
+                    2,
+                    "press_key",
+                    replay_mode="fixed",
+                    param={"key": "enter"},
+                ),
+            ),
         ]
     )
     db_path = tmp_path / "critic.db"
@@ -166,7 +166,6 @@ def test_candidate_promotion_keeps_only_safe_roi_target(tmp_path):
         submission,
         [
             {"seq": 0, "keep": True},
-            {"seq": 2, "keep": False},
         ],
     )
 
@@ -177,15 +176,11 @@ def test_candidate_promotion_keeps_only_safe_roi_target(tmp_path):
 
 def test_candidate_without_recorded_after_state_is_not_promoted(tmp_path):
     submission = _candidate_submission()
-    submission["action_events"][0]["transition"].pop("after_state")
+    submission["action_events"][0].pop("transition")
+    db_path = tmp_path / "missing-after-state.db"
 
-    result = _promote(
-        tmp_path / "missing-after-state.db",
-        submission,
-        [{"seq": 0, "keep": True}],
-    )
-
-    assert result["promotion"]["promoted_action_count"] == 0
+    assert _store_candidate(db_path, submission) == ""
+    assert RecipeStore(db_path).get_by_site("wanted") == []
 
 
 def test_critic_cannot_rewrite_autonomous_recipe_fields(tmp_path):
@@ -223,10 +218,10 @@ def test_critic_cannot_rewrite_autonomous_recipe_fields(tmp_path):
 def test_critic_payload_keeps_causal_trajectory_without_raw_blobs():
     submission = _candidate_submission()
     submission["goal"] = "전체 사이트 지침 " * 500
-    candidate = RecipeCandidate(
+    candidate = RecipeCandidate.from_submission(
+        WorkerSubmission.model_validate(submission),
         run_id="worker-compact",
         status="pending_replay",
-        submission=WorkerSubmission.model_validate(submission),
     )
 
     payload = build_candidate_review_payload(candidate)
@@ -235,7 +230,6 @@ def test_critic_payload_keeps_causal_trajectory_without_raw_blobs():
     assert "goal" not in payload
     assert "steps" not in payload
     assert "feedback_evidence" not in payload
-    assert "transition_records" not in payload
     assert payload["required_step_verdicts"] == [
         {"seq": 0, "action": "click_marker"}
     ]
@@ -249,56 +243,43 @@ def test_variable_action_boundary_creates_separate_recipe_paths(tmp_path):
     submission = _candidate_submission()
     submission["action_events"].extend(
         [
-            {
-                "seq": 1,
-                "recipe_step": {
-                    "seq": 1,
-                    "url_template": "wanted.co.kr/search",
-                    "page_role": "search",
-                    "before_state": _state(
-                        "observation:0002", "search", "2" * 16
-                    ),
-                    "action": "click_marker",
-                    "replay_mode": "fixed",
-                    "component": "job_card_title",
-                    "target": {"text": "매번 달라지는 공고"},
-                    "roi_signature": {"phash": "3" * 16},
-                },
-                "feedback_episode": _feedback(1, "click_marker"),
-                "transition": _transition(
+            _event(
+                1,
+                _state("observation:0002", "search", "2" * 16),
+                _action(
                     1,
+                    "click_marker",
+                    replay_mode="fixed",
+                    component="job_card_title",
+                    target={"text": "매번 달라지는 공고"},
+                    roi_signature={"phash": "3" * 16},
+                ),
+                after=_state("observation:0003", "job_detail", "3" * 16),
+                source="job_card_queue",
+            ),
+            _event(
+                2,
+                _state(
                     "observation:0003",
                     "job_detail",
                     "3" * 16,
-                    source="job_card_queue",
+                    "wanted.co.kr/wd/{id}",
                 ),
-            },
-            {
-                "seq": 2,
-                "recipe_step": {
-                    "seq": 2,
-                    "url_template": "wanted.co.kr/wd/{id}",
-                    "page_role": "job_detail",
-                    "before_state": _state(
-                        "observation:0003",
-                        "job_detail",
-                        "3" * 16,
-                        "wanted.co.kr/wd/{id}",
-                    ),
-                    "action": "click_marker",
-                    "replay_mode": "fixed",
-                    "component": "expand_detail",
-                    "target": {"text": "상세 정보 더 보기"},
-                    "roi_signature": {"phash": "4" * 16},
-                },
-                "feedback_episode": _feedback(2, "click_marker"),
-                "transition": _transition(
+                _action(
                     2,
+                    "click_marker",
+                    replay_mode="fixed",
+                    component="expand_detail",
+                    target={"text": "상세 정보 더 보기"},
+                    roi_signature={"phash": "4" * 16},
+                ),
+                after=_state(
                     "observation:0004",
                     "job_detail",
                     "4" * 16,
+                    "wanted.co.kr/wd/{id}",
                 ),
-            },
+            ),
         ]
     )
 
@@ -321,54 +302,40 @@ def test_contextual_actions_are_promoted_as_one_verified_path(tmp_path):
     submission = _candidate_submission()
     submission["action_events"].extend(
         [
-            {
-                "seq": 1,
-                "recipe_step": {
-                    "seq": 1,
-                    "before_state": _state(
-                        "observation:0002", "search_overlay", "2" * 16
-                    ),
-                    "page_role": "search_overlay",
-                    "action": "type_in_marker",
-                    "replay_mode": "parameterized",
-                    "component": "search_input",
-                    "target": {"text": "검색어"},
-                    "param": {
+            _event(
+                1,
+                _state("observation:0002", "search_overlay", "2" * 16),
+                _action(
+                    1,
+                    "type_in_marker",
+                    replay_mode="parameterized",
+                    component="search_input",
+                    target={"text": "검색어"},
+                    param={
                         "text": "AI 엔지니어",
                         "slot_name": "search_keyword",
                     },
-                    "slot_refs": ["search_keyword"],
-                    "roi_signature": {
+                    slot_refs=["search_keyword"],
+                    roi_signature={
                         "phash": "1" * 16,
                         "crop_rect_ratio": [0.1, 0.1, 0.7, 0.2],
                     },
-                },
-                "feedback_episode": _feedback(1, "type_in_marker"),
-                "transition": _transition(
-                    1, "observation:0003", "search_overlay", "3" * 16
                 ),
-            },
-            {
-                "seq": 2,
-                "recipe_step": {
-                    "seq": 2,
-                    "before_state": _state(
-                        "observation:0003", "search_overlay", "3" * 16
-                    ),
-                    "page_role": "search_overlay",
-                    "action": "press_key",
-                    "replay_mode": "fixed",
-                    "param": {"key": "enter"},
-                    "screen_context_signature": {
-                        "phash": "2" * 16,
-                        "size": [1920, 1080],
-                    },
-                },
-                "feedback_episode": _feedback(2, "press_key"),
-                "transition": _transition(
-                    2, "observation:0004", "search_results", "4" * 16
+                after=_state("observation:0003", "search_overlay", "3" * 16),
+                status="unknown",
+                reason="no_screen_change",
+            ),
+            _event(
+                2,
+                _state("observation:0003", "search_overlay", "3" * 16),
+                _action(
+                    2,
+                    "press_key",
+                    replay_mode="fixed",
+                    param={"key": "enter"},
                 ),
-            },
+                after=_state("observation:0004", "search_results", "4" * 16),
+            ),
         ]
     )
     db_path = tmp_path / "grouped-path.db"
@@ -402,81 +369,60 @@ def test_type_and_enter_require_state_continuity(enter_observation, eligible):
             "goal": "검색",
             "collection_intent": {"site": "wanted"},
             "action_events": [
-                {
-                    "seq": 2,
-                    "recipe_step": {
-                        "seq": 2,
-                        "action": "type_in_marker",
-                        "replay_mode": "parameterized",
-                        "param": {
+                _event(
+                    2,
+                    {"observation_id": "observation:0002"},
+                    _action(
+                        2,
+                        "type_in_marker",
+                        replay_mode="parameterized",
+                        param={
                             "slot_name": "search_keyword",
                             "text": "iOS 개발자",
                         },
-                        "before_state": {
-                            "observation_id": "observation:0002"
-                        },
-                    },
-                    "feedback_episode": _feedback(2, "type_in_marker"),
-                    "transition": {
-                        "action_seq": 2,
-                        "source": "autonomous",
-                        "status": "unknown",
-                        "reason": "no_screen_change",
-                        "after_state": {
-                            "observation_id": "observation:0003"
-                        },
-                    },
-                },
-                {
-                    "seq": 4,
-                    "recipe_step": {
-                        "seq": 4,
-                        "action": "press_key",
-                        "replay_mode": "fixed",
-                        "param": {"key": "enter"},
-                        "before_state": {
-                            "observation_id": enter_observation
-                        },
-                    },
-                    "feedback_episode": _feedback(4, "press_key"),
-                    "transition": {
-                        "action_seq": 4,
-                        "source": "autonomous",
-                        "status": "ready",
-                        "reason": "screen_change_pixels_matched",
-                        "after_state": {
-                            "observation_id": "observation:0004"
-                        },
-                    },
-                },
+                    ),
+                    after={"observation_id": "observation:0003"},
+                    status="unknown",
+                    reason="no_screen_change",
+                ),
+                _event(
+                    4,
+                    {"observation_id": enter_observation},
+                    _action(
+                        4,
+                        "press_key",
+                        replay_mode="fixed",
+                        param={"key": "enter"},
+                    ),
+                    after={"observation_id": "observation:0004"},
+                ),
             ],
         }
     )
-    candidate = RecipeCandidate(
+    candidate = RecipeCandidate.from_submission(
+        submission,
         run_id="worker-continuity",
         status="pending_replay",
-        submission=submission,
     )
 
     verdict = evaluate_candidate_step_evidence(candidate)[2]
 
-    assert verdict["eligible"] is eligible
+    assert verdict.eligible is eligible
     if eligible:
-        assert verdict["execution_group_seqs"] == [2, 4]
-        assert verdict["effect_verified_by_seq"] == 4
+        assert verdict.execution_group_seqs == [2, 4]
+        assert verdict.effect_verified_by_seq == 4
     else:
-        assert verdict["blocking_reasons"] == ["no_screen_change"]
+        assert verdict.blocking_reasons == ["no_screen_change"]
 
 
 def test_candidate_promotion_blocks_no_effect_step(tmp_path):
     submission = _candidate_submission()
-    submission["action_events"][0]["feedback_episode"]["feedback"] = {
-        "label": "no_effect",
-        "reason": "screen_unchanged",
-    }
+    evidence = submission["action_events"][0]["transition"]["evidence"]
+    evidence["result_status"] = "skipped"
+    evidence["result_reason"] = "screen_unchanged"
     db_path = tmp_path / "no-effect.db"
     result = _promote(db_path, submission, [{"seq": 0, "keep": True}])
 
     assert result["promotion"]["promoted"] is False
-    assert result["promotion"]["skipped_steps"][0]["reason"] == "feedback_no_effect"
+    assert result["promotion"]["skipped_steps"][0]["reason"] == "action_skipped"
     assert RecipeStore(db_path).get_by_site("wanted") == []

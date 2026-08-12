@@ -10,7 +10,6 @@ from agent.config import get_settings
 from agent.runtime.worker_contracts import (
     WorkerState,
     action_event_results,
-    action_event_transitions,
 )
 from agent.utils.logger import logger
 from agent.utils.text import normalize_text, url_template
@@ -19,25 +18,29 @@ from agent.vision.screen_signature import (
     compute_screen_phash_signature,
     hamming_distance,
 )
+from shared.schema.feedback_schema import ExecutionEvent
+from shared.schema.recipe_schema import ExperienceTransition
 
 
 def detect_two_screen_transition_cycle(
-    observations: list[dict[str, Any]],
+    observations: list[ExperienceTransition],
 ) -> dict[str, Any]:
     """최근 전환 화면이 A-B-A-B로 반복됐는지 pHash로 확인한다."""
 
     recent = [
-        item
-        for item in observations or []
-        if isinstance(item, dict) and str(item.get("screenshot") or "")
+        transition
+        for transition in observations
+        if transition.evidence and transition.evidence.screenshot
     ][-4:]
     if len(recent) < 4:
         return {"detected": False}
 
     try:
         signatures = [
-            compute_screen_phash_signature(str(item.get("screenshot") or ""))
-            for item in recent
+            compute_screen_phash_signature(
+                transition.evidence.screenshot
+            )
+            for transition in recent
         ]
     except (OSError, ValueError) as exc:
         logger.debug("transition cycle pHash check skipped", error=str(exc))
@@ -67,14 +70,12 @@ def detect_two_screen_transition_cycle(
         return {"detected": False}
 
     action_cycle: list[str] = []
-    for observation in recent[:2]:
-        action = str(observation.get("action") or "")
-        step = (
-            observation.get("step") if isinstance(observation.get("step"), dict) else {}
+    for transition in recent[:2]:
+        action = transition.actions[0]
+        detail = action.param.key or action.component
+        action_cycle.append(
+            f"{action.action}:{detail}" if detail else action.action
         )
-        args = step.get("args") if isinstance(step.get("args"), dict) else {}
-        detail = str(args.get("key") or args.get("target_component") or "")
-        action_cycle.append(f"{action}:{detail}" if detail else action)
     return {
         "detected": True,
         "action_cycle": action_cycle,
@@ -86,24 +87,46 @@ def detect_two_screen_transition_cycle(
 def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
     """현재 화면에서 효과가 없다고 확인된 가장 최근 물리 행동을 반환한다."""
 
-    observations = action_event_transitions(
-        state["transition"].get("action_events", []) or []
-    )
-    if not observations:
+    events = [
+        ExecutionEvent.model_validate(event)
+        for event in state["transition"].get("action_events", []) or []
+    ]
+    completed_events = [event for event in events if event.transition]
+    if not completed_events:
         return {}
-    latest = observations[-1]
-    if not isinstance(latest, dict) or latest.get("status") != "unknown":
+    latest_event = completed_events[-1]
+    latest = latest_event.transition
+    evidence = latest.evidence
+    if evidence is None or evidence.status != "unknown":
         return {}
-    if latest.get("reason") not in {
+    if evidence.reason not in {
         "reflex_no_screen_change",
         "no_screen_change",
     }:
         return {}
     latest_screen = str(state["observation"].get("current_screenshot") or "")
-    observed_screen = str(latest.get("screenshot") or "")
+    observed_screen = evidence.screenshot
     if latest_screen and observed_screen and latest_screen != observed_screen:
         return {}
-    return latest
+    action = latest.actions[0]
+    result_args = latest_event.result.get("args")
+    return {
+        "action": action.action,
+        "step": {
+            "args": (
+                dict(result_args)
+                if isinstance(result_args, dict)
+                else action.param.model_dump(
+                    mode="json",
+                    exclude_defaults=True,
+                    exclude_none=True,
+                )
+            )
+        },
+        "status": evidence.status,
+        "reason": evidence.reason,
+        "screenshot": observed_screen,
+    }
 
 
 def transition_visual_change_ratio(

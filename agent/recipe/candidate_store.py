@@ -21,12 +21,27 @@ FROM recipe_candidates AS c
 JOIN worker_submissions AS s ON s.run_id = c.run_id
 """
 
+_CANDIDATE_CONTRACT_VERSION = 2
+
 
 class RecipeCandidateStore(SQLiteStore):
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
             conn.execute(WORKER_SUBMISSIONS_TABLE_SQL)
             conn.execute(RECIPE_CANDIDATES_TABLE_SQL)
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(recipe_candidates)")
+            }
+            if "contract_version" not in columns:
+                conn.execute(
+                    "ALTER TABLE recipe_candidates ADD COLUMN "
+                    "contract_version INTEGER NOT NULL DEFAULT 1"
+                )
+            conn.execute(
+                "DELETE FROM recipe_candidates WHERE contract_version<>?",
+                (_CANDIDATE_CONTRACT_VERSION,),
+            )
             for sql in (
                 *RECIPE_CANDIDATES_INDEX_SQL,
                 *RECIPE_CANDIDATES_QUEUE_INDEX_SQL,
@@ -40,7 +55,7 @@ class RecipeCandidateStore(SQLiteStore):
         run_id: str,
         status: str = "pending_replay",
     ) -> str:
-        if not run_id or not submission.recorded_steps:
+        if not run_id or not submission.transitions:
             return ""
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
@@ -52,11 +67,19 @@ class RecipeCandidateStore(SQLiteStore):
             conn.execute(
                 """
                 INSERT OR REPLACE INTO recipe_candidates (
-                    run_id, status, validation_json,
+                    run_id, contract_version, status, validation_json,
                     review_attempts, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?)
                 """,
-                (run_id, status, "", 0, created_at, now),
+                (
+                    run_id,
+                    _CANDIDATE_CONTRACT_VERSION,
+                    status,
+                    "",
+                    0,
+                    created_at,
+                    now,
+                ),
             )
         return run_id
 
@@ -195,5 +218,4 @@ class RecipeCandidateStore(SQLiteStore):
         )
         item["validation"] = self.load_json(item.pop("validation_json", ""), {})
         item["review_error"] = str(item.get("review_error") or "")
-        item["submission"] = submission
-        return RecipeCandidate.model_validate(item)
+        return RecipeCandidate.from_submission(submission, **item)

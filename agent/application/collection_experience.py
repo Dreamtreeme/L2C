@@ -38,7 +38,7 @@ def _run_is_reusable(
 ) -> bool:
     return bool(
         submission.run_status == "finished"
-        and submission.recorded_steps
+        and submission.transitions
         and persistence.persisted_count > 0
         and persistence.rejected_count == 0
     )

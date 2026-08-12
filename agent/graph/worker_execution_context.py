@@ -16,6 +16,7 @@ from agent.runtime.worker_contracts import (
     apply_worker_state_update,
 )
 from agent.vision.target_snapshot import marker_by_id
+from shared.schema.feedback_schema import ExecutionEvent
 
 
 @dataclass
@@ -50,9 +51,8 @@ class WorkerExecutionContext:
             worker_runtime=worker_runtime,
             data_services=data_services,
             prior_events=[
-                dict(event)
+                ExecutionEvent.model_validate(event)
                 for event in (state["transition"].get("action_events", []) or [])
-                if isinstance(event, dict)
             ],
         )
 

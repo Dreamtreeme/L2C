@@ -49,13 +49,22 @@ def test_queue_phash_match_records_results_transition(monkeypatch):
                     },
                 },
                 "action_events": [
-                    {
-                        "seq": 9,
-                        "result": {
-                            "action": "go_back",
-                            "status": "success",
-                        },
-                    }
+                        {
+                            "seq": 9,
+                            "result": {
+                                "action": "go_back",
+                                "status": "success",
+                            },
+                            "candidate_action": {
+                                "source_seq": 9,
+                                "action": "go_back",
+                            },
+                            "before_checkpoint": {
+                                "observation_id": "observation:0008",
+                                "url_template": "wanted.co.kr/wd/{id}",
+                                "page_role": "job_detail",
+                            },
+                        }
                 ],
             },
             collection={
@@ -83,12 +92,11 @@ def test_queue_phash_match_records_results_transition(monkeypatch):
 
     assert result["decision"]["pending_action"].source == "job_card_queue"
     record = action_event_transitions(result["transition"]["action_events"])[0]
-    assert isinstance(record, dict)
-    assert record["action_seq"] == 9
-    assert record["action"] == "go_back"
-    assert record["status"] == "ready"
-    assert record["reason"] == "queue_results_phash_match"
-    assert record["marker_texts"] == [
+    assert record.seq == 9
+    assert record.actions[0].action == "go_back"
+    assert record.evidence.status == "ready"
+    assert record.evidence.reason == "queue_results_phash_match"
+    assert record.evidence.after_marker_texts == [
         "검색 결과",
         "두 번째 iOS 개발자",
     ]
@@ -340,7 +348,7 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
                 "ocr_complete": True,
             },
             replay={
-                "active_reflex_recipe": {
+                "replay_session": {
                     "recipe_key": "path6#search",
                     "current_transition_index": 0,
                     "pending_transition_index": 0,

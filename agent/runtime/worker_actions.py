@@ -2,31 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
 
-
-TARGET_REPLAY_ACTIONS = frozenset(
-    {
-        "click_marker",
-        "type_in_marker",
-    }
+from shared.schema.recipe_schema import (
+    NAVIGATION_ACTIONS,
+    RECIPE_COMMIT_ACTIONS,
+    REVIEWABLE_REPLAY_ACTIONS,
+    TARGET_REPLAY_ACTIONS,
+    TRAJECTORY_ACTIONS,
+    UI_ACTIONS,
+    PhysicalAction,
 )
-
-NAVIGATION_ACTIONS = frozenset(
-    {
-        "go_back",
-        "close_current_tab",
-        "switch_tab",
-    }
-)
-
-RECIPE_COMMIT_ACTIONS = frozenset({"press_key"})
-REVIEWABLE_REPLAY_ACTIONS = TARGET_REPLAY_ACTIONS | RECIPE_COMMIT_ACTIONS
-TRAJECTORY_ACTIONS = frozenset(
-    REVIEWABLE_REPLAY_ACTIONS | NAVIGATION_ACTIONS | {"scroll"}
-)
-
-UI_ACTIONS = TRAJECTORY_ACTIONS | {"open_browser"}
 
 STATE_UPDATE_ACTIONS = frozenset(
     {
@@ -49,36 +35,44 @@ DIRECT_SCREEN_ACTION_SOURCES = frozenset(
 )
 
 
-def _action_value(action: Any, key: str, default: Any = None) -> Any:
-    if isinstance(action, dict):
-        return action.get(key, default)
-    return getattr(action, key, default)
-
-
-def is_supported_recipe_action_group(actions: list[Any]) -> bool:
+def is_supported_recipe_action_group(actions: Sequence[PhysicalAction]) -> bool:
     """중간 화면 관찰 없이 실행할 수 있는 행동 묶음인지 확인한다."""
 
     if len(actions) == 1:
-        return str(_action_value(actions[0], "action") or "") in TARGET_REPLAY_ACTIONS
+        return actions[0].action in TARGET_REPLAY_ACTIONS
     if len(actions) != 2:
         return False
     first, second = actions
-    if (
-        str(_action_value(first, "action") or "") != "type_in_marker"
-    ):
+    if first.action != "type_in_marker":
         return False
-    second_action = str(_action_value(second, "action") or "")
+    second_action = second.action
     if second_action == "click_marker":
         return True
     if second_action != "press_key":
         return False
-    param = _action_value(second, "param", {})
-    if not isinstance(param, dict):
-        return False
-    return str(param.get("key") or "").strip().casefold() in {
+    return second.param.key.strip().casefold() in {
         "enter",
         "return",
     }
+
+
+def is_supported_recipe_tool_group(
+    action_names: Sequence[str],
+    *,
+    commit_key: str = "",
+) -> bool:
+    """검증된 도구 호출 이름 묶음이 연속 실행 가능한지 확인한다."""
+
+    if len(action_names) == 1:
+        return action_names[0] in TARGET_REPLAY_ACTIONS
+    if len(action_names) != 2 or action_names[0] != "type_in_marker":
+        return False
+    if action_names[1] == "click_marker":
+        return True
+    return bool(
+        action_names[1] == "press_key"
+        and commit_key.strip().casefold() in {"enter", "return"}
+    )
 
 
 __all__ = [
@@ -93,4 +87,5 @@ __all__ = [
     "UI_ACTIONS",
     "URL_STALE_ACTIONS",
     "is_supported_recipe_action_group",
+    "is_supported_recipe_tool_group",
 ]

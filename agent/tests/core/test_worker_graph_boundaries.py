@@ -180,7 +180,7 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
             "transition_result": {"status": "ready", "action": "type_in_marker"}
         },
         replay={
-            "active_reflex_recipe": {
+            "replay_session": {
                 "recipe_key": "recipe-search-set",
                 "current_transition_index": 1,
                 "transition_count": 2,
@@ -417,14 +417,10 @@ def test_execution_records_one_complete_action_event(monkeypatch):
         == "worker-test:observation:0003"
     )
     event = result["transition"]["action_events"][0]
-    assert event["observation_id"] == "worker-test:observation:0003"
-    assert event["recipe_step"].action == "click_marker"
+    assert event.observation_id == "worker-test:observation:0003"
+    assert event.candidate_action.action == "click_marker"
     assert (
-        event["recipe_step"].before_state["observation_id"]
-        == "worker-test:observation:0003"
-    )
-    assert (
-        event["feedback_episode"].observation.before["observation_id"]
+        event.before_checkpoint.observation_id
         == "worker-test:observation:0003"
     )
     assert result["transition"]["error_count"] == 0
@@ -457,12 +453,25 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     state["transition"]["action_events"] = [
         {
             "seq": 0,
-            "result": {"action": "click_marker", "status": "success"},
-            "transition": {
+            "result": {
                 "action": "click_marker",
-                "status": "unknown",
-                "reason": "no_screen_change",
-                "step": {"args": {"marker_id": 1}},
+                "status": "success",
+                "args": {"marker_id": 1},
+            },
+            "transition": {
+                "seq": 0,
+                "before": {"observation_id": "observation:0"},
+                "actions": [
+                    {
+                        "source_seq": 0,
+                        "action": "click_marker",
+                    }
+                ],
+                "after": {"observation_id": "observation:1"},
+                "evidence": {
+                    "status": "unknown",
+                    "reason": "no_screen_change",
+                },
             },
         }
     ]

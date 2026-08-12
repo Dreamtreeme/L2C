@@ -5,21 +5,25 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, TypedDict, cast
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent.runtime.tool_schema import (
     ACTION_TOOL_SCHEMAS,
     normalize_model_action_calls,
 )
-from agent.runtime.worker_actions import is_supported_recipe_action_group
+from agent.runtime.worker_actions import is_supported_recipe_tool_group
 from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
 from shared.schema.collection_intent import CollectionIntent
-from shared.schema.feedback_schema import (
-    FeedbackEpisode,
-    RecordedRecipeStep,
-    RecordedTransition,
-)
 from shared.schema.jd_schema import JobCapture
+from shared.schema.feedback_schema import ExecutionEvent
+from shared.schema.recipe_schema import (
+    ExperienceTransition,
+    PhysicalAction,
+    ReplaySession,
+    ScreenCheckpoint,
+    TransitionEvidence,
+    TransitionStatus,
+)
 
 
 def _message_text(content: Any) -> str:
@@ -95,17 +99,15 @@ class ActionRequest(BaseModel):
                     normalized_args.pop(empty_collection_field, None)
             call.args = normalized_args
         if len(self.tool_calls) > 1:
-            action_group = [
-                {
-                    "action": call.name,
-                    "param": call.args,
-                }
-                for call in self.tool_calls
-            ]
+            action_names = [call.name for call in self.tool_calls]
+            commit_key = str(self.tool_calls[-1].args.get("key") or "")
             if (
                 self.source != "reflex"
                 or self.metadata.get("execution_unit") != "recipe_transition"
-                or not is_supported_recipe_action_group(action_group)
+                or not is_supported_recipe_tool_group(
+                    action_names,
+                    commit_key=commit_key,
+                )
             ):
                 raise ValueError(
                     "여러 행동은 검증된 경험 기반 탐색 전이에서만 허용됩니다."
@@ -113,15 +115,41 @@ class ActionRequest(BaseModel):
         return self
 
 
-class ActionEvent(TypedDict, total=False):
-    """행동 선택부터 화면 전환 검증까지 한 생명주기로 보관하는 기록."""
+ActionEvent = ExecutionEvent
 
-    seq: int
-    observation_id: str
-    result: dict[str, Any]
-    recipe_step: RecordedRecipeStep
-    feedback_episode: FeedbackEpisode
-    transition: dict[str, Any]
+
+class CompletedTransitionObservation(BaseModel):
+    """화면 전환 판정 결과에서 경험 기록에 필요한 필드."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action_seq: int | None = None
+    action: str = ""
+    before_observation_id: str = ""
+    after_observation_id: str = ""
+    step: dict[str, Any] = Field(default_factory=dict)
+    expected_after: str = ""
+    source: str = ""
+    status: TransitionStatus = ""
+    outcome: str = ""
+    reason: str = ""
+    recipe_key: str = ""
+    recipe_transition_index: int | None = None
+    recipe_transition_count: int | None = None
+    transition_actions: list[str] = Field(default_factory=list)
+    after_state_match: dict[str, Any] = Field(default_factory=dict)
+    attempt: int = 0
+    elapsed_sec: float = 0.0
+    phash_distance: int | None = None
+    visual_change_ratio: float | None = None
+    ocr_skipped: bool = False
+    marker_count: int = 0
+    marker_texts: list[str] = Field(default_factory=list)
+    screenshot: str = ""
+    marked_image: str = ""
+    current_url: str = ""
+    page_role: str = ""
+    after_state: ScreenCheckpoint
 
 
 def build_action_event(
@@ -129,56 +157,104 @@ def build_action_event(
     result: dict[str, Any],
     *,
     observation_id: str = "",
-    recipe_step: RecordedRecipeStep | None = None,
-    feedback_episode: FeedbackEpisode | None = None,
+    candidate_action: PhysicalAction | None = None,
+    before_checkpoint: ScreenCheckpoint | None = None,
+    before_marker_texts: Sequence[str] | None = None,
+    expected_after: str = "",
+    intent: str = "",
 ) -> ActionEvent:
-    event: ActionEvent = {
-        "seq": int(seq),
-        "result": dict(result),
-    }
-    if observation_id:
-        event["observation_id"] = observation_id
-    if recipe_step:
-        event["recipe_step"] = recipe_step
-    if feedback_episode:
-        event["feedback_episode"] = feedback_episode
-    return event
+    return ExecutionEvent(
+        seq=int(seq),
+        observation_id=observation_id,
+        result=dict(result),
+        candidate_action=candidate_action,
+        before_checkpoint=before_checkpoint,
+        before_marker_texts=[str(item) for item in before_marker_texts or []],
+        expected_after=expected_after,
+        intent=intent,
+    )
+
+
+def _execution_event(event: ActionEvent | Mapping[str, Any]) -> ExecutionEvent:
+    if isinstance(event, ExecutionEvent):
+        return event
+    return ExecutionEvent.model_validate(event)
 
 
 def action_event_results(events: Sequence[ActionEvent]) -> list[dict[str, Any]]:
     return [
-        dict(event.get("result") or {})
-        for event in events or []
-        if event.get("result") is not None
+        dict(_execution_event(event).result)
+        for event in events
     ]
 
 
 def action_event_transitions(
     events: Sequence[ActionEvent],
-) -> list[dict[str, Any]]:
+) -> list[ExperienceTransition]:
     return [
-        dict(event["transition"])
-        for event in events or []
-        if isinstance(event.get("transition"), Mapping)
+        parsed.transition
+        for event in events
+        if (parsed := _execution_event(event)).transition is not None
     ]
 
 
 def attach_action_transition(
     events: Sequence[ActionEvent],
-    transition: dict[str, Any],
+    transition: Mapping[str, Any] | CompletedTransitionObservation,
 ) -> list[ActionEvent]:
-    """행동 순번이 같은 이벤트에 화면 전환 검증 결과를 연결한다."""
+    """행동 순번이 같은 이벤트를 완성된 경험 전이로 만든다."""
 
-    recorded_transition = RecordedTransition.model_validate(transition)
-    target_seq = recorded_transition.action_seq
-    if target_seq is None:
-        return list(events or [])
+    observation = (
+        transition
+        if isinstance(transition, CompletedTransitionObservation)
+        else CompletedTransitionObservation.model_validate(transition)
+    )
+    parsed_events = [_execution_event(event) for event in events]
+    if observation.action_seq is None:
+        return parsed_events
 
     updated: list[ActionEvent] = []
-    for raw_event in events or []:
-        event: ActionEvent = dict(raw_event)
-        if event["seq"] == target_seq:
-            event["transition"] = recorded_transition.model_dump(mode="json")
+    for raw_event in parsed_events:
+        event = raw_event.model_copy(deep=True)
+        if event.seq == observation.action_seq:
+            action = event.candidate_action
+            before = event.before_checkpoint
+            if action and before:
+                result = event.result
+                evidence = TransitionEvidence(
+                    source=observation.source,
+                    result_status=str(result.get("status") or ""),
+                    result_reason=str(
+                        result.get("reason") or result.get("error") or ""
+                    ),
+                    status=observation.status,
+                    outcome=observation.outcome,
+                    reason=observation.reason,
+                    recipe_key=observation.recipe_key,
+                    recipe_transition_index=observation.recipe_transition_index,
+                    recipe_transition_count=observation.recipe_transition_count,
+                    transition_actions=observation.transition_actions,
+                    after_state_match=observation.after_state_match,
+                    attempt=observation.attempt,
+                    elapsed_sec=observation.elapsed_sec,
+                    phash_distance=observation.phash_distance,
+                    visual_change_ratio=observation.visual_change_ratio,
+                    ocr_skipped=observation.ocr_skipped,
+                    before_marker_texts=event.before_marker_texts,
+                    after_marker_texts=observation.marker_texts,
+                    screenshot=observation.screenshot,
+                    marked_image=observation.marked_image,
+                )
+                observed = ExperienceTransition(
+                    seq=observation.action_seq,
+                    before=before,
+                    actions=[action],
+                    after=observation.after_state,
+                    expected_after=event.expected_after,
+                    intent=event.intent,
+                    evidence=evidence,
+                )
+                event.transition = observed
         updated.append(event)
     return updated
 
@@ -316,7 +392,7 @@ class RecipeReplayState(TypedDict, total=False):
     """자율탐색 기록과 경험 기반 탐색 재생 상태."""
 
     reflex_trace: dict[str, Any]
-    active_reflex_recipe: dict[str, Any]
+    replay_session: ReplaySession | None
     reflex_blocked_recipe_keys: list[str]
 
 
@@ -477,7 +553,7 @@ def create_worker_state(
         },
         "replay": {
             "reflex_trace": {},
-            "active_reflex_recipe": {},
+            "replay_session": None,
             "reflex_blocked_recipe_keys": [],
         },
         "collection": {

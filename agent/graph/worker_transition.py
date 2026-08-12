@@ -7,7 +7,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from agent.recipe.phash_replay import match_step_by_screen_signature
+from agent.recipe.phash_replay import match_target_by_screen_signature
 from agent.runtime.site_context import (
     is_job_detail_context,
     normalize_page_role,
@@ -27,6 +27,7 @@ from agent.runtime.transition_runtime import (
 )
 from agent.utils.logger import logger
 from agent.utils.text import recipe_url_scope_matches, url_template
+from shared.schema.recipe_schema import ActionTarget, ReplaySession
 
 
 def _verify_reflex_after_state(
@@ -77,11 +78,9 @@ def _verify_reflex_after_state(
     anchor_target = expected.get("anchor_target")
     anchor_signature = dict(expected.get("anchor_roi_signature") or {})
     if isinstance(anchor_target, dict) and anchor_signature:
-        marker_id, match = match_step_by_screen_signature(
-            {
-                "target": anchor_target,
-                "roi_signature": anchor_signature,
-            },
+        marker_id, match = match_target_by_screen_signature(
+            ActionTarget.model_validate(anchor_target),
+            anchor_signature,
             dict(observation.get("screen_signature") or {}),
             list(observation.get("current_markers") or []),
             current_image_path=str(observation.get("current_screenshot") or ""),
@@ -132,29 +131,25 @@ def _blocked_recipe_keys(state: WorkerState) -> list[str]:
     ]
 
 
-def _active_recipe_after_transition(
+def _replay_session(state: WorkerState) -> ReplaySession | None:
+    raw_session = state["replay"].get("replay_session")
+    if isinstance(raw_session, ReplaySession):
+        return raw_session
+    return ReplaySession.model_validate(raw_session) if raw_session else None
+
+
+def _replay_session_after_transition(
     state: WorkerState,
     *,
     source: str,
     status: str,
-) -> dict[str, Any]:
-    active_recipe = dict(
-        state["replay"].get("active_reflex_recipe", {}) or {}
-    )
-    if not active_recipe or source != "reflex":
-        return active_recipe
+) -> ReplaySession | None:
+    session = _replay_session(state)
+    if not session or source != "reflex":
+        return session
     if status != "ready":
-        return {}
-    current_index = int(active_recipe.get("current_transition_index") or 0)
-    pending_index = active_recipe.get("pending_transition_index")
-    if pending_index is None or int(pending_index) != current_index:
-        return {}
-    next_index = current_index + 1
-    if next_index >= int(active_recipe.get("transition_count") or 0):
-        return {}
-    active_recipe["current_transition_index"] = next_index
-    active_recipe.pop("pending_transition_index", None)
-    return active_recipe
+        return None
+    return session.advance()
 
 
 def _reused_observation(
@@ -318,17 +313,16 @@ def _record_replay_outcome(
 
     if str(request.get("source") or "") != "reflex":
         return
-    active = dict(state["replay"].get("active_reflex_recipe", {}) or {})
-    recipe_key = str(active.get("recipe_key") or request.get("recipe_key") or "")
+    session = _replay_session(state)
+    recipe_key = str(
+        (session.recipe_key if session else "") or request.get("recipe_key") or ""
+    )
     if not recipe_key:
         return
-    current_index = int(active.get("current_transition_index") or 0)
-    pending_index = active.get("pending_transition_index")
-    if pending_index is None or int(pending_index) != current_index:
+    if not session or not session.pending_is_current():
         return
-    transition_count = int(active.get("transition_count") or 0)
     succeeded = status == "ready"
-    if succeeded and current_index + 1 < transition_count:
+    if succeeded and not session.is_last_transition():
         return
     try:
         record_replay_result(recipe_key, succeeded)
@@ -499,7 +493,7 @@ def _evaluate_before_ocr(
                 request,
                 should_block=source == "reflex",
             ),
-            "active_reflex_recipe": _active_recipe_after_transition(
+            "replay_session": _replay_session_after_transition(
                 state,
                 source=source,
                 status="unknown",
@@ -635,7 +629,7 @@ def _evaluate_after_ocr(
                 request,
                 should_block=block_recipe,
             ),
-            "active_reflex_recipe": _active_recipe_after_transition(
+            "replay_session": _replay_session_after_transition(
                 state,
                 source=source,
                 status=status,
