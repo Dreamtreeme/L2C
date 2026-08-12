@@ -11,6 +11,28 @@ max-complexity = 10
 max-branches = 12
 max-statements = 50
 
+[tool.mypy]
+python_version = "3.13"
+files = [
+    "agent/runtime/worker_contracts.py",
+    "agent/runtime/transition_runtime.py",
+    "agent/recipe/replay_runtime.py",
+    "agent/graph/worker_transition_recording.py",
+    "agent/graph/worker_transition.py",
+    "agent/graph/worker_execution_context.py",
+    "agent/graph/worker_action_effects.py",
+    "agent/graph/worker_execution.py",
+    "agent/graph/worker_observation.py",
+    "agent/graph/worker_selection.py",
+    "agent/graph/workflow.py",
+    "agent/application/worker_execution_service.py",
+]
+check_untyped_defs = true
+explicit_package_bases = true
+follow_imports = "skip"
+ignore_missing_imports = true
+show_error_codes = true
+
 [tool.importlinter]
 root_package = "agent"
 

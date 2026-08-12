@@ -93,7 +93,6 @@ def execute_ui_action(
             action_name,
             args,
             transition_source,
-            tool_call_id,
         )
     return result, screen_changed
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 
 from agent.graph.worker_execution_policy import state_snapshot_for_action
 from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
@@ -15,6 +15,7 @@ from agent.runtime.worker_contracts import (
     WorkerStateUpdate,
     apply_worker_state_update,
 )
+from agent.runtime.transition_runtime import transition_result
 from agent.vision.target_snapshot import marker_by_id
 from shared.schema.feedback_schema import ExecutionEvent
 
@@ -23,7 +24,6 @@ from shared.schema.feedback_schema import ExecutionEvent
 class WorkerExecutionContext:
     """행동 요청 하나의 원본 상태와 실행 중 변경을 보관한다."""
 
-    original_state: WorkerState
     state: WorkerState
     action_request: ActionRequest
     worker_runtime: VisionWorkerRuntime
@@ -45,7 +45,6 @@ class WorkerExecutionContext:
         """그래프 상태를 행동 실행 전용 문맥으로 변환한다."""
 
         return cls(
-            original_state=state,
             state=apply_worker_state_update(state, {}),
             action_request=action_request,
             worker_runtime=worker_runtime,
@@ -80,26 +79,20 @@ class WorkerExecutionContext:
             *self.prior_events,
             *self.new_events,
         ]
-        transition_request = dict(
-            state["transition"].get("transition_request", {}) or {}
+        transition_request = state["transition"].get("transition_request")
+        state["transition"]["transition_result"] = transition_result(
+            transition_request,
+            status="waiting_capture" if transition_request else "idle",
         )
-        state["transition"]["transition_result"] = {
-            **transition_request,
-            "status": "waiting_capture" if transition_request else "idle",
-            "outcome": "",
-            "reason": "",
-            "visual_change_detected": False,
-            "visual_change_ratio": None,
-            "needs_ocr": False,
+        return {
+            "request": state["request"],
+            "observation": state["observation"],
+            "decision": state["decision"],
+            "transition": state["transition"],
+            "replay": state["replay"],
+            "collection": state["collection"],
+            "lifecycle": state["lifecycle"],
         }
-        return cast(
-            WorkerStateUpdate,
-            {
-                section: dict(value)
-                for section, value in state.items()
-                if value != self.original_state[section]
-            },
-        )
 
 
 __all__ = [

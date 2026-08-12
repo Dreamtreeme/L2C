@@ -10,6 +10,8 @@ from langgraph.runtime import Runtime
 from agent.config import get_settings
 from agent.runtime.worker_contracts import (
     ActionRequest,
+    CompletedTransitionObservation,
+    TransitionResult,
     WorkerState,
     attach_action_transition,
     build_action_request,
@@ -76,7 +78,7 @@ def _no_effect_stop(count: int) -> dict[str, Any]:
 def _skip_duplicate_detail(
     state: WorkerState,
     *,
-    transition_result: dict[str, Any],
+    transition_result: TransitionResult,
     current_url: str,
     duplicate_trace: dict[str, Any],
 ) -> dict[str, Any]:
@@ -97,7 +99,7 @@ def _skip_duplicate_detail(
     )
     update: dict[str, Any] = {
         "transition": {
-            "transition_request": {},
+            "transition_request": None,
             "transition_result": {
                 **transition_result,
                 "status": "ready",
@@ -115,9 +117,9 @@ def _skip_duplicate_detail(
 
 def _queue_results_transition(
     state: WorkerState,
-    transition_result: dict[str, Any],
+    transition_result: TransitionResult,
     trace: dict[str, Any],
-) -> dict[str, Any] | None:
+) -> CompletedTransitionObservation | None:
     if not str(transition_result.get("action") or ""):
         return None
     saved_signature = dict(
@@ -127,18 +129,11 @@ def _queue_results_transition(
         )
     )
     anchors = [
-        str(text)
-        for text in saved_signature.get("anchors", []) or []
-        if str(text)
+        str(text) for text in saved_signature.get("anchors", []) or [] if str(text)
     ]
-    results_match = (
-        trace.get("results_match")
-        if isinstance(trace.get("results_match"), dict)
-        else {}
-    )
-    started_at = float(
-        transition_result.get("started_at") or time.time()
-    )
+    raw_results_match = trace.get("results_match")
+    results_match = raw_results_match if isinstance(raw_results_match, dict) else {}
+    started_at = float(transition_result.get("started_at") or time.time())
     return build_transition_observation(
         transition_result,
         status="ready",
@@ -147,17 +142,10 @@ def _queue_results_transition(
         reason="queue_results_phash_match",
         elapsed_sec=max(0.0, time.time() - started_at),
         attempt=1,
-        markers=[
-            {"id": index, "text": text}
-            for index, text in enumerate(anchors)
-        ],
-        screenshot=str(
-            state["observation"].get("current_screenshot") or ""
-        ),
+        markers=[{"id": index, "text": text} for index, text in enumerate(anchors)],
+        screenshot=str(state["observation"].get("current_screenshot") or ""),
         marked_image="",
-        after_observation_id=str(
-            state["observation"].get("observation_id") or ""
-        ),
+        after_observation_id=str(state["observation"].get("observation_id") or ""),
         phash_distance=results_match.get("distance"),
         ocr_skipped=True,
     )
@@ -169,7 +157,7 @@ def _replay_queued_card(
     request: ActionRequest,
     selected_markers: list[dict[str, Any]],
     trace: dict[str, Any],
-    transition_result: dict[str, Any],
+    transition_result: TransitionResult,
     signature: dict[str, Any],
     memory: dict[str, Any],
     saved_signature: dict[str, Any],
@@ -182,7 +170,7 @@ def _replay_queued_card(
     update: dict[str, Any] = {
         "decision": {"pending_action": request},
         "transition": {
-            "transition_request": {},
+            "transition_request": None,
             "transition_result": {
                 **transition_result,
                 "status": "ready",
@@ -210,7 +198,7 @@ def _replay_queued_card(
 
 
 def _queue_replay_waits_for_ocr(
-    transition_result: dict[str, Any],
+    transition_result: TransitionResult,
     *,
     ocr_complete: bool,
 ) -> bool:
@@ -226,7 +214,7 @@ def _select_duplicate_detail(
     runtime: Runtime[WorkerDependencies],
     *,
     current_url: str,
-    transition_result: dict[str, Any],
+    transition_result: TransitionResult,
 ) -> dict[str, Any] | None:
     active_card = active_job_card(
         list(state["collection"].get("job_card_queue", []) or [])
@@ -256,7 +244,7 @@ def _select_queued_card(
     state: WorkerState,
     *,
     current_url: str,
-    transition_result: dict[str, Any],
+    transition_result: TransitionResult,
 ) -> dict[str, Any] | None:
     if not transition_result.get("action"):
         return None
@@ -267,11 +255,7 @@ def _select_queued_card(
         ocr_complete=ocr_complete,
     ):
         return None
-    markers = (
-        list(observation.get("current_markers") or [])
-        if ocr_complete
-        else []
-    )
+    markers = list(observation.get("current_markers") or []) if ocr_complete else []
     signature_value = (
         observation.get("screen_signature")
         if ocr_complete
@@ -325,21 +309,16 @@ def selection_node(
     if no_effect_count >= get_settings().vision.no_effect_action_limit:
         return _no_effect_stop(no_effect_count)
 
-    capture_count = int(
-        observation.get("low_information_capture_count") or 0
-    )
+    capture_count = int(observation.get("low_information_capture_count") or 0)
     if observation.get("low_information_screen"):
-        if (
-            capture_count
-            >= get_settings().vision.low_information_max_capture_cycles
-        ):
+        if capture_count >= get_settings().vision.low_information_max_capture_cycles:
             return _low_information_stop()
         return {}
 
     if replay.get("replay_session"):
         return {}
 
-    transition_result = dict(transition.get("transition_result", {}) or {})
+    transition_result = transition.get("transition_result", {}) or {}
     current_url = str(observation.get("current_url") or "")
     duplicate_update = _select_duplicate_detail(
         state,
@@ -349,11 +328,14 @@ def selection_node(
     )
     if duplicate_update is not None:
         return duplicate_update
-    return _select_queued_card(
-        state,
-        current_url=current_url,
-        transition_result=transition_result,
-    ) or {}
+    return (
+        _select_queued_card(
+            state,
+            current_url=current_url,
+            transition_result=transition_result,
+        )
+        or {}
+    )
 
 
 __all__ = ["selection_node"]

@@ -12,6 +12,7 @@ from agent.tests.worker_test_support import (
     worker_data_services,
     worker_state,
 )
+from shared.schema.recipe_schema import ScreenCheckpoint
 
 
 def test_queue_phash_match_records_results_transition(monkeypatch):
@@ -41,30 +42,24 @@ def test_queue_phash_match_records_results_transition(monkeypatch):
                     "action_seq": 9,
                     "source": "autonomous",
                     "started_at": time.time(),
-                    "step": {
-                        "seq": 9,
-                        "action": "go_back",
-                        "page_role": "job_detail",
-                        "args": {"page_role": "job_detail"},
-                    },
                 },
                 "action_events": [
-                        {
-                            "seq": 9,
-                            "result": {
-                                "action": "go_back",
-                                "status": "success",
-                            },
-                            "candidate_action": {
-                                "source_seq": 9,
-                                "action": "go_back",
-                            },
-                            "before_checkpoint": {
-                                "observation_id": "observation:0008",
-                                "url_template": "wanted.co.kr/wd/{id}",
-                                "page_role": "job_detail",
-                            },
-                        }
+                    {
+                        "seq": 9,
+                        "result": {
+                            "action": "go_back",
+                            "status": "success",
+                        },
+                        "candidate_action": {
+                            "source_seq": 9,
+                            "action": "go_back",
+                        },
+                        "before_checkpoint": {
+                            "observation_id": "observation:0008",
+                            "url_template": "wanted.co.kr/wd/{id}",
+                            "page_role": "job_detail",
+                        },
+                    }
                 ],
             },
             collection={
@@ -110,11 +105,6 @@ def test_queue_phash_mismatch_falls_through_to_ocr():
         "source": "page_policy",
         "needs_ocr": True,
         "started_at": time.time(),
-        "step": {
-            "seq": 9,
-            "action": "go_back",
-            "page_role": "job_detail",
-        },
     }
     state = worker_state(
         observation={
@@ -191,10 +181,7 @@ def test_cached_queue_click_without_screen_change_refreshes_ocr():
                 "action_seq": 10,
                 "source": "job_card_queue",
                 "started_at": time.time(),
-                "step": {
-                    "action": "click_marker",
-                    "args": {"marker_id": 0},
-                },
+                "target_marker_id": 0,
             },
         },
         collection={
@@ -277,10 +264,7 @@ def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
         "before_observation_id": "observation:0010",
         "before_screenshot": "search-overlay.png",
         "before_url": "https://www.wanted.co.kr/",
-        "step": {
-            "action": "type_in_marker",
-            "args": {"text": "iOS 개발자"},
-        },
+        "input_text": "iOS 개발자",
         "started_at": time.time(),
     }
     result = worker_transition.transition_node(
@@ -358,14 +342,13 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
         ),
         node_runtime(
             data=worker_data_services(
-                record_recipe_replay=lambda recipe_key, succeeded: replay_results.append(
-                    (recipe_key, succeeded)
-                )
-                or True,
+                record_recipe_replay=lambda recipe_key, succeeded: (
+                    replay_results.append((recipe_key, succeeded)) or True
+                ),
             )
         ),
     )
-    assert transition["transition"]["transition_request"] == {}
+    assert transition["transition"]["transition_request"] is None
     assert transition["transition"]["transition_result"]["status"] == "unknown"
     assert (
         transition["transition"]["transition_result"]["reason"]
@@ -389,14 +372,14 @@ def test_reflex_transition_accepts_changed_page_role_with_dynamic_content(
                 "transition_request": {
                     "source": "reflex",
                     "before_page_role": "search_overlay",
-                    "expected_after_state": {
-                        "url_template": "wanted.co.kr/search?query",
-                        "page_role": "search_results",
-                        "screen_context_signature": {
+                    "expected_after_state": ScreenCheckpoint(
+                        url_template="wanted.co.kr/search?query",
+                        page_role="search_results",
+                        screen_context_signature={
                             "phash": "0" * 16,
                             "size": [1920, 1080],
                         },
-                    },
+                    ),
                 }
             },
             observation={
@@ -432,13 +415,13 @@ def test_reflex_transition_keeps_phash_check_within_same_page_role(monkeypatch):
                 "transition_request": {
                     "source": "reflex",
                     "before_page_role": "job_detail",
-                    "expected_after_state": {
-                        "page_role": "job_detail",
-                        "screen_context_signature": {
+                    "expected_after_state": ScreenCheckpoint(
+                        page_role="job_detail",
+                        screen_context_signature={
                             "phash": "0" * 16,
                             "size": [1920, 1080],
                         },
-                    },
+                    ),
                 }
             },
             observation={

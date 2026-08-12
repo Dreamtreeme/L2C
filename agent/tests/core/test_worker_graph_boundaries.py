@@ -366,15 +366,9 @@ def test_capture_screen_assigns_run_scoped_incrementing_observation_id(monkeypat
         worker_observation.capture_node(next_run_state, runtime),
     )
 
-    assert (
-        first["observation"]["observation_id"]
-        == "worker-test:observation:0001"
-    )
+    assert first["observation"]["observation_id"] == "worker-test:observation:0001"
     assert first["observation"]["observation_sequence"] == 1
-    assert (
-        second["observation"]["observation_id"]
-        == "worker-test:observation:0002"
-    )
+    assert second["observation"]["observation_id"] == "worker-test:observation:0002"
     assert second["observation"]["observation_sequence"] == 2
     assert (
         next_run_first["observation"]["observation_id"]
@@ -419,10 +413,7 @@ def test_execution_records_one_complete_action_event(monkeypatch):
     event = result["transition"]["action_events"][0]
     assert event.observation_id == "worker-test:observation:0003"
     assert event.candidate_action.action == "click_marker"
-    assert (
-        event.before_checkpoint.observation_id
-        == "worker-test:observation:0003"
-    )
+    assert event.before_checkpoint.observation_id == "worker-test:observation:0003"
     assert result["transition"]["error_count"] == 0
 
 
@@ -477,9 +468,7 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     ]
 
     result = _run_execution(state)
-    action_result = action_event_results(
-        result["transition"]["action_events"]
-    )[-1]
+    action_result = action_event_results(result["transition"]["action_events"])[-1]
 
     assert action_result["status"] == "skipped"
     assert action_result["reason"] == "same_screen_no_effect_action_blocked"
@@ -621,9 +610,7 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
         == "search_overlay"
     )
     assert (
-        result["transition"]["transition_request"]["expected_after_state"][
-            "url_template"
-        ]
+        result["transition"]["transition_request"]["expected_after_state"].url_template
         == "example.com/jobs"
     )
 
@@ -664,9 +651,7 @@ def test_failed_ui_dispatch_is_recorded_once_without_screen_transition(monkeypat
                 ],
             )
         )
-        action_results = action_event_results(
-            result["transition"]["action_events"]
-        )
+        action_results = action_event_results(result["transition"]["action_events"])
         assert len(action_results) == 1
         assert action_results[0]["status"] == "error"
         assert action_results[0]["error"] == "physical input failed"

@@ -431,7 +431,6 @@ def _write_summary(summary: dict[str, object], summary_path: Path) -> None:
 
 
 def _run_e2e(args: argparse.Namespace, log_path: Path, summary_path: Path) -> int:
-    from agent.application.collection_worker_runner import run_worker_once
     from agent.application.worker_execution_service import (
         WorkerExecutionService,
         build_worker_data_services,
@@ -458,7 +457,6 @@ def _run_e2e(args: argparse.Namespace, log_path: Path, summary_path: Path) -> in
     try:
         worker_service = WorkerExecutionService(
             vision_runtime,
-            run_worker_once,
             build_worker_data_services(db_path),
         )
         events = []

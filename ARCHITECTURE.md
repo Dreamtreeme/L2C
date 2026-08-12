@@ -74,7 +74,7 @@ flowchart TD
 - `pHash`: 저장된 전체 화면·ROI 서명과 현재 화면을 비교해 카드 큐 복귀, Reflex 대상과 행동 직전 마커 동일성을 검증합니다.
 - `Job Card Queue`: 검색 결과에서 LLM이 한 번 고른 공고 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
 - `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 작업자는 URL, OCR 원문과 화면 근거만 `JobCapture`로 반환합니다. 조사 그래프의 후처리 노드가 수집 종료 후 한 번 구조화하며 검색 목록의 카드 메타데이터는 사실 근거로 사용하지 않습니다.
-- `Reflex Runtime`: `site + task_category + page_role`로 활성 레시피를 조회하고 ROI pHash와 현재 마커 좌표비율이 맞을 때만 재생합니다.
+- `Reflex Runtime`: `site + task_category`로 활성 레시피 후보를 조회하고 URL 범위, ROI pHash와 현재 마커 좌표비율이 맞는 경로만 재생합니다. `page_role`은 실행 기록과 도착 화면 설명에 사용합니다.
 - `Reasoning`: 큐, 상세 정책, Reflex로 고정할 수 없는 현재 화면의 의미 판단만 수행합니다.
 - `Execution`: `click_marker`, `type_in_marker`, `scroll`, `press_key`, `go_back`을 물리 입력으로 실행합니다.
 
@@ -86,13 +86,12 @@ flowchart TD
 | 실행 계약 | `agent/observability/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
 | 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py`, `conversation_context_service.py` | 실행 계측·응답 변환과 그래프가 호출하는 DB·대화 어댑터 |
 | 수집 요청 | `agent/application/collection_request_builder.py` | 사이트 프로필 선택, 확정된 수집 의도로 작업자 목표 생성 |
-| 수집 작업자 | `agent/application/collection_worker_runner.py` | 확정된 `CollectionIntent`로 단일 비전 작업자 실행과 제출물 생성 |
 | 수집 후처리 | `agent/application/collection_postprocessing.py` | `JobCapture`를 `CollectedJob`으로 구조화하고 필수 필드·날짜 조건 판정 |
 | 공고 저장 | `agent/application/collection_storage.py` | 후처리된 공고 UPSERT와 검색 사전 연결 결과 기록 |
 | 경험 기록 | `agent/application/collection_experience.py` | 작업자 제출물 저장과 레시피 후보 등록 |
 | 구성·수명주기 | `agent/bootstrap.py` | 체크포인터·서비스·그래프·비전 런타임·승격 작업자의 생성과 종료 |
 | 비전 런타임 | `agent/runtime/vision_worker_runtime.py` | OCR·Perception·ActionTools·판단 모델·작업자 그래프의 지연 생성과 실행 잠금 |
-| 작업자 실행 | `agent/application/worker_execution_service.py` | 화면 잠금, 시작 화면 준비, 그래프 실행, 브라우저 정리 |
+| 작업자 실행 | `agent/application/worker_execution_service.py` | 수집 의도 정규화, 작업자 상태·제출물 생성, 화면 잠금, 그래프 실행과 브라우저 정리 |
 | 비동기 승격 | `agent/application/recipe_promotion_worker.py`, `recipe_candidate_review_service.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
 | 지휘자 그래프 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 주입된 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
 | 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 문맥을 반영한 요청 해석, 근거 판정, 수집·저장, 재검사와 답변 |
@@ -116,11 +115,12 @@ flowchart TD
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `decision.pending_action: ActionRequest`, 실행 결과는 `transition.action_events`에 순서대로 기록합니다.
 - `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
-- `WorkerExecutionContext`는 최초 상태, 검증된 행동, 런타임 의존성, 작업 상태 사본과 후속 행동을 직접 보관합니다. 실행 후 최초 상태와 달라진 구역만 반환합니다.
+- `WorkerExecutionContext`는 검증된 행동, 런타임 의존성, 작업 상태 사본과 후속 행동을 직접 보관합니다. 실행 후 각 책임 구역을 `WorkerStateUpdate` 타입으로 반환합니다.
 - 실행기는 안전 검증, 도구 전달, 상태 효과를 순서대로 조립하며 행동 종류는 `agent/runtime/worker_actions.py`에서 한 번만 정의합니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
-- 행동이 요구한 전환은 `transition.transition_request`, 현재 검증 결과는 `transition.transition_result`로 구분합니다. 확정된 전환은 같은 순번의 `transition.action_events`에 연결되고 제출물에도 같은 구조로 저장됩니다.
+- 행동이 요구한 전환은 `transition.transition_request`, 현재 검증 결과는 `transition.transition_result`로 구분합니다. 전환 요청에는 행동, 입력 문자열, 대상 마커 ID와 저장된 도착 화면을 각각 보관하며 중복 `step` 딕셔너리를 만들지 않습니다. 전환이 없으면 `transition_request=None`입니다.
+- 작업자 상태와 이를 직접 소비하는 그래프 모듈은 CI의 `mypy` 검사 대상입니다. Pydantic 런타임 검증은 API·LLM 도구·저장 스키마 경계에서만 수행합니다.
 - 결정론적 정책이 검증에 실패하면 행동을 강행하지 않고 reasoning으로 폴백합니다.
 
 ## 그래프 의존성 주입

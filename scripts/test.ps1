@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\use_utf8.ps1"
 
 if (-not $PytestArgs -or $PytestArgs.Count -eq 0) {
-    $PytestArgs = @('agent\tests\core', '-q', '-p', 'no:cacheprovider')
+    $PytestArgs = @('agent\tests', '-q', '-p', 'no:cacheprovider')
 }
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')

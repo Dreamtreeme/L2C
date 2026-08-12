@@ -7,6 +7,7 @@ from typing import Any
 from agent.config import get_settings
 from agent.runtime.worker_contracts import (
     ActionRequest,
+    TransitionRequest,
     WorkerState,
     build_action_request,
 )
@@ -112,10 +113,7 @@ def _normalized_job_card(
         marker_bbox(marker),
         size,
         capture_context=dict(
-            (observation.get("screen_signature") or {}).get(
-                "capture_context", {}
-            )
-            or {}
+            (observation.get("screen_signature") or {}).get("capture_context", {}) or {}
         ),
     )
     if roi_signature:
@@ -240,11 +238,10 @@ def needs_job_results_navigation(state: WorkerState) -> bool:
     if not needs_more_cards:
         return False
     observation = state["observation"]
-    return (
-        str(observation.get("current_page_role") or "") == "job_detail"
-        or looks_like_job_detail_url(
-            str(observation.get("current_url") or "")
-        )
+    return str(
+        observation.get("current_page_role") or ""
+    ) == "job_detail" or looks_like_job_detail_url(
+        str(observation.get("current_url") or "")
     )
 
 
@@ -325,6 +322,26 @@ def complete_active_job_card(queue: list[dict]) -> list[dict]:
             item["status"] = "done"
         updated.append(item)
     return updated
+
+
+def queue_click_used_cached_marker(
+    state: WorkerState,
+    request: TransitionRequest,
+) -> bool:
+    """현재 화면 OCR 없이 복원한 큐 마커를 클릭했는지 확인한다."""
+
+    if (
+        request.get("source") != "job_card_queue"
+        or request.get("action") != "click_marker"
+    ):
+        return False
+    marker_id = request.get("target_marker_id")
+    previous = dict(state["observation"].get("previous_observation") or {})
+    return any(
+        marker.get("id") == marker_id and marker.get("type") == "queue_cached_card"
+        for marker in previous.get("markers", []) or []
+        if isinstance(marker, dict)
+    )
 
 
 def skip_active_job_card(
@@ -437,12 +454,12 @@ def job_card_marker_for_item(
         marker = marker_by_id(markers, marker_id) or {}
         saved_text = job_card_match_text(target.get("text"))
         current_text = job_card_match_text(marker.get("text"))
-        if saved_text and current_text and (
-            saved_text in current_text or current_text in saved_text
+        if (
+            saved_text
+            and current_text
+            and (saved_text in current_text or current_text in saved_text)
         ):
-            return marker_id, markers, {
-                "reason": "current_marker_identity_match"
-            }
+            return marker_id, markers, {"reason": "current_marker_identity_match"}
 
     if not allow_synthetic:
         return None, markers, {"reason": "current_marker_identity_missing"}
@@ -453,12 +470,14 @@ def job_card_marker_for_item(
         current_signature=signature,
     )
     if not roi_match.get("matched"):
-        return None, markers, {
-            "reason": str(
-                roi_match.get("reason") or "cached_target_roi_mismatch"
-            ),
-            "roi_match": roi_match,
-        }
+        return (
+            None,
+            markers,
+            {
+                "reason": str(roi_match.get("reason") or "cached_target_roi_mismatch"),
+                "roi_match": roi_match,
+            },
+        )
 
     bbox = bbox_from_ratio(
         item.get("bbox_ratio") or [], screen_size_from_signature(signature)
@@ -597,6 +616,7 @@ __all__ = [
     "job_card_label",
     "job_card_marker_for_item",
     "job_card_match_text",
+    "queue_click_used_cached_marker",
     "release_active_job_card",
     "replay_job_card_on_results",
     "job_results_page_matches",

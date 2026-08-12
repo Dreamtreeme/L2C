@@ -25,6 +25,7 @@ from agent.runtime.job_field_contract import (
 from agent.runtime.site_context import is_job_detail_context
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.runtime.worker_contracts import (
+    ObservationState,
     WorkerState,
     WorkerStateUpdate,
     apply_worker_state_update,
@@ -55,9 +56,7 @@ def _build_ui_context(
     """상세 화면은 섹션을, 다른 화면은 제한된 마커 목록을 만든다."""
 
     marker_texts = [
-        marker.get("text")
-        for marker in markers
-        if isinstance(marker, dict)
+        marker.get("text") for marker in markers if isinstance(marker, dict)
     ]
     if current_url and is_job_detail_context(
         current_url,
@@ -90,8 +89,7 @@ def _build_ui_context(
         )
     if shown_icons:
         parts.append(
-            "기타 아이콘/버튼 마커 ID 목록: "
-            f"{[marker['id'] for marker in shown_icons]}"
+            f"기타 아이콘/버튼 마커 ID 목록: {[marker['id'] for marker in shown_icons]}"
         )
     omitted_text = len(text_markers) - len(shown_text)
     omitted_icons = len(icon_markers) - len(shown_icons)
@@ -107,10 +105,13 @@ def _next_observation_identity(state: WorkerState) -> tuple[int, str]:
     """작업자 실행 안에서 읽기 쉬운 단조 증가 관찰 ID를 만든다."""
 
     try:
-        sequence = max(
-            0,
-            int(state["observation"].get("observation_sequence", 0)),
-        ) + 1
+        sequence = (
+            max(
+                0,
+                int(state["observation"].get("observation_sequence", 0)),
+            )
+            + 1
+        )
     except (TypeError, ValueError):
         sequence = 1
     run_id = str(state["request"].get("worker_run_id") or "").strip()
@@ -135,9 +136,7 @@ def _previous_observation(state: WorkerState) -> dict[str, Any]:
             "markers": list(observation.get("current_markers") or []),
             "ui_context": str(observation.get("ui_context") or ""),
             "marked_image": str(observation.get("marked_image") or ""),
-            "screen_signature": dict(
-                observation.get("screen_signature") or {}
-            ),
+            "screen_signature": dict(observation.get("screen_signature") or {}),
             "page_role": str(observation.get("current_page_role") or ""),
         }
     return dict(observation.get("previous_observation") or {})
@@ -152,34 +151,24 @@ def capture_node(
     raise_if_cancelled()
     perception = runtime.context.vision.get_perception()
     observation = state["observation"]
-    transition_request = dict(
-        state["transition"].get("transition_request", {}) or {}
-    )
+    transition_request = dict(state["transition"].get("transition_request", {}) or {})
     pending_action = str(transition_request.get("action") or "")
 
     if pending_action in _WAIT_ACTIONS:
-        before_screenshot = str(
-            transition_request.get("before_screenshot") or ""
-        )
+        before_screenshot = str(transition_request.get("before_screenshot") or "")
         if before_screenshot:
             perception.wait_for_transition_change(before_screenshot)
 
     if pending_action == "type_in_marker":
         initial_wait = get_settings().browser.input_capture_initial_wait_sec
-        image_path = perception.capture_usable_screen(
-            initial_wait_sec=initial_wait
-        )
+        image_path = perception.capture_usable_screen(initial_wait_sec=initial_wait)
     else:
         image_path = perception.capture_usable_screen()
 
     capture_quality = dict(perception.last_capture_quality)
     current_url = str(observation.get("current_url") or "")
     current_url_stale = bool(observation.get("current_url_stale", True))
-    if (
-        current_url_stale
-        or not current_url
-        or transition_request
-    ):
+    if current_url_stale or not current_url or transition_request:
         fetched_url = str(perception.get_current_url() or "")
         if fetched_url:
             current_url = fetched_url
@@ -188,9 +177,7 @@ def capture_node(
             current_url_stale = True
 
     raw_signature = (
-        compute_screen_phash_signature(image_path)
-        if transition_request
-        else {}
+        compute_screen_phash_signature(image_path) if transition_request else {}
     )
     low_information = bool(capture_quality.get("low_information"))
     low_information_capture_count = (
@@ -206,30 +193,32 @@ def capture_node(
         low_information=low_information,
         has_transition=bool(transition_request),
     )
-    return {"observation": {
-        "observation_id": observation_id,
-        "observation_sequence": observation_sequence,
-        "current_screenshot": str(image_path),
-        "previous_observation": previous_observation,
-        "raw_screen_signature": raw_signature,
-        "ocr_complete": False,
-        "current_url": current_url,
-        "current_url_stale": current_url_stale,
-        "low_information_screen": low_information,
-        "low_information_capture_count": low_information_capture_count,
-        # 새 관찰의 OCR이 끝나기 전에는 직전 화면 인식을 재사용하지 않는다.
-        "ui_context": "",
-        "current_markers": [],
-        "marked_image": "",
-        "screen_signature": {},
-        "current_page_role": "",
-    }}
+    return {
+        "observation": {
+            "observation_id": observation_id,
+            "observation_sequence": observation_sequence,
+            "current_screenshot": str(image_path),
+            "previous_observation": previous_observation,
+            "raw_screen_signature": raw_signature,
+            "ocr_complete": False,
+            "current_url": current_url,
+            "current_url_stale": current_url_stale,
+            "low_information_screen": low_information,
+            "low_information_capture_count": low_information_capture_count,
+            # 새 관찰의 OCR이 끝나기 전에는 직전 화면 인식을 재사용하지 않는다.
+            "ui_context": "",
+            "current_markers": [],
+            "marked_image": "",
+            "screen_signature": {},
+            "current_page_role": "",
+        }
+    }
 
 
 def ocr_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
-) -> dict[str, Any]:
+) -> WorkerStateUpdate:
     """현재 캡처 한 장에 SoM/OCR을 한 번 실행하고 화면 문맥을 만든다."""
 
     raise_if_cancelled()
@@ -249,13 +238,11 @@ def ocr_node(
     )
     if capture_context:
         screen_signature["capture_context"] = capture_context
-    raw_signature = dict(
-        observation_state.get("raw_screen_signature", {}) or {}
-    )
+    raw_signature = dict(observation_state.get("raw_screen_signature", {}) or {})
     if raw_signature.get("phash"):
         screen_signature["phash"] = raw_signature["phash"]
-        screen_signature["size"] = (
-            raw_signature.get("size") or screen_signature.get("size")
+        screen_signature["size"] = raw_signature.get("size") or screen_signature.get(
+            "size"
         )
 
     current_url = str(observation_state.get("current_url") or "")
@@ -278,7 +265,7 @@ def ocr_node(
         "Worker screen OCR completed",
         marker_count=len(markers),
     )
-    observation = {
+    observation: ObservationState = {
         "marked_image": marked_image,
         "current_markers": markers,
         "ui_context": ui_context,
@@ -320,13 +307,12 @@ def _collect_job_detail_observation(
     ):
         detail_followup = {}
     detail_coverage = dict(collection.get("job_detail_coverage", {}) or {})
-    if (
-        detail_context_matches(detail_buffer, current_url, detail_key)
-        and not detail_coverage_matches(
-            detail_coverage,
-            current_url,
-            detail_key,
-        )
+    if detail_context_matches(
+        detail_buffer, current_url, detail_key
+    ) and not detail_coverage_matches(
+        detail_coverage,
+        current_url,
+        detail_key,
     ):
         detail_coverage = merge_job_detail_coverage(
             {},

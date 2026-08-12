@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, TypedDict, cast
+from typing import Annotated, Any, TypeAlias, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -115,7 +115,7 @@ class ActionRequest(BaseModel):
         return self
 
 
-ActionEvent = ExecutionEvent
+ActionEvent: TypeAlias = ExecutionEvent
 
 
 class CompletedTransitionObservation(BaseModel):
@@ -127,7 +127,6 @@ class CompletedTransitionObservation(BaseModel):
     action: str = ""
     before_observation_id: str = ""
     after_observation_id: str = ""
-    step: dict[str, Any] = Field(default_factory=dict)
     expected_after: str = ""
     source: str = ""
     status: TransitionStatus = ""
@@ -182,10 +181,7 @@ def _execution_event(event: ActionEvent | Mapping[str, Any]) -> ExecutionEvent:
 
 
 def action_event_results(events: Sequence[ActionEvent]) -> list[dict[str, Any]]:
-    return [
-        dict(_execution_event(event).result)
-        for event in events
-    ]
+    return [dict(_execution_event(event).result) for event in events]
 
 
 def action_event_transitions(
@@ -320,9 +316,12 @@ class TransitionRequest(TypedDict, total=False):
     recipe_transition_index: int
     recipe_transition_count: int
     transition_actions: list[str]
-    expected_after_state: dict[str, Any]
+    expected_after_state: ScreenCheckpoint | None
+    expected_after: str
+    input_text: str
+    target_marker_id: int | None
     after_state_match: dict[str, Any]
-    step: dict[str, Any]
+    queue_marker_refresh: bool
     before_url: str
     before_page_role: str
     before_screenshot: str
@@ -384,7 +383,7 @@ class TransitionState(TypedDict, total=False):
     action_events: list[ActionEvent]
     error_count: int
     no_effect_count: int
-    transition_request: TransitionRequest
+    transition_request: TransitionRequest | None
     transition_result: TransitionResult
 
 
@@ -453,60 +452,50 @@ def apply_worker_state_update(
 ) -> WorkerState:
     """노드 내부의 연속 계산에서 LangGraph와 같은 섹션 병합을 적용한다."""
 
-    return WorkerState(
-        request=cast(
-            WorkerRequestState,
-            merge_worker_section(state["request"], update.get("request")),
-        ),
-        observation=cast(
-            ObservationState,
-            merge_worker_section(
-                state["observation"],
-                update.get("observation"),
-            ),
-        ),
-        decision=cast(
-            DecisionState,
-            merge_worker_section(state["decision"], update.get("decision")),
-        ),
-        transition=cast(
-            TransitionState,
-            merge_worker_section(
-                state["transition"],
-                update.get("transition"),
-            ),
-        ),
-        replay=cast(
-            RecipeReplayState,
-            merge_worker_section(state["replay"], update.get("replay")),
-        ),
-        collection=cast(
-            JobCollectionState,
-            merge_worker_section(
-                state["collection"],
-                update.get("collection"),
-            ),
-        ),
-        lifecycle=cast(
-            WorkerLifecycleState,
-            merge_worker_section(
-                state["lifecycle"],
-                update.get("lifecycle"),
-            ),
-        ),
-    )
+    request = state["request"].copy()
+    observation = state["observation"].copy()
+    decision = state["decision"].copy()
+    transition = state["transition"].copy()
+    replay = state["replay"].copy()
+    collection = state["collection"].copy()
+    lifecycle = state["lifecycle"].copy()
+
+    if request_update := update.get("request"):
+        request.update(request_update)
+    if observation_update := update.get("observation"):
+        observation.update(observation_update)
+    if decision_update := update.get("decision"):
+        decision.update(decision_update)
+    if transition_update := update.get("transition"):
+        transition.update(transition_update)
+    if replay_update := update.get("replay"):
+        replay.update(replay_update)
+    if collection_update := update.get("collection"):
+        collection.update(collection_update)
+    if lifecycle_update := update.get("lifecycle"):
+        lifecycle.update(lifecycle_update)
+
+    return {
+        "request": request,
+        "observation": observation,
+        "decision": decision,
+        "transition": transition,
+        "replay": replay,
+        "collection": collection,
+        "lifecycle": lifecycle,
+    }
 
 
 def create_worker_state(
     goal: str = "",
     *,
-    request: Mapping[str, Any] | None = None,
-    observation: Mapping[str, Any] | None = None,
-    decision: Mapping[str, Any] | None = None,
-    transition: Mapping[str, Any] | None = None,
-    replay: Mapping[str, Any] | None = None,
-    collection: Mapping[str, Any] | None = None,
-    lifecycle: Mapping[str, Any] | None = None,
+    request: WorkerRequestState | None = None,
+    observation: ObservationState | None = None,
+    decision: DecisionState | None = None,
+    transition: TransitionState | None = None,
+    replay: RecipeReplayState | None = None,
+    collection: JobCollectionState | None = None,
+    lifecycle: WorkerLifecycleState | None = None,
 ) -> WorkerState:
     """모든 작업자 진입점에서 동일한 섹션 상태를 만든다."""
 
@@ -545,7 +534,7 @@ def create_worker_state(
             "action_events": [],
             "error_count": 0,
             "no_effect_count": 0,
-            "transition_request": {},
+            "transition_request": None,
             "transition_result": {
                 "status": "idle",
                 "needs_ocr": False,
@@ -567,18 +556,22 @@ def create_worker_state(
         },
         "lifecycle": {"is_finished": False},
     }
-    return apply_worker_state_update(
-        state,
-        {
-            "request": cast(WorkerRequestState, dict(request or {})),
-            "observation": cast(ObservationState, dict(observation or {})),
-            "decision": cast(DecisionState, dict(decision or {})),
-            "transition": cast(TransitionState, dict(transition or {})),
-            "replay": cast(RecipeReplayState, dict(replay or {})),
-            "collection": cast(JobCollectionState, dict(collection or {})),
-            "lifecycle": cast(WorkerLifecycleState, dict(lifecycle or {})),
-        },
-    )
+    update: WorkerStateUpdate = {}
+    if request:
+        update["request"] = request
+    if observation:
+        update["observation"] = observation
+    if decision:
+        update["decision"] = decision
+    if transition:
+        update["transition"] = transition
+    if replay:
+        update["replay"] = replay
+    if collection:
+        update["collection"] = collection
+    if lifecycle:
+        update["lifecycle"] = lifecycle
+    return apply_worker_state_update(state, update)
 
 
 __all__ = [

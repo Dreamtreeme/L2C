@@ -10,6 +10,7 @@ from agent.tests.worker_test_support import (
     worker_state,
 )
 from shared.schema.collection_intent import CollectionIntent
+from shared.schema.recipe_schema import ScreenCheckpoint
 
 
 def test_reflex_replays_one_parameterized_roi_step(tmp_path):
@@ -295,7 +296,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
                     "recipe_key": "recipe-search-set",
                     "before_url": "https://www.saramin.co.kr/zf_user/",
                     "before_screenshot": str(input_screen),
-                    "expected_after_state": result_state.model_dump(),
+                    "expected_after_state": result_state,
                     "recipe_transition_index": 0,
                     "recipe_transition_count": 2,
                     "started_at": time.time(),
@@ -349,10 +350,9 @@ def test_replay_success_is_recorded_only_after_final_transition():
     replay_results = []
     runtime = node_runtime(
         data=worker_data_services(
-            record_recipe_replay=lambda recipe_key, succeeded: replay_results.append(
-                (recipe_key, succeeded)
-            )
-            or True,
+            record_recipe_replay=lambda recipe_key, succeeded: (
+                replay_results.append((recipe_key, succeeded)) or True
+            ),
         )
     )
     observation = {
@@ -373,14 +373,14 @@ def test_replay_success_is_recorded_only_after_final_transition():
         "source": "reflex",
         "recipe_key": "recipe-search-set",
         "before_url": "https://www.saramin.co.kr/zf_user/",
-        "expected_after_state": {
-            "url_template": "saramin.co.kr/zf_user/search",
-            "page_role": "search_results",
-            "screen_context_signature": {
+        "expected_after_state": ScreenCheckpoint(
+            url_template="saramin.co.kr/zf_user/search",
+            page_role="search_results",
+            screen_context_signature={
                 "phash": "a" * 16,
                 "size": [1920, 1080],
             },
-        },
+        ),
         "started_at": time.time(),
     }
 
@@ -416,9 +416,7 @@ def test_replay_success_is_recorded_only_after_final_transition():
     )
 
     assert intermediate["transition"]["transition_result"]["status"] == "ready"
-    assert (
-        intermediate["replay"]["replay_session"].current_transition_index == 2
-    )
+    assert intermediate["replay"]["replay_session"].current_transition_index == 2
     assert completed["transition"]["transition_result"]["status"] == "ready"
     assert completed["replay"]["replay_session"] is None
     assert replay_results == [("recipe-search-set", True)]

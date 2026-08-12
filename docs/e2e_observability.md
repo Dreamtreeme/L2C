@@ -84,7 +84,7 @@ python -m benchmark.run_regression_matrix `
   --scenario wanted-ios-experience-guided
 ```
 
-자율 탐색 프로세스에서는 자동승격을 끕니다. 수집이 끝나면 부모 프로세스가 실제 서비스와 같은 `RecipePromotionWorker`를 사용해 해당 후보만 재시도하며 검토합니다. 프로세스 종료, 저장 품질, 목표 수, 실제 레시피 승격을 모두 통과한 경우에만 짝이 되는 경험 기반 탐색을 실행합니다. 하나라도 실패하면 `paired_autonomous_promotion_failed`로 건너뛰므로, 승격되지 않은 실행을 경험 기반 탐색 성능으로 잘못 집계하지 않습니다.
+자율 탐색 프로세스에서는 자동승격을 끕니다. 수집이 끝나면 부모 프로세스가 실제 서비스와 같은 `RecipePromotionWorker`를 사용해 해당 후보만 재시도하며 검토합니다. 최종 실행 판정은 프로세스 종료, 수집 품질과 실행 모드 계약을 한 번씩 조합합니다. 자율 탐색의 모드 계약은 실제 레시피 승격이며, 경험 기반 탐색의 모드 계약은 완료된 재생 경로가 한 개 이상이고 비교 전제조건이 충족되는 것입니다. 자율 탐색이 실패하면 짝 실행은 `paired_autonomous_promotion_failed`로 건너뜁니다.
 
 수집과 승격 비용은 다음 필드로 분리합니다.
 
@@ -146,7 +146,7 @@ LangSmith에서 root run 이름 `l2c.e2e`를 기준으로 다음 지표를 구�
 | 토큰 소비 | `total_tokens`, `tokens_per_persisted_item` | 합계와 공고당 평균 |
 | 비용 | `estimated_cost_usd`, `cost_per_persisted_item_usd` | 단가 파일이 있을 때만 |
 | OCR 안정성 | `ocr_timeout_count`, `recovered_failure_count` | 합계와 성공 실행 비교 |
-| 경험 기반 탐색 성과 | `reflex_hits`, `queue_replay_hits` | 경험 기반 탐색 실행의 평균 |
+| 경험 기반 탐색 성과 | `reflex_path_completed_count`, `reflex_hits`, `queue_replay_hits` | 완료 경로 수와 경험 기반 탐색 실행의 평균 |
 | 변경 영향 | `git_commit`, `git_dirty`, `config_fingerprint`, `recipe_version` | 필터와 그룹 |
 
 비교할 때는 `scenario_id`, `site`, `target_count`, `execution_mode`가 같은 실행만 묶습니다. 서로 다른 검색 난이도나 수집 개수를 한 그래프에 섞으면 실행시간과 토큰 변화의 원인을 판단할 수 없습니다.

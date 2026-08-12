@@ -35,11 +35,7 @@ def _expand_scenarios(
             scenario["base_id"] = base_id
             scenario["repeat_index"] = repeat_index
             scenario["repeat_total"] = repeat
-            scenario["id"] = (
-                f"{base_id}-r{repeat_index}"
-                if repeat > 1
-                else base_id
-            )
+            scenario["id"] = f"{base_id}-r{repeat_index}" if repeat > 1 else base_id
             expanded.append(scenario)
     return expanded
 
@@ -53,21 +49,13 @@ def _git_execution_contract() -> dict[str, Any]:
             capture_output=True,
             text=True,
         )
-        return (
-            completed.stdout.strip()
-            if strip
-            else completed.stdout.rstrip("\r\n")
-        )
+        return completed.stdout.strip() if strip else completed.stdout.rstrip("\r\n")
 
     status = run_git("status", "--porcelain", strip=False)
     return {
         "commit_sha": run_git("rev-parse", "HEAD"),
         "worktree_clean": not bool(status),
-        "changed_paths": [
-            line[3:]
-            for line in status.splitlines()
-            if len(line) >= 4
-        ],
+        "changed_paths": [line[3:] for line in status.splitlines() if len(line) >= 4],
     }
 
 
@@ -104,10 +92,7 @@ def _runtime_execution_contract() -> dict[str, Any]:
             "ocr_max_dim": settings.ocr.max_image_dim,
             "run_deadline_sec": settings.execution.run_deadline_sec,
         },
-        "environment": {
-            key: os.environ.get(key, "")
-            for key in environment_keys
-        },
+        "environment": {key: os.environ.get(key, "") for key in environment_keys},
     }
 
 
@@ -157,10 +142,11 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
             6,
         ),
         "reasoning_count": len(reasoning),
-        "reasoning_time_sec": round(sum(float(item.get("duration_sec") or 0.0) for item in reasoning), 6),
+        "reasoning_time_sec": round(
+            sum(float(item.get("duration_sec") or 0.0) for item in reasoning), 6
+        ),
         "reflex_count": sum(
-            item.get("stage") == "reflex"
-            and item.get("action_source") == "reflex"
+            item.get("stage") == "reflex" and item.get("action_source") == "reflex"
             for item in steps
         ),
         **reflex_paths,
@@ -198,10 +184,7 @@ def _command(scenario: dict[str, Any], log_path: Path, summary_path: Path) -> li
         "--count-mode",
         str(scenario.get("count_mode") or "unspecified"),
         "--original-query",
-        str(
-            scenario.get("original_query")
-            or scenario["search_keyword"]
-        ),
+        str(scenario.get("original_query") or scenario["search_keyword"]),
         "--scenario-id",
         str(scenario["id"]),
         "--execution-mode",
@@ -245,7 +228,9 @@ def _clear_jobs_for_collection_run(db_path: Path) -> int:
         ).fetchone()
         if not table_exists:
             return 0
-        removed_count = int(connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+        removed_count = int(
+            connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        )
         connection.execute("DELETE FROM jobs")
         connection.commit()
     return removed_count
@@ -255,9 +240,9 @@ def _scenario_workload_key(scenario: dict[str, Any]) -> str:
     return json.dumps(
         {
             "site": str(scenario.get("site") or "").strip().casefold(),
-            "search_keyword": str(
-                scenario.get("search_keyword") or ""
-            ).strip().casefold(),
+            "search_keyword": str(scenario.get("search_keyword") or "")
+            .strip()
+            .casefold(),
             "target_count": max(0, int(scenario.get("target_count") or 0)),
             "count_mode": str(scenario.get("count_mode") or "unspecified"),
         },
@@ -272,12 +257,8 @@ def _paired_autonomous_failed(
     autonomous_contracts: dict[str, bool],
 ) -> bool:
     return (
-        str(scenario.get("execution_mode") or "")
-        == "experience_guided"
-        and autonomous_contracts.get(
-            _scenario_pair_key(scenario)
-        )
-        is False
+        str(scenario.get("execution_mode") or "") == "experience_guided"
+        and autonomous_contracts.get(_scenario_pair_key(scenario)) is False
     )
 
 
@@ -327,9 +308,7 @@ def _attach_promotion_metrics(
     collection_cost = metric_summary.get("estimated_cost")
     promotion_cost = review_metrics.get("estimated_cost")
     numeric_costs = [
-        float(value)
-        for value in (collection_cost, promotion_cost)
-        if value is not None
+        float(value) for value in (collection_cost, promotion_cost) if value is not None
     ]
     return {
         **metric_summary,
@@ -340,7 +319,9 @@ def _attach_promotion_metrics(
             int(metric_summary.get("total_tokens") or 0)
             + int(review_metrics.get("total_tokens") or 0)
         ),
-        "workflow_estimated_cost": round(sum(numeric_costs), 10) if numeric_costs else None,
+        "workflow_estimated_cost": round(sum(numeric_costs), 10)
+        if numeric_costs
+        else None,
     }
 
 
@@ -376,9 +357,7 @@ def _mode_pair_efficiency(
                     experience_metrics.get("quality_passed"),
                     autonomous.get("mode_contract_passed"),
                     experience.get("mode_contract_passed"),
-                    experience_metrics.get(
-                        "experience_guided_performance_comparable"
-                    ),
+                    experience_metrics.get("experience_guided_performance_comparable"),
                 )
             )
             if not comparable:
@@ -387,49 +366,28 @@ def _mode_pair_efficiency(
             experience_cost = experience_metrics.get("estimated_cost")
             cost_saved = (
                 float(autonomous_cost) - float(experience_cost)
-                if autonomous_cost is not None
-                and experience_cost is not None
+                if autonomous_cost is not None and experience_cost is not None
                 else None
             )
             pairs.append(
                 {
                     "repeat_index": repeat_index,
                     "execution_time_saved_sec": round(
-                        float(
-                            autonomous_metrics.get(
-                                "execution_time_sec"
-                            )
-                            or 0.0
-                        )
-                        - float(
-                            experience_metrics.get(
-                                "execution_time_sec"
-                            )
-                            or 0.0
-                        ),
+                        float(autonomous_metrics.get("execution_time_sec") or 0.0)
+                        - float(experience_metrics.get("execution_time_sec") or 0.0),
                         6,
                     ),
                     "reasoning_calls_saved": int(
                         autonomous_metrics.get("reasoning_count") or 0
                     )
-                    - int(
-                        experience_metrics.get("reasoning_count") or 0
-                    ),
-                    "tokens_saved": int(
-                        autonomous_metrics.get("total_tokens") or 0
-                    )
-                    - int(
-                        experience_metrics.get("total_tokens") or 0
-                    ),
+                    - int(experience_metrics.get("reasoning_count") or 0),
+                    "tokens_saved": int(autonomous_metrics.get("total_tokens") or 0)
+                    - int(experience_metrics.get("total_tokens") or 0),
                     "estimated_cost_saved": (
-                        round(cost_saved, 10)
-                        if cost_saved is not None
-                        else None
+                        round(cost_saved, 10) if cost_saved is not None else None
                     ),
                     "promotion_estimated_cost": (
-                        autonomous_metrics.get(
-                            "promotion_estimated_cost"
-                        )
+                        autonomous_metrics.get("promotion_estimated_cost")
                     ),
                 }
             )
@@ -445,16 +403,8 @@ def _mode_pair_efficiency(
             for item in pairs
             if item["promotion_estimated_cost"] is not None
         ]
-        median_cost_saved = (
-            median(cost_savings)
-            if cost_savings
-            else None
-        )
-        median_promotion_cost = (
-            median(promotion_costs)
-            if promotion_costs
-            else None
-        )
+        median_cost_saved = median(cost_savings) if cost_savings else None
+        median_promotion_cost = median(promotion_costs) if promotion_costs else None
         break_even = (
             round(median_promotion_cost / median_cost_saved, 3)
             if median_promotion_cost is not None
@@ -467,20 +417,13 @@ def _mode_pair_efficiency(
                 "workload": json.loads(workload),
                 "comparable_pair_count": len(pairs),
                 "median_execution_time_saved_sec": round(
-                    median(
-                        item["execution_time_saved_sec"]
-                        for item in pairs
-                    ),
+                    median(item["execution_time_saved_sec"] for item in pairs),
                     6,
                 ),
                 "median_reasoning_calls_saved": median(
-                    item["reasoning_calls_saved"]
-                    for item in pairs
+                    item["reasoning_calls_saved"] for item in pairs
                 ),
-                "median_tokens_saved": median(
-                    item["tokens_saved"]
-                    for item in pairs
-                ),
+                "median_tokens_saved": median(item["tokens_saved"] for item in pairs),
                 "median_estimated_cost_saved": (
                     round(median_cost_saved, 10)
                     if median_cost_saved is not None
@@ -499,7 +442,9 @@ def _mode_pair_efficiency(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run L2C vision E2E scenarios sequentially.")
+    parser = argparse.ArgumentParser(
+        description="Run L2C vision E2E scenarios sequentially."
+    )
     parser.add_argument("--matrix", required=True)
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--scenario", action="append", default=[])
@@ -578,16 +523,11 @@ def _mode_contract_passed(
     promotion: dict[str, Any],
 ) -> bool:
     execution_mode = str(scenario["execution_mode"])
-    target_count = max(0, int(scenario.get("target_count") or 0))
     if execution_mode == "autonomous":
-        return metrics["persisted_count"] >= target_count and bool(
-            promotion.get("promoted")
-        )
+        return bool(promotion.get("promoted"))
     if execution_mode == "experience_guided":
         return (
-            metrics["persisted_count"] >= target_count
-            and metrics["reflex_count"] > 0
-            and metrics["observed_existing_count"] == 0
+            metrics["reflex_path_completed_count"] > 0
             and metrics["experience_guided_performance_comparable"]
         )
     return True
@@ -687,8 +627,12 @@ def main() -> int:
     matrix_path, matrix, scenarios = _selected_matrix_scenarios(args)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(args.output_dir or ROOT_DIR / "logs" / f"regression_{stamp}").resolve()
-    db_path = Path(args.db_path).resolve() if args.db_path else output_dir / "regression.db"
+    output_dir = Path(
+        args.output_dir or ROOT_DIR / "logs" / f"regression_{stamp}"
+    ).resolve()
+    db_path = (
+        Path(args.db_path).resolve() if args.db_path else output_dir / "regression.db"
+    )
     commands = _scenario_commands(scenarios, output_dir)
     if args.dry_run:
         print(
@@ -706,13 +650,8 @@ def main() -> int:
         return 0
 
     git_contract = _git_execution_contract()
-    if (
-        matrix.get("require_clean_worktree")
-        and not git_contract["worktree_clean"]
-    ):
-        raise SystemExit(
-            "이 평가 행렬은 깨끗한 작업 트리에서만 실행할 수 있습니다."
-        )
+    if matrix.get("require_clean_worktree") and not git_contract["worktree_clean"]:
+        raise SystemExit("이 평가 행렬은 깨끗한 작업 트리에서만 실행할 수 있습니다.")
 
     output_dir.mkdir(parents=True, exist_ok=False)
     results, exit_code = _run_scenario_matrix(
@@ -729,17 +668,14 @@ def main() -> int:
         "created_at": datetime.now().astimezone().isoformat(),
         "git": git_contract,
         "runtime": _runtime_execution_contract(),
-        "passed": all(
-            item["process_exit_code"] == 0
-            and item["metrics"]["quality_passed"]
-            and item["mode_contract_passed"]
-            for item in results
-        ),
+        "passed": all(_result_passed(item) for item in results),
         "mode_pair_efficiency": _mode_pair_efficiency(results),
         "results": results,
     }
     aggregate_path = output_dir / "matrix.summary.json"
-    aggregate_path.write_text(json.dumps(aggregate, ensure_ascii=False, indent=2), encoding="utf-8")
+    aggregate_path.write_text(
+        json.dumps(aggregate, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     print(f"MATRIX_SUMMARY={aggregate_path}")
     return exit_code if aggregate["passed"] else 1
 

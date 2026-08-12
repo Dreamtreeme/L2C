@@ -12,7 +12,6 @@ from agent.application.chat_service import ChatService
 from agent.application.collection_experience import record_collection_experience
 from agent.application.collection_postprocessing import postprocess_collection_batch
 from agent.application.collection_storage import store_postprocessed_collection
-from agent.application.collection_worker_runner import run_worker_once
 from agent.application.conversation_context_service import (
     load_conversation_context as load_default_conversation_context,
 )
@@ -143,7 +142,6 @@ class ApplicationRuntime:
         )
         self.worker_execution_service = WorkerExecutionService(
             self.vision_runtime,
-            run_worker_once,
             build_worker_data_services(self.db_path),
         )
         self.investigation_workflow = (

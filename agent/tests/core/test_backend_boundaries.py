@@ -531,14 +531,14 @@ def test_browser_closes_by_default(monkeypatch):
     )
     runtime.get_action_tools()
 
-    service = WorkerExecutionService(
-        runtime,
-        lambda _intent, *, worker_runtime, data_services: {
-            "runtime": worker_runtime,
-            "data": data_services,
-        },
-        worker_data_services(),
-    )
+    class StubWorkerExecutionService(WorkerExecutionService):
+        def _run_collection(self, _intent, *, run_id):
+            return {
+                "runtime": self.worker_runtime,
+                "data": self.data_services,
+            }
+
+    service = StubWorkerExecutionService(runtime, worker_data_services())
     result = service.run(CollectionIntent())
 
     assert closed == [True]
@@ -592,13 +592,13 @@ def test_worker_execution_service_closes_browser_after_worker_failure():
         def close_browser_after_run(self):
             events.append("browser_closed")
 
-    def fail_worker(*args, **kwargs):
-        events.append("worker_started")
-        raise RuntimeError("worker failed")
+    class FailingWorkerExecutionService(WorkerExecutionService):
+        def _run_collection(self, _intent, *, run_id):
+            events.append("worker_started")
+            raise RuntimeError("worker failed")
 
-    service = WorkerExecutionService(
+    service = FailingWorkerExecutionService(
         FakeRuntime(),
-        fail_worker,
         worker_data_services(),
     )
 

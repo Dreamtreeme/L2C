@@ -7,7 +7,7 @@ set PYTHONLEGACYWINDOWSSTDIO=0
 set REPO_ROOT=%~dp0..
 set PYTHON=%REPO_ROOT%\.venv-app\Scripts\python.exe
 set TEST_ARGS=%*
-if "%~1"=="" set TEST_ARGS=agent\tests\core -q -p no:cacheprovider
+if "%~1"=="" set TEST_ARGS=agent\tests -q -p no:cacheprovider
 if not exist "%PYTHON%" goto launcher
 "%PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 13) else 1)" > nul 2>&1
 if errorlevel 1 goto launcher

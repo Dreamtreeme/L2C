@@ -11,6 +11,7 @@ from agent.observability.run_context import raise_if_cancelled
 from agent.runtime.worker_contracts import (
     ActionRequest,
     WorkerState,
+    WorkerStateUpdate,
     build_action_event,
 )
 from shared.schema.feedback_schema import ExecutionEvent
@@ -26,6 +27,7 @@ from agent.graph.worker_action_guard import (
 from agent.graph.worker_action_recording import record_action_result
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.graph.worker_execution_policy import compact_action_args
+from agent.graph.worker_transition_recording import set_transition_request
 from agent.runtime.detail_runtime import is_job_detail_context
 from agent.runtime.job_field_contract import merge_job_detail_coverage
 from agent.runtime.job_card_queue import job_detail_key_from_state
@@ -228,12 +230,16 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 call_metadata=call_metadata,
             )
             if request.source == "reflex":
-                transition = state["transition"]
-                transition["transition_request"] = {
-                    **dict(transition.get("transition_request", {}) or {}),
-                    "source": "reflex",
-                    "execution_failed": True,
-                }
+                set_transition_request(
+                    context,
+                    action_sequence,
+                    action_name,
+                    args,
+                    "reflex",
+                )
+                transition_request = state["transition"].get("transition_request")
+                if transition_request is not None:
+                    transition_request["execution_failed"] = True
             break
 
 
@@ -251,9 +257,9 @@ def _action_request_for_execution(state: WorkerState) -> ActionRequest | None:
 def _missing_action_update(
     state: WorkerState,
     request: ActionRequest | None,
-) -> dict[str, Any]:
+) -> WorkerStateUpdate:
     logger.warning("No validated action request is available.")
-    result = {
+    result: dict[str, Any] = {
         "action": "none",
         "status": "error",
         "error": "No validated action request",
@@ -284,7 +290,7 @@ def _missing_action_update(
 def execution_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
-) -> dict[str, Any]:
+) -> WorkerStateUpdate:
     """현재 화면에서 선택된 행동 실행 단위를 검증하고 실행한다."""
 
     raise_if_cancelled()

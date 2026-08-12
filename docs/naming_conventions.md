@@ -149,7 +149,7 @@ tags:
 | 모듈 | 책임 |
 |---|---|
 | `collection_request_builder.py` | 수집 의도, 사이트 프로필과 작업자 목표 생성 |
-| `collection_worker_runner.py` | 단일 비전 작업자 실행과 `CollectionBatch` 구성 |
+| `worker_execution_service.py` | 단일 비전 작업자 실행과 `CollectionBatch` 구성, 브라우저 생명주기 |
 | `collection_postprocessing.py` | OCR 원문 구조화와 요청 조건 판정 |
 | `collection_storage.py` | 검증된 공고의 SQLite UPSERT |
 | `collection_experience.py` | 작업자 제출물과 레시피 후보 기록 |

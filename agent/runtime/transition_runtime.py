@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
 from agent.config import get_settings
 from agent.runtime.worker_contracts import (
+    CompletedTransitionObservation,
+    ObservationState,
+    TransitionRequest,
+    TransitionResult,
     WorkerState,
     action_event_results,
 )
@@ -37,9 +42,7 @@ def detect_two_screen_transition_cycle(
 
     try:
         signatures = [
-            compute_screen_phash_signature(
-                transition.evidence.screenshot
-            )
+            compute_screen_phash_signature(transition.evidence.screenshot)
             for transition in recent
         ]
     except (OSError, ValueError) as exc:
@@ -73,9 +76,7 @@ def detect_two_screen_transition_cycle(
     for transition in recent[:2]:
         action = transition.actions[0]
         detail = action.param.key or action.component
-        action_cycle.append(
-            f"{action.action}:{detail}" if detail else action.action
-        )
+        action_cycle.append(f"{action.action}:{detail}" if detail else action.action)
     return {
         "detected": True,
         "action_cycle": action_cycle,
@@ -130,7 +131,7 @@ def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
 
 
 def transition_visual_change_ratio(
-    transition_request: dict[str, Any],
+    transition_request: TransitionRequest,
     current_image_path: str | os.PathLike,
 ) -> float | None:
     """행동 전후 스크린샷의 눈에 띄는 픽셀 변화 비율을 계산한다."""
@@ -156,7 +157,7 @@ def transition_visual_change_ratio(
 
 
 def transition_has_visual_change(
-    transition_request: dict[str, Any],
+    transition_request: TransitionRequest,
     current_image_path: str | os.PathLike,
 ) -> tuple[bool, float | None]:
     """OpenCV 전후 프레임 비교로 화면 변화 시작 여부를 확인한다."""
@@ -225,8 +226,10 @@ def used_idempotent_recipe_keys_on_url(
         before_url = str(action.get("before_url") or "")
         if before_url and not same_idempotent_page_scope(before_url, current_url):
             continue
-        args = action.get("args") if isinstance(action.get("args"), dict) else {}
-        target = action.get("target") if isinstance(action.get("target"), dict) else {}
+        raw_args = action.get("args")
+        args = raw_args if isinstance(raw_args, dict) else {}
+        raw_target = action.get("target")
+        target = raw_target if isinstance(raw_target, dict) else {}
         component = str(
             args.get("target_component") or target.get("component") or ""
         ).casefold()
@@ -252,8 +255,173 @@ def transition_marker_texts(markers: list[dict[str, Any]]) -> list[str]:
     return texts
 
 
+def reused_ocr_observation(
+    state: WorkerState,
+    request: TransitionRequest,
+) -> ObservationState:
+    """화면 변화가 없을 때 직전 캡처의 OCR을 현재 관찰에 다시 연결한다."""
+
+    observation = state["observation"]
+    previous = dict(observation.get("previous_observation") or {})
+    if not previous:
+        return {}
+    if str(request.get("before_observation_id") or "") != str(
+        previous.get("observation_id") or ""
+    ):
+        return {}
+    if str(request.get("before_screenshot") or "") != str(
+        previous.get("screenshot") or ""
+    ):
+        return {}
+    before_url = str(request.get("before_url") or "")
+    previous_url = str(previous.get("current_url") or "")
+    if before_url and previous_url and before_url != previous_url:
+        return {}
+
+    markers = [
+        dict(marker)
+        for marker in previous.get("markers", []) or []
+        if isinstance(marker, dict)
+    ]
+    if not markers:
+        return {}
+    signature = dict(previous.get("screen_signature") or {})
+    raw_signature = dict(observation.get("raw_screen_signature") or {})
+    for key in ("phash", "size"):
+        if raw_signature.get(key):
+            signature[key] = raw_signature[key]
+    current_observation = {
+        **previous,
+        "observation_id": str(observation.get("observation_id") or ""),
+        "screenshot": str(observation.get("current_screenshot") or ""),
+        "current_url": str(observation.get("current_url") or previous_url),
+        "markers": markers,
+        "screen_signature": signature,
+    }
+    return {
+        "current_markers": markers,
+        "ui_context": str(previous.get("ui_context") or ""),
+        "marked_image": str(previous.get("marked_image") or ""),
+        "screen_signature": signature,
+        "current_page_role": str(previous.get("page_role") or ""),
+        "ocr_complete": True,
+        "previous_observation": current_observation,
+    }
+
+
+def transition_result(
+    request: TransitionRequest | None,
+    *,
+    status: str,
+    reason: str = "",
+    visual_change_detected: bool = False,
+    visual_change_ratio: float | None = None,
+    needs_ocr: bool = False,
+) -> TransitionResult:
+    result: TransitionResult = {}
+    if request is not None:
+        result.update(request)
+    result.update(
+        {
+            "status": status,
+            "outcome": "",
+            "reason": reason,
+            "visual_change_detected": visual_change_detected,
+            "visual_change_ratio": visual_change_ratio,
+            "needs_ocr": needs_ocr,
+        }
+    )
+    return result
+
+
+def transition_result_without_request(
+    state: WorkerState,
+    request: TransitionRequest | None,
+) -> dict[str, Any] | None:
+    if state["observation"].get("low_information_screen"):
+        return {
+            "transition": {
+                "transition_result": transition_result(
+                    request,
+                    status="pending" if request else "idle",
+                    reason="low_information_screen",
+                ),
+            }
+        }
+    if request is None:
+        return {
+            "transition": {
+                "transition_result": transition_result(
+                    None,
+                    status="idle",
+                    reason="no_transition_request",
+                    needs_ocr=not bool(state["observation"].get("ocr_complete")),
+                ),
+            }
+        }
+    return None
+
+
+def input_text_confirmed_by_ocr(
+    state: WorkerState,
+    request: TransitionRequest,
+) -> bool:
+    """입력 문자열이 이전 화면에는 없고 현재 OCR에 나타났는지 확인한다."""
+
+    if request.get("action") != "type_in_marker":
+        return False
+    input_text = str(request.get("input_text") or "").casefold().replace(" ", "")
+    if not input_text:
+        return False
+    observation = state["observation"]
+    previous = observation.get("previous_observation") or {}
+    previous_markers = list(previous.get("markers") or [])
+    previous_texts = transition_marker_texts(previous_markers)
+    current_texts = transition_marker_texts(
+        list(observation.get("current_markers") or [])
+    )
+
+    def contains_input(texts: list[str]) -> bool:
+        return any(input_text in text.casefold().replace(" ", "") for text in texts)
+
+    return contains_input(current_texts) and not contains_input(previous_texts)
+
+
+def transition_record(
+    request: TransitionRequest,
+    *,
+    status: str,
+    source: str,
+    reason: str,
+    attempt: int,
+    state: WorkerState,
+    visual_change_ratio: float | None,
+    ocr_skipped: bool,
+) -> CompletedTransitionObservation:
+    started_at = float(request.get("started_at") or time.time())
+    observation = state["observation"]
+    return build_transition_observation(
+        request,
+        status=status,
+        outcome="",
+        source=source,
+        reason=reason,
+        elapsed_sec=max(0.0, time.time() - started_at),
+        attempt=attempt,
+        markers=list(observation.get("current_markers", []) or []),
+        screenshot=str(observation.get("current_screenshot") or ""),
+        marked_image=str(observation.get("marked_image") or ""),
+        after_observation_id=str(observation.get("observation_id") or ""),
+        current_url=str(observation.get("current_url") or ""),
+        page_role=str(observation.get("current_page_role") or ""),
+        screen_signature=dict(observation.get("screen_signature") or {}),
+        visual_change_ratio=visual_change_ratio,
+        ocr_skipped=ocr_skipped,
+    )
+
+
 def build_transition_observation(
-    transition_request: dict[str, Any],
+    transition_request: TransitionRequest,
     *,
     status: str,
     outcome: str,
@@ -271,8 +439,8 @@ def build_transition_observation(
     phash_distance: int | None = None,
     visual_change_ratio: float | None = None,
     ocr_skipped: bool = False,
-) -> dict[str, Any]:
-    """행동 step과 관찰 결과를 한 묶음으로 만든다."""
+) -> CompletedTransitionObservation:
+    """행동과 관찰 결과를 완성된 전환 근거로 만든다."""
 
     after_state = {
         "observation_id": str(after_observation_id or ""),
@@ -280,39 +448,36 @@ def build_transition_observation(
         "page_role": str(page_role or ""),
         "screen_context_signature": compact_screen_context_signature(screen_signature),
     }
-    return {
-        "action_seq": transition_request.get("action_seq"),
-        "action": transition_request.get("action", ""),
-        "before_observation_id": str(
+    return CompletedTransitionObservation(
+        action_seq=transition_request.get("action_seq"),
+        action=transition_request.get("action", ""),
+        before_observation_id=str(
             transition_request.get("before_observation_id") or ""
         ),
-        "after_observation_id": str(after_observation_id or ""),
-        "step": dict(transition_request.get("step", {}) or {}),
-        "expected_after": dict(transition_request.get("step") or {}).get(
-            "expected_after", ""
-        ),
-        "source": source,
-        "recipe_key": transition_request.get("recipe_key", ""),
-        "recipe_transition_index": transition_request.get("recipe_transition_index"),
-        "recipe_transition_count": transition_request.get("recipe_transition_count"),
-        "transition_actions": list(transition_request.get("transition_actions") or []),
-        "after_state_match": dict(transition_request.get("after_state_match") or {}),
-        "attempt": attempt,
-        "elapsed_sec": round(elapsed_sec, 3),
-        "status": status,
-        "outcome": outcome,
-        "reason": reason,
-        "phash_distance": phash_distance,
-        "visual_change_ratio": visual_change_ratio,
-        "ocr_skipped": ocr_skipped,
-        "marker_count": len(markers),
-        "marker_texts": transition_marker_texts(markers),
-        "screenshot": str(screenshot),
-        "marked_image": str(marked_image or ""),
-        "current_url": str(current_url or ""),
-        "page_role": str(page_role or ""),
-        "after_state": after_state,
-    }
+        after_observation_id=str(after_observation_id or ""),
+        expected_after=str(transition_request.get("expected_after") or ""),
+        source=source,
+        recipe_key=transition_request.get("recipe_key", ""),
+        recipe_transition_index=transition_request.get("recipe_transition_index"),
+        recipe_transition_count=transition_request.get("recipe_transition_count"),
+        transition_actions=list(transition_request.get("transition_actions") or []),
+        after_state_match=dict(transition_request.get("after_state_match") or {}),
+        attempt=attempt,
+        elapsed_sec=round(elapsed_sec, 3),
+        status=status,
+        outcome=outcome,
+        reason=reason,
+        phash_distance=phash_distance,
+        visual_change_ratio=visual_change_ratio,
+        ocr_skipped=ocr_skipped,
+        marker_count=len(markers),
+        marker_texts=transition_marker_texts(markers),
+        screenshot=str(screenshot),
+        marked_image=str(marked_image or ""),
+        current_url=str(current_url or ""),
+        page_role=str(page_role or ""),
+        after_state=after_state,
+    )
 
 
 __all__ = [
@@ -322,8 +487,13 @@ __all__ = [
     "idempotent_page_scope",
     "idempotent_page_scope_ignored_query_keys",
     "latest_no_effect_transition",
+    "input_text_confirmed_by_ocr",
+    "reused_ocr_observation",
     "same_idempotent_page_scope",
     "transition_has_visual_change",
     "transition_marker_texts",
+    "transition_record",
+    "transition_result",
+    "transition_result_without_request",
     "used_idempotent_recipe_keys_on_url",
 ]

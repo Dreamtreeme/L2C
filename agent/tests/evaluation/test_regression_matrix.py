@@ -9,6 +9,7 @@ from benchmark.run_regression_matrix import (
     _clear_jobs_for_collection_run,
     _command,
     _metric_summary,
+    _mode_contract_passed,
     _mode_pair_efficiency,
     _paired_autonomous_failed,
     _promote_autonomous_candidate,
@@ -89,6 +90,21 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
     assert summary["reflex_count"] == 1
     assert summary["queue_count"] == 1
     assert summary["total_tokens"] == 12
+    experience_metrics = {
+        **summary,
+        "reflex_path_completed_count": 1,
+        "experience_guided_performance_comparable": True,
+    }
+    assert _mode_contract_passed(
+        {"execution_mode": "experience_guided"},
+        experience_metrics,
+        {},
+    )
+    assert not _mode_contract_passed(
+        {"execution_mode": "experience_guided"},
+        {**experience_metrics, "reflex_path_completed_count": 0},
+        {},
+    )
 
 
 def test_experience_guided_comparison_rejects_existing_jobs() -> None:

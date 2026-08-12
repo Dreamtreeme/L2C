@@ -150,8 +150,7 @@ def test_rocketpunch_list_and_selected_job_use_side_panel_contract():
         == "job_detail"
     )
     selected_url = (
-        "https://www.rocketpunch.com/jobs?"
-        "keyword=백엔드+개발자&selectedJobId=159079"
+        "https://www.rocketpunch.com/jobs?keyword=백엔드+개발자&selectedJobId=159079"
     )
     assert looks_like_job_detail_url(selected_url) is True
     assert infer_site_page_role(selected_url, ["주요업무"]) == "job_detail"
@@ -270,26 +269,16 @@ def test_realtime_scraping_wanted_starts_from_home_without_query_url():
     assert "Do not construct or open a search/query URL yourself" in goal
 
 
-def test_worker_receives_structured_collection_intent(monkeypatch):
-    from agent.application import collection_worker_runner as rt
-    from agent.tests.worker_test_support import worker_data_services
+def test_worker_receives_structured_collection_intent():
+    from agent.application.worker_execution_service import (
+        _build_initial_state,
+        _resolve_collection_intent,
+    )
+    from agent.sites import load_site_profile
     from shared.schema.collection_intent import CollectionIntent
 
-    captured = {}
-
-    def fake_execute(initial_state, _profile, _recursion_limit, **_kwargs):
-        captured["collection_intent"] = initial_state["request"]["collection_intent"]
-        captured["goal"] = initial_state["request"].get("goal", "")
-        final_state = {
-            **initial_state,
-            "lifecycle": {**initial_state["lifecycle"], "is_finished": True},
-            "collection": {**initial_state["collection"], "job_captures": []},
-        }
-        return final_state, False
-
-    monkeypatch.setattr(rt, "execute_worker_graph", fake_execute)
-
-    result = rt.run_worker_once(
+    profile = load_site_profile("wanted")
+    intent = _resolve_collection_intent(
         CollectionIntent(
             original_query="7월 서울 iOS 개발자 공고 2개",
             site="wanted",
@@ -300,14 +289,13 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
             task_category="탐색",
             required_fields=["posted_at"],
         ),
-        worker_runtime=object(),
-        data_services=worker_data_services(),
+        profile,
     )
+    state = _build_initial_state(intent, profile, "worker-test")
 
-    assert result.submission.collection_intent.target_count == 2
-    assert result.submission.collection_intent.task_category == "탐색"
-    intent = captured["collection_intent"]
     assert intent.target_count == 2
+    assert intent.task_category == "탐색"
+    assert state["request"]["collection_intent"] == intent
     assert intent.search_keyword == "iOS 개발자"
     assert intent.task_category == "탐색"
     assert [field.value for field in intent.required_fields] == [
@@ -320,9 +308,8 @@ def test_worker_receives_structured_collection_intent(monkeypatch):
         "benefits",
         "posted_at",
     ]
-    assert "required_record_shape" in captured["goal"]
-    assert "Collect up to 2 distinct job postings" in captured["goal"]
-    assert result.submission.collection_intent.search_keyword == "iOS 개발자"
+    assert "required_record_shape" in state["request"]["goal"]
+    assert "Collect up to 2 distinct job postings" in state["request"]["goal"]
     assert intent.filters.model_dump(mode="json") == {
         "posted_from": "2026-07-01",
         "posted_to": "",
