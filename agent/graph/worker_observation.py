@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from langgraph.runtime import Runtime
 
@@ -25,7 +24,10 @@ from agent.runtime.job_field_contract import (
 from agent.runtime.site_context import is_job_detail_context
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.runtime.worker_contracts import (
-    ObservationState,
+    ObservationPatch,
+    PreviousObservation,
+    ScreenMarker,
+    ScreenSignature,
     WorkerState,
     WorkerStateUpdate,
     apply_worker_state_update,
@@ -49,7 +51,7 @@ _WAIT_ACTIONS = {
 
 
 def _build_ui_context(
-    markers: list[dict[str, Any]],
+    markers: list[ScreenMarker],
     current_url: str,
     page_role: str,
 ) -> str:
@@ -119,7 +121,7 @@ def _next_observation_identity(state: WorkerState) -> tuple[int, str]:
     return sequence, f"{prefix}observation:{sequence:04d}"
 
 
-def _previous_observation(state: WorkerState) -> dict[str, Any]:
+def _previous_observation(state: WorkerState) -> PreviousObservation:
     """새 화면을 관찰하기 전에 현재 OCR 관찰을 보존한다."""
 
     observation = state["observation"]
@@ -129,32 +131,35 @@ def _previous_observation(state: WorkerState) -> dict[str, Any]:
         and observation.get("current_screenshot")
         and observation.get("current_markers")
     ):
-        return {
+        previous: PreviousObservation = {
             "observation_id": str(observation.get("observation_id") or ""),
             "screenshot": str(observation.get("current_screenshot") or ""),
             "current_url": str(observation.get("current_url") or ""),
             "markers": list(observation.get("current_markers") or []),
             "ui_context": str(observation.get("ui_context") or ""),
             "marked_image": str(observation.get("marked_image") or ""),
-            "screen_signature": dict(observation.get("screen_signature") or {}),
+            "screen_signature": (observation.get("screen_signature") or {}).copy(),
             "page_role": str(observation.get("current_page_role") or ""),
         }
-    return dict(observation.get("previous_observation") or {})
+        return previous
+    return (observation.get("previous_observation") or {}).copy()
 
 
 def capture_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
-) -> dict[str, Any]:
+) -> WorkerStateUpdate:
     """화면 변화 대기, 캡처, URL 읽기와 원본 pHash 계산만 수행한다."""
 
     raise_if_cancelled()
     perception = runtime.context.vision.get_perception()
     observation = state["observation"]
-    transition_request = dict(state["transition"].get("transition_request", {}) or {})
-    pending_action = str(transition_request.get("action") or "")
+    transition_request = state["transition"].get("transition_request")
+    pending_action = (
+        str(transition_request.get("action") or "") if transition_request else ""
+    )
 
-    if pending_action in _WAIT_ACTIONS:
+    if transition_request is not None and pending_action in _WAIT_ACTIONS:
         before_screenshot = str(transition_request.get("before_screenshot") or "")
         if before_screenshot:
             perception.wait_for_transition_change(before_screenshot)
@@ -176,7 +181,7 @@ def capture_node(
         else:
             current_url_stale = True
 
-    raw_signature = (
+    raw_signature: ScreenSignature = (
         compute_screen_phash_signature(image_path) if transition_request else {}
     )
     low_information = bool(capture_quality.get("low_information"))
@@ -229,21 +234,21 @@ def ocr_node(
     image_path = Path(image_path_text)
 
     analysis = runtime.context.vision.get_perception().analyze_ui(image_path)
-    markers = list(analysis.get("markers", []) or [])
+    markers: list[ScreenMarker] = list(analysis.get("markers", []) or [])
     marked_image = str(analysis.get("marked_image") or "")
-    screen_signature = compute_screen_signature(image_path, markers)
+    screen_signature: ScreenSignature = compute_screen_signature(image_path, markers)
     capture_context = build_capture_context(
         list(screen_signature.get("size") or []),
         int(analysis.get("content_top", 0) or 0),
     )
     if capture_context:
         screen_signature["capture_context"] = capture_context
-    raw_signature = dict(observation_state.get("raw_screen_signature", {}) or {})
+    raw_signature = observation_state.get("raw_screen_signature") or {}
     if raw_signature.get("phash"):
         screen_signature["phash"] = raw_signature["phash"]
-        screen_signature["size"] = raw_signature.get("size") or screen_signature.get(
-            "size"
-        )
+        raw_size = raw_signature.get("size")
+        if raw_size:
+            screen_signature["size"] = raw_size
 
     current_url = str(observation_state.get("current_url") or "")
     page_role = infer_current_page_role(current_url, markers)
@@ -265,7 +270,7 @@ def ocr_node(
         "Worker screen OCR completed",
         marker_count=len(markers),
     )
-    observation: ObservationState = {
+    observation: ObservationPatch = {
         "marked_image": marked_image,
         "current_markers": markers,
         "ui_context": ui_context,
@@ -292,7 +297,7 @@ def _collect_job_detail_observation(
     current_url = str(observation.get("current_url") or "")
     detail_key = job_detail_key_from_state(state)
     detail_buffer = update_job_detail_buffer(
-        dict(collection.get("job_detail_buffer", {}) or {}),
+        (collection.get("job_detail_buffer") or {}).copy(),
         list(observation.get("current_markers") or []),
         current_url,
         str(observation.get("current_screenshot") or ""),

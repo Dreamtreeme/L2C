@@ -54,7 +54,13 @@ def _resolve_comparison_period(value: str) -> tuple[date, date, date, date]:
     )
     if match is None:
         raise ValueError("비교 기간 선택값에 현재 기간과 비교 기간이 필요합니다.")
-    return tuple(date.fromisoformat(item) for item in match.groups())
+    current_start, current_end, comparison_start, comparison_end = match.groups()
+    return (
+        date.fromisoformat(current_start),
+        date.fromisoformat(current_end),
+        date.fromisoformat(comparison_start),
+        date.fromisoformat(comparison_end),
+    )
 
 
 def _selected_value(

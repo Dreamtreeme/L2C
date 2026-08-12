@@ -63,8 +63,9 @@ def execute_ui_action(
     raise_for_action_failure(result)
     screen_changed = True
     if action_name == "open_browser":
+        raw_result_payload = result.get("result")
         result_payload = (
-            result.get("result") if isinstance(result.get("result"), dict) else {}
+            raw_result_payload if isinstance(raw_result_payload, dict) else {}
         )
         screen_changed = bool(result_payload.get("opened"))
         if not screen_changed and not observation.get("ui_context"):

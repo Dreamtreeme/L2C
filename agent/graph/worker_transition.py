@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from langgraph.runtime import Runtime
 
@@ -20,6 +21,9 @@ from agent.runtime.job_card_queue import (
     release_active_job_card,
 )
 from agent.runtime.worker_contracts import (
+    ObservationPatch,
+    RecipeReplayPatch,
+    TransitionPatch,
     TransitionRequest,
     WorkerState,
     WorkerStateUpdate,
@@ -36,133 +40,73 @@ from agent.runtime.transition_runtime import (
     transition_result_without_request,
 )
 from agent.utils.logger import logger
+from shared.schema.recipe_schema import TransitionStatus
 
 
-def _evaluate_before_ocr(
+@dataclass(frozen=True, slots=True)
+class TransitionDecision:
+    """현재 캡처에 대한 전이 판정과 필요한 상태 효과."""
+
+    request: TransitionRequest
+    status: TransitionStatus
+    reason: str
+    needs_ocr: bool = False
+    records_outcome: bool = True
+    block_recipe: bool = False
+    release_queue: bool = False
+    reuse_previous_ocr: bool = False
+    reset_no_effect: bool = False
+
+
+def _decide_before_ocr(
     state: WorkerState,
     request: TransitionRequest,
     *,
     visual_changed: bool,
-    visual_ratio: float | None,
-    record_replay_result,
-) -> dict[str, Any]:
+) -> TransitionDecision:
     source = str(request.get("source") or "")
     action = str(request.get("action") or "")
-    input_requires_ocr = action == "type_in_marker"
     cached_queue_marker_failed = not visual_changed and queue_click_used_cached_marker(
         state, request
     )
     if cached_queue_marker_failed:
         refresh_request = request.copy()
         refresh_request["queue_marker_refresh"] = True
-        return {
-            "transition": {
-                "transition_request": refresh_request,
-                "transition_result": transition_result(
-                    refresh_request,
-                    status="needs_ocr",
-                    reason="queue_cached_marker_refresh_required",
-                    visual_change_ratio=visual_ratio,
-                    needs_ocr=True,
-                ),
-            },
-            "collection": {
-                "job_card_queue": release_active_job_card(
-                    list(state["collection"].get("job_card_queue", []) or [])
-                )
-            },
-        }
-    if visual_changed or input_requires_ocr:
-        return {
-            "transition": {
-                "no_effect_count": 0,
-                "transition_result": transition_result(
-                    request,
-                    status="needs_ocr",
-                    reason=("ocr_required" if visual_changed else "input_ocr_required"),
-                    visual_change_detected=visual_changed,
-                    visual_change_ratio=visual_ratio,
-                    needs_ocr=True,
-                ),
-            }
-        }
-
-    reason = "reflex_no_screen_change" if source == "reflex" else "no_screen_change"
-    observation_update = reused_ocr_observation(state, request)
-    record_state = apply_worker_state_update(
-        state,
-        WorkerStateUpdate(observation=observation_update),
-    )
-    record = transition_record(
-        request,
+        return TransitionDecision(
+            request=refresh_request,
+            status="needs_ocr",
+            reason="queue_cached_marker_refresh_required",
+            needs_ocr=True,
+            records_outcome=False,
+            release_queue=True,
+        )
+    if visual_changed or action == "type_in_marker":
+        return TransitionDecision(
+            request=request,
+            status="needs_ocr",
+            reason="ocr_required" if visual_changed else "input_ocr_required",
+            needs_ocr=True,
+            records_outcome=False,
+            reset_no_effect=True,
+        )
+    return TransitionDecision(
+        request=request,
         status="unknown",
-        source=source,
-        reason=reason,
-        attempt=1,
-        state=record_state,
-        visual_change_ratio=visual_ratio,
-        ocr_skipped=True,
+        reason=(
+            "reflex_no_screen_change" if source == "reflex" else "no_screen_change"
+        ),
+        block_recipe=source == "reflex",
+        release_queue=source == "job_card_queue",
+        reuse_previous_ocr=True,
     )
-    logger.info(
-        "Transition no-effect detected before OCR",
-        source=source,
-        action=request.get("action", ""),
-        visual_change_ratio=visual_ratio,
-    )
-    record_replay_outcome(
-        state,
-        request,
-        status="unknown",
-        persist_result=record_replay_result,
-    )
-    update = {
-        "transition": {
-            "no_effect_count": (
-                int(state["transition"].get("no_effect_count") or 0) + 1
-            ),
-            "transition_request": None,
-            "transition_result": transition_result(
-                request,
-                status="unknown",
-                reason=reason,
-                visual_change_ratio=visual_ratio,
-            ),
-            "action_events": attach_action_transition(
-                state["transition"].get("action_events", []) or [],
-                record,
-            ),
-        },
-        "replay": {
-            "reflex_blocked_recipe_keys": blocked_recipe_keys_after(
-                state,
-                request,
-                should_block=source == "reflex",
-            ),
-            "replay_session": replay_session_after_transition(
-                state,
-                source=source,
-                status="unknown",
-            ),
-        },
-        "observation": observation_update,
-    }
-    if source == "job_card_queue":
-        update["collection"] = {
-            "job_card_queue": release_active_job_card(
-                list(state["collection"].get("job_card_queue", []) or [])
-            )
-        }
-    return update
 
 
-def _evaluate_after_ocr(
+def _decide_after_ocr(
     state: WorkerState,
     request: TransitionRequest,
     *,
     visual_changed: bool,
-    visual_ratio: float | None,
-    record_replay_result,
-) -> dict[str, Any]:
+) -> TransitionDecision:
     source = str(request.get("source") or "")
     current_url = str(state["observation"].get("current_url") or "")
     before_url = str(request.get("before_url") or "")
@@ -177,7 +121,8 @@ def _evaluate_after_ocr(
         ],
     )
 
-    evaluated_request: TransitionRequest
+    evaluated_request = request
+    block_recipe = False
     if source == "reflex":
         matched, reason, after_state_match = verify_replay_after_state(
             request,
@@ -188,12 +133,9 @@ def _evaluate_after_ocr(
         status = "ready" if matched else "unknown"
         block_recipe = not matched
     elif source == "job_card_queue" and not queue_target_reached:
-        evaluated_request = request
         status = "unknown"
         reason = "job_card_detail_not_reached"
-        block_recipe = False
     elif markers and (url_changed or visual_changed or input_confirmed):
-        evaluated_request = request
         status = "ready"
         reason = (
             "screen_change_pixels_matched"
@@ -202,75 +144,134 @@ def _evaluate_after_ocr(
                 "screen_change_url_matched" if url_changed else "input_text_ocr_matched"
             )
         )
-        block_recipe = False
     elif not url_changed and not visual_changed:
-        evaluated_request = request
         status = "unknown"
         reason = "no_screen_change"
-        block_recipe = False
     else:
-        evaluated_request = request
         status = "unknown"
         reason = "transition_change_unverified"
-        block_recipe = False
-
-    attempt = 1
-    record = transition_record(
-        evaluated_request,
+    return TransitionDecision(
+        request=evaluated_request,
         status=status,
-        source=source,
         reason=reason,
-        attempt=attempt,
-        state=state,
+        block_recipe=block_recipe,
+        release_queue=source == "job_card_queue" and status != "ready",
+    )
+
+
+def _pending_transition_update(
+    state: WorkerState,
+    decision: TransitionDecision,
+    *,
+    visual_changed: bool,
+    visual_ratio: float | None,
+) -> WorkerStateUpdate:
+    transition: TransitionPatch = {
+        "transition_request": decision.request,
+        "transition_result": transition_result(
+            decision.request,
+            status=decision.status,
+            reason=decision.reason,
+            visual_change_detected=visual_changed,
+            visual_change_ratio=visual_ratio,
+            needs_ocr=decision.needs_ocr,
+        ),
+    }
+    if decision.reset_no_effect:
+        transition["no_effect_count"] = 0
+    update: WorkerStateUpdate = {"transition": transition}
+    if decision.release_queue:
+        update["collection"] = {
+            "job_card_queue": release_active_job_card(
+                list(state["collection"].get("job_card_queue", []) or [])
+            )
+        }
+    return update
+
+
+def _completed_transition_update(
+    state: WorkerState,
+    decision: TransitionDecision,
+    *,
+    visual_changed: bool,
+    visual_ratio: float | None,
+    ocr_skipped: bool,
+    record_replay_result: Callable[[str, bool], object],
+) -> WorkerStateUpdate:
+    request = decision.request
+    source = str(request.get("source") or "")
+    observation: ObservationPatch = (
+        reused_ocr_observation(state, request) if decision.reuse_previous_ocr else {}
+    )
+    record_state = (
+        apply_worker_state_update(
+            state,
+            WorkerStateUpdate(observation=observation),
+        )
+        if observation
+        else state
+    )
+    record = transition_record(
+        request,
+        status=decision.status,
+        source=source,
+        reason=decision.reason,
+        attempt=1,
+        state=record_state,
         visual_change_ratio=visual_ratio,
-        ocr_skipped=False,
+        ocr_skipped=ocr_skipped,
     )
     logger.info(
         "Transition evaluated",
         source=source,
-        status=status,
-        reason=reason,
+        status=decision.status,
+        reason=decision.reason,
+        ocr_skipped=ocr_skipped,
     )
     record_replay_outcome(
         state,
-        evaluated_request,
-        status=status,
+        request,
+        status=decision.status,
         persist_result=record_replay_result,
     )
-    update = {
-        "transition": {
-            "no_effect_count": (
-                0
-                if status == "ready"
-                else int(state["transition"].get("no_effect_count") or 0) + 1
-            ),
-            "transition_request": None,
-            "transition_result": transition_result(
-                evaluated_request,
-                status=status,
-                reason=reason,
-                visual_change_detected=visual_changed,
-                visual_change_ratio=visual_ratio,
-            ),
-            "action_events": attach_action_transition(
-                state["transition"].get("action_events", []) or [],
-                record,
-            ),
-        },
-        "replay": {
-            "reflex_blocked_recipe_keys": blocked_recipe_keys_after(
-                state,
-                request,
-                should_block=block_recipe,
-            ),
-            "replay_session": replay_session_after_transition(
-                state,
-                source=source,
-                status=status,
-            ),
-        },
+    transition: TransitionPatch = {
+        "no_effect_count": (
+            0
+            if decision.status == "ready"
+            else int(state["transition"].get("no_effect_count") or 0) + 1
+        ),
+        "transition_request": None,
+        "transition_result": transition_result(
+            request,
+            status=decision.status,
+            reason=decision.reason,
+            visual_change_detected=visual_changed,
+            visual_change_ratio=visual_ratio,
+        ),
+        "action_events": attach_action_transition(
+            state["transition"].get("action_events", []) or [],
+            record,
+        ),
     }
-    if source == "job_card_queue" and status != "ready":
+    replay: RecipeReplayPatch = {
+        "reflex_blocked_recipe_keys": blocked_recipe_keys_after(
+            state,
+            request,
+            should_block=decision.block_recipe,
+        ),
+        "replay_session": replay_session_after_transition(
+            state,
+            source=source,
+            status=decision.status,
+        ),
+    }
+    update: WorkerStateUpdate = {
+        "transition": transition,
+        "replay": replay,
+    }
+    if observation:
+        update["observation"] = observation
+    if decision.release_queue:
         update["collection"] = {
             "job_card_queue": release_active_job_card(
                 list(state["collection"].get("job_card_queue", []) or [])
@@ -282,7 +283,7 @@ def _evaluate_after_ocr(
 def transition_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
-) -> dict[str, Any]:
+) -> WorkerStateUpdate:
     """직전 원자 행동과 현재 캡처를 비교하고 OCR 필요 여부를 결정한다."""
 
     request = state["transition"].get("transition_request")
@@ -296,18 +297,30 @@ def transition_node(
         str(state["observation"].get("current_screenshot") or ""),
     )
     if not state["observation"].get("ocr_complete"):
-        return _evaluate_before_ocr(
+        decision = _decide_before_ocr(
             state,
             request,
             visual_changed=visual_changed,
-            visual_ratio=visual_ratio,
-            record_replay_result=runtime.context.data.record_recipe_replay,
         )
-    return _evaluate_after_ocr(
+    else:
+        decision = _decide_after_ocr(
+            state,
+            request,
+            visual_changed=visual_changed,
+        )
+    if not decision.records_outcome:
+        return _pending_transition_update(
+            state,
+            decision,
+            visual_changed=visual_changed,
+            visual_ratio=visual_ratio,
+        )
+    return _completed_transition_update(
         state,
-        request,
+        decision,
         visual_changed=visual_changed,
         visual_ratio=visual_ratio,
+        ocr_skipped=not bool(state["observation"].get("ocr_complete")),
         record_replay_result=runtime.context.data.record_recipe_replay,
     )
 

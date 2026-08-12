@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
 from agent.config import get_settings
 from agent.runtime.worker_contracts import (
     CompletedTransitionObservation,
-    ObservationState,
+    ObservationPatch,
+    PreviousObservation,
+    ScreenSignature,
     TransitionRequest,
     TransitionResult,
     WorkerState,
+    WorkerStateUpdate,
     action_event_results,
 )
 from agent.utils.logger import logger
@@ -238,7 +242,9 @@ def used_idempotent_recipe_keys_on_url(
     return out
 
 
-def transition_marker_texts(markers: list[dict[str, Any]]) -> list[str]:
+def transition_marker_texts(
+    markers: Sequence[Mapping[str, Any]],
+) -> list[str]:
     """전환 로그에는 중복을 제거한 OCR 텍스트만 남긴다."""
 
     seen: set[str] = set()
@@ -258,11 +264,11 @@ def transition_marker_texts(markers: list[dict[str, Any]]) -> list[str]:
 def reused_ocr_observation(
     state: WorkerState,
     request: TransitionRequest,
-) -> ObservationState:
+) -> ObservationPatch:
     """화면 변화가 없을 때 직전 캡처의 OCR을 현재 관찰에 다시 연결한다."""
 
     observation = state["observation"]
-    previous = dict(observation.get("previous_observation") or {})
+    previous = observation.get("previous_observation") or {}
     if not previous:
         return {}
     if str(request.get("before_observation_id") or "") != str(
@@ -278,19 +284,15 @@ def reused_ocr_observation(
     if before_url and previous_url and before_url != previous_url:
         return {}
 
-    markers = [
-        dict(marker)
-        for marker in previous.get("markers", []) or []
-        if isinstance(marker, dict)
-    ]
+    markers = [marker.copy() for marker in previous.get("markers", []) or []]
     if not markers:
         return {}
-    signature = dict(previous.get("screen_signature") or {})
-    raw_signature = dict(observation.get("raw_screen_signature") or {})
+    signature: ScreenSignature = (previous.get("screen_signature") or {}).copy()
+    raw_signature = observation.get("raw_screen_signature") or {}
     for key in ("phash", "size"):
         if raw_signature.get(key):
             signature[key] = raw_signature[key]
-    current_observation = {
+    current_observation: PreviousObservation = {
         **previous,
         "observation_id": str(observation.get("observation_id") or ""),
         "screenshot": str(observation.get("current_screenshot") or ""),
@@ -337,7 +339,7 @@ def transition_result(
 def transition_result_without_request(
     state: WorkerState,
     request: TransitionRequest | None,
-) -> dict[str, Any] | None:
+) -> WorkerStateUpdate | None:
     if state["observation"].get("low_information_screen"):
         return {
             "transition": {
@@ -414,14 +416,14 @@ def transition_record(
         after_observation_id=str(observation.get("observation_id") or ""),
         current_url=str(observation.get("current_url") or ""),
         page_role=str(observation.get("current_page_role") or ""),
-        screen_signature=dict(observation.get("screen_signature") or {}),
+        screen_signature=(observation.get("screen_signature") or {}).copy(),
         visual_change_ratio=visual_change_ratio,
         ocr_skipped=ocr_skipped,
     )
 
 
 def build_transition_observation(
-    transition_request: TransitionRequest,
+    transition_request: TransitionRequest | TransitionResult,
     *,
     status: str,
     outcome: str,
@@ -429,13 +431,13 @@ def build_transition_observation(
     reason: str,
     elapsed_sec: float,
     attempt: int,
-    markers: list[dict[str, Any]],
+    markers: Sequence[Mapping[str, Any]],
     screenshot: str,
     marked_image: str,
     after_observation_id: str = "",
     current_url: str = "",
     page_role: str = "",
-    screen_signature: dict[str, Any] | None = None,
+    screen_signature: ScreenSignature | None = None,
     phash_distance: int | None = None,
     visual_change_ratio: float | None = None,
     ocr_skipped: bool = False,

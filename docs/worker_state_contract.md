@@ -11,7 +11,7 @@ tags:
 
 # 작업자 상태 계약
 
-Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`를 공유한다. 상태는 책임별 구역으로 나뉘며 노드는 자신이 소유한 구역을 `WorkerStateUpdate`로 반환한다. 각 구역의 LangGraph reducer가 기존 값과 부분 갱신을 병합한다. 이름 규칙은 [[naming_conventions]]을 따른다.
+Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`를 공유한다. `WorkerState`와 그 일곱 구역은 실행 중 항상 모든 필드를 갖는 완성 상태다. 노드는 `WorkerStateUpdate` 안의 `WorkerRequestPatch`, `ObservationPatch` 같은 부분 갱신 타입을 반환한다. 각 구역의 LangGraph reducer가 기존 값과 패치를 병합한다. 이름 규칙은 [[naming_conventions]]을 따른다.
 
 ## 상태 구역
 
@@ -45,9 +45,9 @@ return {
 }
 ```
 
-위 반환값은 전체 상태가 아니다. LangGraph가 기존 `observation`에 세 필드를 병합하고 다른 여섯 구역은 유지한다. 노드 내부에서 여러 부분 갱신을 연속 계산할 때는 `apply_worker_state_update()`를 사용한다.
+위 반환값은 전체 상태가 아니다. `ObservationPatch`이며 LangGraph가 기존 `observation`에 세 필드를 병합하고 다른 여섯 구역은 유지한다. 노드 내부에서 여러 부분 갱신을 연속 계산할 때는 `apply_worker_state_update()`를 사용한다. 완성 상태 타입과 패치 타입을 분리하므로 필수 상태 누락은 정적 검사에서 잡고, 노드가 일부 필드만 반환하는 것은 허용한다.
 
-`WorkerExecutionContext`는 행동 요청 하나를 실행하는 동안 검증된 행동 요청, 런타임 의존성, 작업 상태 사본과 후속 행동을 직접 보관한다. 실행 코드는 책임 구역을 갱신하고 마지막에 타입이 지정된 `WorkerStateUpdate`를 반환한다. 실행 필드를 별도 상태 객체와 동기화하는 변환 표는 없다.
+`WorkerExecutionContext`는 행동 요청 하나를 실행하는 동안 검증된 행동 요청, 런타임 의존성, 작업 상태 사본과 후속 행동을 직접 보관한다. 여러 원자 행동이 같은 문맥에서 순서대로 상태를 바꾸므로 실행 단위가 끝나면 완성된 `WorkerState`를 반환한다. 다른 그래프 노드는 필요한 구역만 `WorkerStateUpdate`로 반환한다. 실행 필드를 별도 상태 객체와 동기화하는 변환 표는 없다.
 
 ## 런타임 의존성
 
@@ -75,4 +75,4 @@ app.stream(
 9. 수집 완료 공고는 `CollectedJob`으로 생성한 뒤 필드 이름이나 타입을 다시 변환하지 않는다.
 10. 큐 카드 클릭은 도구 호출의 `queue_id`가 실제 대기 항목과 일치할 때만 해당 항목을 활성화한다.
 
-`current_observation_ready()`가 현재 관찰의 OCR 완료 여부를 검사한다. Reflex 전이 범위와 도착 상태는 `agent/recipe/replay_runtime.py`, 일반 화면 변화와 OCR 재사용은 `agent/runtime/transition_runtime.py`, 그래프 분기는 `worker_transition.py`가 담당한다.
+`current_observation_ready()`가 현재 관찰의 OCR 완료 여부를 검사한다. Reflex 전이 범위와 도착 상태는 `agent/recipe/replay_runtime.py`, 일반 화면 변화와 OCR 재사용은 `agent/runtime/transition_runtime.py`가 담당한다. `worker_transition.py`의 `TransitionDecision`은 이 판정 결과를 상태 패치와 실행 기록에 한 번 반영한다.

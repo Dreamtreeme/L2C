@@ -103,8 +103,10 @@ def repeats_no_effect_target(
 
     if observation.get("action") != action_name:
         return False
-    step = observation.get("step") if isinstance(observation.get("step"), dict) else {}
-    previous_args = step.get("args") if isinstance(step.get("args"), dict) else {}
+    raw_step = observation.get("step")
+    step = raw_step if isinstance(raw_step, dict) else {}
+    raw_previous_args = step.get("args")
+    previous_args = raw_previous_args if isinstance(raw_previous_args, dict) else {}
     if action_name in {"click_marker", "type_in_marker"}:
         previous_marker = previous_args.get("marker_id")
         current_marker = args.get("marker_id")

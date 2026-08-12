@@ -24,9 +24,7 @@ def build_database_lookup_evidence_plan(
 
     constraints = investigation.constraints
     minimum_count = (
-        constraints.target_count
-        if constraints.count_mode == "explicit"
-        else 1
+        constraints.target_count if constraints.count_mode == "explicit" else 1
     )
     return EvidencePlan(
         requirements=[
@@ -50,11 +48,7 @@ def compact_db_report(report: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         requirements.append(
-            {
-                key: value
-                for key, value in item.items()
-                if key != "candidates"
-            }
+            {key: value for key, value in item.items() if key != "candidates"}
         )
     return {
         "total_db_rows": int(report.get("total_db_rows") or 0),
@@ -193,7 +187,9 @@ def normalize_evidence_requirements(
 
     normalized = []
     for requirement in plan.requirements:
-        updates = {"required_fields": list(dict.fromkeys(requirement.required_fields))}
+        updates: dict[str, Any] = {
+            "required_fields": list(dict.fromkeys(requirement.required_fields))
+        }
         if requirement.scope.count_mode == "visible_all":
             updates["minimum_count"] = 1
         elif requirement.scope.count_mode == "explicit":

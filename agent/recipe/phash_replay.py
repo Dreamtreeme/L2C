@@ -8,14 +8,15 @@ from agent.runtime.target_matching import (
     match_target_by_ratio,
     roi_signature_match,
 )
+from agent.runtime.worker_contracts import ScreenMarker, ScreenSignature
 from shared.schema.recipe_schema import ActionTarget, PhysicalAction
 
 
 def match_target_by_screen_signature(
     target: ActionTarget | None,
     saved_roi_signature: dict[str, Any],
-    current_signature: dict[str, Any],
-    markers: list[dict[str, Any]],
+    current_signature: ScreenSignature,
+    markers: list[ScreenMarker],
     current_image_path: str = "",
 ) -> tuple[int | None, dict[str, Any]]:
     """저장된 ROI와 대상 좌표를 현재 화면의 마커에 대응시킨다."""
@@ -48,8 +49,8 @@ def match_target_by_screen_signature(
 
 def match_step_by_screen_signature(
     step: PhysicalAction,
-    current_signature: dict[str, Any],
-    markers: list[dict[str, Any]],
+    current_signature: ScreenSignature,
+    markers: list[ScreenMarker],
     current_image_path: str = "",
 ) -> tuple[int | None, dict[str, Any]]:
     return match_target_by_screen_signature(

@@ -115,12 +115,12 @@ flowchart TD
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `decision.pending_action: ActionRequest`, 실행 결과는 `transition.action_events`에 순서대로 기록합니다.
 - `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
-- `WorkerExecutionContext`는 검증된 행동, 런타임 의존성, 작업 상태 사본과 후속 행동을 직접 보관합니다. 실행 후 각 책임 구역을 `WorkerStateUpdate` 타입으로 반환합니다.
+- `WorkerState`의 일곱 구역은 완성 상태이고, 노드 반환은 구역별 `*Patch`로 분리합니다. `WorkerExecutionContext`는 검증된 연속 행동을 같은 상태 사본에 반영한 뒤 완성된 `WorkerState`를 반환합니다.
 - 실행기는 안전 검증, 도구 전달, 상태 효과를 순서대로 조립하며 행동 종류는 `agent/runtime/worker_actions.py`에서 한 번만 정의합니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.
 - 행동이 요구한 전환은 `transition.transition_request`, 현재 검증 결과는 `transition.transition_result`로 구분합니다. 전환 요청에는 행동, 입력 문자열, 대상 마커 ID와 저장된 도착 화면을 각각 보관하며 중복 `step` 딕셔너리를 만들지 않습니다. 전환이 없으면 `transition_request=None`입니다.
-- 작업자 상태와 이를 직접 소비하는 그래프 모듈은 CI의 `mypy` 검사 대상입니다. Pydantic 런타임 검증은 API·LLM 도구·저장 스키마 경계에서만 수행합니다.
+- `agent/application`, `agent/graph`, `agent/recipe`, `agent/runtime`은 CI의 `mypy` 검사 대상입니다. Pydantic 런타임 검증은 API·LLM 도구·저장 스키마 경계에서만 수행합니다.
 - 결정론적 정책이 검증에 실패하면 행동을 강행하지 않고 reasoning으로 폴백합니다.
 
 ## 그래프 의존성 주입

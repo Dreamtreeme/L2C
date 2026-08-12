@@ -41,14 +41,11 @@ def _enrich_action_result(
     if target:
         enriched["target"] = target
     if action_request.source == "reflex":
-        trace = dict(state["replay"].get("reflex_trace", {}) or {})
+        trace = state["replay"].get("reflex_trace") or {}
         if trace:
             enriched["reflex_recipe_key"] = trace.get("recipe_key", "")
-            call_trace = (
-                (trace.get("tool_calls") or {}).get(tool_call_id)
-                if tool_call_id
-                else None
-            )
+            tool_calls = trace.get("tool_calls") or {}
+            call_trace = tool_calls.get(tool_call_id) if tool_call_id else None
             if call_trace:
                 enriched["reflex_match"] = dict(call_trace)
     if enriched.get("action") != action_name:

@@ -12,7 +12,6 @@ from agent.runtime.worker_contracts import (
     ActionEvent,
     ActionRequest,
     WorkerState,
-    WorkerStateUpdate,
     apply_worker_state_update,
 )
 from agent.runtime.transition_runtime import transition_result
@@ -70,8 +69,8 @@ class WorkerExecutionContext:
         current_url = str(state["observation"].get("current_url") or "")
         return state_snapshot_for_action(state, current_url)
 
-    def build_state_update(self) -> WorkerStateUpdate:
-        """실행 중 실제로 바뀐 작업자 섹션만 그래프에 반환한다."""
+    def finish_state(self) -> WorkerState:
+        """행동 실행 결과가 반영된 전체 작업자 상태를 반환한다."""
 
         state = self.state
         state["decision"]["pending_action"] = self.next_pending_action

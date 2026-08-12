@@ -13,6 +13,7 @@ from agent.config import get_settings
 from agent.observability.run_context import invoke_with_metrics
 from agent.runtime.worker_contracts import (
     ActionRequest,
+    ScreenMarker,
     WorkerState,
     build_action_request,
 )
@@ -95,14 +96,17 @@ def prepare_job_card_selector_model() -> None:
     _get_job_card_selector_model()
 
 
-def _compact_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _compact_markers(markers: list[ScreenMarker]) -> list[dict[str, Any]]:
     compact: list[dict[str, Any]] = []
     for marker in markers or []:
         if not isinstance(marker, dict):
             continue
         text = str(marker.get("text") or "").strip()
+        raw_marker_id = marker.get("id")
+        if raw_marker_id is None:
+            continue
         try:
-            marker_id = int(marker.get("id"))
+            marker_id = int(raw_marker_id)
         except (TypeError, ValueError):
             continue
         if not text:
@@ -198,21 +202,25 @@ def _selection_messages(
 
 def _validated_cards(
     selection: dict[str, Any],
-    markers: list[dict[str, Any]],
+    markers: list[ScreenMarker],
     limit: int | None,
 ) -> list[dict[str, Any]]:
-    marker_ids = {
-        int(marker.get("id")): marker
-        for marker in markers or []
-        if isinstance(marker, dict) and str(marker.get("id", "")).lstrip("-").isdigit()
-    }
+    marker_ids: dict[int, ScreenMarker] = {}
+    for marker in markers or []:
+        raw_marker_id = marker.get("id")
+        if raw_marker_id is None or not str(raw_marker_id).lstrip("-").isdigit():
+            continue
+        marker_ids[int(raw_marker_id)] = marker
     cards: list[dict[str, Any]] = []
     used_ids: set[int] = set()
     for raw in selection.get("cards") or []:
         if not isinstance(raw, dict):
             continue
+        raw_selected_marker_id = raw.get("marker_id")
+        if raw_selected_marker_id is None:
+            continue
         try:
-            marker_id = int(raw.get("marker_id"))
+            marker_id = int(raw_selected_marker_id)
         except (TypeError, ValueError):
             continue
         if marker_id not in marker_ids or marker_id in used_ids:
@@ -259,8 +267,11 @@ def _selection_availability(
     selection: dict[str, Any],
 ) -> dict[str, Any]:
     availability: dict[str, Any] = {}
+    raw_available_count = selection.get("available_job_count")
     try:
-        available_count = int(selection.get("available_job_count"))
+        available_count = (
+            int(raw_available_count) if raw_available_count is not None else -1
+        )
     except (TypeError, ValueError):
         available_count = -1
     count_evidence = str(selection.get("count_evidence") or "").strip()[:160]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, TypeAlias, TypedDict
+from typing import Annotated, Any, NotRequired, TypeAlias, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -305,7 +305,115 @@ def action_request_from_model_response(
     )
 
 
-class TransitionRequest(TypedDict, total=False):
+class ScreenMarker(TypedDict):
+    """OCR과 아이콘 검출을 합친 화면 상호작용 요소."""
+
+    id: int
+    text: str
+    bbox: list[int]
+    type: str
+    conf: NotRequired[float]
+
+
+class CaptureContext(TypedDict):
+    """화면 좌표를 다시 사용할 때 필요한 캡처 환경."""
+
+    version: str
+    size: list[int]
+    content_top: int
+
+
+class ScreenSignature(TypedDict, total=False):
+    """캡처 단계에 따라 채워지는 화면 pHash와 OCR 요약."""
+
+    algorithm: str
+    phash: str
+    size: list[int]
+    marker_count: int
+    marker_count_bucket: str
+    anchors: list[str]
+    capture_context: CaptureContext
+
+
+class PreviousObservation(TypedDict, total=False):
+    """뒤로가기와 OCR 재사용에 쓰는 직전 완료 관찰."""
+
+    observation_id: str
+    screenshot: str
+    current_url: str
+    markers: list[ScreenMarker]
+    ui_context: str
+    marked_image: str
+    screen_signature: ScreenSignature
+    page_role: str
+
+
+class ReflexTrace(TypedDict, total=False):
+    """경험 경로 후보 선택과 실패 원인을 남기는 실행 추적값."""
+
+    hit: bool
+    source: str
+    reason: str
+    site: str
+    task_category: str
+    candidate_count: int
+    rejected_count: int
+    last_reason: str
+    reject_reasons: dict[str, int]
+    candidate_rejections: list[dict[str, Any]]
+    recipe_key: str
+    recipe_transition_index: int
+    recipe_transition_count: int
+    path_failed: bool
+    actions: list[str]
+    tool_calls: dict[str, dict[str, Any]]
+
+
+class JobDetailLine(TypedDict):
+    """상세 화면에서 중복 제거한 OCR 본문 한 줄."""
+
+    text: str
+    bbox: list[int]
+    first_screen: str
+
+
+class JobDetailScreenEvidence(TypedDict):
+    """상세 본문 줄이 추가된 화면 근거."""
+
+    path: str
+    added_lines: int
+    duplicate_lines: int
+
+
+class JobDetailStats(TypedDict):
+    """상세 OCR 누적 현황."""
+
+    screen_count: int
+    added_lines_last_screen: int
+    duplicate_lines_last_screen: int
+    total_lines: int
+
+
+class JobDetailBuffer(TypedDict, total=False):
+    """공고 하나를 여러 화면에 걸쳐 읽는 동안 누적하는 OCR 본문."""
+
+    url: str
+    detail_key: str
+    lines: list[JobDetailLine]
+    seen_keys: list[str]
+    screens: list[str]
+    screen_evidence: list[JobDetailScreenEvidence]
+    stats: JobDetailStats
+
+
+class JobResultsMemory(TypedDict, total=False):
+    """검색 결과 목록으로 복귀할 때 비교하는 화면 기억."""
+
+    url: str
+    screen_signature: ScreenSignature
+
+
+class TransitionRequest(TypedDict):
     """화면 변경 행동 뒤 다음 캡처에서 확인할 전환 요청."""
 
     action_seq: int
@@ -313,25 +421,44 @@ class TransitionRequest(TypedDict, total=False):
     before_observation_id: str
     source: str
     recipe_key: str
-    recipe_transition_index: int
-    recipe_transition_count: int
     transition_actions: list[str]
     expected_after_state: ScreenCheckpoint | None
     expected_after: str
     input_text: str
     target_marker_id: int | None
-    after_state_match: dict[str, Any]
-    queue_marker_refresh: bool
     before_url: str
     before_page_role: str
     before_screenshot: str
     started_at: float
-    execution_failed: bool
+    recipe_transition_index: NotRequired[int]
+    recipe_transition_count: NotRequired[int]
+    after_state_match: NotRequired[dict[str, Any]]
+    queue_marker_refresh: NotRequired[bool]
+    execution_failed: NotRequired[bool]
 
 
-class TransitionResult(TransitionRequest, total=False):
+class TransitionResult(TypedDict, total=False):
     """전환 요청과 현재 캡처를 비교한 판정 결과."""
 
+    action_seq: int
+    action: str
+    before_observation_id: str
+    source: str
+    recipe_key: str
+    transition_actions: list[str]
+    expected_after_state: ScreenCheckpoint | None
+    expected_after: str
+    input_text: str
+    target_marker_id: int | None
+    before_url: str
+    before_page_role: str
+    before_screenshot: str
+    started_at: float
+    recipe_transition_index: int
+    recipe_transition_count: int
+    after_state_match: dict[str, Any]
+    queue_marker_refresh: bool
+    execution_failed: bool
     status: str
     outcome: str
     reason: str
@@ -340,7 +467,7 @@ class TransitionResult(TransitionRequest, total=False):
     needs_ocr: bool
 
 
-class WorkerRequestState(TypedDict, total=False):
+class WorkerRequestState(TypedDict):
     """한 작업자 실행에서 변하지 않는 목표와 수집 계약."""
 
     worker_run_id: str
@@ -349,27 +476,27 @@ class WorkerRequestState(TypedDict, total=False):
     action_permission_contract: dict[str, Any]
 
 
-class ObservationState(TypedDict, total=False):
+class ObservationState(TypedDict):
     """한 캡처에서 얻은 화면, OCR과 브라우저 상태."""
 
     observation_id: str
     observation_sequence: int
     current_screenshot: str
-    raw_screen_signature: dict[str, Any]
+    raw_screen_signature: ScreenSignature
     ocr_complete: bool
-    previous_observation: dict[str, Any]
+    previous_observation: PreviousObservation
     ui_context: str
     current_url: str
     current_page_role: str
     current_url_stale: bool
     low_information_screen: bool
     low_information_capture_count: int
-    current_markers: list[dict[str, Any]]
+    current_markers: list[ScreenMarker]
     marked_image: str
-    screen_signature: dict[str, Any]
+    screen_signature: ScreenSignature
 
 
-class DecisionState(TypedDict, total=False):
+class DecisionState(TypedDict):
     """현재 캡처에서 선택한 다음 행동과 선택 근거."""
 
     pending_action: ActionRequest | None
@@ -377,7 +504,7 @@ class DecisionState(TypedDict, total=False):
     reasoning_call_count: int
 
 
-class TransitionState(TypedDict, total=False):
+class TransitionState(TypedDict):
     """행동 실행 기록과 다음 화면 전환 판정 상태."""
 
     action_events: list[ActionEvent]
@@ -387,29 +514,88 @@ class TransitionState(TypedDict, total=False):
     transition_result: TransitionResult
 
 
-class RecipeReplayState(TypedDict, total=False):
+class RecipeReplayState(TypedDict):
     """자율탐색 기록과 경험 기반 탐색 재생 상태."""
 
-    reflex_trace: dict[str, Any]
+    reflex_trace: ReflexTrace
     replay_session: ReplaySession | None
     reflex_blocked_recipe_keys: list[str]
 
 
-class JobCollectionState(TypedDict, total=False):
+class JobCollectionState(TypedDict):
     """공고 목록 선택, 상세 판독과 결과 누적 상태."""
 
     job_captures: list[JobCapture]
     job_card_queue: list[dict[str, Any]]
-    job_results_memory: dict[str, Any]
+    job_results_memory: JobResultsMemory
     job_results_availability: dict[str, Any]
-    job_detail_buffer: dict[str, Any]
+    job_detail_buffer: JobDetailBuffer
     job_detail_coverage: dict[str, Any]
     job_detail_followup: dict[str, Any]
 
 
-class WorkerLifecycleState(TypedDict, total=False):
+class WorkerLifecycleState(TypedDict):
     """작업자 반복 실행의 종료 상태."""
 
+    is_finished: bool
+
+
+class WorkerRequestPatch(TypedDict, total=False):
+    worker_run_id: str
+    goal: str
+    collection_intent: CollectionIntent
+    action_permission_contract: dict[str, Any]
+
+
+class ObservationPatch(TypedDict, total=False):
+    observation_id: str
+    observation_sequence: int
+    current_screenshot: str
+    raw_screen_signature: ScreenSignature
+    ocr_complete: bool
+    previous_observation: PreviousObservation
+    ui_context: str
+    current_url: str
+    current_page_role: str
+    current_url_stale: bool
+    low_information_screen: bool
+    low_information_capture_count: int
+    current_markers: list[ScreenMarker]
+    marked_image: str
+    screen_signature: ScreenSignature
+
+
+class DecisionPatch(TypedDict, total=False):
+    pending_action: ActionRequest | None
+    job_card_selection_trace: dict[str, Any]
+    reasoning_call_count: int
+
+
+class TransitionPatch(TypedDict, total=False):
+    action_events: list[ActionEvent]
+    error_count: int
+    no_effect_count: int
+    transition_request: TransitionRequest | None
+    transition_result: TransitionResult
+
+
+class RecipeReplayPatch(TypedDict, total=False):
+    reflex_trace: ReflexTrace
+    replay_session: ReplaySession | None
+    reflex_blocked_recipe_keys: list[str]
+
+
+class JobCollectionPatch(TypedDict, total=False):
+    job_captures: list[JobCapture]
+    job_card_queue: list[dict[str, Any]]
+    job_results_memory: JobResultsMemory
+    job_results_availability: dict[str, Any]
+    job_detail_buffer: JobDetailBuffer
+    job_detail_coverage: dict[str, Any]
+    job_detail_followup: dict[str, Any]
+
+
+class WorkerLifecyclePatch(TypedDict, total=False):
     is_finished: bool
 
 
@@ -437,13 +623,13 @@ class WorkerState(TypedDict):
 class WorkerStateUpdate(TypedDict, total=False):
     """노드가 변경할 책임 섹션만 담는 상태 패치."""
 
-    request: WorkerRequestState
-    observation: ObservationState
-    decision: DecisionState
-    transition: TransitionState
-    replay: RecipeReplayState
-    collection: JobCollectionState
-    lifecycle: WorkerLifecycleState
+    request: WorkerRequestPatch
+    observation: ObservationPatch
+    decision: DecisionPatch
+    transition: TransitionPatch
+    replay: RecipeReplayPatch
+    collection: JobCollectionPatch
+    lifecycle: WorkerLifecyclePatch
 
 
 def apply_worker_state_update(
@@ -489,13 +675,13 @@ def apply_worker_state_update(
 def create_worker_state(
     goal: str = "",
     *,
-    request: WorkerRequestState | None = None,
-    observation: ObservationState | None = None,
-    decision: DecisionState | None = None,
-    transition: TransitionState | None = None,
-    replay: RecipeReplayState | None = None,
-    collection: JobCollectionState | None = None,
-    lifecycle: WorkerLifecycleState | None = None,
+    request: WorkerRequestPatch | None = None,
+    observation: ObservationPatch | None = None,
+    decision: DecisionPatch | None = None,
+    transition: TransitionPatch | None = None,
+    replay: RecipeReplayPatch | None = None,
+    collection: JobCollectionPatch | None = None,
+    lifecycle: WorkerLifecyclePatch | None = None,
 ) -> WorkerState:
     """모든 작업자 진입점에서 동일한 섹션 상태를 만든다."""
 
@@ -577,18 +763,35 @@ def create_worker_state(
 __all__ = [
     "ActionEvent",
     "ActionRequest",
+    "CaptureContext",
     "DecisionState",
+    "DecisionPatch",
+    "JobDetailBuffer",
+    "JobDetailLine",
+    "JobDetailScreenEvidence",
+    "JobDetailStats",
+    "JobResultsMemory",
     "WorkerState",
     "WorkerStateUpdate",
     "WorkerLifecycleState",
+    "WorkerLifecyclePatch",
     "WorkerRequestState",
+    "WorkerRequestPatch",
     "JobCollectionState",
+    "JobCollectionPatch",
     "ObservationState",
+    "ObservationPatch",
+    "PreviousObservation",
+    "ReflexTrace",
     "RecipeReplayState",
+    "RecipeReplayPatch",
+    "ScreenMarker",
+    "ScreenSignature",
     "ToolCallRequest",
     "TransitionRequest",
     "TransitionResult",
     "TransitionState",
+    "TransitionPatch",
     "apply_worker_state_update",
     "action_event_results",
     "action_event_transitions",

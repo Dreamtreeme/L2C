@@ -31,7 +31,7 @@ jobs:
         run: python -m ruff check agent/application agent/graph agent/recipe agent/runtime
       - name: Check architecture contracts
         run: lint-imports
-      - name: Check worker state types
+      - name: Check application and worker types
         run: python -m mypy
       - name: Run backend tests
         run: python -m pytest -q agent/tests

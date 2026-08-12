@@ -14,18 +14,10 @@ max-statements = 50
 [tool.mypy]
 python_version = "3.13"
 files = [
-    "agent/runtime/worker_contracts.py",
-    "agent/runtime/transition_runtime.py",
-    "agent/recipe/replay_runtime.py",
-    "agent/graph/worker_transition_recording.py",
-    "agent/graph/worker_transition.py",
-    "agent/graph/worker_execution_context.py",
-    "agent/graph/worker_action_effects.py",
-    "agent/graph/worker_execution.py",
-    "agent/graph/worker_observation.py",
-    "agent/graph/worker_selection.py",
-    "agent/graph/workflow.py",
-    "agent/application/worker_execution_service.py",
+    "agent/application",
+    "agent/graph",
+    "agent/recipe",
+    "agent/runtime",
 ]
 check_untyped_defs = true
 explicit_package_bases = true

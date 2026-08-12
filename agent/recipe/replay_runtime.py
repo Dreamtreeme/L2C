@@ -122,7 +122,7 @@ def verify_replay_after_state(
         marker_id, match = match_target_by_screen_signature(
             anchor_target,
             anchor_signature,
-            dict(observation.get("screen_signature") or {}),
+            (observation.get("screen_signature") or {}).copy(),
             list(observation.get("current_markers") or []),
             current_image_path=str(observation.get("current_screenshot") or ""),
         )
@@ -145,7 +145,7 @@ def verify_replay_after_state(
     if context_signature:
         match = screen_context_signature_match(
             context_signature,
-            dict(observation.get("screen_signature") or {}),
+            (observation.get("screen_signature") or {}).copy(),
         )
         matched = bool(match.get("matched"))
         return (

@@ -290,7 +290,7 @@ def _missing_action_update(
 def execution_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
-) -> WorkerStateUpdate:
+) -> WorkerState | WorkerStateUpdate:
     """현재 화면에서 선택된 행동 실행 단위를 검증하고 실행한다."""
 
     raise_if_cancelled()
@@ -315,7 +315,7 @@ def execution_node(
         "Execution node completed",
         duration_sec=round(time.perf_counter() - started, 6),
     )
-    return context.build_state_update()
+    return context.finish_state()
 
 
 __all__ = ["execution_node"]

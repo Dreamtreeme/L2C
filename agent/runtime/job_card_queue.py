@@ -7,7 +7,12 @@ from typing import Any
 from agent.config import get_settings
 from agent.runtime.worker_contracts import (
     ActionRequest,
+    JobResultsMemory,
+    ObservationState,
+    ScreenMarker,
+    ScreenSignature,
     TransitionRequest,
+    TransitionResult,
     WorkerState,
     build_action_request,
 )
@@ -78,10 +83,10 @@ def _card_geometry(
 
 def _normalized_job_card(
     raw: dict[str, Any],
-    markers: list[dict],
+    markers: list[ScreenMarker],
     size: list[int],
     queue: list[dict],
-    observation: dict[str, Any],
+    observation: ObservationState,
 ) -> dict[str, Any] | None:
     marker_id = int(raw["marker_id"])
     marker = marker_by_id(markers, marker_id)
@@ -112,9 +117,9 @@ def _normalized_job_card(
         str(observation.get("current_screenshot") or ""),
         marker_bbox(marker),
         size,
-        capture_context=dict(
-            (observation.get("screen_signature") or {}).get("capture_context", {}) or {}
-        ),
+        capture_context=(
+            (observation.get("screen_signature") or {}).get("capture_context") or {}
+        ).copy(),
     )
     if roi_signature:
         card["roi_signature"] = roi_signature
@@ -122,12 +127,12 @@ def _normalized_job_card(
 
 
 def _job_results_memory(
-    observation: dict[str, Any],
+    observation: ObservationState,
     current_url: str,
-) -> dict[str, Any]:
+) -> JobResultsMemory:
     return {
         "url": current_url or observation.get("current_url", "") or "",
-        "screen_signature": dict(observation.get("screen_signature", {}) or {}),
+        "screen_signature": (observation.get("screen_signature") or {}).copy(),
     }
 
 
@@ -135,7 +140,7 @@ def normalize_job_card_queue(
     args: dict,
     state: WorkerState,
     current_url: str,
-) -> tuple[list[dict], dict]:
+) -> tuple[list[dict], JobResultsMemory]:
     """LLM이 고른 현재 화면의 공고 카드를 좌표비율 기반 큐로 정규화한다."""
 
     cards = job_card_entries_from_args(args)
@@ -336,7 +341,7 @@ def queue_click_used_cached_marker(
     ):
         return False
     marker_id = request.get("target_marker_id")
-    previous = dict(state["observation"].get("previous_observation") or {})
+    previous = state["observation"].get("previous_observation") or {}
     return any(
         marker.get("id") == marker_id and marker.get("type") == "queue_cached_card"
         for marker in previous.get("markers", []) or []
@@ -371,7 +376,7 @@ def skip_active_job_card(
 def job_results_page_matches(
     memory: dict,
     current_url: str,
-    current_signature: dict,
+    current_signature: ScreenSignature,
     *,
     require_anchors: bool = True,
 ) -> tuple[bool, dict]:
@@ -434,12 +439,12 @@ def job_results_page_matches(
 
 def job_card_marker_for_item(
     item: dict,
-    markers: list[dict],
-    signature: dict,
+    markers: list[ScreenMarker],
+    signature: ScreenSignature,
     *,
     allow_synthetic: bool = True,
     current_image_path: str = "",
-) -> tuple[int | None, list[dict], dict]:
+) -> tuple[int | None, list[ScreenMarker], dict]:
     target = dict(item.get("target") or {})
     target.setdefault("text", item.get("title", ""))
     target.setdefault("semantic_label", item.get("title", ""))
@@ -495,7 +500,7 @@ def job_card_marker_for_item(
         )
         + 1
     )
-    synthetic = {
+    synthetic: ScreenMarker = {
         "id": next_id,
         "bbox": bbox,
         "text": item.get("title") or "queued job card",
@@ -514,14 +519,14 @@ def job_card_marker_for_item(
 
 def replay_job_card_on_results(
     state: WorkerState,
-    transition_result: dict,
+    transition_result: TransitionResult,
     current_url: str,
-    markers: list[dict],
-    screen_signature: dict,
+    markers: list[ScreenMarker],
+    screen_signature: ScreenSignature,
     *,
     require_anchors: bool = True,
     current_image_path: str = "",
-) -> tuple[ActionRequest | None, list[dict], dict]:
+) -> tuple[ActionRequest | None, list[ScreenMarker], dict]:
     """직전 행동 뒤 목록 화면이 확인되면 다음 카드를 준비한다."""
 
     if not str(transition_result.get("action") or ""):

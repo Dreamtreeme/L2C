@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from agent.recipe.matcher import marker_region
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
@@ -61,15 +63,11 @@ def build_screen_checkpoint(
     observation = state["observation"]
     resolved_url = current_url or str(observation.get("current_url") or "")
     return ScreenCheckpoint(
-        observation_id=(
-            observation_id or str(observation.get("observation_id") or "")
-        ),
+        observation_id=(observation_id or str(observation.get("observation_id") or "")),
         url_template=url_template(resolved_url),
-        page_role=(
-            normalize_page_role(observation.get("current_page_role"))
-        ),
+        page_role=(normalize_page_role(observation.get("current_page_role"))),
         screen_context_signature=compact_screen_context_signature(
-            dict(observation.get("screen_signature") or {})
+            observation.get("screen_signature") or {}
         ),
     )
 
@@ -84,7 +82,7 @@ def _target(
     if not marker:
         return None, {}
 
-    screen_signature = dict(observation.get("screen_signature") or {})
+    screen_signature = (observation.get("screen_signature") or {}).copy()
     snapshot = (
         build_marker_target_snapshot(
             markers,
@@ -110,14 +108,18 @@ def _target(
         image_path,
         marker_bbox(marker),
         screen_size,
-        capture_context=dict(screen_signature.get("capture_context") or {}),
+        capture_context=(screen_signature.get("capture_context") or {}).copy(),
     )
     return target, roi_signature
 
 
-def _action_param(action_name: str, args: dict, slot_name: str) -> dict:
+def _action_param(
+    action_name: str,
+    args: dict[str, Any],
+    slot_name: str,
+) -> dict[str, Any]:
     if action_name == "type_in_marker":
-        param = {"text": str(args.get("text") or "").strip()}
+        param: dict[str, Any] = {"text": str(args.get("text") or "").strip()}
         if slot_name:
             param["slot_name"] = slot_name
         return param

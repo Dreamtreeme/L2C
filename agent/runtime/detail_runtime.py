@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from agent.runtime.worker_contracts import WorkerState
+from typing import Any
 
 from agent.config import get_settings
 from agent.runtime.job_field_contract import (
@@ -17,11 +15,19 @@ from agent.runtime.job_field_contract import (
     required_fields_from_state,
 )
 from agent.runtime.site_context import is_job_detail_context, page_guidance_for_url
+from agent.runtime.worker_contracts import (
+    JobDetailBuffer,
+    JobDetailLine,
+    JobDetailScreenEvidence,
+    JobDetailStats,
+    ScreenMarker,
+    WorkerState,
+)
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox
 
 
-def marker_prompt_rank(marker: dict) -> tuple[int, int, int]:
+def marker_prompt_rank(marker: ScreenMarker) -> tuple[int, int, int]:
     """의미를 추측하지 않고 화면 읽기 순서로 마커를 정렬한다."""
 
     bbox = marker.get("bbox", [0, 0, 0, 0])
@@ -31,7 +37,7 @@ def marker_prompt_rank(marker: dict) -> tuple[int, int, int]:
     return (y, x, marker_id)
 
 
-def is_icon_marker(marker: dict) -> bool:
+def is_icon_marker(marker: ScreenMarker) -> bool:
     text = str(marker.get("text") or "")
     marker_type = str(marker.get("type") or "").strip().lower()
     return (
@@ -42,7 +48,7 @@ def is_icon_marker(marker: dict) -> bool:
     )
 
 
-def line_bbox(markers: list[dict]) -> list[int]:
+def line_bbox(markers: list[ScreenMarker]) -> list[int]:
     boxes = [marker_bbox(marker) for marker in markers]
     boxes = [box for box in boxes if box != [0, 0, 0, 0]]
     if not boxes:
@@ -55,7 +61,7 @@ def line_bbox(markers: list[dict]) -> list[int]:
     ]
 
 
-def join_line_marker_text(markers: list[dict]) -> str:
+def join_line_marker_text(markers: list[ScreenMarker]) -> str:
     ordered = sorted(
         markers, key=lambda marker: (marker_bbox(marker)[0], marker_bbox(marker)[1])
     )
@@ -71,9 +77,9 @@ def join_line_marker_text(markers: list[dict]) -> str:
 
 
 def _group_markers_by_y(
-    markers: list[dict],
+    markers: list[ScreenMarker],
     tolerance: int,
-) -> list[list[dict]]:
+) -> list[list[ScreenMarker]]:
     lines: list[dict[str, Any]] = []
     ordered_markers = sorted(
         markers,
@@ -99,11 +105,11 @@ def _group_markers_by_y(
 
 
 def _split_inline_segments(
-    markers: list[dict],
+    markers: list[ScreenMarker],
     max_inline_gap: int,
-) -> list[list[dict]]:
-    segments: list[list[dict]] = []
-    current_segment: list[dict] = []
+) -> list[list[ScreenMarker]]:
+    segments: list[list[ScreenMarker]] = []
+    current_segment: list[ScreenMarker] = []
     previous_right: int | None = None
     for marker in sorted(markers, key=lambda item: marker_bbox(item)[0]):
         bbox = marker_bbox(marker)
@@ -121,7 +127,7 @@ def _split_inline_segments(
     return segments
 
 
-def _compacted_marker_line(segment: list[dict]) -> dict[str, Any] | None:
+def _compacted_marker_line(segment: list[ScreenMarker]) -> dict[str, Any] | None:
     text = join_line_marker_text(segment)
     if not text:
         return None
@@ -132,7 +138,7 @@ def _compacted_marker_line(segment: list[dict]) -> dict[str, Any] | None:
     }
 
 
-def group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
+def group_text_markers_into_lines(markers: list[ScreenMarker]) -> list[dict]:
     """가까운 y축의 OCR 마커를 읽기 순서의 문장 줄로 묶는다."""
 
     text_markers = [
@@ -159,21 +165,21 @@ def group_text_markers_into_lines(markers: list[dict]) -> list[dict]:
 
 
 def detail_action_marker_candidates(
-    markers: list[dict],
+    markers: list[ScreenMarker],
     limit: int,
     allowed_labels: list[str],
-) -> list[dict]:
+) -> list[ScreenMarker]:
     """본문 펼치기라고 명확히 선언된 마커만 결정론적 클릭 후보로 고른다."""
 
     labels = [str(label) for label in allowed_labels if str(label).strip()]
     normalized_labels = {re.sub(r"\s+", "", label).casefold() for label in labels}
     if not normalized_labels:
         return []
-    primary: list[dict] = []
+    primary: list[ScreenMarker] = []
     seen: set[int] = set()
     for marker in sorted(markers, key=marker_prompt_rank):
         marker_id = marker.get("id")
-        if marker_id in seen:
+        if not isinstance(marker_id, int) or marker_id in seen:
             continue
         text = str(marker.get("text") or "").strip()
         collapsed = re.sub(r"\s+", "", text).casefold()
@@ -195,7 +201,7 @@ def detail_reveal_controls(current_url: str) -> list[str]:
 
 
 def draw_detail_lightweight_marker(
-    draw: Any, marker: dict, color: tuple[int, int, int], font: Any
+    draw: Any, marker: ScreenMarker, color: tuple[int, int, int], font: Any
 ) -> None:
     bbox = marker_bbox(marker)
     if bbox == [0, 0, 0, 0]:
@@ -213,7 +219,7 @@ def draw_detail_lightweight_marker(
 
 def build_detail_lightweight_marked_image(
     image_path: Any,
-    markers: list[dict],
+    markers: list[ScreenMarker],
     current_url: str,
     *,
     page_role: str = "",
@@ -267,7 +273,7 @@ def build_detail_lightweight_marked_image(
         return ""
 
 
-def build_detail_section_context(markers: list[dict]) -> str:
+def build_detail_section_context(markers: list[ScreenMarker]) -> str:
     settings = get_settings().vision
     min_text_markers = settings.detail_section_min_text_markers
     max_lines = settings.detail_ocr_max_lines
@@ -305,7 +311,7 @@ def build_detail_section_context(markers: list[dict]) -> str:
 
 
 def detail_context_matches(
-    context: dict[str, Any] | None,
+    context: Mapping[str, Any] | None,
     current_url: str,
     detail_key: str = "",
 ) -> bool:
@@ -319,7 +325,10 @@ def detail_context_matches(
     return bool(current_url and value.get("url") == current_url)
 
 
-def new_job_detail_buffer(current_url: str, detail_key: str = "") -> dict[str, Any]:
+def new_job_detail_buffer(
+    current_url: str,
+    detail_key: str = "",
+) -> JobDetailBuffer:
     return {
         "url": current_url,
         "detail_key": detail_key,
@@ -337,16 +346,14 @@ def new_job_detail_buffer(current_url: str, detail_key: str = "") -> dict[str, A
 
 
 def _append_detail_buffer_lines(
-    buffer: dict[str, Any],
-    markers: list[dict],
+    buffer: JobDetailBuffer,
+    markers: list[ScreenMarker],
     *,
     screen_name: str,
     max_lines: int,
     max_line_chars: int,
-) -> tuple[list[dict], list[str], int, int]:
-    lines = [
-        dict(item) for item in (buffer.get("lines") or []) if isinstance(item, dict)
-    ]
+) -> tuple[list[JobDetailLine], list[str], int, int]:
+    lines = list(buffer.get("lines") or [])
     seen_keys = [str(item) for item in (buffer.get("seen_keys") or []) if str(item)]
     seen = set(seen_keys)
     added = 0
@@ -365,13 +372,12 @@ def _append_detail_buffer_lines(
             continue
         seen.add(key)
         seen_keys.append(key)
-        lines.append(
-            {
-                "text": text,
-                "bbox": line.get("bbox") or [0, 0, 0, 0],
-                "first_screen": screen_name,
-            }
-        )
+        detail_line: JobDetailLine = {
+            "text": text,
+            "bbox": line.get("bbox") or [0, 0, 0, 0],
+            "first_screen": screen_name,
+        }
+        lines.append(detail_line)
         added += 1
         if len(lines) >= max_lines:
             break
@@ -379,42 +385,37 @@ def _append_detail_buffer_lines(
 
 
 def _append_detail_screen_evidence(
-    buffer: dict[str, Any],
+    buffer: JobDetailBuffer,
     screen_path: str,
     *,
     added: int,
     duplicate: int,
-) -> tuple[list[str], list[dict[str, Any]]]:
+) -> tuple[list[str], list[JobDetailScreenEvidence]]:
     screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]
     if screen_path and (not screens or screens[-1] != screen_path):
         screens.append(screen_path)
-    screen_evidence = [
-        dict(item)
-        for item in (buffer.get("screen_evidence") or [])
-        if isinstance(item, dict)
-    ]
+    screen_evidence = list(buffer.get("screen_evidence") or [])
     if screen_path and (
         not screen_evidence or screen_evidence[-1].get("path") != screen_path
     ):
-        screen_evidence.append(
-            {
-                "path": screen_path,
-                "added_lines": added,
-                "duplicate_lines": duplicate,
-            }
-        )
+        evidence: JobDetailScreenEvidence = {
+            "path": screen_path,
+            "added_lines": added,
+            "duplicate_lines": duplicate,
+        }
+        screen_evidence.append(evidence)
     return screens, screen_evidence
 
 
 def update_job_detail_buffer(
-    existing: dict[str, Any] | None,
-    markers: list[dict],
+    existing: JobDetailBuffer | None,
+    markers: list[ScreenMarker],
     current_url: str,
     image_path: Any = "",
     *,
     page_role: str = "",
     detail_key: str = "",
-) -> dict[str, Any]:
+) -> JobDetailBuffer:
     """상세 페이지 OCR 본문 줄을 공고 단위 버퍼에 누적한다."""
 
     marker_texts = [
@@ -425,13 +426,13 @@ def update_job_detail_buffer(
         page_role=page_role,
         marker_texts=marker_texts,
     ):
-        return dict(existing or {})
+        return (existing or {}).copy()
 
     settings = get_settings().vision
     max_lines = settings.detail_buffer_max_lines
     max_line_chars = settings.detail_buffer_max_line_chars
 
-    buffer = dict(existing or {})
+    buffer = (existing or {}).copy()
     if not detail_context_matches(buffer, current_url, detail_key):
         buffer = new_job_detail_buffer(current_url, detail_key)
     screen_name = Path(image_path).name if image_path else ""
@@ -449,7 +450,15 @@ def update_job_detail_buffer(
         added=added,
         duplicate=duplicate,
     )
-    stats = dict(buffer.get("stats") or {})
+    stats: JobDetailStats = (
+        buffer.get("stats")
+        or {
+            "screen_count": 0,
+            "added_lines_last_screen": 0,
+            "duplicate_lines_last_screen": 0,
+            "total_lines": 0,
+        }
+    ).copy()
     stats["screen_count"] = int(stats.get("screen_count") or 0) + 1
     stats["added_lines_last_screen"] = added
     stats["duplicate_lines_last_screen"] = duplicate
@@ -477,7 +486,7 @@ def update_job_detail_buffer(
 
 
 def compact_job_detail_buffer_context(
-    state: "WorkerState",
+    state: WorkerState,
     current_url: str,
     detail_key: str = "",
 ) -> str:
@@ -485,7 +494,7 @@ def compact_job_detail_buffer_context(
         return ""
     collection = state["collection"]
     observation = state["observation"]
-    buffer = dict(collection.get("job_detail_buffer", {}) or {})
+    buffer = (collection.get("job_detail_buffer") or {}).copy()
     if not detail_context_matches(buffer, current_url, detail_key):
         return ""
     if not buffer.get("lines") and not is_job_detail_context(
@@ -569,7 +578,7 @@ def compact_job_detail_buffer_context(
     return "\n".join(parts) + "\n\n"
 
 
-def detail_buffer_text(buffer: dict[str, Any]) -> str:
+def detail_buffer_text(buffer: JobDetailBuffer) -> str:
     """누적 OCR 줄을 최종 추출 모델의 입력 크기에 맞춰 렌더링한다."""
 
     max_chars = get_settings().vision.detail_final_ocr_max_chars
@@ -588,7 +597,7 @@ def detail_buffer_text(buffer: dict[str, Any]) -> str:
     return "\n".join(rendered)
 
 
-def detail_evidence_screenshot(buffer: dict[str, Any]) -> str:
+def detail_evidence_screenshot(buffer: JobDetailBuffer) -> str:
     """새 OCR 본문을 처음 제공한 상세 화면을 대표 근거로 선택한다."""
 
     screens = [str(item) for item in (buffer.get("screens") or []) if str(item)]

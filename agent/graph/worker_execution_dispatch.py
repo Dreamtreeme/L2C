@@ -23,12 +23,16 @@ from agent.runtime.job_card_queue import (
 from shared.schema.jd_schema import JobCapture, JobCollectionEvidence
 
 
+def _empty_state_update() -> WorkerStateUpdate:
+    return {}
+
+
 @dataclass(frozen=True)
 class StateActionOutcome:
     """상태 행동의 결과와 작업자 상태 변경."""
 
     result: dict[str, Any]
-    state_update: WorkerStateUpdate = field(default_factory=dict)
+    state_update: WorkerStateUpdate = field(default_factory=_empty_state_update)
 
 
 @dataclass(frozen=True)
@@ -105,12 +109,9 @@ def _detail_followup(
     """같은 상세 화면의 추가 판독 횟수와 누락 필드를 기록한다."""
 
     detail_key = job_detail_key_from_state(state)
-    previous = dict(
-        state["collection"].get("job_detail_followup", {}) or {}
-    )
+    previous = dict(state["collection"].get("job_detail_followup", {}) or {})
     same_detail = previous.get("url") == current_url or (
-        detail_key
-        and previous.get("detail_key") == detail_key
+        detail_key and previous.get("detail_key") == detail_key
     )
     attempts = int(previous.get("attempts") or 0) + 1 if same_detail else 1
     return {
@@ -153,9 +154,9 @@ def _detail_retry_update(
 ) -> WorkerStateUpdate:
     return {
         "collection": {
-            "job_detail_buffer": dict(
-                state["collection"].get("job_detail_buffer", {}) or {}
-            ),
+            "job_detail_buffer": (
+                state["collection"].get("job_detail_buffer") or {}
+            ).copy(),
             "job_detail_coverage": assessment.coverage,
             "job_detail_followup": _detail_followup(
                 state,
@@ -222,7 +223,7 @@ def _prepare_job_capture(
     current_url: str,
     raw_ocr_text: str,
 ) -> JobCapture:
-    buffer = dict(state["collection"].get("job_detail_buffer", {}) or {})
+    buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
     return JobCapture(
         url=current_url,
         raw_ocr_text=raw_ocr_text,
@@ -247,8 +248,7 @@ def _merge_completed_detail(
             "action": "finish_detail_reading",
             "status": "success",
             "result": (
-                "Detail OCR buffer captured "
-                f"(total_captures={len(merged_captures)})"
+                f"Detail OCR buffer captured (total_captures={len(merged_captures)})"
             ),
             "incoming_captures": 1,
             "total_captures": len(merged_captures),
@@ -282,7 +282,7 @@ def _finish_detail_reading(
                 current_url,
             )
 
-        buffer = dict(state["collection"].get("job_detail_buffer", {}) or {})
+        buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
         raw_ocr_text = detail_buffer_text(buffer)
         if not raw_ocr_text:
             return _empty_detail_outcome(current_captures)
@@ -303,6 +303,7 @@ def _finish_detail_reading(
                 "status": "error",
                 "result": f"Failed to extract detail OCR buffer: {exc}",
             },
+            state_update={},
         )
 
 
@@ -319,26 +320,20 @@ def _set_job_card_queue(
         queue,
         current_url,
     )
-    selector_trace = dict(
-        state["decision"].get("job_card_selection_trace", {}) or {}
-    )
+    selector_trace = dict(state["decision"].get("job_card_selection_trace", {}) or {})
     availability_source = (
-        args
-        if args.get("available_job_count") is not None
-        else selector_trace
+        args if args.get("available_job_count") is not None else selector_trace
     )
     availability: dict[str, Any] = {}
+    raw_available_count = availability_source.get("available_job_count")
     try:
-        available_count = int(availability_source.get("available_job_count"))
+        available_count = (
+            int(raw_available_count) if raw_available_count is not None else -1
+        )
     except (TypeError, ValueError):
         available_count = -1
-    count_evidence = str(
-        availability_source.get("count_evidence") or ""
-    ).strip()[:160]
-    if (
-        available_count >= len(queue)
-        and count_evidence
-    ):
+    count_evidence = str(availability_source.get("count_evidence") or "").strip()[:160]
+    if available_count >= len(queue) and count_evidence:
         availability = {
             "available_job_count": available_count,
             "count_evidence": count_evidence,
@@ -374,12 +369,11 @@ def dispatch_state_action(
     current_captures: list[JobCapture],
     *,
     current_url: str = "",
-    state: WorkerState | None = None,
+    state: WorkerState,
     data_services: WorkerDataServices,
 ) -> StateActionOutcome:
     """공고 추출과 카드 큐처럼 그래프 상태를 변경하는 행동을 실행한다."""
 
-    state = state or {}
     if action_name == "finish_detail_reading":
         return _finish_detail_reading(
             args,

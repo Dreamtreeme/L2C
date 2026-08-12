@@ -14,7 +14,7 @@ from agent.runtime.worker_actions import (
     RECIPE_COMMIT_ACTIONS,
     TARGET_REPLAY_ACTIONS,
 )
-from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_contracts import ScreenMarker, WorkerState
 from agent.runtime.worker_data_services import SiteExperienceLoader
 from agent.utils.text import recipe_url_scope_matches, url_template
 from shared.schema.recipe_schema import (
@@ -57,16 +57,14 @@ class ReflexRejectionLog:
         if score > self.reason_score:
             self.reason_score = score
             self.last_reason = resolved
-        item = {"recipe_key": recipe_key, "reason": resolved}
+        item: dict[str, Any] = {"recipe_key": recipe_key, "reason": resolved}
         if trace:
             item.update(
                 {
                     "page_role": trace.get("page_role", ""),
                     "current_page_role": trace.get("current_page_role", ""),
                     "url_template": trace.get("url_template", ""),
-                    "current_url_template": trace.get(
-                        "current_url_template", ""
-                    ),
+                    "current_url_template": trace.get("current_url_template", ""),
                     "action": trace.get("action", ""),
                     "phash": dict(trace.get("phash") or {}),
                 }
@@ -108,7 +106,7 @@ class ReplayInputs:
 class ReflexReplayContext:
     """한 캡처에서 후보 조회와 검증에 공통으로 쓰는 값."""
 
-    markers: list[dict[str, Any]]
+    markers: list[ScreenMarker]
     inputs: ReplayInputs
     task_category: str
     site: str
@@ -306,9 +304,7 @@ def load_reflex_replay_context(
         task_category=intent.task_category.strip(),
         site=site,
         current_image_path=str(observation.get("current_screenshot") or ""),
-        current_page_role=normalize_page_role(
-            observation.get("current_page_role", "")
-        ),
+        current_page_role=normalize_page_role(observation.get("current_page_role", "")),
         current_url=current_url,
         current_url_template=url_template(current_url),
         blocked_recipe_keys={
@@ -345,8 +341,7 @@ def _eligible_candidates(
         transition_count = len(recipe.transitions)
         transition_index = (
             context.replay_session.current_transition_index
-            if context.replay_session
-            and recipe_key == context.active_recipe_key
+            if context.replay_session and recipe_key == context.active_recipe_key
             else 0
         )
         if transition_index >= transition_count:
@@ -397,7 +392,7 @@ def _match_target_action_screen(
 ) -> tuple[int | None, str]:
     marker_id, phash_result = match_step_by_screen_signature(
         action,
-        dict(state["observation"].get("screen_signature", {}) or {}),
+        (state["observation"].get("screen_signature") or {}).copy(),
         context.markers,
         current_image_path=context.current_image_path,
     )
@@ -476,12 +471,8 @@ def _bind_candidate(
                 trace,
             )
             return None
-        key_digest = hashlib.sha1(
-            candidate.recipe_key.encode("utf-8")
-        ).hexdigest()[:12]
-        call_id = (
-            f"reflex_{key_digest}_{candidate.transition_index}_{action_index}"
-        )
+        key_digest = hashlib.sha1(candidate.recipe_key.encode("utf-8")).hexdigest()[:12]
+        call_id = f"reflex_{key_digest}_{candidate.transition_index}_{action_index}"
         tool_calls.append({"name": action.action, "args": args, "id": call_id})
         trace.update({"accepted": True, "tool_call_id": call_id})
         tool_call_traces[call_id] = dict(trace)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import wraps
 from typing import Any, Callable
 
@@ -108,14 +109,14 @@ def _instrument_node(
     name: str,
     node: Callable[
         [WorkerState, Runtime[WorkerDependencies]],
-        dict[str, Any],
+        Mapping[str, Any],
     ],
 ):
     @wraps(node)
     def observed(
         state: WorkerState,
         runtime: Runtime[WorkerDependencies],
-    ) -> dict[str, Any]:
+    ) -> Mapping[str, Any]:
         with graph_step(name) as observation:
             result = node(state, runtime)
             request = (

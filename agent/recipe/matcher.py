@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from agent.runtime.site_context import normalize_page_role
+from agent.runtime.worker_contracts import ScreenMarker
 from agent.runtime.worker_actions import (
     RECIPE_COMMIT_ACTIONS,
     TARGET_REPLAY_ACTIONS,
@@ -12,7 +13,7 @@ from agent.vision.marker_geometry import marker_center
 from shared.schema.recipe_schema import PhysicalAction, ScreenCheckpoint
 
 
-def marker_region(marker: dict, markers: list[dict]) -> str:
+def marker_region(marker: ScreenMarker, markers: list[ScreenMarker]) -> str:
     """현재 마커 집합 안에서 coarse 3x3 영역을 계산한다."""
     if not marker:
         return ""

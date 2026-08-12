@@ -11,6 +11,9 @@ from agent.config import get_settings
 from agent.runtime.worker_contracts import (
     ActionRequest,
     CompletedTransitionObservation,
+    JobResultsMemory,
+    ScreenMarker,
+    ScreenSignature,
     TransitionResult,
     WorkerState,
     attach_action_transition,
@@ -122,12 +125,8 @@ def _queue_results_transition(
 ) -> CompletedTransitionObservation | None:
     if not str(transition_result.get("action") or ""):
         return None
-    saved_signature = dict(
-        (state["collection"].get("job_results_memory", {}) or {}).get(
-            "screen_signature",
-            {},
-        )
-    )
+    memory = state["collection"].get("job_results_memory") or {}
+    saved_signature = (memory.get("screen_signature") or {}).copy()
     anchors = [
         str(text) for text in saved_signature.get("anchors", []) or [] if str(text)
     ]
@@ -155,12 +154,12 @@ def _replay_queued_card(
     state: WorkerState,
     *,
     request: ActionRequest,
-    selected_markers: list[dict[str, Any]],
+    selected_markers: list[ScreenMarker],
     trace: dict[str, Any],
     transition_result: TransitionResult,
-    signature: dict[str, Any],
-    memory: dict[str, Any],
-    saved_signature: dict[str, Any],
+    signature: ScreenSignature,
+    memory: JobResultsMemory,
+    saved_signature: ScreenSignature,
 ) -> dict[str, Any]:
     transition = _queue_results_transition(
         state,
@@ -261,7 +260,7 @@ def _select_queued_card(
         if ocr_complete
         else observation.get("raw_screen_signature")
     )
-    signature = dict(signature_value or {})
+    signature: ScreenSignature = (signature_value or {}).copy()
     request, selected_markers, trace = replay_job_card_on_results(
         state,
         transition_result,
@@ -273,8 +272,8 @@ def _select_queued_card(
     )
     if request is None:
         return None
-    memory = dict(state["collection"].get("job_results_memory", {}) or {})
-    saved_signature = dict(memory.get("screen_signature", {}) or {})
+    memory = (state["collection"].get("job_results_memory") or {}).copy()
+    saved_signature = (memory.get("screen_signature") or {}).copy()
     logger.info(
         "Job card queue action selected",
         queue_id=trace.get("queue_id", ""),

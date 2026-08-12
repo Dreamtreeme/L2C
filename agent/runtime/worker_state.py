@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_contracts import ScreenMarker, WorkerState
 from agent.runtime.site_context import infer_site_page_role
 
 
@@ -33,7 +31,7 @@ def count_mode_from_state(state: WorkerState) -> str:
 
 def infer_current_page_role(
     current_url: str,
-    markers: list[dict[str, Any]],
+    markers: list[ScreenMarker],
 ) -> str:
     """현재 화면의 Reflex 적용 범위를 보수적으로 분류한다."""
 

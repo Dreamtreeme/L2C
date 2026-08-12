@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from agent.config import get_settings
+from agent.runtime.worker_contracts import ScreenMarker
 from agent.utils.text import normalize_text
 from agent.vision.marker_geometry import (
     bbox_to_ratio,
@@ -28,15 +30,13 @@ def _capture_size(value: Any) -> list[int]:
 
 def capture_context_match(
     saved: dict[str, Any],
-    current_signature: dict[str, Any],
+    current_signature: Mapping[str, Any],
 ) -> dict[str, Any]:
     """반응형 레이아웃이 달라질 정도의 캡처 크기 차이를 차단한다."""
 
     saved_context = dict(saved.get("capture_context") or {})
     saved_size = _capture_size(
-        saved_context.get("size")
-        or saved.get("source_size")
-        or saved.get("size")
+        saved_context.get("size") or saved.get("source_size") or saved.get("size")
     )
     current_context = dict(current_signature.get("capture_context") or {})
     current_size = _capture_size(
@@ -47,10 +47,8 @@ def capture_context_match(
 
     settings = get_settings().reflex
     if (
-        abs(saved_size[0] - current_size[0])
-        > settings.capture_width_tolerance_px
-        or abs(saved_size[1] - current_size[1])
-        > settings.capture_height_tolerance_px
+        abs(saved_size[0] - current_size[0]) > settings.capture_width_tolerance_px
+        or abs(saved_size[1] - current_size[1]) > settings.capture_height_tolerance_px
     ):
         return {
             "matched": False,
@@ -69,7 +67,7 @@ def capture_context_match(
 def roi_signature_match(
     saved: dict[str, Any],
     current_image_path: str,
-    current_signature: dict[str, Any] | None = None,
+    current_signature: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """저장된 ROI와 현재 화면의 같은 영역을 pHash로 비교한다."""
 
@@ -135,7 +133,7 @@ def roi_signature_match(
 
 def screen_context_signature_match(
     saved: dict[str, Any],
-    current_signature: dict[str, Any],
+    current_signature: Mapping[str, Any],
 ) -> dict[str, Any]:
     """좌표 없는 행동 직전 화면이 자율탐색 기록과 같은지 확인한다."""
 
@@ -168,9 +166,7 @@ def screen_context_signature_match(
     return {
         "matched": matched,
         "reason": (
-            "screen_context_matched"
-            if matched
-            else "screen_context_phash_distance"
+            "screen_context_matched" if matched else "screen_context_phash_distance"
         ),
         "distance": distance,
         "max_distance": max_distance,
@@ -185,9 +181,7 @@ def _normalized_key(value: Any) -> str:
 def anchor_overlap(saved: list[Any], current: list[Any]) -> float:
     """저장한 OCR 앵커 중 현재 화면에도 보이는 비율을 반환한다."""
 
-    saved_set = {
-        _normalized_key(item) for item in saved or [] if _normalized_key(item)
-    }
+    saved_set = {_normalized_key(item) for item in saved or [] if _normalized_key(item)}
     current_set = {
         _normalized_key(item) for item in current or [] if _normalized_key(item)
     }
@@ -237,7 +231,7 @@ def _bbox_iou(left: list[float], right: list[float]) -> float:
 
 def match_target_by_ratio(
     target: dict[str, Any] | None,
-    markers: list[dict[str, Any]],
+    markers: list[ScreenMarker],
     screen_size: list[int],
 ) -> int | None:
     """저장 좌표와 종류·형상이 가장 잘 맞는 현재 마커를 선택한다."""
@@ -259,8 +253,9 @@ def match_target_by_ratio(
         distance = _distance(target_center, current_center)
         if distance > max_distance:
             continue
+        raw_marker_id = marker.get("id")
         try:
-            marker_id = int(marker.get("id"))
+            marker_id = int(raw_marker_id)
         except (TypeError, ValueError):
             continue
         current_bbox = bbox_to_ratio(marker_bbox(marker), screen_size)
