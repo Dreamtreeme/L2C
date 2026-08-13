@@ -3,7 +3,7 @@ title: "Reflex Recipe 구현 기준"
 type: plan
 area: reflex
 status: active
-updated: 2026-08-12
+updated: 2026-08-13
 tags:
   - l2c
   - docs/reflex
@@ -23,42 +23,49 @@ tags:
 ## 현재 저장 흐름
 
 ```text
-자율 탐색 action
--> 직전 ScreenCheckpoint와 PhysicalAction을 ExecutionEvent에 기록
--> 다음 캡처에서 도착 화면과 증거를 붙여 ExperienceTransition 완성
+자율 탐색 ActionRequest
+-> 직전 ScreenCheckpoint와 실행할 PhysicalAction 묶음을 기록
+-> 묶음 실행 뒤 한 번 캡처해 도착 화면과 증거를 붙인 ExperienceTransition 완성
 -> worker_submission 저장
--> recipe_candidate를 pending_replay로 저장
+-> recipe_candidate를 recorded로 저장
 -> 사용자 답변 경로는 계속 진행
 -> 자동 승격이 켜진 실행은 후보를 pending_review 대기열에 등록
 -> 백엔드 승격 작업자가 후보를 선점
--> Critic이 후보 단계 유지/제거 판정
--> active_recipe 저장
+-> 실행 계약이 완성된 전이만 Critic에 전달
+-> 시작 화면과 각 전이 후 화면을 실행 순서대로 Critic에 전달
+-> Critic이 전이 묶음 유지/제거 판정
+-> 남은 전이가 하나의 연속 경로일 때만 내용을 바꾸지 않고 active_recipe 저장
 -> 다음 경험 기반 탐색에서 Reflex replay
 ```
 
-승격 검토는 현재 답변의 전제 조건이 아니다. FastAPI 수명주기의 단일 작업자가 SQLite 대기열을 처리하므로 요청과 E2E는 Critic 완료를 기다리지 않는다. 전송 오류는 `pending_review`로 재시도하고, 재시도 한도를 넘기면 의미상 거절인 `revise`와 구분해 `review_failed`로 남긴다.
+승격 검토는 현재 답변의 전제 조건이 아니다. FastAPI 수명주기의 단일 작업자가 SQLite 대기열을 처리하므로 요청과 E2E는 Critic 완료를 기다리지 않는다. 전송 오류는 `pending_review`로 재시도하고, 재시도 한도를 넘기면 `review_failed`로 남긴다. Critic의 내용 판정은 `accept` 또는 `reject`다.
 
 ## Active Recipe 기준
 
 활성 레시피는 한 성공 실행의 `ExperienceTransition` 목록인
 `ExperiencePath` 하나로 저장한다. 각 전이는 `before + actions + after`를
 가지며, 시작 화면과 완료 화면은 첫 전이의 `before`와 마지막 전이의 `after`에서
-계산한다. 첫 전이의 첫 행동은 반드시 ROI로 다시 찾을 수 있는
-클릭/입력이어야 한다. 이후 전이도 ROI 클릭·입력만 재생하며, 입력 직후
-Enter가 하나의 화면 전환을 만들 때만 두 행동을 같은 전이로 묶는다.
+계산한다. 각 전이의 첫 행동은 ROI로 다시 찾을 수 있는 클릭/입력이다.
+입력과 Enter 또는 입력과 화면에 이미 보이는 제출 클릭을 중간 관찰 없이 실행한
+경우에는 두 행동이 처음부터 같은 전이로 기록된다.
+입력 뒤 새 관찰이 필요했던 경우에는 입력 전이를 따로 유지한다. 입력 직후 화면이
+거의 변하지 않았더라도 바로 다음 성공 전이의 시작 화면과 이어지면 해당 입력은
+`preparation transition`으로 검토한다. 승격 단계에서 두 전이를 다시 합치지는 않는다.
 
 - `site`: 사이트 식별자.
 - `task_category`: 검색, 로그인, 결제, 사이트 탐색 같은 작업 분류.
 - `page_role`: home, search, job_detail, popup 등 행동 당시의 설명과 기록 완전성 확인에 쓰는 화면 역할. 현재 화면과의 재생 일치 판정에는 사용하지 않는다.
 - `roi_signature`: target 주변 crop pHash와 crop 비율.
 - `target.center_ratio` 또는 `target.bbox_ratio`: 현재 OCR marker 재탐색용 비율 좌표.
-- `replay_mode`: 실행된 도구와 입력 슬롯 계약에서 `fixed` 또는 `parameterized`로 계산되고 Critic이 유지한 단계.
+- `replay_mode`: 실행된 도구와 입력 슬롯 계약에서 `fixed` 또는 `parameterized`로 계산된 행동.
 - `before` / `after`: `ScreenCheckpoint`로 표현한 행동 묶음 전후 화면.
-- `actions`: 중간 화면 관찰 없이 실행해도 되는 행동 묶음. 현재는 단일 클릭·입력 또는 `검색어 입력 + Enter`만 허용한다.
+- `actions`: 중간 화면 관찰 없이 실행한 행동 묶음. 현재는 단일 클릭·입력, `입력 + Enter`, `입력 + 제출 클릭`을 허용한다.
 - `evidence`: 실행 결과, 전환 상태, OpenCV 변화율과 OCR 문맥을 담은 자율탐색 근거. 활성 경로 저장 시에는 제거한다.
 
-Critic이 중간 행동을 제거했을 때 삭제 전후 체크포인트가 같다는 근거가 없으면
-그 지점에서 경로를 끝낸다. 뒤쪽 행동을 별도 레시피로 자동 생성하지 않는다.
+Critic이 중간 전이를 제거했을 때 삭제 전후 체크포인트가 같은 관찰 ID이거나,
+URL·화면 역할이 같고 화면 pHash까지 정확히 같을 때만 경로를 다시 연결한다.
+근사 pHash만으로는 두 상태를 같은 화면으로 취급하지 않는다. 남은 전이가 하나의
+연속 경로를 만들지 못하면 후보 전체를 승격하지 않는다.
 경로 키는
 전체 단계의 순서와 의미를 포함하므로 `A-B-C`와 `A-D-C`는 별도 레시피다.
 새 후보를 승격할 때도 단계가 겹친다는 이유로 다른 후보의 경로를 삭제하지 않는다.
@@ -68,9 +75,9 @@ Critic이 중간 행동을 제거했을 때 삭제 전후 체크포인트가 같
 `state_key`, Jaccard anchor 유사도와 코드 기반 화면 역할 분류는 active replay의
 기본 조회 기준이 아니다.
 
-전체 경로 키는 `experience7#` 버전을 사용한다. 이전 활성 경로는 스키마 전환 때
-폐기한다. 후보 테이블은 `contract_version=2`만 검토하며 이전 계약의 대기 후보는
-삭제한다. 새 자율탐색이 현재 계약으로 다시 기록한 경로만 승격한다.
+전체 경로 키는 `experience8#` 버전을 사용한다. 조회와 재생은 이 버전의 활성
+경로만 대상으로 한다. 후보 테이블도 `contract_version=3`만 검토한다. 이전 계약
+행은 실행 중 삭제하지 않고 DB에 보존하되 현재 경로에서 조회하지 않는다.
 
 ## Replay 순서
 
@@ -81,16 +88,16 @@ Critic이 중간 행동을 제거했을 때 삭제 전후 체크포인트가 같
 5. ROI가 맞으면 저장된 target 비율에 가까운 현재 OCR marker를 찾는다.
 6. 첫 전이가 통과한 경로 하나를 선택하고 `ReplaySession`에 경로 키, 현재 전이 번호와 검증 대기 번호를 저장한다. 이 시점에는 번호를 증가시키지 않는다.
 7. 현재 캡처에서 검증한 단일 클릭·입력 또는 `입력 + Enter` 행동 묶음을 `ActionRequest`로 실행한다.
-8. OpenCV 연속 프레임 비교로 화면 변화 시작과 렌더링 안정화를 기다린 뒤 OCR을 실행한다.
+8. OpenCV 연속 프레임 비교로 화면 변화 시작과 렌더링 안정화를 기다린다. 변화 뒤에는 설정된 정숙 시간 동안 추가 변화가 없어야 준비 완료로 판정하고 OCR을 실행한다.
 9. 저장된 `after`의 ROI 앵커 또는 화면 문맥이 현재 화면과 일치할 때만 다음 전이 번호로 이동한다.
 10. 다음 전이의 ROI 대상도 현재 marker로 다시 찾는다.
 11. 마지막 전이의 도착 상태가 검증되면 `ReplaySession`을 끝낸다. 검증이 실패하면 세션을 종료하고 reasoning으로 폴백하며 같은 run 안에서 해당 `recipe_key`를 차단한다.
 
 ## 승격 정책
 
-자율탐색의 실제 도구 계약에서 재사용 방식을 계산한다. Critic은 실행 내용을
-수정하지 않고 잘못된 대상, 무효 행동, 폐기된 복구 경로와 불안정한 단계만
-제거한다. 코드는 전이에 포함된 실행 결과와 화면 증거를 검사한다.
+자율탐색의 실제 도구 계약에서 재사용 방식을 계산한다. 실행 직후 코드는 전이의
+결과와 화면 증거를 한 번 확정한다. Critic은 잘못된 대상, 무효 행동, 폐기된 복구
+경로와 불안정한 전이 묶음을 제거하며 실행 내용을 수정하지 않는다.
 
 - `fixed`: 같은 UI 조작이 여러 실행에서 그대로 유효한 단계.
 - `parameterized`: UI 조작은 같고 입력 슬롯만 바뀌는 단계.
@@ -98,10 +105,12 @@ Critic이 중간 행동을 제거했을 때 삭제 전후 체크포인트가 같
 
 공고 제목 클릭은 기본적으로 `reasoning`이다. 검색 열기, 검색어 입력, 검색 제출처럼 반복 증거가 있는 컨트롤만 active recipe 후보가 된다. 상세 펼치기 자동 클릭은 현재 사이트 `page_guidance.reveal_controls`에 선언된 OCR 라벨과 정확히 일치할 때만 허용한다.
 
-LLM이 한 번에 여러 행동을 생성하는 것은 허용하지 않는다. 다만 자율탐색 기록에서
-`type_in_marker` 직후 `Enter`가 하나의 화면 전환을 만든 것이 확인되면 활성
-레시피 승격 시 두 행동을 같은 전이로 묶는다. 서로 다른 타깃 클릭처럼 중간 화면을
-다시 봐야 하는 행동은 묶지 않는다.
+LLM은 화면에 입력칸과 제출 수단이 함께 명확히 보일 때 `type_in_marker` 뒤
+`Enter` 또는 제출 클릭을 한 요청으로 만들 수 있다. 실행기는 호출 순서대로 수행한
+뒤 한 번만 화면을 관찰해 행동 묶음 전이를 완성한다. 중간 화면을 다시 봐야 하는
+행동은 서로 다른 요청과 전이로 기록한다. 독립 입력 전이는 바로 뒤의 성공 행동을
+준비한 기록일 때만 Critic 검토 대상으로 남긴다. 승격 단계에서 행동을 다시 합치지
+않는다.
 
 ## 실패 처리
 

@@ -1,85 +1,13 @@
+import sqlite3
+
 from agent.runtime.job_card_queue import replay_job_card_on_results
 from agent.tests.worker_test_support import worker_state
-from shared.schema.feedback_schema import RecipeCandidate, WorkerSubmission
 from shared.schema.recipe_schema import ExperiencePath
 from shared.schema.skill_schema import RecipeSkillMetadata
 
 
 def _recipe_metadata(task_category: str) -> RecipeSkillMetadata:
     return RecipeSkillMetadata(task_category=task_category)
-
-
-def _recipe_candidate(steps: list[dict], transitions: list[dict]) -> RecipeCandidate:
-    transitions_by_seq = {
-        transition.get("action_seq"): transition for transition in transitions
-    }
-    submission = WorkerSubmission(
-        run_id="recipe-path-test",
-        collection_intent={"site": "example"},
-        action_events=[
-            {
-                "seq": int(step.get("seq") or 0),
-                "candidate_action": {
-                    "source_seq": int(step.get("seq") or 0),
-                    "action": step.get("action") or "",
-                    "target": step.get("target"),
-                    "roi_signature": step.get("roi_signature", {}),
-                    "param": step.get("param", {}),
-                    "intent": step.get("intent", ""),
-                    "target_role": step.get("target_role", ""),
-                    "component": step.get("component", ""),
-                    "slot_refs": step.get("slot_refs", []),
-                    "risk_level": step.get("risk_level", ""),
-                    "replay_mode": step.get("replay_mode", "reasoning"),
-                },
-                "before_checkpoint": step.get("before_state") or {},
-                "transition": (
-                    {
-                        "seq": int(step.get("seq") or 0),
-                        "before": step.get("before_state") or {},
-                        "actions": [
-                            {
-                                "source_seq": int(step.get("seq") or 0),
-                                "action": step.get("action") or "",
-                                "target": step.get("target"),
-                                "roi_signature": step.get("roi_signature", {}),
-                                "param": step.get("param", {}),
-                                "intent": step.get("intent", ""),
-                                "target_role": step.get("target_role", ""),
-                                "component": step.get("component", ""),
-                                "slot_refs": step.get("slot_refs", []),
-                                "risk_level": step.get("risk_level", ""),
-                                "replay_mode": step.get("replay_mode", "reasoning"),
-                            }
-                        ],
-                        "after": transitions_by_seq[step.get("seq")]["after_state"],
-                        "expected_after": step.get("expected_after", ""),
-                        "intent": step.get("intent", ""),
-                        "evidence": {
-                            "source": transitions_by_seq[step.get("seq")].get(
-                                "source", "autonomous"
-                            ),
-                            "result_status": "success",
-                            "status": transitions_by_seq[step.get("seq")].get(
-                                "status", "ready"
-                            ),
-                            "reason": transitions_by_seq[step.get("seq")].get(
-                                "reason", "screen_change_pixels_matched"
-                            ),
-                        },
-                    }
-                    if step.get("seq") in transitions_by_seq
-                    else None
-                ),
-            }
-            for step in steps
-        ],
-    )
-    return RecipeCandidate.from_submission(
-        submission,
-        run_id="recipe-path-test",
-        status="pending_replay",
-    )
 
 
 def _active_recipe_path(actions: list[dict]) -> ExperiencePath:
@@ -254,6 +182,45 @@ def test_recipe_store_scopes_by_site_and_task_category(tmp_path):
     assert store.get_site_recipes("saramin", task_category="검색") == []
 
 
+def test_recipe_store_ignores_legacy_paths_without_deleting_them(tmp_path):
+    from agent.recipe.store import RecipeStore
+
+    db_path = tmp_path / "legacy-recipes.db"
+    store = RecipeStore(db_path)
+    path = _active_recipe_path(
+        [
+            {
+                "seq": 0,
+                "action": "click_marker",
+                "target": {"text": "검색", "center_ratio": [0.8, 0.1]},
+                "roi_signature": {"phash": "0" * 16},
+            }
+        ]
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO recipes "
+            "(recipe_key, site, goal, path_json, metadata_json, support_count, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "experience7#legacy",
+                "wanted",
+                "검색",
+                path.model_dump_json(),
+                "{}",
+                1,
+                "2026-08-13T00:00:00",
+                "2026-08-13T00:00:00",
+            ),
+        )
+
+    assert store.get_by_site("wanted") == []
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM recipes WHERE recipe_key='experience7#legacy'"
+        ).fetchone()[0] == 1
+
+
 def test_recipe_store_keeps_actions_in_one_path_across_page_changes(tmp_path):
     from agent.recipe.store import RecipeStore
 
@@ -301,118 +268,6 @@ def test_recipe_store_keeps_actions_in_one_path_across_page_changes(tmp_path):
         assert saved == 1, case_name
         assert len(recipes) == 1, case_name
         assert actions == ["type_in_marker", "click_marker"], case_name
-
-
-def test_recipe_path_accepts_page_role_change_without_full_screen_hash(
-    tmp_path,
-):
-    from agent.recipe.path_builder import build_experience_path
-    from agent.recipe.store import RecipeStore
-
-    before = {
-        "observation_id": "observation:0001",
-        "url_template": "example.com/search",
-        "page_role": "search_overlay",
-        "screen_context_signature": {
-            "phash": "1" * 16,
-            "size": [1920, 1080],
-        },
-    }
-    after = {
-        "observation_id": "observation:0002",
-        "url_template": "example.com/search",
-        "page_role": "search",
-    }
-    step = {
-        "seq": 1,
-        "action": "click_marker",
-        "replay_mode": "fixed",
-        "target": {"text": "검색", "center_ratio": [0.5, 0.5]},
-        "roi_signature": {
-            "phash": "2" * 16,
-            "crop_rect_ratio": [0.4, 0.4, 0.6, 0.6],
-        },
-        "before_state": before,
-    }
-    candidate = _recipe_candidate(
-        [step],
-        [{"action_seq": 1, "after_state": after}],
-    )
-
-    path, issues = build_experience_path(candidate, [candidate.steps[0]])
-
-    assert path is not None
-    assert issues == []
-    assert path.completion_state.screen_context_signature == {}
-    assert (
-        RecipeStore(tmp_path / "role-change.db").commit_recipe_path(
-            "example",
-            "검색",
-            path,
-            metadata=_recipe_metadata("검색"),
-        )
-        == 1
-    )
-
-
-def test_recipe_path_validates_screen_changing_targets_on_separate_screens():
-    from agent.recipe.path_builder import build_experience_path
-
-    def state(observation_id: str, role: str, phash: str) -> dict:
-        return {
-            "observation_id": observation_id,
-            "url_template": "example.com/",
-            "page_role": role,
-            "screen_context_signature": {
-                "phash": phash,
-                "size": [1920, 1080],
-            },
-        }
-
-    type_step = {
-        "seq": 1,
-        "action": "type_in_marker",
-        "replay_mode": "parameterized",
-        "param": {"slot_name": "search_keyword"},
-        "slot_refs": ["search_keyword"],
-        "target": {"text": "검색어", "center_ratio": [0.5, 0.1]},
-        "roi_signature": {"phash": "1" * 16},
-        "before_state": state("observation:0001", "home", "1" * 16),
-    }
-    click_step = {
-        "seq": 2,
-        "action": "click_marker",
-        "replay_mode": "fixed",
-        "target": {"text": "검색", "center_ratio": [0.9, 0.1]},
-        "roi_signature": {"phash": "2" * 16},
-        "before_state": state("observation:0002", "search_overlay", "2" * 16),
-    }
-    candidate = _recipe_candidate(
-        [type_step, click_step],
-        [
-            {
-                "action_seq": 1,
-                "after_state": state(
-                    "observation:0002", "search_overlay", "2" * 16
-                ),
-            },
-            {
-                "action_seq": 2,
-                "after_state": state("observation:0003", "search", "3" * 16),
-            },
-        ],
-    )
-
-    path, issues = build_experience_path(candidate, candidate.steps)
-
-    assert issues == []
-    assert [
-        [action.action for action in transition.actions]
-        for transition in path.transitions
-    ] == [["type_in_marker"], ["click_marker"]]
-    assert path.transitions[0].after.anchor_target.model_dump(
-        mode="json", exclude_defaults=True
-    ) == click_step["target"]
 
 
 def test_recipe_store_preserves_two_paths_with_overlapping_steps(tmp_path):
@@ -552,13 +407,16 @@ def test_recipe_store_separates_candidate_support_from_replay_results(tmp_path):
         ]
     )
     store = RecipeStore(tmp_path / "replay-results.db")
-    assert store.replace_recipe_paths(
-        "example",
-        "검색",
-        [path],
-        metadata=_recipe_metadata("검색"),
-        source_run_id="run-one",
-    ) == 1
+    assert (
+        store.replace_recipe_paths(
+            "example",
+            "검색",
+            [path],
+            metadata=_recipe_metadata("검색"),
+            source_run_id="run-one",
+        )
+        == 1
+    )
     recipe_key = store.get_by_site("example")[0]["recipe_key"]
 
     assert store.record_replay_result(recipe_key, True) is True
@@ -569,77 +427,3 @@ def test_recipe_store_separates_candidate_support_from_replay_results(tmp_path):
     assert recipe["replay_success_count"] == 1
     assert recipe["replay_failure_count"] == 1
     assert recipe["last_replayed_at"]
-
-
-def test_critic_does_not_join_different_recorded_observations():
-    from agent.recipe.path_builder import build_experience_path
-
-    def state(observation_id: str, phash: str) -> dict:
-        return {
-            "observation_id": observation_id,
-            "url_template": "example.com/search",
-            "page_role": "search_results",
-            "screen_context_signature": {
-                "phash": phash,
-                "size": [1920, 1080],
-            },
-        }
-
-    first = {
-        "seq": 1,
-        "action": "click_marker",
-        "page_role": "search_results",
-        "replay_mode": "fixed",
-        "target": {"text": "A"},
-        "roi_signature": {"phash": "1" * 16},
-        "before_state": state("observation:0001", "1" * 16),
-    }
-    removed = {
-        "seq": 2,
-        "action": "press_key",
-        "page_role": "search_results",
-        "replay_mode": "reasoning",
-        "param": {"key": "tab"},
-        "before_state": state("observation:0002", "2" * 16),
-    }
-    last = {
-        "seq": 3,
-        "action": "click_marker",
-        "page_role": "search_results",
-        "replay_mode": "fixed",
-        "target": {"text": "B"},
-        "roi_signature": {"phash": "3" * 16},
-        "before_state": state("observation:0003", "2" * 16),
-    }
-    candidate = _recipe_candidate(
-        [first, removed, last],
-        [
-            {
-                "action_seq": 1,
-                "after_state": state("observation:0002", "2" * 16),
-            },
-            {
-                "action_seq": 3,
-                "after_state": state("observation:0004", "4" * 16),
-            },
-        ],
-    )
-
-    replay_actions = [
-        action
-        for action in candidate.steps
-        if action.source_seq in {1, 3}
-    ]
-    path, issues = build_experience_path(candidate, replay_actions)
-
-    assert path is not None
-    assert [
-        transition.actions[0].source_seq for transition in path.transitions
-    ] == [1]
-    assert issues == [
-        {
-            "seq": 3,
-            "action": "click_marker",
-            "reason": "state_continuity_unproven",
-        }
-    ]

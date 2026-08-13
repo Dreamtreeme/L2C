@@ -141,12 +141,6 @@ class BrowserSettings(SectionSettings):
     chrome_window_width: int = Field(1024, ge=640, le=7680, validation_alias="CHROME_WINDOW_WIDTH")
     chrome_window_height: int = Field(768, ge=480, le=4320, validation_alias="CHROME_WINDOW_HEIGHT")
     page_load_wait_sec: float = Field(4.0, ge=0, le=120, validation_alias="PAGE_LOAD_WAIT_SEC")
-    input_capture_initial_wait_sec: float = Field(
-        0.7,
-        ge=0,
-        le=10,
-        validation_alias="VISION_INPUT_CAPTURE_INITIAL_WAIT_SEC",
-    )
     executable: str | None = Field(None, validation_alias="VISION_BROWSER_EXECUTABLE")
     vision_window_width: int = Field(1976, ge=640, le=7680, validation_alias="VISION_BROWSER_WINDOW_WIDTH")
     vision_window_height: int = Field(2129, ge=480, le=4320, validation_alias="VISION_BROWSER_WINDOW_HEIGHT")
@@ -259,7 +253,6 @@ class VisionSettings(SectionSettings):
     detail_buffer_max_line_chars: int = Field(220, ge=20, le=4000, validation_alias="VISION_JOB_DETAIL_BUFFER_MAX_LINE_CHARS")
     detail_final_ocr_max_chars: int = Field(16000, ge=1000, le=200000, validation_alias="VISION_DETAIL_FINAL_OCR_MAX_CHARS")
     content_top: str = Field("auto", validation_alias="VISION_CONTENT_TOP")
-    capture_initial_wait_sec: float = Field(0.16, ge=0, le=10, validation_alias="VISION_CAPTURE_INITIAL_WAIT_SEC")
     content_bottom_ignore_px: int = Field(80, ge=0, le=2000, validation_alias="VISION_CONTENT_BOTTOM_IGNORE_PX")
     loading_blank_max_stddev: float = Field(12.0, ge=0, le=255, validation_alias="VISION_LOADING_BLANK_MAX_STDDEV")
     loading_blank_max_edge_mean: float = Field(3.0, ge=0, le=255, validation_alias="VISION_LOADING_BLANK_MAX_EDGE_MEAN")
@@ -285,9 +278,9 @@ class VisionSettings(SectionSettings):
     content_scan_max_y: int = Field(320, ge=1, le=4000, validation_alias="VISION_CONTENT_SCAN_MAX_Y")
     content_scan_width: int = Field(256, ge=32, le=4096, validation_alias="VISION_CONTENT_SCAN_WIDTH")
     content_min_row_delta: float = Field(60.0, ge=0, le=765, validation_alias="VISION_CONTENT_MIN_ROW_DELTA")
-    transition_change_max_wait_sec: float = Field(1.2, ge=0, le=30, validation_alias="VISION_TRANSITION_CHANGE_MAX_WAIT_SEC")
-    transition_change_check_sec: float = Field(0.08, gt=0, le=5, validation_alias="VISION_TRANSITION_CHANGE_CHECK_SEC")
+    loading_change_grace_sec: float = Field(1.2, ge=0, le=30, validation_alias="VISION_LOADING_CHANGE_GRACE_SEC")
     loading_check_interval_sec: float = Field(0.04, gt=0, le=5, validation_alias="VISION_LOADING_CHECK_INTERVAL_SEC")
+    loading_quiet_period_sec: float = Field(0.8, ge=0, le=30, validation_alias="VISION_LOADING_QUIET_PERIOD_SEC")
     loading_motion_threshold_percent: float = Field(1.0, ge=0, le=100, validation_alias="VISION_LOADING_MOTION_THRESHOLD_PERCENT")
     loading_sample_width: int = Field(360, ge=32, le=4096, validation_alias="VISION_LOADING_SAMPLE_WIDTH")
     loading_stable_frames: int = Field(2, ge=1, le=10, validation_alias="VISION_LOADING_STABLE_FRAMES")
@@ -404,6 +397,7 @@ class ReflexSettings(SectionSettings):
 class RecipeSettings(SectionSettings):
     auto_promote: bool = Field(True, validation_alias="VISION_RECIPE_AUTO_PROMOTE")
     critic_evidence_text_limit: int = Field(12, ge=1, le=100, validation_alias="VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT")
+    critic_evidence_image_limit: int = Field(8, ge=0, le=32, validation_alias="VISION_RECIPE_CRITIC_EVIDENCE_IMAGE_LIMIT")
     critic_timeout_sec: float = Field(30.0, gt=0, le=300, validation_alias="VISION_RECIPE_CRITIC_TIMEOUT_SEC")
     promotion_poll_sec: float = Field(1.0, ge=0.1, le=300, validation_alias="VISION_RECIPE_PROMOTION_POLL_SEC")
     promotion_retry_delay_sec: float = Field(30.0, ge=0, le=3600, validation_alias="VISION_RECIPE_PROMOTION_RETRY_DELAY_SEC")

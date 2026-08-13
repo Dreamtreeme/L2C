@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.recipe.matcher import marker_region
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
     REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
     UI_ACTIONS,
 )
-from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_contracts import ScreenMarker, WorkerState
 from agent.utils.text import normalize_text, url_template
-from agent.vision.marker_geometry import marker_bbox
+from agent.vision.marker_geometry import marker_bbox, marker_center
 from agent.vision.screen_signature import (
     compact_screen_context_signature,
     compute_target_roi_signature,
@@ -24,6 +23,24 @@ from shared.schema.recipe_schema import (
     PhysicalAction,
     ScreenCheckpoint,
 )
+
+
+def _marker_region(marker: ScreenMarker, markers: list[ScreenMarker]) -> str:
+    """현재 마커 집합에서 대상의 대략적인 3x3 화면 영역을 계산한다."""
+
+    centers = [marker_center(item) for item in markers]
+    if not centers:
+        return ""
+    xs, ys = zip(*centers)
+    x, y = marker_center(marker)
+
+    def band(value: int, low: int, high: int, names: tuple[str, str, str]) -> str:
+        ratio = (value - low) / max(1, high - low)
+        return names[0] if ratio < 1 / 3 else names[1] if ratio < 2 / 3 else names[2]
+
+    vertical = band(y, min(ys), max(ys), ("top", "middle", "bottom"))
+    horizontal = band(x, min(xs), max(xs), ("left", "center", "right"))
+    return f"{vertical}-{horizontal}"
 
 
 def _replay_mode(action_name: str, args: dict, slot_name: str) -> str:
@@ -94,7 +111,7 @@ def _target(
     target = ActionTarget(
         text=normalize_text(marker.get("text")),
         semantic_label=normalize_text(args.get("target_label")) or None,
-        region=marker_region(marker, markers),
+        region=_marker_region(marker, markers),
         marker_type=normalize_text(marker.get("type")),
         bbox_ratio=list(snapshot.get("bbox_ratio") or []),
         center_ratio=list(snapshot.get("center_ratio") or []),

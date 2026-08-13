@@ -276,15 +276,13 @@ def _promote_autonomous_candidate(
 ) -> dict[str, Any]:
     """자율 탐색 시간과 분리해 후보를 검토하고 경험 기반 탐색에 반영한다."""
 
-    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    raw_result = payload.get("result")
+    result: dict[str, Any] = raw_result if isinstance(raw_result, dict) else {}
     run_id = str(result.get("worker_run_id") or "")
     if not run_id:
         return {"run_id": "", "promoted": False, "reason": "run_id_missing"}
 
-    from agent.application.recipe_promotion_worker import RecipePromotionWorker
-
-    worker = RecipePromotionWorker(db_path, retry_delay_sec=0)
-    outcome = worker.process_run_until_settled(run_id, enqueue=True)
+    outcome = _process_candidate_until_settled(run_id, db_path=db_path)
     validation = dict(outcome.get("validation") or {})
     review = dict(validation.get("review") or {})
     promotion = dict(validation.get("promotion") or {})
@@ -297,6 +295,69 @@ def _promote_autonomous_candidate(
         "review_metrics": dict(outcome.get("review_metrics") or {}),
         "reason": "" if promotion.get("promoted") else "candidate_not_promoted",
         **promotion,
+    }
+
+
+def _aggregate_review_metrics(attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics = [dict(item.get("review_metrics") or {}) for item in attempts]
+    costs = [
+        float(item["estimated_cost"])
+        for item in metrics
+        if item.get("estimated_cost") is not None
+    ]
+    return {
+        "attempt_count": len(attempts),
+        "duration_sec": round(
+            sum(float(item.get("duration_sec") or 0.0) for item in metrics), 6
+        ),
+        "input_tokens": sum(int(item.get("input_tokens") or 0) for item in metrics),
+        "output_tokens": sum(int(item.get("output_tokens") or 0) for item in metrics),
+        "total_tokens": sum(int(item.get("total_tokens") or 0) for item in metrics),
+        "estimated_cost": round(sum(costs), 10) if costs else None,
+    }
+
+
+def _process_candidate_until_settled(
+    run_id: str,
+    *,
+    db_path: Path,
+) -> dict[str, Any]:
+    """회귀 행렬에서 특정 후보의 재시도 결과만 동기적으로 수집한다."""
+
+    from agent.application.recipe_promotion_worker import RecipePromotionWorker
+    from agent.recipe.candidate_store import RecipeCandidateStore
+
+    store = RecipeCandidateStore(db_path)
+    candidate = store.get_candidate(run_id)
+    if candidate is None:
+        return {
+            "review_status": "not_found",
+            "review_attempts": 0,
+            "review_error": "",
+            "validation": {},
+            "review_metrics": _aggregate_review_metrics([]),
+        }
+    if candidate.status == "recorded":
+        store.enqueue_review(run_id)
+
+    worker = RecipePromotionWorker(db_path, retry_delay_sec=0)
+    attempts: list[dict[str, Any]] = []
+    for _attempt in range(worker.max_attempts):
+        candidate = store.get_candidate(run_id)
+        if candidate is None or candidate.status != "pending_review":
+            break
+        result = worker.process_one(run_id)
+        if result is None:
+            break
+        attempts.append(dict(result))
+
+    candidate = store.get_candidate(run_id)
+    return {
+        "review_status": candidate.status if candidate else "not_found",
+        "review_attempts": candidate.review_attempts if candidate else 0,
+        "review_error": candidate.review_error if candidate else "",
+        "validation": candidate.validation if candidate else {},
+        "review_metrics": _aggregate_review_metrics(attempts),
     }
 
 

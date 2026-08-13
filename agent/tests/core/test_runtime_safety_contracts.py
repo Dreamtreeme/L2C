@@ -203,9 +203,7 @@ def test_action_permissions_require_declared_risk_and_default_scroll_to_safe_rea
 
 
 def test_explicit_sensitive_action_is_not_promotion_eligible():
-    from agent.recipe.promotion_policy import (
-        evaluate_candidate_step_evidence,
-    )
+    from agent.recipe.candidate_promotion import transition_rejection_reason
     from shared.schema.feedback_schema import RecipeCandidate, WorkerSubmission
 
     submission = WorkerSubmission(
@@ -217,19 +215,34 @@ def test_explicit_sensitive_action_is_not_promotion_eligible():
                 "candidate_action": {
                     "source_seq": 1,
                     "action": "click_marker",
+                    "replay_mode": "fixed",
                     "risk_level": "sensitive",
+                    "target": {"text": "결제", "center_ratio": [0.5, 0.5]},
+                    "roi_signature": {"phash": "1" * 16},
                 },
                 "transition": {
                     "seq": 1,
-                    "before": {"observation_id": "observation:1"},
+                    "before": {
+                        "observation_id": "observation:1",
+                        "page_role": "detail",
+                    },
                     "actions": [
                         {
                             "source_seq": 1,
                             "action": "click_marker",
+                            "replay_mode": "fixed",
                             "risk_level": "sensitive",
+                            "target": {
+                                "text": "결제",
+                                "center_ratio": [0.5, 0.5],
+                            },
+                            "roi_signature": {"phash": "1" * 16},
                         }
                     ],
-                    "after": {"observation_id": "observation:2"},
+                    "after": {
+                        "observation_id": "observation:2",
+                        "page_role": "payment",
+                    },
                     "evidence": {
                         "source": "autonomous",
                         "result_status": "success",
@@ -242,13 +255,10 @@ def test_explicit_sensitive_action_is_not_promotion_eligible():
     candidate = RecipeCandidate.from_submission(
         submission,
         run_id="worker-sensitive",
-        status="pending_replay",
+        status="recorded",
     )
 
-    verdict = evaluate_candidate_step_evidence(candidate)[1]
-
-    assert verdict.eligible is False
-    assert "sensitive_action" in verdict.blocking_reasons
+    assert transition_rejection_reason(candidate.transitions[0]) == "sensitive_action"
 
 
 def test_run_deadline_stops_before_next_external_step():

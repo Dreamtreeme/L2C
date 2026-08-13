@@ -279,7 +279,7 @@ class PerceptionEngine:
         """이미 찾은 브라우저 영역을 다시 조회하지 않고 저장한다."""
 
         if not filename:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             filename = f"screen_{timestamp}.png"
 
         output_path = self.screenshot_dir / filename
@@ -314,30 +314,18 @@ class PerceptionEngine:
             logger.exception("Failed to capture screen", error=str(e))
             raise
 
-    def wait_for_transition_change(self, reference_image_path: str) -> bool:
-        """화면 변경 행동 뒤 이전 화면이 그대로인 동안에는 OCR 캡처를 미룹니다."""
-        region = self._require_browser_region()
-        return self.loading_wait.wait_for_change(
-            reference_image_path,
-            region=region,
-        )
-
     def capture_usable_screen(
         self,
         *,
-        initial_wait_sec: Optional[float] = None,
+        reference_image_path: str | Path | None = None,
     ) -> Path:
-        """메모리 프레임으로 로딩을 기다린 뒤 준비된 화면만 한 번 저장한다."""
+        """직전 화면과 비교하며 준비된 화면을 기다린 뒤 한 번 저장한다."""
 
-        wait_sec = (
-            get_settings().vision.capture_initial_wait_sec
-            if initial_wait_sec is None
-            else initial_wait_sec
-        )
-        if wait_sec > 0:
-            time.sleep(wait_sec)
         region = self._require_browser_region()
-        self.last_capture_quality = self.loading_wait.wait_until_ready(region=region)
+        self.last_capture_quality = self.loading_wait.wait_until_ready(
+            reference_image_path=reference_image_path,
+            region=region,
+        )
         return self._save_capture(region)
 
     def get_current_url(self) -> str:
@@ -466,3 +454,31 @@ class PerceptionEngine:
             "marked_image": str(marked_path),
             "content_top": crop_top,
         }
+
+    def detect_target_roi(
+        self,
+        image_path: Path,
+        crop_rect_ratio: list[float],
+        marker_type: str,
+    ) -> list[dict[str, Any]]:
+        """경험 행동의 작은 ROI를 원본 해상도로 다시 인식한다."""
+
+        elements = self.ocr_engine.detect_region(
+            image_path,
+            crop_rect_ratio,
+            marker_type,
+        )
+        return [
+            {
+                "id": marker_id,
+                "text": str(element.get("text") or ""),
+                "bbox": [int(round(value)) for value in element["bbox"]],
+                "type": str(element.get("type") or marker_type),
+                **(
+                    {"conf": float(element["conf"])}
+                    if element.get("conf") is not None
+                    else {}
+                ),
+            }
+            for marker_id, element in enumerate(elements)
+        ]

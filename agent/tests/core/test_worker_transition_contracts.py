@@ -358,7 +358,7 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
     assert replay_results == [("path6#search", False)]
 
 
-def test_reflex_transition_accepts_changed_page_role_with_dynamic_content(
+def test_reflex_transition_accepts_changed_url_with_dynamic_content(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -372,6 +372,7 @@ def test_reflex_transition_accepts_changed_page_role_with_dynamic_content(
                 "transition_request": {
                     "source": "reflex",
                     "before_page_role": "search_overlay",
+                    "before_url": "https://www.wanted.co.kr/",
                     "expected_after_state": ScreenCheckpoint(
                         url_template="wanted.co.kr/search?query",
                         page_role="search_results",
@@ -397,10 +398,52 @@ def test_reflex_transition_accepts_changed_page_role_with_dynamic_content(
     )
 
     transition = result["transition"]["transition_result"]
-    evidence = transition["after_state_match"]
     assert transition["status"] == "ready"
-    assert transition["reason"] == "recipe_after_page_role_matched"
-    assert evidence["expected_page_role"] == "search"
+    assert transition["reason"] == "recipe_after_url_matched"
+
+
+def test_reflex_transition_does_not_accept_page_role_without_screen_match(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (True, 0.5),
+    )
+    result = worker_transition.transition_node(
+        worker_state(
+            transition={
+                "transition_request": {
+                    "source": "reflex",
+                    "before_page_role": "search_overlay",
+                    "before_url": "https://www.wanted.co.kr/search",
+                    "expected_after_state": ScreenCheckpoint(
+                        url_template="wanted.co.kr/search",
+                        page_role="search_results",
+                        screen_context_signature={
+                            "phash": "0" * 16,
+                            "size": [1920, 1080],
+                        },
+                    ),
+                }
+            },
+            observation={
+                "current_url": "https://www.wanted.co.kr/search",
+                "current_page_role": "search",
+                "current_markers": [{"id": 1, "text": "검색 결과"}],
+                "screen_signature": {
+                    "phash": "f" * 16,
+                    "size": [1920, 1080],
+                },
+                "ocr_complete": True,
+            },
+        ),
+        node_runtime(),
+    )
+
+    transition = result["transition"]["transition_result"]
+    assert transition["status"] == "unknown"
+    assert transition["reason"] == "screen_context_phash_distance"
 
 
 def test_reflex_transition_keeps_phash_check_within_same_page_role(monkeypatch):

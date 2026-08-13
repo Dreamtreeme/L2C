@@ -365,7 +365,7 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
             "promoted": True,
             "saved_count": 1,
             "promoted_action_count": 1,
-            "skipped_steps": [],
+            "pruned_transitions": [],
         }
         RecipeCandidateStore(db_path).update_status(
             value,

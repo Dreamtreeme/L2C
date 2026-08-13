@@ -21,7 +21,7 @@ FROM recipe_candidates AS c
 JOIN worker_submissions AS s ON s.run_id = c.run_id
 """
 
-_CANDIDATE_CONTRACT_VERSION = 2
+_CANDIDATE_CONTRACT_VERSION = 3
 
 
 class RecipeCandidateStore(SQLiteStore):
@@ -38,10 +38,6 @@ class RecipeCandidateStore(SQLiteStore):
                     "ALTER TABLE recipe_candidates ADD COLUMN "
                     "contract_version INTEGER NOT NULL DEFAULT 1"
                 )
-            conn.execute(
-                "DELETE FROM recipe_candidates WHERE contract_version<>?",
-                (_CANDIDATE_CONTRACT_VERSION,),
-            )
             for sql in (
                 *RECIPE_CANDIDATES_INDEX_SQL,
                 *RECIPE_CANDIDATES_QUEUE_INDEX_SQL,
@@ -53,7 +49,7 @@ class RecipeCandidateStore(SQLiteStore):
         submission: WorkerSubmission,
         *,
         run_id: str,
-        status: str = "pending_replay",
+        status: str = "recorded",
     ) -> str:
         if not run_id or not submission.transitions:
             return ""
@@ -85,8 +81,9 @@ class RecipeCandidateStore(SQLiteStore):
 
     def _load(self, conn, run_id: str):
         return conn.execute(
-            _CANDIDATE_SELECT + " WHERE c.run_id=?",
-            (run_id,),
+            _CANDIDATE_SELECT
+            + " WHERE c.run_id=? AND c.contract_version=?",
+            (run_id, _CANDIDATE_CONTRACT_VERSION),
         ).fetchone()
 
     def get_candidate(self, run_id: str) -> RecipeCandidate | None:
@@ -107,9 +104,15 @@ class RecipeCandidateStore(SQLiteStore):
                 UPDATE recipe_candidates
                 SET status=?, validation_json=?, review_started_at=NULL,
                     next_review_at=NULL, review_error='', updated_at=?
-                WHERE run_id=?
+                WHERE run_id=? AND contract_version=?
                 """,
-                (status, self.dump_json(validation or {}), now, run_id),
+                (
+                    status,
+                    self.dump_json(validation or {}),
+                    now,
+                    run_id,
+                    _CANDIDATE_CONTRACT_VERSION,
+                ),
             )
             return result.rowcount > 0
 
@@ -121,9 +124,9 @@ class RecipeCandidateStore(SQLiteStore):
                 UPDATE recipe_candidates
                 SET status='pending_review', review_started_at=NULL,
                     next_review_at=NULL, review_error='', updated_at=?
-                WHERE run_id=? AND status='pending_replay'
+                WHERE run_id=? AND contract_version=? AND status='recorded'
                 """,
-                (now, run_id),
+                (now, run_id, _CANDIDATE_CONTRACT_VERSION),
             )
             return result.rowcount > 0
 
@@ -136,22 +139,27 @@ class RecipeCandidateStore(SQLiteStore):
                 SET status='pending_review', review_started_at=NULL,
                     next_review_at=NULL,
                     review_error='review_worker_interrupted', updated_at=?
-                WHERE status='reviewing'
+                WHERE contract_version=? AND status='reviewing'
                 """,
-                (now,),
+                (now, _CANDIDATE_CONTRACT_VERSION),
             )
             return result.rowcount
 
     def claim_review(self, run_id: str | None = None) -> RecipeCandidate | None:
         now = datetime.now().isoformat(timespec="seconds")
         candidate_filter = "AND run_id=?" if run_id else ""
-        params: tuple[Any, ...] = (now, run_id) if run_id else (now,)
+        params: tuple[Any, ...] = (
+            (_CANDIDATE_CONTRACT_VERSION, now, run_id)
+            if run_id
+            else (_CANDIDATE_CONTRACT_VERSION, now)
+        )
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 f"""
                 SELECT run_id FROM recipe_candidates
                 WHERE status='pending_review'
+                  AND contract_version=?
                   AND (next_review_at IS NULL OR next_review_at <= ?)
                   {candidate_filter}
                 ORDER BY created_at, run_id LIMIT 1
@@ -167,9 +175,9 @@ class RecipeCandidateStore(SQLiteStore):
                 SET status='reviewing', review_started_at=?,
                     review_attempts=review_attempts + 1,
                     review_error='', updated_at=?
-                WHERE run_id=? AND status='pending_review'
+                WHERE run_id=? AND contract_version=? AND status='pending_review'
                 """,
-                (now, now, resolved_id),
+                (now, now, resolved_id, _CANDIDATE_CONTRACT_VERSION),
             )
             claimed_row = (
                 self._load(conn, resolved_id) if claimed.rowcount == 1 else None
@@ -199,7 +207,7 @@ class RecipeCandidateStore(SQLiteStore):
                 UPDATE recipe_candidates
                 SET status=?, review_started_at=NULL, next_review_at=?,
                     review_error=?, updated_at=?
-                WHERE run_id=? AND status='reviewing'
+                WHERE run_id=? AND contract_version=? AND status='reviewing'
                 """,
                 (
                     "review_failed" if terminal else "pending_review",
@@ -207,6 +215,7 @@ class RecipeCandidateStore(SQLiteStore):
                     str(error or "")[:1000],
                     now,
                     run_id,
+                    _CANDIDATE_CONTRACT_VERSION,
                 ),
             )
             return result.rowcount > 0

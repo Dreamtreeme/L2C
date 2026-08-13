@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS worker_submissions (
 RECIPE_CANDIDATES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS recipe_candidates (
     run_id            TEXT PRIMARY KEY,
-    contract_version  INTEGER NOT NULL DEFAULT 2,
-    status            TEXT NOT NULL DEFAULT 'pending_replay',
+    contract_version  INTEGER NOT NULL DEFAULT 3,
+    status            TEXT NOT NULL DEFAULT 'recorded',
     validation_json   TEXT,
     review_attempts   INTEGER NOT NULL DEFAULT 0,
     review_started_at TEXT,

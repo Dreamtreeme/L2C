@@ -156,6 +156,7 @@ class ActionTools:
             "--no-default-browser-check",
             "--hide-crash-restore-bubble",
             "--disable-popup-blocking",
+            "--disable-backgrounding-occluded-windows",
         ]
         width, height = self._browser_window_dimensions()
         if width <= 0 or height <= 0:

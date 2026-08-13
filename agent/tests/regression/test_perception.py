@@ -19,10 +19,10 @@ class FakeSct:
 
 class ReadyLoadingWait:
     def __init__(self):
-        self.regions = []
+        self.calls = []
 
-    def wait_until_ready(self, *, region=None):
-        self.regions.append(region)
+    def wait_until_ready(self, *, reference_image_path=None, region=None):
+        self.calls.append((reference_image_path, region))
         return {"ready": True, "stable": True, "low_information": False}
 
 
@@ -90,6 +90,23 @@ def test_capture_screen_saves_bound_browser_region(monkeypatch, tmp_path):
     assert engine.last_region == region
 
 
+def test_automatic_capture_names_do_not_overwrite_same_second(tmp_path):
+    engine = object.__new__(PerceptionEngine)
+    engine.screenshot_dir = tmp_path
+    engine.sct = FakeSct()
+    engine.scale_x = 1.0
+    engine.scale_y = 1.0
+    engine.last_region = None
+    region = {"top": 0, "left": 0, "width": 4, "height": 4}
+
+    first = engine._save_capture(region)
+    second = engine._save_capture(region)
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
+
+
 def test_capture_usable_screen_waits_in_memory_then_saves_once(monkeypatch, tmp_path):
     engine = object.__new__(PerceptionEngine)
     engine.screenshot_dir = tmp_path
@@ -107,10 +124,10 @@ def test_capture_usable_screen_waits_in_memory_then_saves_once(monkeypatch, tmp_
         )
         or output,
     )
-    monkeypatch.setattr("agent.tools.perception.time.sleep", lambda _seconds: None)
+    reference = tmp_path / "before.png"
 
-    assert engine.capture_usable_screen(initial_wait_sec=0.7) == output
-    assert engine.loading_wait.regions == [region]
+    assert engine.capture_usable_screen(reference_image_path=reference) == output
+    assert engine.loading_wait.calls == [(reference, region)]
     assert save_calls == [(region, None)]
     assert engine.last_capture_quality["ready"] is True
 

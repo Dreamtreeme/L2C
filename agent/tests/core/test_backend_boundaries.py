@@ -564,6 +564,18 @@ def test_worker_execution_session_closes_browser_after_failure_without_touching_
     assert user_window_closed == []
 
 
+def test_browser_launch_keeps_occluded_window_rendering():
+    from types import SimpleNamespace
+
+    from agent.tools.actions import ActionTools
+
+    tools = ActionTools(SimpleNamespace(browser_window_id=None))
+
+    assert "--disable-backgrounding-occluded-windows" in (
+        tools._browser_window_cli_args()
+    )
+
+
 def test_vision_runtime_reuses_ocr_worker_until_application_shutdown():
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 

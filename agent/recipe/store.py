@@ -11,22 +11,17 @@ from pydantic import BaseModel, ConfigDict
 from agent.recipe.sqlite_store import SQLiteStore
 from agent.recipe.task_category import normalize_task_category, task_category_matches
 from agent.runtime.site_context import normalize_page_role
-from agent.runtime.worker_actions import (
-    TARGET_REPLAY_ACTIONS,
-    is_supported_recipe_action_group,
-)
 from agent.utils.text import normalize_text
 from shared.schema.recipe_schema import (
     ExperiencePath,
-    ExperienceTransition,
     PhysicalAction,
     SiteExperience,
 )
 from shared.schema.skill_schema import RecipeSkillMetadata
 
 
-_RECIPE_KEY_VERSION = 7
-_RECIPE_KEY_PREFIX = "experience7#"
+_RECIPE_KEY_VERSION = 8
+_RECIPE_KEY_PREFIX = "experience8#"
 
 
 class StoredExperienceRecord(BaseModel):
@@ -95,36 +90,6 @@ def _persistent_path(path: ExperiencePath) -> ExperiencePath:
         for transition in path.transitions
     ]
     return ExperiencePath(transitions=transitions)
-
-
-def _transition_has_verifiable_result(
-    transition: ExperienceTransition,
-) -> bool:
-    before = transition.before
-    after = transition.after
-    if after.has_anchor():
-        return True
-    before_role = normalize_page_role(before.page_role)
-    after_role = normalize_page_role(after.page_role)
-    if before_role and after_role and before_role != after_role:
-        return True
-    if after.has_context_phash():
-        return True
-    return bool(after.url_template and after.url_template != before.url_template)
-
-
-def _path_is_replayable(path: ExperiencePath) -> bool:
-    if path.transitions[0].actions[0].action not in TARGET_REPLAY_ACTIONS:
-        return False
-    return all(
-        is_supported_recipe_action_group(transition.actions)
-        and all(
-            action.is_supported_replay_action()
-            for action in transition.actions
-        )
-        and _transition_has_verifiable_result(transition)
-        for transition in path.transitions
-    )
 
 
 def _action_path_identity(action: PhysicalAction) -> dict[str, object]:
@@ -231,14 +196,6 @@ class RecipeStore(SQLiteStore):
                 "CREATE INDEX IF NOT EXISTS idx_recipe_sources_run "
                 "ON recipe_sources(run_id)"
             )
-            conn.execute(
-                "DELETE FROM recipe_sources WHERE recipe_key NOT LIKE ?",
-                (f"{_RECIPE_KEY_PREFIX}%",),
-            )
-            conn.execute(
-                "DELETE FROM recipes WHERE recipe_key NOT LIKE ?",
-                (f"{_RECIPE_KEY_PREFIX}%",),
-            )
 
     def _upsert_recipe_path(
         self,
@@ -251,8 +208,6 @@ class RecipeStore(SQLiteStore):
         """같은 의미의 전체 안정 경로를 저장하거나 갱신한다."""
 
         replay_path = _persistent_path(path)
-        if not _path_is_replayable(replay_path):
-            return False
         recipe_key = _recipe_key_for_path(site, replay_path, metadata)
 
         now = datetime.now().isoformat(timespec="seconds")
@@ -419,11 +374,11 @@ class RecipeStore(SQLiteStore):
                 "(SELECT COUNT(*) FROM recipe_sources "
                 "WHERE recipe_sources.recipe_key=recipes.recipe_key) "
                 "AS source_count FROM recipes "
-                "WHERE site=? "
+                "WHERE site=? AND recipe_key LIKE ? "
                 "ORDER BY replay_success_count DESC, "
                 "replay_failure_count ASC, support_count DESC, "
                 "updated_at DESC, recipe_key ASC",
-                (site,),
+                (site, f"{_RECIPE_KEY_PREFIX}%"),
             ).fetchall()
         return [
             StoredExperienceRecord(
@@ -450,8 +405,11 @@ class RecipeStore(SQLiteStore):
     def active_counts(self, site: str | None = None) -> dict[str, int]:
         """E2E 사전조건 검사용 활성 자동화 데이터 개수를 반환한다."""
 
-        where = " WHERE site=?" if site else ""
-        params: tuple[str, ...] = (site,) if site else ()
+        where = " WHERE recipe_key LIKE ?"
+        params: tuple[str, ...] = (f"{_RECIPE_KEY_PREFIX}%",)
+        if site:
+            where += " AND site=?"
+            params += (site,)
         with self._conn() as conn:
             recipe_count = int(
                 conn.execute(

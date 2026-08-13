@@ -122,3 +122,64 @@ def test_ocr_engine_combines_paddle_and_omni_results(tmp_path):
     assert marked_path.exists()
     assert bboxes == {0: [10, 195, 60, 215], 1: [100, 195, 130, 225]}
     assert [element["type"] for element in elements] == ["text", "icon"]
+
+
+def test_ocr_engine_detects_only_requested_roi_and_restores_screen_coordinates(
+    tmp_path,
+):
+    image_path = tmp_path / "screen.png"
+    Image.new("RGB", (200, 100), "white").save(image_path)
+    calls = {"paddle": 0, "omni": 0}
+
+    class FakePaddle:
+        worker_pid = 123
+
+        def detect(self, image):
+            calls["paddle"] += 1
+            assert image.size == (100, 50)
+            return [
+                {
+                    "bbox": [10, 5, 30, 15],
+                    "type": "text",
+                    "text": "JOB검색",
+                    "conf": 0.9,
+                }
+            ]
+
+        def close(self):
+            pass
+
+        def ensure_ready(self):
+            pass
+
+    class FakeOmni:
+        def detect(self, image):
+            calls["omni"] += 1
+            assert image.size == (640, 640)
+            return [
+                {
+                    "bbox": [310, 305, 325, 320],
+                    "type": "icon",
+                    "text": "icon",
+                    "conf": 0.8,
+                }
+            ]
+
+    engine = OcrEngine(paddle=FakePaddle(), omni=FakeOmni())
+    text = engine.detect_region(
+        image_path,
+        [0.25, 0.2, 0.75, 0.7],
+        "text",
+    )
+
+    assert calls == {"paddle": 1, "omni": 0}
+    assert text[0]["bbox"] == [60, 25, 80, 35]
+
+    icon = engine.detect_region(
+        image_path,
+        [0.25, 0.2, 0.75, 0.7],
+        "icon",
+    )
+
+    assert calls == {"paddle": 1, "omni": 1}
+    assert icon[0]["bbox"] == [90, 30, 105, 45]

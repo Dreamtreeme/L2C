@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -110,6 +109,41 @@ def frame_quality(frame: Any) -> dict[str, Any]:
     }
 
 
+def _wait_result(
+    quality: dict[str, Any],
+    *,
+    ready: bool,
+    wait_reason: str,
+    elapsed: float,
+    probe_count: int,
+    stable_count: int,
+    required_stable_frames: int,
+    last_motion_elapsed: float,
+    last_diff: float | None,
+    visual_change_detected: bool,
+    visual_change_ratio: float | None,
+) -> dict[str, Any]:
+    """로딩 대기 결과의 공통 관측값을 같은 형식으로 만든다."""
+
+    return {
+        **quality,
+        "ready": ready,
+        "stable": stable_count >= required_stable_frames,
+        "wait_reason": wait_reason,
+        "elapsed_sec": round(elapsed, 3),
+        "probe_count": probe_count,
+        "stable_frames": stable_count,
+        "quiet_elapsed_sec": round(elapsed - last_motion_elapsed, 3),
+        "diff_percent": round(last_diff, 3) if last_diff is not None else None,
+        "visual_change_detected": visual_change_detected,
+        "visual_change_ratio": (
+            round(visual_change_ratio, 4)
+            if visual_change_ratio is not None
+            else None
+        ),
+    }
+
+
 class LoadingWait:
     """화면이 바뀐 뒤 움직임이 멈추고 본문이 나타날 때까지 기다린다."""
 
@@ -129,7 +163,7 @@ class LoadingWait:
                 if region
                 else self.perception.sct.grab(self.perception.sct.monitors[1])
             )
-            raw = np.frombuffer(source.bgra, dtype=np.uint8).reshape(
+            raw: np.ndarray = np.frombuffer(source.bgra, dtype=np.uint8).reshape(
                 int(source.height), int(source.width), 4
             )
             return gray_frame(raw)
@@ -148,80 +182,50 @@ class LoadingWait:
             interpolation=cv2.INTER_AREA,
         )
 
-    def wait_for_change(
-        self,
-        reference_image_path: str,
-        *,
-        max_wait_sec: float | None = None,
-        check_interval_sec: float | None = None,
-        region: dict[str, int] | None = None,
-    ) -> bool:
-        """직전 화면과 의미 있는 픽셀 차이가 시작될 때까지만 기다린다."""
-
-        if not reference_image_path or not os.path.exists(reference_image_path):
-            return False
-        settings = get_settings()
-        max_wait_sec = (
-            settings.vision.transition_change_max_wait_sec
-            if max_wait_sec is None
-            else max_wait_sec
-        )
-        check_interval_sec = (
-            settings.vision.transition_change_check_sec
-            if check_interval_sec is None
-            else check_interval_sec
-        )
-        try:
-            reference = load_gray_frame(Path(reference_image_path))
-        except (OSError, ValueError) as exc:
-            logger.debug("Transition reference could not be loaded", error=str(exc))
-            return False
-
-        started = time.perf_counter()
-        while time.perf_counter() - started < max_wait_sec:
-            current = self._capture_memory_frame(region=region)
-            ratio = changed_pixel_ratio(
-                reference,
-                current,
-                intensity_threshold=settings.reflex.visual_change_pixel_threshold,
-            )
-            if ratio >= settings.reflex.visual_change_min_ratio:
-                logger.info(
-                    "Transition screen change detected",
-                    elapsed_sec=round(time.perf_counter() - started, 3),
-                    changed_ratio=round(ratio, 4),
-                )
-                return True
-            time.sleep(max(0.0, check_interval_sec))
-        logger.info("Transition screen change wait expired", max_wait_sec=max_wait_sec)
-        return False
-
     def wait_until_ready(
         self,
         *,
+        reference_image_path: str | Path | None = None,
         region: dict[str, int] | None = None,
         max_wait_sec: float | None = None,
+        change_grace_sec: float | None = None,
         check_interval_sec: float | None = None,
+        quiet_period_sec: float | None = None,
         threshold_percent: float | None = None,
         required_stable_frames: int | None = None,
     ) -> dict[str, Any]:
-        """파일을 만들지 않고 안정성과 본문 정보량을 한 루프에서 확인한다."""
+        """화면 변화 시작, 로딩 종료와 안정화를 한 CV 루프에서 확인한다."""
 
-        settings = get_settings().vision
-        max_wait_sec = (
-            settings.loading_timeout_sec
-            if max_wait_sec is None
-            else max_wait_sec
-        )
-        check_interval_sec = (
-            settings.loading_check_interval_sec
-            if check_interval_sec is None
-            else check_interval_sec
-        )
-        threshold_percent = (
-            settings.loading_motion_threshold_percent
-            if threshold_percent is None
-            else threshold_percent
+        app_settings = get_settings()
+        settings = app_settings.vision
+        (
+            max_wait_sec,
+            change_grace_sec,
+            check_interval_sec,
+            quiet_period_sec,
+            threshold_percent,
+        ) = (
+            settings.loading_timeout_sec if max_wait_sec is None else max_wait_sec,
+            (
+                settings.loading_change_grace_sec
+                if change_grace_sec is None
+                else change_grace_sec
+            ),
+            (
+                settings.loading_check_interval_sec
+                if check_interval_sec is None
+                else check_interval_sec
+            ),
+            (
+                settings.loading_quiet_period_sec
+                if quiet_period_sec is None
+                else max(0.0, quiet_period_sec)
+            ),
+            (
+                settings.loading_motion_threshold_percent
+                if threshold_percent is None
+                else threshold_percent
+            ),
         )
         required = max(
             1,
@@ -232,6 +236,13 @@ class LoadingWait:
             ),
         )
 
+        reference: np.ndarray | None = None
+        if reference_image_path:
+            try:
+                reference = load_gray_frame(Path(reference_image_path))
+            except (OSError, ValueError) as exc:
+                logger.debug("Loading reference could not be loaded", error=str(exc))
+
         started = time.perf_counter()
         previous_source = self._capture_memory_frame(region=region)
         previous = self._comparison_frame(
@@ -241,9 +252,25 @@ class LoadingWait:
         quality = frame_quality(previous_source)
         probe_count = 0
         stable_count = 0
+        last_motion_elapsed = 0.0
         last_diff: float | None = None
+        visual_change_ratio: float | None = None
+        visual_change_detected = False
+        if reference is not None:
+            visual_change_ratio = changed_pixel_ratio(
+                reference,
+                previous_source,
+                intensity_threshold=(
+                    app_settings.reflex.visual_change_pixel_threshold
+                ),
+            )
+            visual_change_detected = (
+                visual_change_ratio
+                >= app_settings.reflex.visual_change_min_ratio
+            )
 
-        while time.perf_counter() - started < max_wait_sec:
+        elapsed = 0.0
+        while elapsed < max_wait_sec:
             time.sleep(max(0.0, check_interval_sec))
             current_source = self._capture_memory_frame(region=region)
             current = self._comparison_frame(
@@ -251,38 +278,76 @@ class LoadingWait:
                 settings.loading_sample_width,
             )
             probe_count += 1
+            elapsed = time.perf_counter() - started
             last_diff = mean_difference_percent(previous, current)
             quality = frame_quality(current_source)
-            stable_count = stable_count + 1 if last_diff <= threshold_percent else 0
-            if stable_count >= required and not quality["low_information"]:
-                self.last_result = {
-                    **quality,
-                    "ready": True,
-                    "stable": True,
-                    "wait_reason": "screen_ready",
-                    "elapsed_sec": round(time.perf_counter() - started, 3),
-                    "probe_count": probe_count,
-                    "stable_frames": stable_count,
-                    "diff_percent": round(last_diff, 3),
-                }
+            if last_diff <= threshold_percent:
+                stable_count += 1
+            else:
+                stable_count = 0
+                last_motion_elapsed = elapsed
+            if reference is not None:
+                visual_change_ratio = changed_pixel_ratio(
+                    reference,
+                    current_source,
+                    intensity_threshold=(
+                        app_settings.reflex.visual_change_pixel_threshold
+                    ),
+                )
+                visual_change_detected = visual_change_detected or (
+                    visual_change_ratio
+                    >= app_settings.reflex.visual_change_min_ratio
+                )
+            change_wait_complete = (
+                reference is None
+                or visual_change_detected
+                or elapsed >= max(0.0, change_grace_sec)
+            )
+            quiet_wait_complete = (
+                reference is None
+                or not visual_change_detected
+                or elapsed - last_motion_elapsed >= quiet_period_sec
+            )
+            if (
+                change_wait_complete
+                and quiet_wait_complete
+                and stable_count >= required
+                and not quality["low_information"]
+            ):
+                self.last_result = _wait_result(
+                    quality,
+                    ready=True,
+                    wait_reason="screen_ready",
+                    elapsed=elapsed,
+                    probe_count=probe_count,
+                    stable_count=stable_count,
+                    required_stable_frames=required,
+                    last_motion_elapsed=last_motion_elapsed,
+                    last_diff=last_diff,
+                    visual_change_detected=visual_change_detected,
+                    visual_change_ratio=visual_change_ratio,
+                )
                 logger.info("Screen ready", **self.last_result)
                 return dict(self.last_result)
             previous = current
 
-        self.last_result = {
-            **quality,
-            "ready": False,
-            "stable": stable_count >= required,
-            "wait_reason": (
+        self.last_result = _wait_result(
+            quality,
+            ready=False,
+            wait_reason=(
                 "low_information_timeout"
                 if quality["low_information"]
                 else "stability_timeout"
             ),
-            "elapsed_sec": round(time.perf_counter() - started, 3),
-            "probe_count": probe_count,
-            "stable_frames": stable_count,
-            "diff_percent": round(last_diff, 3) if last_diff is not None else None,
-        }
+            elapsed=elapsed,
+            probe_count=probe_count,
+            stable_count=stable_count,
+            required_stable_frames=required,
+            last_motion_elapsed=last_motion_elapsed,
+            last_diff=last_diff,
+            visual_change_detected=visual_change_detected,
+            visual_change_ratio=visual_change_ratio,
+        )
         logger.warning("Screen readiness wait expired", **self.last_result)
         return dict(self.last_result)
 

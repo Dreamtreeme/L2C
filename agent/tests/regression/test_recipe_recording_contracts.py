@@ -24,7 +24,7 @@ def _append_recorded_step(steps, state, action_name, args, seq):
 def test_roi_record_and_replay_uses_target_crop(tmp_path):
     from PIL import Image, ImageDraw
 
-    from agent.recipe.phash_replay import match_step_by_screen_signature
+    from agent.runtime.target_matching import match_local_target, roi_signature_match
 
     saved = tmp_path / "saved.png"
     current = tmp_path / "current.png"
@@ -47,7 +47,12 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
                 "screen_signature": {"phash": "f" * 16, "size": [200, 200]},
                 "current_screenshot": str(saved),
                 "current_markers": [
-                    {"id": 1, "bbox": [150, 20, 170, 40], "text": "검색"},
+                    {
+                        "id": 1,
+                        "bbox": [150, 20, 170, 40],
+                        "text": "검색",
+                        "type": "text",
+                    },
                 ],
             },
         ),
@@ -69,7 +74,12 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
                 "screen_signature": {"phash": "f" * 16, "size": [200, 200]},
                 "current_screenshot": str(saved),
                 "current_markers": [
-                    {"id": 1, "bbox": [150, 20, 170, 40], "text": "검색"},
+                    {
+                        "id": 1,
+                        "bbox": [150, 20, 170, 40],
+                        "text": "검색",
+                        "type": "text",
+                    },
                 ],
             },
         ),
@@ -83,21 +93,35 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
         1,
     )
 
-    marker_id, trace = match_step_by_screen_signature(
-        steps[0],
-        {"phash": "0" * 16, "size": [200, 200]},
-        [{"id": 7, "bbox": [150, 20, 170, 40], "text": "검색"}],
-        current_image_path=str(current),
+    trace = roi_signature_match(
+        dict(steps[0].roi_signature),
+        str(current),
+        current_signature={"size": [200, 200]},
+    )
+    marker_id = match_local_target(
+        steps[0].target.model_dump(mode="json") if steps[0].target else None,
+        [
+            {
+                "id": 7,
+                "bbox": [150, 20, 170, 40],
+                "text": "검색",
+                "type": "text",
+            }
+        ],
+        [200, 200],
     )
 
-    assert build_screen_checkpoint(
-        worker_state(
-            observation={
-                "current_url": "https://www.wanted.co.kr",
-                "current_page_role": "home",
-            }
-        )
-    ).page_role == "home"
+    assert (
+        build_screen_checkpoint(
+            worker_state(
+                observation={
+                    "current_url": "https://www.wanted.co.kr",
+                    "current_page_role": "home",
+                }
+            )
+        ).page_role
+        == "home"
+    )
     assert steps[0].roi_signature["algorithm"] == "roi-phash-dct64-v2"
     assert steps[0].replay_mode == "fixed"
     assert steps[1].replay_mode == "parameterized"
@@ -108,25 +132,66 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
 
 
 def test_roi_replay_rejects_step_without_roi_signature():
-    from agent.recipe.phash_replay import match_step_by_screen_signature
+    from agent.runtime.target_matching import roi_signature_match
 
-    marker_id, trace = match_step_by_screen_signature(
-        PhysicalAction(
-            source_seq=0,
-            action="click_marker",
-            replay_mode="fixed",
-            target=ActionTarget(
-                text="검색",
-                bbox_ratio=[0.79, 0.08, 0.83, 0.12],
-                center_ratio=[0.81, 0.1],
-            ),
+    action = PhysicalAction(
+        source_seq=0,
+        action="click_marker",
+        replay_mode="fixed",
+        target=ActionTarget(
+            text="검색",
+            bbox_ratio=[0.79, 0.08, 0.83, 0.12],
+            center_ratio=[0.81, 0.1],
         ),
-        {"phash": "0" * 16, "size": [1000, 1000]},
-        [{"id": 3, "bbox": [790, 80, 830, 120], "text": "검색"}],
+    )
+    trace = roi_signature_match(
+        dict(action.roi_signature),
+        "unused.png",
+        current_signature={"size": [1000, 1000]},
     )
 
-    assert marker_id is None
     assert trace["reason"] == "roi_signature_missing"
+
+
+def test_local_target_match_rejects_merged_neighbor_text():
+    from agent.runtime.target_matching import match_local_target
+
+    target = {
+        "text": "JOB검색",
+        "marker_type": "text",
+        "bbox_ratio": [0.4, 0.1, 0.6, 0.2],
+        "center_ratio": [0.5, 0.15],
+    }
+    merged = {
+        "id": 1,
+        "bbox": [350, 100, 650, 200],
+        "text": "지역 전체 JOB검색",
+        "type": "text",
+    }
+    exact = {
+        "id": 2,
+        "bbox": [400, 100, 600, 200],
+        "text": "JOB 검색",
+        "type": "text",
+    }
+
+    assert match_local_target(target, [merged], [1000, 1000]) is None
+    assert match_local_target(target, [merged, exact], [1000, 1000]) == 2
+    assert (
+        match_local_target(
+            target,
+            [
+                {
+                    "id": 3,
+                    "bbox": [400, 100, 600, 200],
+                    "text": "icon",
+                    "type": "icon",
+                }
+            ],
+            [1000, 1000],
+        )
+        == 3
+    )
 
 
 def test_trajectory_records_context_actions_without_promoting_them():
@@ -163,16 +228,19 @@ def test_trajectory_records_context_actions_without_promoting_them():
     ]
     assert build_screen_checkpoint(state).screen_context_signature["phash"] == "a" * 16
     assert is_supported_recipe_action_group(steps) is False
-    assert is_supported_recipe_action_group(
-        [
-            PhysicalAction(source_seq=1, action="type_in_marker"),
-            PhysicalAction(
-                source_seq=2,
-                action="press_key",
-                param={"key": "enter"},
-            ),
-        ]
-    ) is True
+    assert (
+        is_supported_recipe_action_group(
+            [
+                PhysicalAction(source_seq=1, action="type_in_marker"),
+                PhysicalAction(
+                    source_seq=2,
+                    action="press_key",
+                    param={"key": "enter"},
+                ),
+            ]
+        )
+        is True
+    )
 
 
 def test_replay_mode_is_derived_from_executed_tool_contract():
@@ -226,10 +294,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     class FakePerception:
         last_capture_quality = {}
 
-        def wait_for_transition_change(self, _reference_image_path):
-            return False
-
-        def capture_usable_screen(self):
+        def capture_usable_screen(self, *, reference_image_path=None):
             return screenshot
 
         def get_current_url(self):
@@ -333,21 +398,21 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
                     "started_at": time.time(),
                 },
                 "action_events": [
-                        {
-                            "seq": 0,
-                            "result": {
-                                "action": "click_marker",
-                                "status": "success",
-                            },
-                            "candidate_action": {
-                                "source_seq": 0,
-                                "action": "click_marker",
-                            },
-                            "before_checkpoint": {
-                                "observation_id": "worker-test:observation:0002",
-                                "url_template": "example.com/jobs",
-                            },
-                        }
+                    {
+                        "seq": 0,
+                        "result": {
+                            "action": "click_marker",
+                            "status": "success",
+                        },
+                        "candidate_action": {
+                            "source_seq": 0,
+                            "action": "click_marker",
+                        },
+                        "before_checkpoint": {
+                            "observation_id": "worker-test:observation:0002",
+                            "url_template": "example.com/jobs",
+                        },
+                    }
                 ],
             },
         ),
@@ -356,9 +421,9 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
 
     assert stale.get("observation", {}).get("ocr_complete") is None
     assert (
-        action_event_transitions(
-            stale["transition"]["action_events"]
-        )[0].evidence.after_marker_texts
+        action_event_transitions(stale["transition"]["action_events"])[
+            0
+        ].evidence.after_marker_texts
         == []
     )
     stale_state = apply_update(

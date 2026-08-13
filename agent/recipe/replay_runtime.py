@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from langgraph.runtime import Runtime
 
-from agent.recipe.phash_replay import match_target_by_screen_signature
 from agent.runtime.site_context import normalize_page_role
-from agent.runtime.target_matching import screen_context_signature_match
+from agent.runtime.target_matching import (
+    roi_signature_match,
+    screen_context_signature_match,
+)
 from agent.runtime.worker_contracts import (
+    ScreenMarker,
     TransitionRequest,
     WorkerState,
     build_action_request,
@@ -25,7 +29,7 @@ from agent.recipe.replay import (
 )
 from agent.utils.logger import logger
 from agent.utils.text import recipe_url_scope_matches, url_template
-from shared.schema.recipe_schema import ReplaySession
+from shared.schema.recipe_schema import PhysicalAction, ReplaySession
 
 
 def replay_session_from_state(state: WorkerState) -> ReplaySession | None:
@@ -101,32 +105,42 @@ def verify_replay_after_state(
     expected_role = normalize_page_role(expected.page_role)
     current_role = normalize_page_role(observation.get("current_page_role"))
     if before_role and expected_role and expected_role != before_role and current_role:
-        matched = current_role == expected_role
+        if current_role != expected_role:
+            return (
+                False,
+                "recipe_after_page_role_mismatch",
+                {
+                    "before_page_role": before_role,
+                    "expected_page_role": expected_role,
+                    "current_page_role": current_role,
+                },
+            )
+
+    before_url = url_template(str(request.get("before_url") or ""))
+    if (
+        expected_url
+        and current_url
+        and expected_url != before_url
+        and recipe_url_scope_matches(expected_url, current_url)
+    ):
         return (
-            matched,
-            (
-                "recipe_after_page_role_matched"
-                if matched
-                else "recipe_after_page_role_mismatch"
-            ),
+            True,
+            "recipe_after_url_matched",
             {
-                "before_page_role": before_role,
-                "expected_page_role": expected_role,
-                "current_page_role": current_role,
+                "expected_url_template": expected_url,
+                "current_url": current_url,
             },
         )
 
     anchor_target = expected.anchor_target
     anchor_signature = dict(expected.anchor_roi_signature)
     if anchor_target is not None and anchor_signature:
-        marker_id, match = match_target_by_screen_signature(
-            anchor_target,
+        match = roi_signature_match(
             anchor_signature,
-            (observation.get("screen_signature") or {}).copy(),
-            list(observation.get("current_markers") or []),
-            current_image_path=str(observation.get("current_screenshot") or ""),
+            str(observation.get("current_screenshot") or ""),
+            current_signature=(observation.get("screen_signature") or {}).copy(),
         )
-        if marker_id is None:
+        if not match.get("matched"):
             return (
                 False,
                 str(match.get("reason") or "recipe_after_anchor_mismatch"),
@@ -135,10 +149,7 @@ def verify_replay_after_state(
         return (
             True,
             "recipe_after_anchor_matched",
-            {
-                **match,
-                "marker_id": marker_id,
-            },
+            match,
         )
 
     context_signature = dict(expected.screen_context_signature)
@@ -158,21 +169,6 @@ def verify_replay_after_state(
             match,
         )
 
-    before_url = url_template(str(request.get("before_url") or ""))
-    if (
-        expected_url
-        and current_url
-        and expected_url != before_url
-        and recipe_url_scope_matches(expected_url, current_url)
-    ):
-        return (
-            True,
-            "recipe_after_url_matched",
-            {
-                "expected_url_template": expected_url,
-                "current_url": current_url,
-            },
-        )
     return False, "recipe_after_state_unverifiable", {}
 
 
@@ -252,7 +248,6 @@ def _build_request(selection: ReflexSelection):
         "cached recipe transition",
         selection.tool_calls,
         metadata={
-            "execution_unit": "recipe_transition",
             "recipe_key": selection.recipe_key,
             "transition_index": selection.transition_index,
             "transition_count": transition_count,
@@ -277,12 +272,9 @@ def _hit_result(
         current_transition_index=selection.transition_index,
         pending_transition_index=selection.transition_index,
         transition_count=transition_count,
-        actions=[
-            [str(action.action) for action in transition.actions]
-            for transition in selection.recipe.transitions
-        ],
     )
     return {
+        "observation": {"current_markers": selection.markers},
         "decision": {"pending_action": _build_request(selection)},
         "replay": {
             "reflex_trace": {
@@ -298,6 +290,40 @@ def _hit_result(
             "replay_session": replay_session,
         },
     }
+
+
+def _detect_target_markers(
+    runtime: Runtime[WorkerDependencies],
+    context: ReflexReplayContext,
+    action: PhysicalAction,
+) -> list[ScreenMarker]:
+    target = action.target
+    crop_rect_ratio = list(action.roi_signature.get("crop_rect_ratio") or [])
+    if target is None or not crop_rect_ratio or not context.current_image_path:
+        return []
+    try:
+        perception = runtime.context.vision.get_perception()
+        markers = perception.detect_target_roi(
+            Path(context.current_image_path),
+            crop_rect_ratio,
+            target.marker_type,
+        )
+        if markers or target.marker_type not in {"text", "icon"}:
+            return markers
+        fallback_type = "icon" if target.marker_type == "text" else "text"
+        return perception.detect_target_roi(
+            Path(context.current_image_path),
+            crop_rect_ratio,
+            fallback_type,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Target ROI detection failed",
+            action=action.action,
+            marker_type=target.marker_type,
+            error=str(exc),
+        )
+        return []
 
 
 def attempt_reflex_replay(
@@ -328,7 +354,11 @@ def attempt_reflex_replay(
             },
         )
 
-    selection, rejection_log = select_reflex_replay(state, context)
+    selection, rejection_log = select_reflex_replay(
+        state,
+        context,
+        lambda action: _detect_target_markers(runtime, context, action),
+    )
     if selection is None:
         trace = rejection_log.trace_payload(context.candidate_count)
         logger.info(

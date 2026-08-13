@@ -452,6 +452,7 @@ def build_transition_observation(
     }
     return CompletedTransitionObservation(
         action_seq=transition_request.get("action_seq"),
+        action_seqs=list(transition_request.get("action_seqs") or []),
         action=transition_request.get("action", ""),
         before_observation_id=str(
             transition_request.get("before_observation_id") or ""

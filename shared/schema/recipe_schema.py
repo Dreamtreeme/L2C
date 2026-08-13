@@ -103,18 +103,6 @@ class ScreenCheckpoint(BaseModel):
             and self.observation_id == other.observation_id
         )
 
-    def with_action_anchor(self, action: "PhysicalAction") -> "ScreenCheckpoint":
-        if not action.has_replay_target():
-            return self.model_copy(deep=True)
-        return self.model_copy(
-            deep=True,
-            update={
-                "anchor_target": action.target.model_copy(deep=True),
-                "anchor_roi_signature": dict(action.roi_signature),
-            },
-        )
-
-
 class PhysicalAction(BaseModel):
     """한 화면 관찰을 근거로 실행한 물리 행동."""
 
@@ -244,7 +232,6 @@ class ReplaySession(BaseModel):
     current_transition_index: int = Field(ge=0)
     pending_transition_index: int | None = Field(default=None, ge=0)
     transition_count: int = Field(gt=0)
-    actions: List[List[str]] = Field(default_factory=list)
 
     def pending_is_current(self) -> bool:
         return self.pending_transition_index == self.current_transition_index

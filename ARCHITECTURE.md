@@ -27,7 +27,7 @@ flowchart TD
     STORE --> DB
     DB[(SQLite)] --> DBQ
     STORE --> EXPERIENCE[실행 기록과 레시피 후보 저장]
-    EXPERIENCE --> CANDIDATE[승격 후보 pending_replay 또는 pending_review]
+    EXPERIENCE --> CANDIDATE[승격 후보 recorded 또는 pending_review]
     CANDIDATE --> PROMOTION[별도 승격 작업자]
     PROMOTION --> RECIPE[활성 Reflex Recipe]
     ANSWER --> U
@@ -58,7 +58,7 @@ flowchart TD
     TRANSITION --> SELECT
     OCR[SoM 및 OCR] --> TRANSITION
     SELECT -->|OCR 필요| OCR
-    SELECT -->|카드 큐 또는 상세 정책| EXECUTION[원자 행동 실행]
+    SELECT -->|카드 큐 또는 상세 정책| EXECUTION[행동 또는 입력·제출 묶음 실행]
     SELECT -->|재생 후보| REFLEX[Reflex ROI 검증]
     SELECT -->|의미 판단 필요| REASON[Reasoning]
     REFLEX -->|ROI pHash와 마커 비율 일치| EXECUTION
@@ -70,7 +70,7 @@ flowchart TD
     EXECUTION -->|완료 또는 승인 필요| END[종료]
 ```
 
-- `Loading Wait`: 저해상도 OpenCV 프레임을 메모리에서 비교해 화면 변화 시작, 렌더링 안정화와 회색 저정보 화면 해소를 기다립니다. 준비된 최종 화면만 파일로 저장합니다.
+- `Loading Wait`: 저해상도 OpenCV 프레임을 메모리에서 비교해 화면 변화 시작, 렌더링 안정화와 회색 저정보 화면 해소를 기다립니다. 변화 뒤 일정 시간 추가 움직임이 없는 화면만 준비 완료로 판정하고 최종 화면만 파일로 저장합니다.
 - `OCR`: `OcrEngine`이 `PaddleOcr` 문자 검출과 `OmniParser` 아이콘 검출 결과를 합쳐 마커를 만듭니다. Paddle 작업자는 작업 동안 재사용합니다.
 - `pHash`: 저장된 전체 화면·ROI 서명과 현재 화면을 비교해 카드 큐 복귀, Reflex 대상과 행동 직전 마커 동일성을 검증합니다.
 - `Job Card Queue`: 검색 결과에서 LLM이 한 번 고른 공고 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
@@ -106,7 +106,7 @@ flowchart TD
 | OCR | `agent/tools/ocr_engine.py`, `paddle_ocr.py`, `omni_parser.py` | 문자·아이콘 검출과 마커 합성 |
 | pHash | `agent/vision/screen_signature.py` | 저장 화면·ROI 서명 생성과 유사도 비교 |
 | 화면·입력 | `agent/tools/perception.py`, `actions.py` | 화면 캡처 진입점과 물리 입력 |
-| 경험 메모리 | `agent/recipe/` | 행동 기록, 결정론적 승격 정책, 경로 생성, 활성 레시피 저장·매칭·재생 |
+| 경험 메모리 | `agent/recipe/` | 행동 묶음 전이 기록, Critic 가지치기, 활성 경로 저장·매칭·재생 |
 
 ## 상태와 행동 계약
 
@@ -145,7 +145,7 @@ flowchart TD
 - 무거운 화면 모델과 GUI 도구는 수집이 실제로 호출될 때 지연 초기화합니다.
 - DB 근거만으로 답할 수 있는 요청은 비전 런타임을 초기화하지 않습니다.
 - 자동승격은 `recipe_candidates` SQLite 상태를 영속 대기열로 사용합니다. API 요청은 `pending_review` 등록 후 답변을 계속하고, FastAPI 수명주기의 단일 작업자가 `reviewing`으로 선점해 Critic을 실행합니다.
-- 백엔드가 중단되면 처리 중이던 후보는 다음 시작에서 `pending_review`로 복구됩니다. Critic 전송 오류는 재시도하며 의미상 `revise`와 시스템 오류 `review_failed`를 구분합니다.
+- 백엔드가 중단되면 처리 중이던 후보는 다음 시작에서 `pending_review`로 복구됩니다. Critic 전송 오류는 재시도하고 한도를 넘기면 `review_failed`로 남깁니다. 내용 판정은 `accepted` 또는 `rejected`로 끝납니다.
 
 ## Classic 경로
 

@@ -1,20 +1,22 @@
-"""자율탐색 후보를 Critic으로 검토하고 승격 결과를 저장한다."""
+"""자율탐색 경험 후보를 검토하고 활성 경로로 승격한다."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Literal
 
 from agent.config import get_settings
 from agent.recipe.candidate_promotion import (
     CandidatePromotionResult,
     apply_candidate_promotion,
+    is_preparation_transition,
+    reviewable_candidate_transitions,
 )
-from agent.recipe.promotion_policy import compact_step_evidence_verdicts
 from agent.recipe.task_category import normalize_task_category
-from agent.runtime.worker_actions import REVIEWABLE_REPLAY_ACTIONS
 from agent.utils.text import normalize_text, url_template
+from agent.utils.image_utils import image_to_base64_jpeg
 from shared.schema.feedback_schema import (
     ExecutionEvent,
     RecipeCandidate,
@@ -23,44 +25,12 @@ from shared.schema.feedback_schema import (
 from shared.schema.recipe_schema import (
     ExperienceTransition,
     PhysicalAction,
-    PhysicalActionName,
     ScreenCheckpoint,
 )
 
 
 CriticFn = Callable[[dict[str, Any]], dict[str, Any] | RecipeCandidateReview]
 ReviewProcessMode = Literal["review", "promote"]
-
-
-@dataclass(frozen=True, slots=True)
-class ReviewableActionSpec:
-    """Critic이 빠짐없이 판정해야 하는 실행 단계."""
-
-    seq: int
-    action: PhysicalActionName
-
-    def to_payload(self) -> dict[str, int | str]:
-        return {"seq": self.seq, "action": self.action}
-
-
-def _critic_evidence_text_limit() -> int:
-    return get_settings().recipe.critic_evidence_text_limit
-
-
-def _reviewable_action_specs(
-    steps: list[PhysicalAction],
-) -> list[ReviewableActionSpec]:
-    """도구 계약으로 재생 방식이 확정된 단계만 Critic 검토 대상으로 삼는다."""
-
-    specs: list[ReviewableActionSpec] = []
-    for step in steps:
-        if (
-            step.action not in REVIEWABLE_REPLAY_ACTIONS
-            or step.replay_mode not in {"fixed", "parameterized"}
-        ):
-            continue
-        specs.append(ReviewableActionSpec(seq=step.source_seq, action=step.action))
-    return specs
 
 
 def _without_empty_values(value: dict[str, Any]) -> dict[str, Any]:
@@ -72,16 +42,15 @@ def _without_empty_values(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_observation_id(value: str) -> str:
-    observation_id = value
     marker = ":observation:"
-    if marker in observation_id:
-        return "observation:" + observation_id.rsplit(marker, 1)[-1]
-    return observation_id
+    return (
+        "observation:" + value.rsplit(marker, 1)[-1]
+        if marker in value
+        else value
+    )
 
 
-def _compact_checkpoint(
-    checkpoint: ScreenCheckpoint | None,
-) -> dict[str, Any]:
+def _compact_checkpoint(checkpoint: ScreenCheckpoint | None) -> dict[str, Any]:
     if checkpoint is None:
         return {}
     return _without_empty_values(
@@ -93,245 +62,127 @@ def _compact_checkpoint(
     )
 
 
-def _compact_target(step: PhysicalAction) -> dict[str, Any]:
-    if step.target is None:
-        return {}
-    target = step.target
-    return _without_empty_values(
-        {
-            "text": target.text,
-            "semantic_label": target.semantic_label,
-            "marker_type": target.marker_type,
-            "region": target.region,
-            "center_ratio": target.center_ratio,
-        }
-    )
-
-
-def _compact_step_param(step: PhysicalAction) -> dict[str, Any]:
-    if step.action == "type_in_marker":
-        return _without_empty_values({"slot_name": step.param.slot_name})
-    if step.action == "press_key":
-        return _without_empty_values({"key": step.param.key})
-    return {}
-
-
-def _compact_candidate_step(
-    candidate: RecipeCandidate,
-    step: PhysicalAction,
-) -> dict[str, Any]:
-    transition = candidate.transition_for_action(step.source_seq)
-    roi = dict(step.roi_signature or {})
-    return _without_empty_values(
-        {
-            "seq": step.source_seq,
-            "action": step.action,
-            "replay_mode": step.replay_mode,
-            "before": _compact_checkpoint(transition.before if transition else None),
-            "target": _compact_target(step),
-            "roi": _without_empty_values(
-                {
-                    "available": bool(roi.get("phash")),
-                    "algorithm": roi.get("algorithm"),
-                    "crop_rect_ratio": roi.get("crop_rect_ratio"),
-                    "target_center_ratio": roi.get("target_center_ratio"),
-                }
-            ),
-            "param": _compact_step_param(step),
-            "slot_refs": list(step.slot_refs),
-            "expected_after": transition.expected_after if transition else "",
-            "intent": transition.intent if transition else step.intent,
-            "target_role": step.target_role,
-            "component": step.component,
-            "risk_level": step.risk_level,
-        }
-    )
-
-
-def _normalized_marker_texts(values: list[Any]) -> list[str]:
+def _compact_texts(values: list[Any]) -> list[str]:
+    limit = get_settings().recipe.critic_evidence_text_limit
     texts: list[str] = []
     seen: set[str] = set()
     for value in values:
-        text = normalize_text(value)
-        key = text.casefold().replace(" ", "")
+        normalized = normalize_text(value)
+        key = normalized.casefold().replace(" ", "")
         if len(key) < 2 or key in seen:
             continue
         seen.add(key)
-        texts.append(text)
+        texts.append(normalized)
+        if len(texts) >= limit:
+            break
     return texts
 
 
-def _local_marker_context(
-    values: list[Any],
-    step: PhysicalAction | None,
-) -> list[str]:
-    """전체 OCR 대신 대상 주변의 짧은 화면 문맥만 남긴다."""
-
-    texts = _normalized_marker_texts(values)
-    limit = _critic_evidence_text_limit()
-    if len(texts) <= limit:
-        return texts
-    target = step.target if step else None
-    labels = {
-        normalize_text(value).casefold().replace(" ", "")
-        for value in (
-            target.semantic_label if target else "",
-            target.text if target else "",
-        )
-        if normalize_text(value)
-    }
-    index = next(
-        (
-            position
-            for position, text in enumerate(texts)
-            if text.casefold().replace(" ", "") in labels
-        ),
-        None,
+def _compact_action(action: PhysicalAction) -> dict[str, Any]:
+    target = action.target
+    param: dict[str, Any] = {}
+    if action.action == "type_in_marker":
+        param["slot_name"] = action.param.slot_name
+    elif action.action == "press_key":
+        param["key"] = action.param.key
+    return _without_empty_values(
+        {
+            "seq": action.source_seq,
+            "action": action.action,
+            "replay_mode": action.replay_mode,
+            "target": _without_empty_values(
+                {
+                    "text": target.text if target else "",
+                    "semantic_label": target.semantic_label if target else "",
+                    "marker_type": target.marker_type if target else "",
+                    "region": target.region if target else "",
+                    "center_ratio": target.center_ratio if target else [],
+                }
+            ),
+            "roi_available": bool(action.roi_signature.get("phash")),
+            "param": _without_empty_values(param),
+            "slot_refs": list(action.slot_refs),
+            "intent": action.intent,
+            "target_role": action.target_role,
+            "component": action.component,
+        }
     )
-    if index is None:
-        return texts[:limit]
-    start = max(0, min(index - limit // 2, len(texts) - limit))
-    return texts[start : start + limit]
 
 
 def _compact_transition(
-    transition: ExperienceTransition | None,
+    transition: ExperienceTransition,
     *,
-    include_text: bool,
+    prepares_transition_seq: int | None = None,
 ) -> dict[str, Any]:
-    if transition is None:
-        return {}
     evidence = transition.evidence
-    match = dict(evidence.after_state_match or {}) if evidence else {}
-    item = {
-        "status": evidence.status if evidence else "",
-        "outcome": evidence.outcome if evidence else "",
-        "reason": evidence.reason if evidence else "",
-        "visual_change_ratio": evidence.visual_change_ratio if evidence else None,
-        "after": _without_empty_values(
-            {"page_role": transition.after.page_role}
-        ),
-    }
-    if include_text and evidence:
-        item.update(
-            {
-                "before_observation_id": _compact_observation_id(
-                    transition.before.observation_id
-                ),
-                "after_observation_id": _compact_observation_id(
-                    transition.after.observation_id
-                ),
-                "phash_distance": evidence.phash_distance,
-                "transition_actions": list(evidence.transition_actions),
-                "after_state_match": _without_empty_values(
-                    {
-                        "matched": match.get("matched"),
-                        "reason": match.get("reason"),
-                        "mode": match.get("mode"),
-                        "distance": match.get("distance"),
-                    }
-                ),
-                "after": _compact_checkpoint(transition.after),
-                "after_text_sample": _normalized_marker_texts(
-                    list(evidence.after_marker_texts)
-                )[: _critic_evidence_text_limit()],
-            }
-        )
-    return _without_empty_values(item)
+    return _without_empty_values(
+        {
+            "seq": transition.seq,
+            "before": _compact_checkpoint(transition.before),
+            "actions": [_compact_action(action) for action in transition.actions],
+            "after": _compact_checkpoint(transition.after),
+            "expected_after": transition.expected_after,
+            "intent": transition.intent,
+            "prepares_transition_seq": prepares_transition_seq,
+            "evidence": _without_empty_values(
+                {
+                    "source": evidence.source if evidence else "",
+                    "result_status": evidence.result_status if evidence else "",
+                    "status": evidence.status if evidence else "",
+                    "outcome": evidence.outcome if evidence else "",
+                    "reason": evidence.reason if evidence else "",
+                    "visual_change_ratio": (
+                        evidence.visual_change_ratio if evidence else None
+                    ),
+                    "after_text_sample": _compact_texts(
+                        list(evidence.after_marker_texts) if evidence else []
+                    ),
+                }
+            ),
+        }
+    )
 
 
 def _compact_trajectory_event(
     event: ExecutionEvent,
-    reviewable_seqs: set[int],
+    candidate_action_seqs: set[int],
 ) -> dict[str, Any]:
-    step = event.candidate_action
+    action = event.candidate_action
     result = dict(event.result or {})
-    action = (
-        step.action
-        if step
-        else str(result.get("action") or result.get("requested_action") or "")
-    )
-    is_candidate = event.seq in reviewable_seqs
-    before_checkpoint = _compact_checkpoint(event.before_checkpoint)
-    if not is_candidate:
-        before_checkpoint = _without_empty_values(
-            {"page_role": before_checkpoint.get("page_role")}
-        )
     evidence = event.transition.evidence if event.transition else None
-    item = {
-        "seq": event.seq,
-        "action": action,
-        "candidate": is_candidate,
-        "source": result.get("action_source")
-        or (evidence.source if evidence else ""),
-        "before": before_checkpoint,
-        "result": _without_empty_values(
-            {
-                "status": result.get("status"),
-                "reason": result.get("reason") or result.get("error"),
-            }
-        ),
-        "transition": _compact_transition(
-            event.transition,
-            include_text=is_candidate,
-        ),
-    }
-    if is_candidate:
-        item["before_text_context"] = _local_marker_context(
-            list(event.before_marker_texts),
-            step,
-        )
-    return _without_empty_values(item)
-
-
-def _compact_trajectory(
-    candidate: RecipeCandidate,
-    reviewable_seqs: set[int],
-) -> list[dict[str, Any]]:
-    """성공·실패 분기를 포함한 실행 순서를 짧은 인과 기록으로 만든다."""
-
-    return [
-        _compact_trajectory_event(event, reviewable_seqs)
-        for event in candidate.action_events
-    ]
-
-
-def _compact_worker_execution(candidate: RecipeCandidate) -> dict[str, Any]:
-    """Critic에 필요한 실행 결과만 남겨 반복된 전체 상태를 제거한다."""
-
-    keys = (
-        "run_status",
-        "collected_count",
-        "persisted_count",
+    return _without_empty_values(
+        {
+            "seq": event.seq,
+            "action": (
+                action.action
+                if action
+                else result.get("action") or result.get("requested_action")
+            ),
+            "candidate": event.seq in candidate_action_seqs,
+            "source": result.get("action_source")
+            or (evidence.source if evidence else ""),
+            "before": _compact_checkpoint(event.before_checkpoint),
+            "intent": event.intent or (action.intent if action else ""),
+            "result": _without_empty_values(
+                {
+                    "status": result.get("status"),
+                    "reason": result.get("reason") or result.get("error"),
+                }
+            ),
+            "transition": (
+                _without_empty_values(
+                    {
+                        "after": _compact_checkpoint(event.transition.after),
+                        "status": evidence.status if evidence else "",
+                        "outcome": evidence.outcome if evidence else "",
+                        "reason": evidence.reason if evidence else "",
+                    }
+                )
+                if event.transition
+                else {}
+            ),
+        }
     )
-    execution = {
-        key: getattr(candidate, key)
-        for key in keys
-        if getattr(candidate, key) not in (None, "", [], {})
-    }
-    return execution
-
-
-def _coerce_review(
-    raw: dict[str, Any] | RecipeCandidateReview,
-) -> RecipeCandidateReview:
-    return (
-        raw if isinstance(raw, RecipeCandidateReview) else RecipeCandidateReview(**raw)
-    )
-
-
-def _fallback_review(reason: str) -> RecipeCandidateReview:
-    return RecipeCandidateReview(
-        decision="revise",
-        reasons=[reason],
-        feedback_to_worker="Candidate review could not be completed. Re-submit with clearer worker evidence.",
-    )
-
-
-def _serialize_candidate_review_payload(payload: dict[str, Any]) -> str:
-    """구조를 유지하면서 전송에 불필요한 JSON 공백을 제거한다."""
-
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _compact_collection_request(candidate: RecipeCandidate) -> dict[str, Any]:
@@ -350,45 +201,139 @@ def _compact_collection_request(candidate: RecipeCandidate) -> dict[str, Any]:
     )
 
 
+def _candidate_screen_evidence(
+    candidate: RecipeCandidate,
+    transitions: list[ExperienceTransition],
+) -> list[tuple[str, Path]]:
+    """비평가가 행동 순서를 직접 볼 수 있도록 전이 전후 화면을 고른다."""
+
+    limit = get_settings().recipe.critic_evidence_image_limit
+    if limit <= 0 or not transitions:
+        return []
+    events_by_transition = {
+        event.transition.seq: event
+        for event in candidate.action_events
+        if event.transition is not None
+    }
+    evidence: list[tuple[str, Path]] = []
+    seen_paths: set[Path] = set()
+
+    def append(label: str, raw_path: Any) -> None:
+        if len(evidence) >= limit:
+            return
+        path_text = str(raw_path or "").strip()
+        if not path_text:
+            return
+        path = Path(path_text)
+        if path in seen_paths or not path.is_file():
+            return
+        seen_paths.add(path)
+        evidence.append((label, path))
+
+    for index, transition in enumerate(transitions):
+        event = events_by_transition.get(transition.seq)
+        if index == 0 and event is not None:
+            append(
+                f"transition {transition.seq} before",
+                event.result.get("before_marked_image")
+                or event.result.get("before_screenshot"),
+            )
+        transition_evidence = transition.evidence
+        if transition_evidence is not None:
+            append(
+                f"transition {transition.seq} after",
+                transition_evidence.marked_image or transition_evidence.screenshot,
+            )
+    return evidence
+
+
 def build_candidate_review_payload(
     candidate: RecipeCandidate,
 ) -> dict[str, Any]:
-    """전체 실행 순서와 재생 후보의 인과 증거만 Critic에게 전달한다."""
+    """비평가에게 실행 순서와 재생 가능한 전이만 전달한다."""
 
-    steps = candidate.steps
-    required_step_verdicts = _reviewable_action_specs(steps)
-    reviewable_seqs = {item.seq for item in required_step_verdicts}
-    candidate_steps = [
-        _compact_candidate_step(candidate, step)
-        for step in steps
-        if step.source_seq in reviewable_seqs
-    ]
+    all_transitions = candidate.transitions
+    transitions, _pruned = reviewable_candidate_transitions(candidate)
+    following_by_seq = {
+        transition.seq: all_transitions[index + 1]
+        for index, transition in enumerate(all_transitions[:-1])
+    }
+    candidate_action_seqs = {
+        action.source_seq
+        for transition in transitions
+        for action in transition.actions
+    }
+    screen_evidence = _candidate_screen_evidence(candidate, transitions)
     return {
         "run_id": candidate.run_id,
         "status": candidate.status,
         "request": _compact_collection_request(candidate),
-        "trajectory": _compact_trajectory(
-            candidate,
-            reviewable_seqs,
-        ),
-        "candidate_steps": candidate_steps,
-        "deterministic_step_validation": compact_step_evidence_verdicts(candidate),
-        "required_step_verdicts": [
-            item.to_payload() for item in required_step_verdicts
+        "trajectory": [
+            _compact_trajectory_event(event, candidate_action_seqs)
+            for event in candidate.action_events
         ],
-        "worker_execution": _compact_worker_execution(candidate),
+        "candidate_transitions": [
+            _compact_transition(
+                transition,
+                prepares_transition_seq=(
+                    following.seq
+                    if (
+                        (following := following_by_seq.get(transition.seq))
+                        and is_preparation_transition(transition, following)
+                    )
+                    else None
+                ),
+            )
+            for transition in transitions
+        ],
+        "required_transition_verdicts": [
+            {
+                "seq": transition.seq,
+                "actions": [action.action for action in transition.actions],
+            }
+            for transition in transitions
+        ],
+        "screen_evidence_order": [label for label, _path in screen_evidence],
+        "worker_execution": _without_empty_values(
+            {
+                "run_status": candidate.run_status,
+                "collected_count": candidate.collected_count,
+                "persisted_count": candidate.persisted_count,
+            }
+        ),
     }
 
 
-def _llm_review_candidate(payload: dict[str, Any]) -> RecipeCandidateReview:
+def _coerce_review(
+    raw: dict[str, Any] | RecipeCandidateReview,
+) -> RecipeCandidateReview:
+    return (
+        raw
+        if isinstance(raw, RecipeCandidateReview)
+        else RecipeCandidateReview.model_validate(raw)
+    )
+
+
+def _fallback_review(reason: str) -> RecipeCandidateReview:
+    return RecipeCandidateReview(
+        decision="reject",
+        reasons=[reason],
+        feedback_to_worker="비평가가 전이 유지 여부를 확정하지 못했습니다.",
+    )
+
+
+def _llm_review_candidate(
+    payload: dict[str, Any],
+    screen_evidence: list[tuple[str, Path]],
+) -> RecipeCandidateReview:
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    from agent.llm.clients import get_structured_google_model
     from agent.llm.policy import commander_model_name
+    from agent.observability.run_context import invoke_with_metrics
     from agent.prompts.trust_boundary import external_content_contract_en
 
     model_name = get_settings().models.recipe_critic_model or commander_model_name()
-    from agent.llm.clients import get_structured_google_model
-
     llm = get_structured_google_model(
         model_name,
         RecipeCandidateReview,
@@ -399,67 +344,75 @@ def _llm_review_candidate(payload: dict[str, Any]) -> RecipeCandidateReview:
         SystemMessage(
             content=(
                 external_content_contract_en()
-                + "\nYou are the Reflex Recipe Critic. The recorder preserved the ordered execution trajectory and "
-                "derived candidate replay modes from executed tool contracts. You have pruning authority only. "
-                "Return only RecipeCandidateReview and never rewrite or synthesize executable metadata. "
-                "For every item in required_step_verdicts, return exactly one step_verdict with the same seq. "
-                "Use trajectory to distinguish the successful route from abandoned, recovery, or variable-choice "
-                "branches. candidate_steps contains the only actions eligible for promotion. "
-                "Set keep=false for wrong targets, no-op actions, abandoned or recovery branches, unstable "
-                "state-dependent choices, and steps whose expected result is not supported by the evidence. "
-                "A recovery action is never a reusable task path even when it eventually reveals the expected "
-                "site. If the recorded intent says the visible screen is wrong, unrelated, unexpected, or must "
-                "be exited before the task can continue, set keep=false for that action. Evaluate later stable "
-                "task actions independently. "
-                "Keep an eligible step when its after observation is the before observation of a later kept "
-                "step: that continuity is evidence that it prepared the next target or state. Do not call a "
-                "step redundant merely because it did not reach the final page. Prune such a bridge only when "
-                "the trajectory explicitly shows that it failed, was reverted, or belonged to an abandoned "
-                "branch. "
-                "A successful overall run does not make every step reusable. Evaluate deterministic_step_validation "
-                "first; eligible=false must always be keep=false. When execution_group_seqs is present, evaluate "
-                "the listed actions as one transition: a deferred_group_effect action is valid only because the "
-                "final group member verified the saved after-state. Do not reject that action merely because it "
-                "did not change the screen by itself. Preserve only steps that causally contributed to success and "
-                "can safely reuse the recorded action. Pruning with keep=false does not by itself require "
-                "decision=revise; return decision=accept when the kept subset still forms a safe causal path. Use "
-                "decision=revise only when the recorded evidence or metadata cannot produce a valid path. "
-                "Do not repair a bad step, change "
-                "replay_mode, create input slots, create transition contracts, or replace an action. "
-                "If critic_correction is present, return one complete verdict list matching the required seq values."
+                + "\nYou are the Reflex Recipe Critic. Autonomous exploration already "
+                "recorded executable transition groups with before and after screens. "
+                "You may only keep or drop those groups. Return exactly one "
+                "transition_verdict for every required_transition_verdicts seq. "
+                "Keep groups on the successful reusable route. Drop no-op, wrong-target, "
+                "abandoned-branch, recovery, and variable-choice groups. Use the full "
+                "trajectory and ordered screen evidence to recognize actions that were "
+                "later undone. Do not rewrite actions, targets, parameters, screen "
+                "evidence, or metadata. "
+                "A transition with prepares_transition_seq is a successful input that "
+                "prepared the following submit action even though the screen stayed stable; "
+                "keep it when the successful route needs that input. "
+                "Return accept only when the kept groups form one continuous reusable "
+                "route; otherwise return reject."
             )
         ),
-        HumanMessage(content=_serialize_candidate_review_payload(payload)),
     ]
-    from agent.observability.run_context import invoke_with_metrics
-
+    payload_text = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    if screen_evidence:
+        vision = get_settings().vision
+        content: list[dict[str, Any]] = [{"type": "text", "text": payload_text}]
+        for label, path in screen_evidence:
+            encoded = image_to_base64_jpeg(
+                path,
+                max_dim=vision.reasoning_image_max_dim,
+                quality=vision.reasoning_image_quality,
+                fast=True,
+            )
+            content.extend(
+                [
+                    {"type": "text", "text": f"Screen evidence: {label}"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{encoded}",
+                        },
+                    },
+                ]
+            )
+        messages.append(HumanMessage(content=content))
+    else:
+        messages.append(HumanMessage(content=payload_text))
     return _coerce_review(invoke_with_metrics(llm, messages, "recipe_critic"))
 
 
-def _step_verdict_contract_errors(
-    required_steps: list[ReviewableActionSpec],
+def _verdict_contract_errors(
+    transitions: list[ExperienceTransition],
     review: RecipeCandidateReview,
 ) -> list[str]:
-    """Critic이 후보를 추가하거나 빼지 않고 모두 판정했는지 검사한다."""
-
-    if review.decision != "accept":
-        return []
-
-    by_seq: dict[int, int] = {}
-    for verdict in review.step_verdicts:
-        by_seq[verdict.seq] = by_seq.get(verdict.seq, 0) + 1
-
-    errors: list[str] = []
-    required_seqs = {required.seq for required in required_steps}
-    for required in required_steps:
-        count = by_seq.get(required.seq, 0)
-        if count == 0:
-            errors.append(f"missing seq={required.seq} action={required.action}")
-            continue
-        if count != 1:
-            errors.append(f"duplicate seq={required.seq} count={count}")
-    for seq in sorted(set(by_seq) - required_seqs):
-        errors.append(f"unexpected seq={seq}")
+    required = {transition.seq for transition in transitions}
+    counts: dict[int, int] = {}
+    for verdict in review.transition_verdicts:
+        counts[verdict.seq] = counts.get(verdict.seq, 0) + 1
+    errors = [
+        f"seq={seq} verdict_count={counts.get(seq, 0)}"
+        for seq in sorted(required)
+        if counts.get(seq, 0) != 1
+    ]
+    errors.extend(
+        f"unexpected seq={seq}" for seq in sorted(set(counts) - required)
+    )
+    if review.decision == "accept" and not any(
+        verdict.keep for verdict in review.transition_verdicts
+    ):
+        errors.append("accepted review kept no transition")
     return errors
 
 
@@ -468,55 +421,31 @@ def review_candidate(
     critic: CriticFn | None = None,
     raise_on_error: bool = False,
 ) -> RecipeCandidateReview:
-    required_steps = _reviewable_action_specs(candidate.steps)
-    payload = build_candidate_review_payload(candidate)
-    if not required_steps:
-        return RecipeCandidateReview(
-            decision="reject",
-            reasons=["autonomous_replay_candidate_missing"],
-            feedback_to_worker=(
-                "자율탐색 단계에 fixed 또는 parameterized 재사용 후보가 없습니다."
-            ),
-        )
+    transitions, _pruned = reviewable_candidate_transitions(candidate)
+    if not transitions:
+        return _fallback_review("autonomous_replay_candidate_missing")
     try:
-        invoke_critic = critic or _llm_review_candidate
-        review = _coerce_review(invoke_critic(payload))
-        errors = _step_verdict_contract_errors(required_steps, review)
-        if not errors:
-            return review
-
-        corrected_payload = dict(payload)
-        corrected_payload["critic_correction"] = {
-            "kind": "step_verdict_contract",
-            "errors": errors,
-            "instruction": (
-                "Return exactly one step_verdict for every required seq. "
-                "Use keep=false for steps that must not be replayed."
-            ),
-        }
-        corrected_review = _coerce_review(invoke_critic(corrected_payload))
-        corrected_errors = _step_verdict_contract_errors(
-            required_steps,
-            corrected_review,
-        )
-        if corrected_errors:
-            return _fallback_review(
-                "critic_step_verdict_contract_failed: "
-                + "; ".join(corrected_errors[:8])
+        payload = build_candidate_review_payload(candidate)
+        raw_review = (
+            critic(payload)
+            if critic is not None
+            else _llm_review_candidate(
+                payload,
+                _candidate_screen_evidence(candidate, transitions),
             )
-        return corrected_review
+        )
+        review = _coerce_review(raw_review)
+        errors = _verdict_contract_errors(transitions, review)
+        if errors:
+            raise ValueError(
+                "critic_transition_verdict_contract_failed: "
+                + "; ".join(errors[:8])
+            )
+        return review
     except Exception as exc:
         if raise_on_error:
             raise
         return _fallback_review(f"critic_review_failed: {str(exc)[:200]}")
-
-
-def _status_for_review(review: RecipeCandidateReview) -> str:
-    if review.decision == "accept":
-        return "accepted"
-    if review.decision == "reject":
-        return "rejected"
-    return "revise"
 
 
 def review_and_apply_candidate(
@@ -530,13 +459,12 @@ def review_and_apply_candidate(
 
     candidate_store = RecipeCandidateStore(db_path)
     candidate = candidate_store.get_candidate(run_id)
-    if not candidate:
-        return _fallback_review(
-            f"candidate_not_found: {run_id}"
-        ).model_dump(mode="json")
+    if candidate is None:
+        return _fallback_review(f"candidate_not_found: {run_id}").model_dump(
+            mode="json"
+        )
 
-    normalized_mode = _process_mode(mode)
-    allow_promotion = normalized_mode == "promote"
+    allow_promotion = _process_mode(mode) == "promote"
     review = review_candidate(
         candidate,
         critic=critic,
@@ -551,25 +479,40 @@ def review_and_apply_candidate(
         promoted_path_count=0,
     )
     if allow_promotion and review.decision == "accept":
-        promotion = apply_candidate_promotion(
-            candidate,
-            review,
-            db_path=db_path,
-        )
+        promotion = apply_candidate_promotion(candidate, review, db_path=db_path)
+        if not promotion.promoted:
+            review = review.model_copy(
+                update={
+                    "decision": "reject",
+                    "reasons": [
+                        *review.reasons,
+                        "kept transitions do not form one continuous replay path",
+                    ],
+                }
+            )
 
     validation = {
         "review": review.model_dump(mode="json"),
         "promotion": promotion.model_dump(mode="json"),
     }
     candidate_store.update_status(
-        run_id, _status_for_review(review), validation=validation
+        run_id,
+        "accepted" if review.decision == "accept" else "rejected",
+        validation=validation,
     )
-    out = review.model_dump(mode="json")
-    out["run_id"] = run_id
-    out["promotion"] = promotion.model_dump(mode="json")
-    return out
+    result = review.model_dump(mode="json")
+    result["run_id"] = run_id
+    result["promotion"] = promotion.model_dump(mode="json")
+    return result
 
 
 def _process_mode(mode: str | None) -> ReviewProcessMode:
-    normalized = (mode or "review").strip().lower()
-    return "promote" if normalized == "promote" else "review"
+    return "promote" if (mode or "review").strip().lower() == "promote" else "review"
+
+
+__all__ = [
+    "CriticFn",
+    "build_candidate_review_payload",
+    "review_and_apply_candidate",
+    "review_candidate",
+]

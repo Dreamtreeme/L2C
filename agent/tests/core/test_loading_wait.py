@@ -85,23 +85,124 @@ def test_frame_quality_rejects_low_contrast_loading_shell(monkeypatch):
     assert quality["low_information"] is True
 
 
-def test_wait_for_change_detects_transition_without_ocr(monkeypatch, tmp_path):
+def test_wait_until_ready_detects_change_and_stability_in_one_loop(
+    monkeypatch,
+    tmp_path,
+):
     reference_path = tmp_path / "before.png"
-    Image.new("RGB", (200, 200), "white").save(reference_path)
+    Image.new("RGB", (600, 600), "white").save(reference_path)
+    before = np.full((600, 600), 255, dtype=np.uint8)
+    content = before.copy()
+    content[100:500, 100:500] = 0
+    frames = iter([before, content, content, content])
     loading_wait = object.__new__(LoadingWait)
     loading_wait.perception = object()
+    loading_wait.last_result = {}
     monkeypatch.setattr(
         loading_wait,
         "_capture_memory_frame",
-        lambda **_kwargs: np.zeros((200, 200), dtype=np.uint8),
+        lambda **_kwargs: next(frames),
+    )
+    monkeypatch.setattr("agent.vision.loading_wait.time.sleep", lambda _seconds: None)
+
+    result = loading_wait.wait_until_ready(
+        reference_image_path=reference_path,
+        max_wait_sec=1,
+        change_grace_sec=0.5,
+        check_interval_sec=0,
+        quiet_period_sec=0,
+        threshold_percent=1,
+        required_stable_frames=2,
+        region={"top": 0, "left": 0, "width": 600, "height": 600},
     )
 
-    assert loading_wait.wait_for_change(
-        str(reference_path),
-        max_wait_sec=0.1,
-        check_interval_sec=0,
-        region={"top": 0, "left": 0, "width": 200, "height": 200},
+    assert result["ready"] is True
+    assert result["visual_change_detected"] is True
+    assert result["visual_change_ratio"] > 0.4
+    assert result["probe_count"] == 3
+
+
+def test_wait_until_ready_does_not_accept_a_short_intermediate_plateau(
+    monkeypatch,
+    tmp_path,
+):
+    reference_path = tmp_path / "before.png"
+    before = np.full((600, 600), 255, dtype=np.uint8)
+    Image.fromarray(before).save(reference_path)
+    intermediate = before.copy()
+    intermediate[100:300, 100:500] = 0
+    final = before.copy()
+    final[100:500, 100:500] = 0
+    frames = iter(
+        [intermediate, intermediate, intermediate, final, final, final]
     )
+    clock = iter([0.0, 0.1, 0.2, 0.5, 0.8, 1.4])
+    loading_wait = object.__new__(LoadingWait)
+    loading_wait.perception = object()
+    loading_wait.last_result = {}
+    monkeypatch.setattr(
+        loading_wait,
+        "_capture_memory_frame",
+        lambda **_kwargs: next(frames),
+    )
+    monkeypatch.setattr("agent.vision.loading_wait.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "agent.vision.loading_wait.time.perf_counter",
+        lambda: next(clock),
+    )
+
+    result = loading_wait.wait_until_ready(
+        reference_image_path=reference_path,
+        max_wait_sec=2,
+        check_interval_sec=0,
+        quiet_period_sec=0.8,
+        threshold_percent=1,
+        required_stable_frames=2,
+        region={"top": 0, "left": 0, "width": 600, "height": 600},
+    )
+
+    assert result["ready"] is True
+    assert result["probe_count"] == 5
+    assert result["quiet_elapsed_sec"] == 0.9
+
+
+def test_wait_until_ready_releases_unchanged_action_after_grace(
+    monkeypatch,
+    tmp_path,
+):
+    reference_path = tmp_path / "before.png"
+    content = np.full((600, 600), 255, dtype=np.uint8)
+    content[100:500, 100:500] = 0
+    Image.fromarray(content).save(reference_path)
+    clock = iter([0.0, 0.2, 0.7, 1.21])
+    loading_wait = object.__new__(LoadingWait)
+    loading_wait.perception = object()
+    loading_wait.last_result = {}
+    monkeypatch.setattr(
+        loading_wait,
+        "_capture_memory_frame",
+        lambda **_kwargs: content,
+    )
+    monkeypatch.setattr("agent.vision.loading_wait.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "agent.vision.loading_wait.time.perf_counter",
+        lambda: next(clock),
+    )
+
+    result = loading_wait.wait_until_ready(
+        reference_image_path=reference_path,
+        max_wait_sec=2,
+        change_grace_sec=1.2,
+        check_interval_sec=0,
+        threshold_percent=1,
+        required_stable_frames=2,
+        region={"top": 0, "left": 0, "width": 600, "height": 600},
+    )
+
+    assert result["ready"] is True
+    assert result["visual_change_detected"] is False
+    assert result["visual_change_ratio"] == 0.0
+    assert result["probe_count"] == 3
 
 
 def test_wait_until_ready_requires_stable_informative_frames(monkeypatch):
@@ -136,7 +237,7 @@ def test_wait_until_ready_requires_stable_informative_frames(monkeypatch):
 def test_wait_until_ready_reports_low_information_timeout(monkeypatch):
     blank = np.full((600, 600), 255, dtype=np.uint8)
     frames = iter([blank, blank])
-    clock = iter([0.0, 0.0, 1.1, 1.1])
+    clock = iter([0.0, 1.1])
     loading_wait = object.__new__(LoadingWait)
     loading_wait.perception = object()
     loading_wait.last_result = {}

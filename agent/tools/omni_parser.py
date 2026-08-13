@@ -15,6 +15,8 @@ from agent.utils.logger import logger
 class OmniParser:
     """OmniParser의 YOLO 모델로 화면의 아이콘 후보를 검출한다."""
 
+    local_canvas_size = 640
+
     def __init__(self, root_dir: Path | None = None):
         self.root_dir = root_dir or Path(__file__).resolve().parent.parent.parent
         config_dir = get_settings().ocr.yolo_config_dir

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.recipe.matcher import is_replayable_action
-from agent.recipe.phash_replay import match_step_by_screen_signature
 from agent.runtime.site_context import normalize_page_role
+from agent.runtime.target_matching import match_local_target, roi_signature_match
 from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
 from agent.runtime.worker_actions import (
     RECIPE_COMMIT_ACTIONS,
@@ -144,6 +144,10 @@ class ReflexSelection:
     transition_index: int
     tool_calls: list[dict[str, Any]]
     tool_call_traces: dict[str, dict[str, Any]]
+    markers: list[ScreenMarker]
+
+
+TargetDetector = Callable[[PhysicalAction], list[ScreenMarker]]
 
 
 def _trace_args(
@@ -388,20 +392,61 @@ def _match_target_action_screen(
     state: WorkerState,
     context: ReflexReplayContext,
     action: PhysicalAction,
+    before: ScreenCheckpoint,
     trace: dict[str, Any],
-) -> tuple[int | None, str]:
-    marker_id, phash_result = match_step_by_screen_signature(
-        action,
-        (state["observation"].get("screen_signature") or {}).copy(),
-        context.markers,
-        current_image_path=context.current_image_path,
+    target_detector: TargetDetector,
+    *,
+    action_index: int,
+) -> tuple[ScreenMarker | None, str]:
+    if action_index == 0:
+        match_signature = dict(before.anchor_roi_signature or action.roi_signature)
+        phash_result = roi_signature_match(
+            match_signature,
+            context.current_image_path,
+            current_signature=(
+                state["observation"].get("screen_signature") or {}
+            ).copy(),
+        )
+        trace["phash"] = phash_result
+        trace["match_mode"] = phash_result.get("mode") or "roi_phash"
+        if not phash_result.get("matched"):
+            return None, str(phash_result.get("reason") or "phash_check_failed")
+    else:
+        trace["match_mode"] = "grouped_recipe_action"
+
+    target_payload = action.target.model_dump(mode="json") if action.target else None
+    screen_size = list(
+        (state["observation"].get("screen_signature") or {}).get("size") or []
     )
-    trace["phash"] = phash_result
-    trace["match_mode"] = phash_result.get("mode") or "roi_phash"
-    if marker_id is None:
-        return None, str(phash_result.get("reason") or "phash_check_failed")
-    trace["marker_id"] = marker_id
-    return marker_id, ""
+    current_marker_id = match_local_target(
+        target_payload,
+        context.markers,
+        screen_size,
+    )
+    current_marker = next(
+        (
+            marker
+            for marker in context.markers
+            if marker.get("id") == current_marker_id
+        ),
+        None,
+    )
+    if current_marker is not None:
+        trace["match_mode"] = "current_marker_ratio"
+        trace["local_detection_count"] = 0
+        return current_marker, ""
+
+    local_markers = target_detector(action)
+    marker_id = match_local_target(target_payload, local_markers, screen_size)
+    marker = next(
+        (item for item in local_markers if item.get("id") == marker_id),
+        None,
+    )
+    trace["local_detection_count"] = len(local_markers)
+    if marker is None:
+        return None, "roi_target_unresolved"
+    trace["match_mode"] = "roi_local_detection"
+    return marker, ""
 
 
 def _match_action_screen(
@@ -410,17 +455,24 @@ def _match_action_screen(
     action: PhysicalAction,
     before: ScreenCheckpoint,
     trace: dict[str, Any],
+    target_detector: TargetDetector,
     *,
     action_index: int,
-) -> tuple[int | None, str]:
+) -> tuple[ScreenMarker | None, str]:
     """저장된 행동의 화면 문맥과 현재 마커 대상을 검증한다."""
 
-    if not is_replayable_action(action, before):
-        return None, "not_replayable"
     if not recipe_url_scope_matches(before.url_template, context.current_url):
         return None, "url_scope_mismatch"
     if action.action in TARGET_REPLAY_ACTIONS:
-        return _match_target_action_screen(state, context, action, trace)
+        return _match_target_action_screen(
+            state,
+            context,
+            action,
+            before,
+            trace,
+            target_detector,
+            action_index=action_index,
+        )
     if action.action in RECIPE_COMMIT_ACTIONS and action_index > 0:
         trace["match_mode"] = "grouped_recipe_action"
         return None, ""
@@ -432,10 +484,13 @@ def _bind_candidate(
     context: ReflexReplayContext,
     candidate: ReflexCandidate,
     rejection_log: ReflexRejectionLog,
+    target_detector: TargetDetector,
 ) -> ReflexSelection | None:
     transition = candidate.transition
     tool_calls: list[dict[str, Any]] = []
     tool_call_traces: dict[str, dict[str, Any]] = {}
+    markers: list[ScreenMarker] = [marker.copy() for marker in context.markers]
+    next_marker_id = max((int(marker["id"]) for marker in markers), default=-1) + 1
 
     for action_index, action in enumerate(transition.actions):
         trace = _step_trace(
@@ -445,17 +500,29 @@ def _bind_candidate(
             action_index=action_index,
             context=context,
         )
-        marker_id, reject_reason = _match_action_screen(
+        local_marker, reject_reason = _match_action_screen(
             state,
             context,
             action,
             transition.before,
             trace,
+            target_detector,
             action_index=action_index,
         )
         if reject_reason:
             rejection_log.reject(candidate.recipe_key, reject_reason, trace)
             return None
+
+        marker_id: int | None = None
+        if local_marker is not None:
+            resolved_marker: ScreenMarker = {
+                **local_marker,
+                "id": next_marker_id,
+            }
+            markers.append(resolved_marker)
+            marker_id = next_marker_id
+            next_marker_id += 1
+            trace["marker_id"] = marker_id
 
         args = build_reflex_action_args(
             action,
@@ -487,18 +554,26 @@ def _bind_candidate(
         transition_index=candidate.transition_index,
         tool_calls=tool_calls,
         tool_call_traces=tool_call_traces,
+        markers=markers,
     )
 
 
 def select_reflex_replay(
     state: WorkerState,
     context: ReflexReplayContext,
+    target_detector: TargetDetector,
 ) -> tuple[ReflexSelection | None, ReflexRejectionLog]:
     """후보를 순서대로 검증하고 첫 번째 실행 가능한 전이를 반환한다."""
 
     rejection_log = ReflexRejectionLog()
     for candidate in _eligible_candidates(context, rejection_log):
-        selection = _bind_candidate(state, context, candidate, rejection_log)
+        selection = _bind_candidate(
+            state,
+            context,
+            candidate,
+            rejection_log,
+            target_detector,
+        )
         if selection is not None:
             return selection, rejection_log
         rejection_log.rejected_count += 1

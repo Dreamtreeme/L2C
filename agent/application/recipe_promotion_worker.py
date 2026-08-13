@@ -28,25 +28,6 @@ def _review_metric_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _aggregate_review_metrics(attempts: list[dict[str, Any]]) -> dict[str, Any]:
-    metrics = [dict(item.get("review_metrics") or {}) for item in attempts]
-    costs = [
-        float(item["estimated_cost"])
-        for item in metrics
-        if item.get("estimated_cost") is not None
-    ]
-    return {
-        "attempt_count": len(attempts),
-        "duration_sec": round(
-            sum(float(item.get("duration_sec") or 0.0) for item in metrics), 6
-        ),
-        "input_tokens": sum(int(item.get("input_tokens") or 0) for item in metrics),
-        "output_tokens": sum(int(item.get("output_tokens") or 0) for item in metrics),
-        "total_tokens": sum(int(item.get("total_tokens") or 0) for item in metrics),
-        "estimated_cost": round(sum(costs), 10) if costs else None,
-    }
-
-
 class RecipePromotionWorker:
     """SQLite 대기열을 한 번에 하나씩 처리하는 저우선순위 작업자."""
 
@@ -189,79 +170,6 @@ class RecipePromotionWorker:
                 "error": str(exc),
                 "review_metrics": review_metrics,
             }
-
-    def process_run_until_settled(
-        self,
-        run_id: str,
-        *,
-        enqueue: bool = False,
-    ) -> dict[str, Any]:
-        """특정 후보만 설정된 횟수까지 처리하고 최종 DB 상태를 반환한다."""
-
-        store = RecipeCandidateStore(self.db_path)
-        candidate = store.get_candidate(run_id)
-        if candidate is None:
-            return {
-                "run_id": run_id,
-                "review_status": "not_found",
-                "review_attempts": 0,
-                "review_error": "",
-                "validation": {},
-                "attempts": [],
-                "review_metrics": _aggregate_review_metrics([]),
-            }
-
-        status = candidate.status
-        if status == "pending_replay" and enqueue:
-            store.enqueue_review(run_id)
-            refreshed_candidate = store.get_candidate(run_id)
-            if refreshed_candidate is not None:
-                candidate = refreshed_candidate
-            status = candidate.status
-
-        attempt_results: list[dict[str, Any]] = []
-        if status in {"pending_review", "reviewing"}:
-            for _attempt in range(self.max_attempts):
-                result = self.process_one(run_id)
-                if result is None:
-                    break
-                attempt_results.append(
-                    {
-                        "run_id": str(result.get("run_id") or ""),
-                        "status": str(result.get("status") or ""),
-                        "decision": str(result.get("decision") or ""),
-                        "error": str(result.get("error") or "")[:300],
-                        "review_metrics": dict(result.get("review_metrics") or {}),
-                    }
-                )
-                refreshed_candidate = store.get_candidate(run_id)
-                if refreshed_candidate is None:
-                    break
-                candidate = refreshed_candidate
-                status = candidate.status
-                if status not in {"pending_review", "reviewing"}:
-                    break
-
-        candidate = store.get_candidate(run_id)
-        if candidate is None:
-            return {
-                "run_id": run_id,
-                "review_status": "not_found",
-                "review_attempts": 0,
-                "review_error": "",
-                "validation": {},
-                "attempts": attempt_results,
-                "review_metrics": _aggregate_review_metrics(attempt_results),
-            }
-        return {
-            "run_id": run_id,
-            "review_status": candidate.status,
-            "review_attempts": candidate.review_attempts,
-            "review_error": candidate.review_error,
-            "validation": candidate.validation,
-            "attempts": attempt_results,
-            "review_metrics": _aggregate_review_metrics(attempt_results),
-        }
 
     def _run(self) -> None:
         while not self._stop_event.is_set():

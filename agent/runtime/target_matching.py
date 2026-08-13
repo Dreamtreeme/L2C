@@ -253,11 +253,7 @@ def match_target_by_ratio(
         distance = _distance(target_center, current_center)
         if distance > max_distance:
             continue
-        raw_marker_id = marker.get("id")
-        try:
-            marker_id = int(raw_marker_id)
-        except (TypeError, ValueError):
-            continue
+        marker_id = marker["id"]
         current_bbox = bbox_to_ratio(marker_bbox(marker), screen_size)
         marker_type = normalize_text(marker.get("type")).casefold()
         scored.append(
@@ -275,9 +271,44 @@ def match_target_by_ratio(
     return candidates[0][2]
 
 
+def match_local_target(
+    target: dict[str, Any] | None,
+    markers: list[ScreenMarker],
+    screen_size: list[int],
+) -> int | None:
+    """국소 재인식 결과에서 저장 당시와 같은 목표만 선택한다."""
+
+    target = target or {}
+    target_type = normalize_text(target.get("marker_type")).casefold()
+    same_type = [
+        marker
+        for marker in markers
+        if normalize_text(marker.get("type")).casefold() == target_type
+    ]
+    if target_type == "text" and same_type:
+        target_text = "".join(normalize_text(target.get("text")).casefold().split())
+        if not target_text:
+            return None
+        same_type = [
+            marker
+            for marker in same_type
+            if "".join(normalize_text(marker.get("text")).casefold().split())
+            == target_text
+        ]
+        if not same_type:
+            return None
+    if same_type:
+        return match_target_by_ratio(target, same_type, screen_size)
+    if target_type not in {"text", "icon"} or not markers:
+        return None
+    fallback_target = {**target, "marker_type": ""}
+    return match_target_by_ratio(fallback_target, markers, screen_size)
+
+
 __all__ = [
     "anchor_overlap",
     "capture_context_match",
+    "match_local_target",
     "match_target_by_ratio",
     "roi_signature_match",
     "screen_context_signature_match",

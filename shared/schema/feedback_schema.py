@@ -74,7 +74,7 @@ class RecipeCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str
-    contract_version: int = 2
+    contract_version: int = 3
     status: str
     validation: Dict[str, Any] = Field(default_factory=dict)
     review_attempts: int = 0
@@ -134,11 +134,13 @@ class RecipeCandidate(BaseModel):
         return None
 
 
-ReviewDecision = Literal["accept", "revise", "reject"]
+ReviewDecision = Literal["accept", "reject"]
 
 
-class RecipeStepVerdict(BaseModel):
-    """자율탐색 행동을 경험 경로에 남길지 결정한 비평가 판정."""
+class RecipeTransitionVerdict(BaseModel):
+    """기록된 행동 묶음 전이를 경험 경로에 남길지 결정한 판정."""
+
+    model_config = ConfigDict(extra="forbid")
 
     seq: int
     keep: bool = False
@@ -146,19 +148,23 @@ class RecipeStepVerdict(BaseModel):
 
 
 class RecipeCandidateReview(BaseModel):
-    """경험 후보의 행동을 유지하거나 제거하는 비평가 판정."""
+    """경험 후보의 전이를 유지하거나 제거하는 비평가 판정."""
+
+    model_config = ConfigDict(extra="forbid")
 
     decision: ReviewDecision
     reasons: List[str] = Field(default_factory=list)
     feedback_to_worker: str = ""
-    step_verdicts: List[RecipeStepVerdict] = Field(default_factory=list)
+    transition_verdicts: List[RecipeTransitionVerdict] = Field(
+        default_factory=list
+    )
 
 
 __all__ = [
     "ExecutionEvent",
     "RecipeCandidate",
     "RecipeCandidateReview",
-    "RecipeStepVerdict",
+    "RecipeTransitionVerdict",
     "StoredWorkerSubmission",
     "WorkerSubmission",
 ]

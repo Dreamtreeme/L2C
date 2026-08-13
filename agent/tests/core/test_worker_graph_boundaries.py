@@ -89,7 +89,7 @@ def _observed_state(**observation):
     )
 
 
-def test_action_request_allows_only_supported_reflex_action_group():
+def test_action_request_allows_supported_input_commit_group():
     calls = [
         {
             "name": "type_in_marker",
@@ -103,14 +103,16 @@ def test_action_request_allows_only_supported_reflex_action_group():
         },
     ]
 
-    with pytest.raises(ValueError):
-        build_action_request("llm", "잘못된 복수 행동", calls)
+    autonomous_group = build_action_request("llm", "검색어 입력 후 검색", calls)
+    assert [call.name for call in autonomous_group.tool_calls] == [
+        "type_in_marker",
+        "click_marker",
+    ]
 
     click_group = build_action_request(
         "reflex",
         "검색어 입력 후 검색 버튼 클릭",
         calls,
-        metadata={"execution_unit": "recipe_transition"},
     )
     assert [call.name for call in click_group.tool_calls] == [
         "type_in_marker",
@@ -122,7 +124,6 @@ def test_action_request_allows_only_supported_reflex_action_group():
             "reflex",
             "두 클릭 사이에는 화면 확인이 필요함",
             [calls[1], calls[1]],
-            metadata={"execution_unit": "recipe_transition"},
         )
 
     grouped = build_action_request(
@@ -136,7 +137,6 @@ def test_action_request_allows_only_supported_reflex_action_group():
                 "id": "submit",
             },
         ],
-        metadata={"execution_unit": "recipe_transition"},
     )
     assert [call.name for call in grouped.tool_calls] == [
         "type_in_marker",
@@ -263,7 +263,7 @@ def test_worker_start_reuses_only_completed_observation():
     )
 
 
-def test_go_back_waits_for_cv_change_before_stable_capture(
+def test_go_back_uses_one_cv_observation_barrier(
     monkeypatch,
     tmp_path,
 ):
@@ -281,12 +281,8 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
             "stable": True,
         }
 
-        def wait_for_transition_change(self, reference_image_path):
-            calls.append(("change", reference_image_path))
-            return True
-
-        def capture_usable_screen(self):
-            calls.append(("stable_capture", str(after)))
+        def capture_usable_screen(self, *, reference_image_path=None):
+            calls.append(("capture", reference_image_path))
             return after
 
         def get_current_url(self):
@@ -313,10 +309,7 @@ def test_go_back_waits_for_cv_change_before_stable_capture(
         ),
     )
 
-    assert calls == [
-        ("change", str(before)),
-        ("stable_capture", str(after)),
-    ]
+    assert calls == [("capture", str(before))]
     assert result["observation"]["current_screenshot"] == str(after)
     assert result["observation"]["ocr_complete"] is False
 
@@ -337,7 +330,7 @@ def test_capture_screen_assigns_run_scoped_incrementing_observation_id(monkeypat
     class FakePerception:
         last_capture_quality = {}
 
-        def capture_usable_screen(self):
+        def capture_usable_screen(self, *, reference_image_path=None):
             return next(captures)
 
     state = worker_state(
@@ -655,7 +648,6 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
             },
         ],
         metadata={
-            "execution_unit": "recipe_transition",
             "recipe_key": "path6#search",
             "transition_index": 0,
             "transition_count": 1,
@@ -703,6 +695,7 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
         "type_in_marker",
         "press_key",
     ]
+    assert result["transition"]["transition_request"]["action_seqs"] == [0, 1]
     assert (
         result["transition"]["transition_request"]["before_page_role"]
         == "search_overlay"

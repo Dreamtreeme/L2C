@@ -40,16 +40,6 @@ from agent.vision.screen_signature import (
     compute_screen_signature,
 )
 
-_WAIT_ACTIONS = {
-    "click_marker",
-    "press_key",
-    "open_browser",
-    "go_back",
-    "close_current_tab",
-    "switch_tab",
-}
-
-
 def _build_ui_context(
     markers: list[ScreenMarker],
     current_url: str,
@@ -155,20 +145,14 @@ def capture_node(
     perception = runtime.context.vision.get_perception()
     observation = state["observation"]
     transition_request = state["transition"].get("transition_request")
-    pending_action = (
-        str(transition_request.get("action") or "") if transition_request else ""
+    before_screenshot = (
+        str(transition_request.get("before_screenshot") or "")
+        if transition_request
+        else ""
     )
-
-    if transition_request is not None and pending_action in _WAIT_ACTIONS:
-        before_screenshot = str(transition_request.get("before_screenshot") or "")
-        if before_screenshot:
-            perception.wait_for_transition_change(before_screenshot)
-
-    if pending_action == "type_in_marker":
-        initial_wait = get_settings().browser.input_capture_initial_wait_sec
-        image_path = perception.capture_usable_screen(initial_wait_sec=initial_wait)
-    else:
-        image_path = perception.capture_usable_screen()
+    image_path = perception.capture_usable_screen(
+        reference_image_path=before_screenshot or None,
+    )
 
     capture_quality = dict(perception.last_capture_quality)
     current_url = str(observation.get("current_url") or "")

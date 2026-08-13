@@ -286,12 +286,13 @@ Realtime/Vision 경로는 DOM이나 Playwright selector를 사용하지 않습�
     - [ ] 같은 카드 반복 클릭, 화면 변화 없음, 팝업/승인창 개입 등 오염 신호 탐지
   - [x] 3. Critic 피드백 루프 추가
     - [x] `ExecutionEvent`에 행동 결과, 직전 화면과 완성된 `ExperienceTransition`을 같은 순번으로 기록
-    - [x] Critic은 후보 전체의 `accept / revise / reject`와 단계별 `keep`만 반환
-    - [x] 실행 결과와 전후 화면 근거가 있는 단계만 결정론적 승격 검사를 통과
+    - [x] Critic은 후보 전체의 `accept / reject`와 전이 묶음별 `keep`만 반환
+    - [x] 실행 결과가 완성된 전이와 시작·도착 화면을 실행 순서대로 Critic에 전달
   - [x] 4. Recipe Memory 승격 정책
     - [ ] 브라우저 툴바, 시스템 대화상자, 광고/팝업처럼 사이트 고유 동작이 아닌 요소는 승격 금지
-    - [x] 자율탐색이 각 단계를 `fixed / parameterized / reasoning`으로 제안하고 Critic은 유지/제거만 판정
+    - [x] 자율탐색이 실행 시점에 행동 묶음 전이를 완성하고 Critic은 유지/제거만 판정
     - [x] Critic이 행동·파라미터·슬롯·화면 역할·전환 조건을 덮어쓰지 못하도록 스키마 축소
+    - [x] 가지치기 뒤 남은 전이가 하나의 연속 경로일 때만 승격
     - [x] 사용자 답변과 분리된 SQLite 대기열·백그라운드 작업자로 후보 검토와 활성 경로 승격
   - [x] 5. 슬롯 기반 Reflex 실행기
     - [x] 검색어가 바뀌면 `query` 슬롯만 교체하고 고정 UI 절차는 유지

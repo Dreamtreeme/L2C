@@ -101,16 +101,12 @@ class ActionRequest(BaseModel):
         if len(self.tool_calls) > 1:
             action_names = [call.name for call in self.tool_calls]
             commit_key = str(self.tool_calls[-1].args.get("key") or "")
-            if (
-                self.source != "reflex"
-                or self.metadata.get("execution_unit") != "recipe_transition"
-                or not is_supported_recipe_tool_group(
-                    action_names,
-                    commit_key=commit_key,
-                )
+            if not is_supported_recipe_tool_group(
+                action_names,
+                commit_key=commit_key,
             ):
                 raise ValueError(
-                    "여러 행동은 검증된 경험 기반 탐색 전이에서만 허용됩니다."
+                    "여러 행동은 입력 후 Enter 또는 검색 버튼 클릭 조합만 허용됩니다."
                 )
         return self
 
@@ -124,6 +120,7 @@ class CompletedTransitionObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action_seq: int | None = None
+    action_seqs: list[int] = Field(default_factory=list)
     action: str = ""
     before_observation_id: str = ""
     after_observation_id: str = ""
@@ -206,51 +203,80 @@ def attach_action_transition(
         else CompletedTransitionObservation.model_validate(transition)
     )
     parsed_events = [_execution_event(event) for event in events]
-    if observation.action_seq is None:
+    action_seqs = list(observation.action_seqs)
+    if not action_seqs and observation.action_seq is not None:
+        action_seqs = [observation.action_seq]
+    if not action_seqs:
         return parsed_events
+
+    selected_events = [event for event in parsed_events if event.seq in action_seqs]
+    recorded_actions = [
+        event.candidate_action.model_copy(deep=True)
+        for event in selected_events
+        if event.candidate_action is not None
+    ]
+    first_event = next(
+        (
+            event
+            for event in selected_events
+            if event.candidate_action is not None
+            and event.before_checkpoint is not None
+        ),
+        None,
+    )
+    if not recorded_actions or first_event is None or first_event.before_checkpoint is None:
+        return parsed_events
+
+    result_statuses = [str(event.result.get("status") or "") for event in selected_events]
+    if result_statuses and all(status == "success" for status in result_statuses):
+        result_status = "success"
+    elif "error" in result_statuses:
+        result_status = "error"
+    elif "skipped" in result_statuses:
+        result_status = "skipped"
+    else:
+        result_status = ""
+    final_event = selected_events[-1]
+    final_result = final_event.result
+    evidence = TransitionEvidence(
+        source=observation.source,
+        result_status=result_status,
+        result_reason=str(
+            final_result.get("reason") or final_result.get("error") or ""
+        ),
+        status=observation.status,
+        outcome=observation.outcome,
+        reason=observation.reason,
+        recipe_key=observation.recipe_key,
+        recipe_transition_index=observation.recipe_transition_index,
+        recipe_transition_count=observation.recipe_transition_count,
+        transition_actions=observation.transition_actions,
+        after_state_match=observation.after_state_match,
+        attempt=observation.attempt,
+        elapsed_sec=observation.elapsed_sec,
+        phash_distance=observation.phash_distance,
+        visual_change_ratio=observation.visual_change_ratio,
+        ocr_skipped=observation.ocr_skipped,
+        before_marker_texts=first_event.before_marker_texts,
+        after_marker_texts=observation.marker_texts,
+        screenshot=observation.screenshot,
+        marked_image=observation.marked_image,
+    )
+    observed = ExperienceTransition(
+        seq=action_seqs[0],
+        before=first_event.before_checkpoint,
+        actions=recorded_actions,
+        after=observation.after_state,
+        expected_after=final_event.expected_after,
+        intent=final_event.intent,
+        evidence=evidence,
+    )
 
     updated: list[ActionEvent] = []
     for raw_event in parsed_events:
         event = raw_event.model_copy(deep=True)
         if event.seq == observation.action_seq:
-            action = event.candidate_action
-            before = event.before_checkpoint
-            if action and before:
-                result = event.result
-                evidence = TransitionEvidence(
-                    source=observation.source,
-                    result_status=str(result.get("status") or ""),
-                    result_reason=str(
-                        result.get("reason") or result.get("error") or ""
-                    ),
-                    status=observation.status,
-                    outcome=observation.outcome,
-                    reason=observation.reason,
-                    recipe_key=observation.recipe_key,
-                    recipe_transition_index=observation.recipe_transition_index,
-                    recipe_transition_count=observation.recipe_transition_count,
-                    transition_actions=observation.transition_actions,
-                    after_state_match=observation.after_state_match,
-                    attempt=observation.attempt,
-                    elapsed_sec=observation.elapsed_sec,
-                    phash_distance=observation.phash_distance,
-                    visual_change_ratio=observation.visual_change_ratio,
-                    ocr_skipped=observation.ocr_skipped,
-                    before_marker_texts=event.before_marker_texts,
-                    after_marker_texts=observation.marker_texts,
-                    screenshot=observation.screenshot,
-                    marked_image=observation.marked_image,
-                )
-                observed = ExperienceTransition(
-                    seq=observation.action_seq,
-                    before=before,
-                    actions=[action],
-                    after=observation.after_state,
-                    expected_after=event.expected_after,
-                    intent=event.intent,
-                    evidence=evidence,
-                )
-                event.transition = observed
+            event.transition = observed
         updated.append(event)
     return updated
 
@@ -417,6 +443,7 @@ class TransitionRequest(TypedDict):
     """화면 변경 행동 뒤 다음 캡처에서 확인할 전환 요청."""
 
     action_seq: int
+    action_seqs: list[int]
     action: str
     before_observation_id: str
     source: str
@@ -441,6 +468,7 @@ class TransitionResult(TypedDict, total=False):
     """전환 요청과 현재 캡처를 비교한 판정 결과."""
 
     action_seq: int
+    action_seqs: list[int]
     action: str
     before_observation_id: str
     source: str
