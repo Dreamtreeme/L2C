@@ -16,6 +16,7 @@ from agent.runtime.worker_actions import (
 )
 from agent.runtime.worker_contracts import ScreenMarker, WorkerState
 from agent.runtime.worker_data_services import SiteExperienceLoader
+from agent.runtime.worker_state import current_frame_signature
 from agent.utils.text import recipe_url_scope_matches, url_template
 from shared.schema.recipe_schema import (
     ExperienceTransition,
@@ -398,14 +399,13 @@ def _match_target_action_screen(
     *,
     action_index: int,
 ) -> tuple[ScreenMarker | None, str]:
+    current_signature = current_frame_signature(state)
     if action_index == 0:
         match_signature = dict(before.anchor_roi_signature or action.roi_signature)
         phash_result = roi_signature_match(
             match_signature,
             context.current_image_path,
-            current_signature=(
-                state["observation"].get("screen_signature") or {}
-            ).copy(),
+            current_signature=current_signature,
         )
         trace["phash"] = phash_result
         trace["match_mode"] = phash_result.get("mode") or "roi_phash"
@@ -415,9 +415,7 @@ def _match_target_action_screen(
         trace["match_mode"] = "grouped_recipe_action"
 
     target_payload = action.target.model_dump(mode="json") if action.target else None
-    screen_size = list(
-        (state["observation"].get("screen_signature") or {}).get("size") or []
-    )
+    screen_size = list(current_signature.get("size") or [])
     current_marker_id = match_local_target(
         target_payload,
         context.markers,

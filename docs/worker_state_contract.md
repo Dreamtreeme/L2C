@@ -31,7 +31,7 @@ Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`�
 
 `collection.job_captures`는 `list[JobCapture]`이다. 작업자는 상세 URL, 누적 OCR 원문과 화면 근거만 보관한다. 구조화된 `CollectedJob`은 Investigation 그래프의 후처리 단계에서 생성되므로 비전 작업자 상태에 들어오지 않는다.
 
-`collection.job_results_memory`는 카드 큐를 만든 목록 URL과 `screen_signature`만 보관한다. 스크린샷 파일과 마커 이미지는 관찰 상태가 소유하며 목록 복귀 재생 상태에 복사하지 않는다. 최초 큐가 만들어진 뒤에는 카드 선택 모델을 다시 호출하지 않는다. 큐를 소진하고도 목표가 남으면 일반 화면 추론이 현재 목록을 스크롤하거나 필터를 조정하고 새 미방문 카드를 큐에 추가한다.
+`collection.job_card_queue`는 선택한 공고의 제목과 처리 상태를 보관한다. 상세 수집 뒤에는 결정된 복귀 행동을 수행하고, 현재 목록 OCR에서 다음 제목을 찾아 클릭한다. 최초 큐가 만들어진 뒤에는 카드 선택 모델을 다시 호출하지 않는다. 큐를 소진하고도 목표가 남으면 일반 화면 추론이 현재 목록을 스크롤하거나 필터를 조정하고 새 미방문 카드를 큐에 추가한다.
 
 ## 노드 갱신 계약
 

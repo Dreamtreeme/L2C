@@ -9,7 +9,12 @@ from agent.observability.run_context import ModelRequestTimeout
 from shared.schema.collection_intent import CollectionIntent, JobSearchFilters
 from shared.schema.collection_run import CollectionBatch
 from shared.schema.feedback_schema import WorkerSubmission
-from shared.schema.jd_schema import JobCapture, JobCollectionEvidence, JobPosting
+from shared.schema.jd_schema import (
+    JobCapture,
+    JobCollectionEvidence,
+    JobField,
+    JobPosting,
+)
 
 
 def _batch(
@@ -168,10 +173,30 @@ def test_postprocessing_preserves_visible_required_field_evidence(monkeypatch):
     )
 
     capture = _capture(page_exhausted=True)
+    capture = capture.model_copy(
+        update={
+            "evidence": capture.evidence.model_copy(
+                update={
+                    "required_fields": [
+                        *capture.evidence.required_fields,
+                        JobField.EMPLOYMENT_TYPE,
+                    ],
+                    "field_evidence": {
+                        **capture.evidence.field_evidence,
+                        JobField.EMPLOYMENT_TYPE: "정규직 수습기간 3개월",
+                    },
+                }
+            )
+        }
+    )
     result = service.postprocess_collection_batch(_batch(capture))
 
     assert result.rejected_items == []
     assert result.collected_jobs[0].posting.main_tasks == ["모델 운영"]
+    assert (
+        result.collected_jobs[0].posting.employment_type
+        == "정규직 수습기간 3개월"
+    )
 
     missing_evidence = capture.model_copy(
         update={

@@ -436,19 +436,11 @@ def test_reflex_replays_action_group_then_advances_after_verification(
     verified = worker_transition.transition_node(
         worker_state(
             observation={
-                "ocr_complete": True,
+                "ocr_complete": False,
                 "current_url": "https://www.saramin.co.kr/zf_user/",
                 "current_screenshot": str(result_screen),
                 "observation_id": "observation:0002",
-                "current_markers": [
-                    {
-                        "id": 8,
-                        "bbox": [160, 10, 220, 40],
-                        "text": "검색",
-                        "type": "text",
-                    },
-                ],
-                "screen_signature": result_context,
+                "raw_screen_signature": result_context,
             },
             transition={
                 "transition_request": {
@@ -469,6 +461,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
     )
 
     assert verified["transition"]["transition_result"]["status"] == "ready"
+    assert verified["transition"]["transition_result"]["needs_ocr"] is False
     assert verified["replay"]["replay_session"].current_transition_index == 1
     assert verified["replay"]["replay_session"].pending_transition_index is None
 
@@ -477,17 +470,9 @@ def test_reflex_replays_action_group_then_advances_after_verification(
             goal="AI 엔지니어 공고",
             observation={
                 "current_url": "https://www.saramin.co.kr/zf_user/",
-                "current_page_role": "search_results",
-                "screen_signature": result_context,
                 "current_screenshot": str(result_screen),
-                "current_markers": [
-                    {
-                        "id": 8,
-                        "bbox": [160, 10, 220, 40],
-                        "text": "검색",
-                        "type": "text",
-                    },
-                ],
+                "raw_screen_signature": result_context,
+                "ocr_complete": False,
             },
             request={
                 "collection_intent": CollectionIntent(
@@ -504,7 +489,7 @@ def test_reflex_replays_action_group_then_advances_after_verification(
     assert second["replay"]["reflex_trace"]["hit"] is True
     assert len(second["decision"]["pending_action"].tool_calls) == 1
     assert second["decision"]["pending_action"].tool_calls[0].name == "click_marker"
-    assert second["decision"]["pending_action"].tool_calls[0].args["marker_id"] == 9
+    assert second["decision"]["pending_action"].tool_calls[0].args["marker_id"] == 0
     assert second["replay"]["replay_session"].current_transition_index == 1
 
 

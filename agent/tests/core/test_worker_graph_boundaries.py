@@ -194,6 +194,33 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
     )
     assert route_after_selection(selected) == "reflex"
 
+    raw_intermediate_state = worker_state(
+        observation={
+            "observation_id": "observation:0002",
+            "current_screenshot": "typed-query.png",
+            "raw_screen_signature": {
+                "phash": "a" * 16,
+                "size": [1920, 1080],
+            },
+            "ocr_complete": False,
+        },
+        transition={
+            "transition_result": {
+                "status": "ready",
+                "action": "type_in_marker",
+                "needs_ocr": False,
+            }
+        },
+        replay={
+            "replay_session": {
+                "recipe_key": "recipe-search-set",
+                "current_transition_index": 1,
+                "transition_count": 2,
+            }
+        },
+    )
+    assert route_after_selection(raw_intermediate_state) == "reflex"
+
 
 def test_duplicate_detail_that_completes_target_ends_after_selection():
     from agent.graph import worker_selection
@@ -810,7 +837,6 @@ def test_stored_job_card_queue_schedules_first_card(monkeypatch):
             state_update={
                 "collection": {
                     "job_card_queue": [queued_card],
-                    "job_results_memory": {"url": "https://example.com/jobs"},
                     "job_results_availability": {},
                 }
             },
@@ -870,7 +896,6 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
             state_update={
                 "collection": {
                     "job_card_queue": existing_cards,
-                    "job_results_memory": {"url": "https://example.com/jobs"},
                     "job_results_availability": {},
                 }
             },

@@ -355,8 +355,6 @@ class ReflexSettings(SectionSettings):
         le=64,
         validation_alias="REFLEX_SCREEN_CONTEXT_PHASH_MAX_DISTANCE",
     )
-    job_card_return_phash_max_distance: int = Field(16, ge=0, le=64, validation_alias="VISION_JOB_CARD_RETURN_PHASH_MAX_DISTANCE")
-    job_card_return_min_anchor_overlap: float = Field(0.20, ge=0, le=1, validation_alias="VISION_JOB_CARD_RETURN_MIN_ANCHOR_OVERLAP")
     transition_cycle_phash_max_distance: int = Field(
         4,
         ge=0,

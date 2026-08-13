@@ -29,6 +29,7 @@ DIRECT_SCREEN_ACTION_SOURCES = frozenset(
     {
         "reflex",
         "job_card_queue",
+        "job_results_navigation",
         "page_policy",
         "duplicate_job_policy",
     }

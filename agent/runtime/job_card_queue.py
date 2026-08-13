@@ -4,37 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.config import get_settings
 from agent.runtime.worker_contracts import (
     ActionRequest,
-    JobResultsMemory,
-    ObservationState,
     ScreenMarker,
-    ScreenSignature,
-    TransitionRequest,
     TransitionResult,
     WorkerState,
     build_action_request,
 )
-from agent.runtime.target_matching import (
-    anchor_overlap,
-    match_target_by_ratio,
-    roi_signature_match,
-)
 from agent.utils.text import normalize_text
 from agent.runtime.site_context import looks_like_job_detail_url
 from agent.runtime.worker_state import target_count_from_state
-from agent.vision.marker_geometry import (
-    bbox_from_ratio,
-    bbox_to_ratio,
-    center_ratio_from_bbox,
-    marker_bbox,
-    screen_size_from_signature,
-)
-from agent.vision.screen_signature import (
-    compute_target_roi_signature,
-    hamming_distance,
-)
 from agent.vision.target_snapshot import marker_by_id
 
 
@@ -50,7 +29,7 @@ def job_card_entries_from_args(args: dict) -> list[dict]:
 
 def job_card_match_text(value: Any) -> str:
     text = normalize_text(value)
-    return text.casefold().replace(" ", "")
+    return "".join(char for char in text.casefold() if char.isalnum())
 
 
 def _queue_limit(
@@ -69,24 +48,10 @@ def _queue_limit(
     return max(0, target_count - resolved_count)
 
 
-def _card_geometry(
-    marker: dict[str, Any],
-    size: list[int],
-) -> tuple[Any, Any]:
-    bbox = marker.get("bbox")
-    if not isinstance(bbox, list) or len(bbox) != 4:
-        bbox = []
-    if not size:
-        return [], []
-    return bbox_to_ratio(bbox, size), center_ratio_from_bbox(bbox, size)
-
-
 def _normalized_job_card(
     raw: dict[str, Any],
     markers: list[ScreenMarker],
-    size: list[int],
     queue: list[dict],
-    observation: ObservationState,
 ) -> dict[str, Any] | None:
     marker_id = int(raw["marker_id"])
     marker = marker_by_id(markers, marker_id)
@@ -95,61 +60,26 @@ def _normalized_job_card(
     label = job_card_label(raw)
     if not label:
         return None
-    bbox_ratio, center_ratio = _card_geometry(marker, size)
     company = str(raw.get("company") or "").strip()
-    card = {
+    return {
         "queue_id": f"card-{len(queue) + 1}",
         "status": "pending",
         "title": label,
         "company": company,
         "source_marker_id": marker_id,
-        "bbox_ratio": bbox_ratio,
-        "center_ratio": center_ratio,
-        "target": {
-            "text": str(marker.get("text") or label),
-            "semantic_label": label,
-            "bbox_ratio": bbox_ratio,
-            "center_ratio": center_ratio,
-            "marker_type": str(marker.get("type") or ""),
-        },
-    }
-    roi_signature = compute_target_roi_signature(
-        str(observation.get("current_screenshot") or ""),
-        marker_bbox(marker),
-        size,
-        capture_context=(
-            (observation.get("screen_signature") or {}).get("capture_context") or {}
-        ).copy(),
-    )
-    if roi_signature:
-        card["roi_signature"] = roi_signature
-    return card
-
-
-def _job_results_memory(
-    observation: ObservationState,
-    current_url: str,
-) -> JobResultsMemory:
-    return {
-        "url": current_url or observation.get("current_url", "") or "",
-        "screen_signature": (observation.get("screen_signature") or {}).copy(),
     }
 
 
 def normalize_job_card_queue(
     args: dict,
     state: WorkerState,
-    current_url: str,
-) -> tuple[list[dict], JobResultsMemory]:
-    """LLM이 고른 현재 화면의 공고 카드를 좌표비율 기반 큐로 정규화한다."""
+) -> list[dict]:
+    """LLM이 고른 현재 화면의 공고 카드를 제목 기반 큐로 정규화한다."""
 
     cards = job_card_entries_from_args(args)
     observation = state["observation"]
     collection = state["collection"]
     markers = list(observation.get("current_markers", []) or [])
-    size = screen_size_from_signature(
-        dict(observation.get("screen_signature", {}) or {})
-    )
     queue: list[dict] = [
         dict(item)
         for item in (collection.get("job_card_queue", []) or [])
@@ -163,7 +93,7 @@ def normalize_job_card_queue(
         for item in queue
     }
     for raw in cards[: _queue_limit(state, queue, len(cards))]:
-        card = _normalized_job_card(raw, markers, size, queue, observation)
+        card = _normalized_job_card(raw, markers, queue)
         if card is None:
             continue
         identity = (
@@ -174,7 +104,7 @@ def normalize_job_card_queue(
             continue
         existing_labels.add(identity)
         queue.append(card)
-    return queue, _job_results_memory(observation, current_url)
+    return queue
 
 
 def pending_job_cards(queue: list[dict]) -> list[dict]:
@@ -329,26 +259,6 @@ def complete_active_job_card(queue: list[dict]) -> list[dict]:
     return updated
 
 
-def queue_click_used_cached_marker(
-    state: WorkerState,
-    request: TransitionRequest,
-) -> bool:
-    """현재 화면 OCR 없이 복원한 큐 마커를 클릭했는지 확인한다."""
-
-    if (
-        request.get("source") != "job_card_queue"
-        or request.get("action") != "click_marker"
-    ):
-        return False
-    marker_id = request.get("target_marker_id")
-    previous = state["observation"].get("previous_observation") or {}
-    return any(
-        marker.get("id") == marker_id and marker.get("type") == "queue_cached_card"
-        for marker in previous.get("markers", []) or []
-        if isinstance(marker, dict)
-    )
-
-
 def skip_active_job_card(
     queue: list[dict],
     *,
@@ -373,164 +283,53 @@ def skip_active_job_card(
     return updated
 
 
-def job_results_page_matches(
-    memory: dict,
-    current_url: str,
-    current_signature: ScreenSignature,
-    *,
-    require_anchors: bool = True,
-) -> tuple[bool, dict]:
-    if not memory:
-        return False, {"reason": "queue_memory_missing"}
-    if looks_like_job_detail_url(current_url):
-        return False, {"reason": "still_on_detail_url", "url": current_url}
-
-    saved_signature = dict(memory.get("screen_signature") or {})
-    saved_phash = str(saved_signature.get("phash") or "")
-    current_phash = str((current_signature or {}).get("phash") or "")
-    if not saved_phash or not current_phash:
-        return False, {
-            "reason": "phash_missing",
-            "saved_phash": bool(saved_phash),
-            "current_phash": bool(current_phash),
-        }
-    saved_size = list(saved_signature.get("size") or [])
-    current_size = list((current_signature or {}).get("size") or [])
-    if saved_size and current_size and saved_size != current_size:
-        return False, {
-            "reason": "capture_size_mismatch",
-            "saved_size": saved_size,
-            "current_size": current_size,
-        }
-    distance = hamming_distance(saved_phash, current_phash)
-    overlap = (
-        anchor_overlap(
-            saved_signature.get("anchors") or [],
-            (current_signature or {}).get("anchors") or [],
-        )
-        if require_anchors
-        else None
-    )
-
-    settings = get_settings().reflex
-    max_distance = settings.job_card_return_phash_max_distance
-    min_overlap = settings.job_card_return_min_anchor_overlap
-    matched = bool(
-        distance is not None
-        and distance <= max_distance
-        and (not require_anchors or (overlap is not None and overlap >= min_overlap))
-    )
-    return matched, {
-        "reason": (
-            "phash_anchor_match"
-            if matched and require_anchors
-            else "phash_match"
-            if matched
-            else "phash_anchor_mismatch"
-            if require_anchors
-            else "phash_mismatch"
-        ),
-        "distance": distance,
-        "max_distance": max_distance,
-        "anchor_overlap": overlap,
-        "min_anchor_overlap": min_overlap,
-    }
-
-
 def job_card_marker_for_item(
     item: dict,
     markers: list[ScreenMarker],
-    signature: ScreenSignature,
-    *,
-    allow_synthetic: bool = True,
-    current_image_path: str = "",
-) -> tuple[int | None, list[ScreenMarker], dict]:
-    target = dict(item.get("target") or {})
-    target.setdefault("text", item.get("title", ""))
-    target.setdefault("semantic_label", item.get("title", ""))
-    target.setdefault("bbox_ratio", item.get("bbox_ratio") or [])
-    target.setdefault("center_ratio", item.get("center_ratio") or [])
-    marker_id = match_target_by_ratio(
-        target,
-        markers,
-        screen_size_from_signature(signature),
-    )
-    if marker_id is not None:
-        marker = marker_by_id(markers, marker_id) or {}
-        saved_text = job_card_match_text(target.get("text"))
+) -> tuple[int | None, dict]:
+    """현재 OCR에서 큐에 저장된 공고 제목과 가장 잘 맞는 마커를 찾는다."""
+
+    saved_text = job_card_match_text(item.get("title"))
+    if not saved_text:
+        return None, {"reason": "queued_card_title_missing"}
+
+    candidates: list[tuple[int, int, int]] = []
+    for marker in markers:
         current_text = job_card_match_text(marker.get("text"))
-        if (
-            saved_text
-            and current_text
-            and (saved_text in current_text or current_text in saved_text)
-        ):
-            return marker_id, markers, {"reason": "current_marker_identity_match"}
-
-    if not allow_synthetic:
-        return None, markers, {"reason": "current_marker_identity_missing"}
-
-    roi_match = roi_signature_match(
-        dict(item.get("roi_signature") or {}),
-        current_image_path,
-        current_signature=signature,
-    )
-    if not roi_match.get("matched"):
-        return (
-            None,
-            markers,
-            {
-                "reason": str(roi_match.get("reason") or "cached_target_roi_mismatch"),
-                "roi_match": roi_match,
-            },
+        if not current_text:
+            continue
+        exact = int(current_text == saved_text)
+        if not exact and saved_text not in current_text and current_text not in saved_text:
+            continue
+        candidates.append(
+            (
+                exact,
+                min(len(saved_text), len(current_text)),
+                int(marker["id"]),
+            )
         )
+    if not candidates:
+        return None, {"reason": "current_marker_identity_missing"}
 
-    bbox = bbox_from_ratio(
-        item.get("bbox_ratio") or [], screen_size_from_signature(signature)
-    )
-    if bbox == [0, 0, 0, 0]:
-        return None, markers, {"reason": "cached_bbox_missing"}
-    next_id = (
-        max(
-            [
-                int(marker.get("id") or 0)
-                for marker in markers or []
-                if isinstance(marker, dict)
-            ]
-            + [-1]
-        )
-        + 1
-    )
-    synthetic: ScreenMarker = {
-        "id": next_id,
-        "bbox": bbox,
-        "text": item.get("title") or "queued job card",
-        "type": "queue_cached_card",
-    }
-    return (
-        next_id,
-        [*markers, synthetic],
-        {
-            "reason": "synthetic_marker_from_cached_bbox",
-            "bbox": bbox,
-            "roi_match": roi_match,
-        },
-    )
+    candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    best = candidates[0]
+    if len(candidates) > 1 and best[:2] == candidates[1][:2]:
+        return None, {"reason": "current_marker_identity_ambiguous"}
+    return best[2], {"reason": "current_marker_identity_match"}
 
 
-def replay_job_card_on_results(
+def next_job_card_request(
     state: WorkerState,
     transition_result: TransitionResult,
     current_url: str,
     markers: list[ScreenMarker],
-    screen_signature: ScreenSignature,
-    *,
-    require_anchors: bool = True,
-    current_image_path: str = "",
-) -> tuple[ActionRequest | None, list[ScreenMarker], dict]:
-    """직전 행동 뒤 목록 화면이 확인되면 다음 카드를 준비한다."""
+) -> tuple[ActionRequest | None, dict]:
+    """목록 화면과 현재 OCR이 확인되면 큐의 다음 카드 행동을 만든다."""
 
     if not str(transition_result.get("action") or ""):
-        return None, markers, {"reason": "return_transition_missing"}
+        return None, {"reason": "return_transition_missing"}
+    if looks_like_job_detail_url(current_url):
+        return None, {"reason": "still_on_detail_url", "url": current_url}
     queue = [
         dict(item)
         for item in (state["collection"].get("job_card_queue", []) or [])
@@ -538,12 +337,11 @@ def replay_job_card_on_results(
     ]
     pending = pending_job_cards(queue)
     if not pending:
-        return None, markers, {"reason": "queue_empty"}
+        return None, {"reason": "queue_empty"}
     active_card = active_job_card(queue)
     if active_card:
         return (
             None,
-            markers,
             {
                 "reason": "active_card_not_completed",
                 "queue_id": active_card.get("queue_id", ""),
@@ -551,27 +349,13 @@ def replay_job_card_on_results(
             },
         )
 
-    matched, match_trace = job_results_page_matches(
-        dict(state["collection"].get("job_results_memory", {}) or {}),
-        current_url,
-        screen_signature,
-        require_anchors=require_anchors,
-    )
-    if not matched:
-        return None, markers, match_trace
-
     item = pending[0]
-    marker_id, next_markers, marker_trace = job_card_marker_for_item(
+    marker_id, marker_trace = job_card_marker_for_item(
         item,
         markers,
-        screen_signature,
-        allow_synthetic=not require_anchors,
-        current_image_path=current_image_path,
     )
     if marker_id is None:
-        trace = dict(match_trace)
-        trace.update(marker_trace)
-        return None, markers, trace
+        return None, marker_trace
     args = {
         "marker_id": marker_id,
         "queue_id": item.get("queue_id", ""),
@@ -583,7 +367,7 @@ def replay_job_card_on_results(
     }
     request = build_action_request(
         "job_card_queue",
-        "cached next job card",
+        "next queued job card",
         [
             {
                 "name": "click_marker",
@@ -597,12 +381,10 @@ def replay_job_card_on_results(
     )
     return (
         request,
-        next_markers,
         {
             "hit": True,
             "queue_id": item.get("queue_id", ""),
             "title": item.get("title", ""),
-            "results_match": match_trace,
             "marker": marker_trace,
         },
     )
@@ -621,10 +403,8 @@ __all__ = [
     "job_card_label",
     "job_card_marker_for_item",
     "job_card_match_text",
-    "queue_click_used_cached_marker",
     "release_active_job_card",
-    "replay_job_card_on_results",
-    "job_results_page_matches",
+    "next_job_card_request",
     "job_card_click_matches_queue",
     "job_card_entries_from_args",
     "skip_active_job_card",

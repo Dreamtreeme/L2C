@@ -20,6 +20,7 @@ from agent.runtime.worker_contracts import (
     WorkerState,
     build_action_request,
 )
+from agent.runtime.worker_state import current_frame_signature
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.recipe.replay import (
     ReflexReplayContext,
@@ -134,11 +135,12 @@ def verify_replay_after_state(
 
     anchor_target = expected.anchor_target
     anchor_signature = dict(expected.anchor_roi_signature)
+    current_signature = current_frame_signature(state)
     if anchor_target is not None and anchor_signature:
         match = roi_signature_match(
             anchor_signature,
             str(observation.get("current_screenshot") or ""),
-            current_signature=(observation.get("screen_signature") or {}).copy(),
+            current_signature=current_signature,
         )
         if not match.get("matched"):
             return (
@@ -156,7 +158,7 @@ def verify_replay_after_state(
     if context_signature:
         match = screen_context_signature_match(
             context_signature,
-            (observation.get("screen_signature") or {}).copy(),
+            current_signature,
         )
         matched = bool(match.get("matched"))
         return (

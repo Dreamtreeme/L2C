@@ -41,6 +41,17 @@ def route_after_start(state: WorkerState) -> str:
     return "capture"
 
 
+def _route_before_ocr(state: WorkerState, transition_result: dict[str, Any]) -> str:
+    """연속 재생 중이면 다음 전이로, 아니면 필요한 화면 해석으로 보낸다."""
+
+    if (
+        state["replay"].get("replay_session")
+        and transition_result.get("status") == "ready"
+    ):
+        return "reflex"
+    return "ocr" if transition_result.get("needs_ocr") else "reasoning"
+
+
 def route_after_selection(state: WorkerState) -> str:
     """결정론적 정책, 선택적 OCR, Reflex, LLM 순서로 다음 경로를 고른다."""
 
@@ -56,7 +67,7 @@ def route_after_selection(state: WorkerState) -> str:
     if transition_result.get("status") == "pending":
         return "capture"
     if not current_observation_ready(state):
-        return "ocr" if transition_result.get("needs_ocr") else "reasoning"
+        return _route_before_ocr(state, transition_result)
     if needs_job_results_navigation(state):
         return "reasoning"
     if state["collection"].get("job_detail_followup"):
@@ -66,6 +77,7 @@ def route_after_selection(state: WorkerState) -> str:
         or transition_result.get("source")
         in {
             "job_card_queue",
+            "job_results_navigation",
             "page_policy",
             "duplicate_job_policy",
         }
@@ -102,6 +114,8 @@ def route_after_execution(state: WorkerState) -> str:
         return "execution"
     if state["transition"].get("transition_request"):
         return "capture"
+    if needs_job_results_navigation(state):
+        return "selection"
     return "reasoning"
 
 
@@ -203,6 +217,7 @@ def build_graph():
         {
             "execution": "execution",
             "capture": "capture",
+            "selection": "selection",
             "reasoning": "reasoning",
             "end": END,
         },

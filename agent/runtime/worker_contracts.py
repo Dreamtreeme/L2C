@@ -432,13 +432,6 @@ class JobDetailBuffer(TypedDict, total=False):
     stats: JobDetailStats
 
 
-class JobResultsMemory(TypedDict, total=False):
-    """검색 결과 목록으로 복귀할 때 비교하는 화면 기억."""
-
-    url: str
-    screen_signature: ScreenSignature
-
-
 class TransitionRequest(TypedDict):
     """화면 변경 행동 뒤 다음 캡처에서 확인할 전환 요청."""
 
@@ -460,7 +453,6 @@ class TransitionRequest(TypedDict):
     recipe_transition_index: NotRequired[int]
     recipe_transition_count: NotRequired[int]
     after_state_match: NotRequired[dict[str, Any]]
-    queue_marker_refresh: NotRequired[bool]
     execution_failed: NotRequired[bool]
 
 
@@ -485,7 +477,6 @@ class TransitionResult(TypedDict, total=False):
     recipe_transition_index: int
     recipe_transition_count: int
     after_state_match: dict[str, Any]
-    queue_marker_refresh: bool
     execution_failed: bool
     status: str
     outcome: str
@@ -555,7 +546,6 @@ class JobCollectionState(TypedDict):
 
     job_captures: list[JobCapture]
     job_card_queue: list[dict[str, Any]]
-    job_results_memory: JobResultsMemory
     job_results_availability: dict[str, Any]
     job_detail_buffer: JobDetailBuffer
     job_detail_coverage: dict[str, Any]
@@ -616,7 +606,6 @@ class RecipeReplayPatch(TypedDict, total=False):
 class JobCollectionPatch(TypedDict, total=False):
     job_captures: list[JobCapture]
     job_card_queue: list[dict[str, Any]]
-    job_results_memory: JobResultsMemory
     job_results_availability: dict[str, Any]
     job_detail_buffer: JobDetailBuffer
     job_detail_coverage: dict[str, Any]
@@ -762,7 +751,6 @@ def create_worker_state(
         "collection": {
             "job_captures": [],
             "job_card_queue": [],
-            "job_results_memory": {},
             "job_results_availability": {},
             "job_detail_buffer": {},
             "job_detail_coverage": {},
@@ -798,7 +786,6 @@ __all__ = [
     "JobDetailLine",
     "JobDetailScreenEvidence",
     "JobDetailStats",
-    "JobResultsMemory",
     "WorkerState",
     "WorkerStateUpdate",
     "WorkerLifecycleState",

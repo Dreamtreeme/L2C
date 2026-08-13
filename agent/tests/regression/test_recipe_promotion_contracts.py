@@ -332,6 +332,9 @@ def test_standalone_input_is_kept_as_preparation_for_following_action(tmp_path):
         transition["actions"][0]["action"]
         for transition in recipe["transitions"]
     ] == ["click_marker", "type_in_marker", "click_marker"]
+    input_result = recipe["transitions"][1]["after"]
+    assert input_result["anchor_target"]["text"] == "검색 실행"
+    assert input_result["anchor_roi_signature"]["phash"] == "2" * 16
 
 
 def test_standalone_input_is_not_kept_when_following_enter_cannot_replay():
@@ -426,7 +429,7 @@ def test_pruned_wrong_branch_reconnects_at_same_recorded_screen(tmp_path):
     ] == ["검색", "올바른 검색"]
 
 
-def test_pruned_gap_with_nearby_phash_rejects_disconnected_path(tmp_path):
+def test_pruned_gap_with_nearby_phash_stores_separate_replay_chains(tmp_path):
     submission = _candidate_submission()
     branch_screen = _state("observation:0010", "search_overlay", "2" * 16)
     wrong_after = _state("observation:0011", "unrelated", "9" * 16)
@@ -460,17 +463,15 @@ def test_pruned_gap_with_nearby_phash_rejects_disconnected_path(tmp_path):
         ],
     )
 
-    assert result["promotion"]["promoted"] is False
-    assert result["promotion"]["promoted_path_count"] == 0
-    assert result["decision"] == "reject"
+    assert result["promotion"]["promoted"] is True
+    assert result["promotion"]["promoted_path_count"] == 2
+    assert result["decision"] == "accept"
     assert RecipeCandidateStore(db_path).get_candidate(
         submission["run_id"]
-    ).status == "rejected"
-    assert RecipeStore(db_path).get_by_site("wanted") == []
-    assert any(
-        item["reason"] == "path_disconnected_after_pruning"
-        for item in result["promotion"]["pruned_transitions"]
-    )
+    ).status == "accepted"
+    recipes = RecipeStore(db_path).get_by_site("wanted")
+    assert len(recipes) == 2
+    assert sorted(len(recipe["transitions"]) for recipe in recipes) == [1, 1]
 
 
 def test_non_autonomous_or_failed_transition_is_filtered_before_critic():

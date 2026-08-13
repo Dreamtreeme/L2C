@@ -186,22 +186,11 @@ def _apply_job_detail_completion(
     state = context.state
     collection = state["collection"]
     job_card_queue = list(collection.get("job_card_queue", []) or [])
-    target_count = target_count_from_state(state)
     collected_count = job_capture_count(state)
 
     job_card_queue = complete_active_job_card(job_card_queue)
     collection["job_card_queue"] = job_card_queue
-    result["detail_policy"] = "required_fields_complete"
     pending_cards = pending_job_cards(job_card_queue)
-    resolved_count = max(
-        collected_count,
-        resolved_job_card_count(job_card_queue),
-    )
-    if pending_cards or (target_count > 0 and resolved_count < target_count):
-        result["next_step"] = "navigate_to_job_results"
-        result["pending_count"] = len(pending_cards)
-        return
-
     if (
         count_mode_from_state(state) == "visible_all"
         and job_card_queue

@@ -17,7 +17,6 @@ from agent.runtime.site_context import (
     is_job_detail_context,
 )
 from agent.runtime.job_card_queue import (
-    queue_click_used_cached_marker,
     release_active_job_card,
 )
 from agent.runtime.worker_contracts import (
@@ -58,28 +57,54 @@ class TransitionDecision:
     reset_no_effect: bool = False
 
 
+def _reflex_before_ocr_decision(
+    state: WorkerState,
+    request: TransitionRequest,
+) -> TransitionDecision | None:
+    """연속 경로의 다음 ROI 또는 마지막 URL을 원본 캡처로 확인한다."""
+
+    if str(request.get("source") or "") != "reflex":
+        return None
+    transition_index = request.get("recipe_transition_index")
+    transition_count = request.get("recipe_transition_count")
+    if not isinstance(transition_index, int) or not isinstance(transition_count, int):
+        return None
+    has_following = transition_index + 1 < transition_count
+    expected = request.get("expected_after_state")
+    if expected is None or (has_following and not expected.has_anchor()):
+        return None
+
+    matched, reason, after_state_match = verify_replay_after_state(request, state)
+    accepted_reason = (
+        "recipe_after_anchor_matched"
+        if has_following
+        else "recipe_after_url_matched"
+    )
+    if not matched or reason != accepted_reason:
+        return None
+
+    evaluated_request = request.copy()
+    evaluated_request["after_state_match"] = after_state_match
+    return TransitionDecision(
+        request=evaluated_request,
+        status="ready",
+        reason=reason,
+        needs_ocr=not has_following,
+        reset_no_effect=True,
+    )
+
+
 def _decide_before_ocr(
     state: WorkerState,
     request: TransitionRequest,
     *,
     visual_changed: bool,
 ) -> TransitionDecision:
+    reflex_decision = _reflex_before_ocr_decision(state, request)
+    if reflex_decision is not None:
+        return reflex_decision
     source = str(request.get("source") or "")
     action = str(request.get("action") or "")
-    cached_queue_marker_failed = not visual_changed and queue_click_used_cached_marker(
-        state, request
-    )
-    if cached_queue_marker_failed:
-        refresh_request = request.copy()
-        refresh_request["queue_marker_refresh"] = True
-        return TransitionDecision(
-            request=refresh_request,
-            status="needs_ocr",
-            reason="queue_cached_marker_refresh_required",
-            needs_ocr=True,
-            records_outcome=False,
-            release_queue=True,
-        )
     if visual_changed or action == "type_in_marker":
         return TransitionDecision(
             request=request,
@@ -247,6 +272,7 @@ def _completed_transition_update(
             reason=decision.reason,
             visual_change_detected=visual_changed,
             visual_change_ratio=visual_ratio,
+            needs_ocr=decision.needs_ocr,
         ),
         "action_events": attach_action_transition(
             state["transition"].get("action_events", []) or [],

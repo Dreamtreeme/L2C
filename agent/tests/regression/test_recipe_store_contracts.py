@@ -1,7 +1,5 @@
 import sqlite3
 
-from agent.runtime.job_card_queue import replay_job_card_on_results
-from agent.tests.worker_test_support import worker_state
 from shared.schema.recipe_schema import ExperiencePath
 from shared.schema.skill_schema import RecipeSkillMetadata
 
@@ -65,92 +63,6 @@ def _active_recipe_path(actions: list[dict]) -> ExperiencePath:
             }
         )
     return ExperiencePath.model_validate({"transitions": transitions})
-
-
-def test_result_queue_replays_cached_card_on_results_screen(tmp_path):
-    from PIL import Image, ImageDraw
-
-    from agent.vision.screen_signature import compute_target_roi_signature
-
-    original_path = tmp_path / "original.png"
-    changed_path = tmp_path / "changed.png"
-    original = Image.new("RGB", (1000, 1000), "white")
-    original_draw = ImageDraw.Draw(original)
-    original_draw.rectangle((300, 400, 500, 450), fill="black")
-    original.save(original_path)
-    changed = Image.new("RGB", (1000, 1000), "white")
-    changed_draw = ImageDraw.Draw(changed)
-    for x in range(280, 521, 20):
-        changed_draw.line((x, 370, x, 480), fill="black", width=5)
-    changed.save(changed_path)
-    roi_signature = compute_target_roi_signature(
-        original_path,
-        [300, 400, 500, 450],
-        [1000, 1000],
-    )
-
-    state = worker_state(
-        collection={
-            "job_card_queue": [
-                {
-                    "queue_id": "card-2",
-                    "status": "pending",
-                    "title": "두 번째 iOS 개발자",
-                    "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
-                    "center_ratio": [0.4, 0.425],
-                    "roi_signature": roi_signature,
-                    "target": {
-                        "text": "두 번째 iOS 개발자",
-                        "bbox_ratio": [0.3, 0.4, 0.5, 0.45],
-                        "center_ratio": [0.4, 0.425],
-                    },
-                }
-            ],
-            "job_results_memory": {
-                "screen_signature": {
-                    "phash": "0" * 16,
-                    "size": [1000, 1000],
-                    "anchors": ["두 번째 iOS 개발자"],
-                },
-            },
-        }
-    )
-
-    request, markers, trace = replay_job_card_on_results(
-        state,
-        {"action": "go_back"},
-        "https://www.wanted.co.kr/search?query=ios",
-        [],
-        {
-            "phash": "0" * 16,
-            "size": [1000, 1000],
-            "anchors": ["두 번째 iOS 개발자"],
-        },
-        require_anchors=False,
-        current_image_path=str(original_path),
-    )
-
-    assert request is not None
-    assert trace["hit"] is True
-    assert request.tool_calls[0].name == "click_marker"
-    assert markers[0]["bbox"] == [300, 400, 500, 450]
-
-    missed_request, _, missed_trace = replay_job_card_on_results(
-        state,
-        {"action": "go_back"},
-        "https://www.wanted.co.kr/search?query=ios",
-        [],
-        {
-            "phash": "0" * 16,
-            "size": [1000, 1000],
-            "anchors": ["두 번째 iOS 개발자"],
-        },
-        require_anchors=False,
-        current_image_path=str(changed_path),
-    )
-
-    assert missed_request is None
-    assert missed_trace["reason"] == "roi_phash_distance"
 
 
 def test_recipe_store_scopes_by_site_and_task_category(tmp_path):

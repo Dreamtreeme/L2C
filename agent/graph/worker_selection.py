@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from langgraph.runtime import Runtime
 
 from agent.config import get_settings
 from agent.runtime.worker_contracts import (
-    ActionRequest,
-    CompletedTransitionObservation,
-    JobResultsMemory,
-    ScreenMarker,
-    ScreenSignature,
     TransitionResult,
     WorkerState,
-    attach_action_transition,
     build_action_request,
 )
 from agent.runtime.vision_worker_runtime import WorkerDependencies
@@ -27,11 +20,11 @@ from agent.runtime.worker_state import (
 from agent.runtime.job_card_queue import (
     active_job_card,
     job_card_queue_scope_complete,
-    replay_job_card_on_results,
+    needs_job_results_navigation,
+    next_job_card_request,
     skip_active_job_card,
 )
 from agent.runtime.site_context import looks_like_job_detail_url
-from agent.runtime.transition_runtime import build_transition_observation
 from agent.utils.logger import logger
 
 
@@ -118,94 +111,51 @@ def _skip_duplicate_detail(
     return update
 
 
-def _queue_results_transition(
+def _job_results_navigation_action(action_name: str) -> dict[str, Any]:
+    reason = (
+        "뒤로가기가 상세 화면을 바꾸지 않아 현재 상세 탭을 닫습니다."
+        if action_name == "close_current_tab"
+        else "수집이 끝난 상세 화면에서 검색 결과로 돌아갑니다."
+    )
+    request = build_action_request(
+        "job_results_navigation",
+        reason,
+        [
+            {
+                "name": action_name,
+                "args": {
+                    "reason": reason,
+                    "expected_after": "검색 결과 목록이 보인다.",
+                    "page_role": "job_detail",
+                    "risk_level": "safe_navigation",
+                },
+                "id": f"job_results_navigation_{action_name}",
+            }
+        ],
+    )
+    return {"decision": {"pending_action": request}}
+
+
+def _select_job_results_navigation(
     state: WorkerState,
     transition_result: TransitionResult,
-    trace: dict[str, Any],
-) -> CompletedTransitionObservation | None:
-    if not str(transition_result.get("action") or ""):
+) -> dict[str, Any] | None:
+    """상세 완료 후 목록 복귀의 결정된 두 단계를 선택한다."""
+
+    if not needs_job_results_navigation(state):
         return None
-    memory = state["collection"].get("job_results_memory") or {}
-    saved_signature = (memory.get("screen_signature") or {}).copy()
-    anchors = [
-        str(text) for text in saved_signature.get("anchors", []) or [] if str(text)
-    ]
-    raw_results_match = trace.get("results_match")
-    results_match = raw_results_match if isinstance(raw_results_match, dict) else {}
-    started_at = float(transition_result.get("started_at") or time.time())
-    return build_transition_observation(
-        transition_result,
-        status="ready",
-        outcome="queue_results_phash_match",
-        source=str(transition_result.get("source") or ""),
-        reason="queue_results_phash_match",
-        elapsed_sec=max(0.0, time.time() - started_at),
-        attempt=1,
-        markers=[{"id": index, "text": text} for index, text in enumerate(anchors)],
-        screenshot=str(state["observation"].get("current_screenshot") or ""),
-        marked_image="",
-        after_observation_id=str(state["observation"].get("observation_id") or ""),
-        phash_distance=results_match.get("distance"),
-        ocr_skipped=True,
-    )
-
-
-def _replay_queued_card(
-    state: WorkerState,
-    *,
-    request: ActionRequest,
-    selected_markers: list[ScreenMarker],
-    trace: dict[str, Any],
-    transition_result: TransitionResult,
-    signature: ScreenSignature,
-    memory: JobResultsMemory,
-    saved_signature: ScreenSignature,
-) -> dict[str, Any]:
-    transition = _queue_results_transition(
-        state,
-        transition_result,
-        trace,
-    )
-    update: dict[str, Any] = {
-        "decision": {"pending_action": request},
-        "transition": {
-            "transition_request": None,
-            "transition_result": {
-                **transition_result,
-                "status": "ready",
-                "outcome": "queue_results_phash_match",
-                "reason": "queue_results_phash_match",
-                "needs_ocr": False,
-            },
-        },
-        "observation": {
-            "current_markers": selected_markers,
-            "screen_signature": {**saved_signature, **signature},
-            "current_page_role": "search",
-            "ocr_complete": True,
-        },
-        "collection": {
-            "job_results_memory": memory,
-        },
-    }
-    if transition:
-        update["transition"]["action_events"] = attach_action_transition(
-            state["transition"].get("action_events", []) or [],
-            transition,
-        )
-    return update
-
-
-def _queue_replay_waits_for_ocr(
-    transition_result: TransitionResult,
-    *,
-    ocr_complete: bool,
-) -> bool:
+    action = str(transition_result.get("action") or "")
     status = str(transition_result.get("status") or "")
-    refresh = bool(transition_result.get("queue_marker_refresh"))
-    if status == "needs_ocr" and refresh:
-        return True
-    return status == "unknown" and not (refresh and ocr_complete)
+    reason = str(transition_result.get("reason") or "")
+    if (
+        action == "go_back"
+        and status == "unknown"
+        and reason in {"no_screen_change", "reflex_no_screen_change"}
+    ):
+        return _job_results_navigation_action("close_current_tab")
+    if action in {"go_back", "close_current_tab"}:
+        return None
+    return _job_results_navigation_action("go_back")
 
 
 def _select_duplicate_detail(
@@ -248,47 +198,27 @@ def _select_queued_card(
     if not transition_result.get("action"):
         return None
     observation = state["observation"]
-    ocr_complete = bool(observation.get("ocr_complete"))
-    if _queue_replay_waits_for_ocr(
-        transition_result,
-        ocr_complete=ocr_complete,
-    ):
+    if not observation.get("ocr_complete"):
         return None
-    markers = list(observation.get("current_markers") or []) if ocr_complete else []
-    signature_value = (
-        observation.get("screen_signature")
-        if ocr_complete
-        else observation.get("raw_screen_signature")
-    )
-    signature: ScreenSignature = (signature_value or {}).copy()
-    request, selected_markers, trace = replay_job_card_on_results(
+    markers = list(observation.get("current_markers") or [])
+    request, trace = next_job_card_request(
         state,
         transition_result,
         current_url,
         markers,
-        signature,
-        require_anchors=ocr_complete,
-        current_image_path=str(observation.get("current_screenshot") or ""),
     )
     if request is None:
+        logger.debug(
+            "Job card queue selection skipped",
+            reason=trace.get("reason", ""),
+        )
         return None
-    memory = (state["collection"].get("job_results_memory") or {}).copy()
-    saved_signature = (memory.get("screen_signature") or {}).copy()
     logger.info(
         "Job card queue action selected",
         queue_id=trace.get("queue_id", ""),
-        ocr_skipped=not ocr_complete,
+        ocr_skipped=False,
     )
-    return _replay_queued_card(
-        state,
-        request=request,
-        selected_markers=selected_markers,
-        trace=trace,
-        transition_result=transition_result,
-        signature=signature,
-        memory=memory,
-        saved_signature=saved_signature,
-    )
+    return {"decision": {"pending_action": request}}
 
 
 def selection_node(
@@ -327,6 +257,9 @@ def selection_node(
     )
     if duplicate_update is not None:
         return duplicate_update
+    navigation_update = _select_job_results_navigation(state, transition_result)
+    if navigation_update is not None:
+        return navigation_update
     return (
         _select_queued_card(
             state,

@@ -174,22 +174,6 @@ def screen_context_signature_match(
     }
 
 
-def _normalized_key(value: Any) -> str:
-    return normalize_text(value).casefold().replace(" ", "")
-
-
-def anchor_overlap(saved: list[Any], current: list[Any]) -> float:
-    """저장한 OCR 앵커 중 현재 화면에도 보이는 비율을 반환한다."""
-
-    saved_set = {_normalized_key(item) for item in saved or [] if _normalized_key(item)}
-    current_set = {
-        _normalized_key(item) for item in current or [] if _normalized_key(item)
-    }
-    if not saved_set or not current_set:
-        return 0.0
-    return len(saved_set & current_set) / max(1, len(saved_set))
-
-
 def _target_center_ratio(target: dict[str, Any]) -> list[float]:
     center = target.get("center_ratio") or []
     if isinstance(center, list) and len(center) == 2:
@@ -306,7 +290,6 @@ def match_local_target(
 
 
 __all__ = [
-    "anchor_overlap",
     "capture_context_match",
     "match_local_target",
     "match_target_by_ratio",

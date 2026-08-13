@@ -11,13 +11,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.config import get_settings
 from agent.runtime.worker_contracts import WorkerState, action_event_results
-from agent.runtime.worker_state import target_count_from_state
 from agent.runtime.detail_runtime import compact_job_detail_buffer_context
 from agent.runtime.job_card_queue import (
     job_detail_key_from_state,
-    needs_job_results_navigation,
     pending_job_cards,
-    resolved_job_card_count,
 )
 from agent.runtime.site_context import site_runtime_guidance
 from agent.runtime.transition_runtime import latest_no_effect_transition
@@ -112,8 +109,7 @@ def _build_forbidden_action_context(
             + f" ({item['reason']})"
         )
     lines.append(
-        "Choose a different visible marker or a different atomic navigation tool instead. "
-        "If go_back had no effect on a detail page opened from results, consider close_current_tab."
+        "Choose a different visible marker or a different atomic navigation tool instead."
     )
     return "\n".join(lines)
 
@@ -225,37 +221,6 @@ def _compact_job_card_queue_context(state: WorkerState) -> str:
     )
 
 
-def _compact_next_card_navigation_context(state: WorkerState) -> str:
-    if not needs_job_results_navigation(state):
-        return ""
-    queue = [
-        dict(item)
-        for item in state["collection"].get("job_card_queue", []) or []
-        if isinstance(item, dict)
-    ]
-    pending_count = len(pending_job_cards(queue))
-    target_count = target_count_from_state(state)
-    resolved_count = max(
-        len(state["collection"].get("job_captures", [])),
-        resolved_job_card_count(queue),
-    )
-    remaining_count = (
-        max(0, target_count - resolved_count)
-        if target_count > 0
-        else pending_count
-    )
-    return (
-        "다음 공고로 이동:\n"
-        "- 현재 공고의 상세 OCR 정제와 큐 완료 처리는 이미 성공했습니다.\n"
-        "- 같은 공고에서 finish_detail_reading, scroll, 본문 펼치기, 정보 추출을 반복하지 마십시오.\n"
-        "- 먼저 go_back으로 검색 결과 복귀를 시도하십시오.\n"
-        "- go_back이 화면을 바꾸지 않았다고 전환 검증이 확인한 경우에만 close_current_tab을 사용하십시오.\n"
-        "- 화면 안에 명확한 목록·닫기 버튼이 있으면 해당 마커를 선택할 수 있습니다.\n"
-        "- 검색 결과 화면이 확인되면 executor가 큐의 다음 카드를 선택합니다.\n"
-        f"- 남은 목표/대기 카드 수: {remaining_count}\n\n"
-    )
-
-
 def _compact_job_results_availability_context(
     state: WorkerState,
 ) -> str:
@@ -347,11 +312,6 @@ def build_reasoning_messages(
                 f"- 판정 이유: {latest_transition.get('reason') or '(없음)'}\n"
                 "- 같은 행동을 반복하지 마십시오.\n"
             )
-            if latest_transition.get("action") == "go_back":
-                transition_context += (
-                    "- go_back이 실패했으므로 상세 공고가 별도 탭에 열렸는지 판단하고 "
-                    "맞다면 close_current_tab을 사용하십시오.\n"
-                )
         transition_context += "\n"
     forbidden_action_context = _build_forbidden_action_context(action_history)
     if forbidden_action_context:
@@ -365,7 +325,6 @@ def build_reasoning_messages(
         f"{collection_context}"
         f"{_compact_job_results_availability_context(state)}"
         f"{_compact_job_card_queue_context(state)}"
-        f"{_compact_next_card_navigation_context(state)}"
         f"{compact_job_detail_buffer_context(state, current_url, job_detail_key_from_state(state))}"
         f"{transition_context}"
         f"현재 화면 상태 (UI 마커):\n{ui_context + loop_warning}\n\n"

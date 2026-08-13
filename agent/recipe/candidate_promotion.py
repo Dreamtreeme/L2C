@@ -167,22 +167,47 @@ def _same_screen(left: ScreenCheckpoint, right: ScreenCheckpoint) -> bool:
     )
 
 
-def _retained_path(
-    transitions: list[ExperienceTransition],
-) -> ExperiencePath | None:
-    """남은 전이가 하나의 연속된 성공 경로일 때만 활성 경로로 만든다."""
+def _replay_path(transitions: list[ExperienceTransition]) -> ExperiencePath:
+    """상태 사슬에 다음 행동의 검증 지점을 연결하고 순서를 다시 매긴다."""
 
-    if not transitions:
-        return None
-    for previous, current in zip(transitions, transitions[1:]):
-        if not _same_screen(previous.after, current.before):
-            return None
-    return ExperiencePath(
-        transitions=[
-            transition.model_copy(deep=True, update={"seq": index})
-            for index, transition in enumerate(transitions)
-        ]
-    )
+    replay_transitions = [
+        transition.model_copy(deep=True, update={"seq": index})
+        for index, transition in enumerate(transitions)
+    ]
+    for index, following in enumerate(replay_transitions[1:]):
+        next_action = following.actions[0]
+        if next_action.target is None or not next_action.roi_signature:
+            continue
+        current = replay_transitions[index]
+        replay_transitions[index] = current.model_copy(
+            update={
+                "after": current.after.model_copy(
+                    deep=True,
+                    update={
+                        "anchor_target": next_action.target.model_copy(deep=True),
+                        "anchor_roi_signature": dict(next_action.roi_signature),
+                    },
+                )
+            }
+        )
+    return ExperiencePath(transitions=replay_transitions)
+
+
+def _split_replay_chains(
+    transitions: list[ExperienceTransition],
+) -> list[ExperiencePath]:
+    """앞 행동의 결과와 다음 행동의 시작이 맞는 전이끼리 묶는다."""
+
+    paths: list[ExperiencePath] = []
+    current: list[ExperienceTransition] = []
+    for transition in transitions:
+        if current and not _same_screen(current[-1].after, transition.before):
+            paths.append(_replay_path(current))
+            current = []
+        current.append(transition)
+    if current:
+        paths.append(_replay_path(current))
+    return paths
 
 
 def _candidate_skill_metadata(
@@ -228,17 +253,7 @@ def apply_candidate_promotion(
                 )
             )
 
-    path = _retained_path(retained)
-    paths = [path] if path else []
-    if retained and path is None:
-        disconnected = retained[-1]
-        pruned.append(
-            PrunedTransition(
-                seq=disconnected.seq,
-                actions=[action.action for action in disconnected.actions],
-                reason="path_disconnected_after_pruning",
-            )
-        )
+    paths = _split_replay_chains(retained)
     metadata = _candidate_skill_metadata(candidate, retained)
     saved_count = RecipeStore(db_path).replace_recipe_paths(
         candidate.site,
@@ -250,10 +265,14 @@ def apply_candidate_promotion(
     return CandidatePromotionResult(
         promoted=saved_count > 0,
         saved_count=saved_count,
-        promoted_action_count=(
-            sum(len(transition.actions) for transition in retained) if path else 0
+        promoted_action_count=sum(
+            len(transition.actions)
+            for path in paths
+            for transition in path.transitions
         ),
-        promoted_transition_count=len(retained) if path else 0,
+        promoted_transition_count=sum(
+            len(path.transitions) for path in paths
+        ),
         promoted_path_count=saved_count,
         pruned_transitions=pruned,
     )

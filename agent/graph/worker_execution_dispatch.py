@@ -317,7 +317,7 @@ def _set_job_card_queue(
     state: WorkerState,
     data_services: WorkerDataServices,
 ) -> StateActionOutcome:
-    queue, memory = normalize_job_card_queue(args, state, current_url)
+    queue = normalize_job_card_queue(args, state)
     queue, existing_cards = data_services.mark_existing_job_cards(
         queue,
         current_url,
@@ -358,7 +358,6 @@ def _set_job_card_queue(
         state_update={
             "collection": {
                 "job_card_queue": queue,
-                "job_results_memory": memory,
                 "job_results_availability": availability,
             }
         },

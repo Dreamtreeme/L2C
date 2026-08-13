@@ -356,8 +356,15 @@ def _llm_review_candidate(
                 "A transition with prepares_transition_seq is a successful input that "
                 "prepared the following submit action even though the screen stayed stable; "
                 "keep it when the successful route needs that input. "
-                "Return accept only when the kept groups form one continuous reusable "
-                "route; otherwise return reject."
+                "Judge semantic reuse only. Deterministic code checks screen connectivity "
+                "and separates kept groups into replay chains. Return accept when at least "
+                "one reusable group remains. "
+                "Example 1: parameterized search input followed by search submit should be "
+                "kept, while clicking one job card chosen from current search results should "
+                "be dropped as variable-choice. "
+                "Example 2: when a wrong-menu click and recovery return to the previous "
+                "screen, drop both detour groups and keep the successful actions before and "
+                "after that detour."
             )
         ),
     ]
@@ -486,7 +493,7 @@ def review_and_apply_candidate(
                     "decision": "reject",
                     "reasons": [
                         *review.reasons,
-                        "kept transitions do not form one continuous replay path",
+                        "no replayable transition remained after deterministic filtering",
                     ],
                 }
             )

@@ -48,7 +48,6 @@ tags:
 | `screen_context_signature` | 좌표 없는 행동 직전 화면의 축약 pHash 서명. 해당 단계의 active replay 판단 기준 |
 | `target_snapshot` | 특정 행동 대상의 text, bbox, ratio, label 등 관찰 스냅샷 |
 | `job_card_queue` | 채용 검색 결과에서 수집할 공고 카드 작업 큐 |
-| `job_results_memory` | 공고 카드 큐를 만든 목록의 URL과 `screen_signature`를 보관하는 복귀 검증 상태 |
 | `job_detail_buffer` | 공고 상세 화면에서 누적한 OCR 본문 |
 | `transition_request` | 직전 행동 묶음이 요청한 화면 전환과 저장된 도착 상태 |
 | `transition_result` | 화면 전환 검증의 현재 결과 |

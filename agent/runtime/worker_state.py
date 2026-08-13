@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent.runtime.worker_contracts import ScreenMarker, WorkerState
+from agent.runtime.worker_contracts import ScreenMarker, ScreenSignature, WorkerState
 from agent.runtime.site_context import infer_site_page_role
 
 
@@ -15,6 +15,16 @@ def current_observation_ready(state: WorkerState) -> bool:
         and observation.get("current_screenshot")
         and observation.get("ocr_complete")
     )
+
+
+def current_frame_signature(state: WorkerState) -> ScreenSignature:
+    """OCR 전에는 원본 캡처 서명, 이후에는 완성된 화면 서명을 반환한다."""
+
+    observation = state["observation"]
+    analyzed = observation.get("screen_signature") or {}
+    if analyzed.get("size"):
+        return analyzed.copy()
+    return (observation.get("raw_screen_signature") or {}).copy()
 
 
 def job_capture_count(state: WorkerState) -> int:
@@ -43,6 +53,7 @@ def infer_current_page_role(
 
 __all__ = [
     "count_mode_from_state",
+    "current_frame_signature",
     "current_observation_ready",
     "job_capture_count",
     "infer_current_page_role",
