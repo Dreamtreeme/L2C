@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "evidence_id": "saramin-target-contract-pair-20260814",
+  "site": "saramin",
+  "search_keyword": "AI 엔지니어",
+  "target_count": 1,
+  "measurement": {
+    "base_commit": "260fcfd1b0a2f79605aec6aabc70382668cd1580",
+    "worktree_clean": false,
+    "python": "3.13.14",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "models": [
+      "gemini-3.5-flash-lite",
+      "gemini-3.6-flash"
+    ]
+  },
+  "expected_source_urls": [
+    "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=54532265"
+  ],
+  "runs": [
+    {
+      "run_id": "e2e-20260814224514-d4205571",
+      "scenario_id": "saramin-xenon-ai-autonomous",
+      "execution_mode": "autonomous",
+      "config_fingerprint": "9c78c047d07c",
+      "process_exit_code": 0,
+      "execution_time_sec": 60.631523,
+      "reasoning_count": 5,
+      "ocr_count": 5,
+      "ocr_time_sec": 3.594348,
+      "total_tokens": 36069,
+      "estimated_cost_usd": 0.0159379,
+      "reflex_transition_hit_count": 0,
+      "reflex_path_completed_count": 0,
+      "target_contract": {
+        "expected_count": 1,
+        "actual_count": 1,
+        "matched_count": 1,
+        "passed": true
+      },
+      "quality_passed": true,
+      "mode_contract_passed": true,
+      "e2e_success": 1
+    },
+    {
+      "run_id": "e2e-20260814224628-58eafa59",
+      "scenario_id": "saramin-xenon-ai-experience",
+      "execution_mode": "experience_guided",
+      "config_fingerprint": "930ffdc77171",
+      "process_exit_code": 0,
+      "execution_time_sec": 29.306624,
+      "reasoning_count": 2,
+      "ocr_count": 4,
+      "ocr_time_sec": 2.743084,
+      "total_tokens": 14871,
+      "estimated_cost_usd": 0.0069957,
+      "reflex_transition_hit_count": 2,
+      "reflex_path_completed_count": 1,
+      "target_contract": {
+        "expected_count": 1,
+        "actual_count": 1,
+        "matched_count": 1,
+        "passed": true
+      },
+      "quality_passed": true,
+      "mode_contract_passed": true,
+      "e2e_success": 1
+    }
+  ],
+  "promotion": {
+    "promoted": true,
+    "review_status": "accepted",
+    "review_attempts": 1,
+    "duration_sec": 10.859025,
+    "total_tokens": 6122,
+    "estimated_cost_usd": 0.013377
+  },
+  "comparison": {
+    "comparable_pair_count": 1,
+    "execution_time_saved_sec": 31.324899,
+    "reasoning_calls_saved": 3,
+    "tokens_saved": 21198,
+    "estimated_cost_saved_usd": 0.0089422,
+    "break_even_repeat_count": 1.496
+  },
+  "stored_job": {
+    "company_name": "(주)제논",
+    "position": "[인공지능솔루션] AI Engineer (Agent 개발)",
+    "location": "서울 강남구",
+    "employment_type": "정규직"
+  },
+  "observability": {
+    "ocr_timeout_count": 0,
+    "failed_step_count": 0,
+    "reflex_path_fallback_count": 0,
+    "langsmith_feedback_status": "skipped",
+    "langsmith_feedback_reason": "trace_id_missing"
+  },
+  "source_artifact_directory": "logs/e2e_target_contract_live_20260814",
+  "limitations": [
+    "single paired sample",
+    "measurement worktree was not clean",
+    "LangSmith remote feedback was not published"
+  ]
+}

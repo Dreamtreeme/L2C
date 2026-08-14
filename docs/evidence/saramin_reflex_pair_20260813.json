@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "evidence_id": "saramin-reflex-pair-20260813",
+  "site": "saramin",
+  "search_keyword": "AI 엔지니어",
+  "target_count": 2,
+  "measurement": {
+    "base_commit": "757d9123589249e583adde9653cf201d53be79a6",
+    "changes_committed_as": "260fcfd1b0a2f79605aec6aabc70382668cd1580",
+    "worktree_clean": false,
+    "models": [
+      "gemini-3.5-flash-lite",
+      "gemini-3.6-flash"
+    ]
+  },
+  "expected_source_urls": [
+    "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=54532032",
+    "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=54517809"
+  ],
+  "runs": [
+    {
+      "run_id": "e2e-20260813184358-e10963a4",
+      "scenario_id": "saramin-fixed-ai-autonomous",
+      "execution_mode": "autonomous",
+      "config_fingerprint": "9c78c047d07c",
+      "execution_time_sec": 73.971015,
+      "reasoning_count": 9,
+      "ocr_count": 12,
+      "total_tokens": 72054,
+      "estimated_cost_usd": 0.0307242,
+      "reflex_path_completed_count": 0,
+      "matched_target_count": 2,
+      "target_contract_passed": true
+    },
+    {
+      "run_id": "e2e-20260813184525-233f948b",
+      "scenario_id": "saramin-fixed-ai-experience",
+      "execution_mode": "experience_guided",
+      "config_fingerprint": "930ffdc77171",
+      "execution_time_sec": 64.481605,
+      "reasoning_count": 7,
+      "ocr_count": 10,
+      "total_tokens": 60430,
+      "estimated_cost_usd": 0.0283634,
+      "reflex_path_completed_count": 1,
+      "matched_target_count": 2,
+      "target_contract_passed": true
+    }
+  ],
+  "comparison": {
+    "execution_time_saved_sec": 9.48941,
+    "reasoning_calls_saved": 2,
+    "tokens_saved": 11624,
+    "estimated_cost_saved_usd": 0.0023608,
+    "critic_estimated_cost_usd": 0.0159255,
+    "break_even_repeat_count": 6.746
+  },
+  "verification": {
+    "rechecked_on": "2026-08-14",
+    "url_contract": "host, path and expected query pairs match; no missing or unexpected persisted URL",
+    "source_artifact_directory": "logs/e2e_reflex_direct_retry_20260813"
+  },
+  "limitations": [
+    "single paired sample",
+    "measurement worktree was not clean",
+    "fixed postings can expire or be removed"
+  ]
+}

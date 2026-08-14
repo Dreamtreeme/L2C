@@ -3,7 +3,7 @@ title: "포트폴리오 평가 실행 규격"
 type: reference
 area: evaluation
 status: active
-updated: 2026-07-31
+updated: 2026-08-14
 tags:
   - l2c
   - docs/evaluation
@@ -64,6 +64,10 @@ git status --short
 자동 실행의 `resolved_count`만큼 서로 다른 상세 URL을 판정표에 넣고,
 새로 저장한 모든 URL을 포함해야 사람 판정 범위가 통과한다.
 
+고정 공고를 지정한 행렬은 `expected_source_urls`를 사용한다. 기대 URL의 호스트,
+경로와 쿼리 식별자를 저장 URL과 일대일로 비교한다. 누락된 공고나 기대 목록에
+없는 추가 저장 URL이 있으면 실행 건수를 채웠더라도 해당 실행을 실패로 판정한다.
+
 ## 경험 기반 탐색
 
 ```powershell
@@ -73,7 +77,8 @@ git status --short
 
 대표 3개 사이트에서 자율 탐색과 경험 기반 탐색을 각 3회 실행한다. 같은
 반복 번호에서 두 실행의 품질과 모드 계약이 모두 통과한 경우만 성능을
-짝 비교한다.
+짝 비교한다. `expected_source_urls`가 있는 시나리오는 두 실행 모두 고정 대상
+계약을 통과해야 한다.
 
 matrix summary의 `mode_pair_efficiency`에는 다음 값이 들어간다.
 
