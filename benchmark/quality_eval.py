@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 from pydantic import ValidationError
 
@@ -37,6 +37,76 @@ def _normalized_url(value: Any) -> str:
     return urlunsplit(
         (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", "")
     )
+
+
+def _matches_expected_source_url(expected: str, actual: str) -> bool:
+    """추적용 쿼리가 추가된 실제 URL이 같은 고정 공고인지 확인한다."""
+
+    expected_parts = urlsplit(str(expected or "").strip())
+    actual_parts = urlsplit(str(actual or "").strip())
+    expected_host = (expected_parts.hostname or "").lower().removeprefix("www.")
+    actual_host = (actual_parts.hostname or "").lower().removeprefix("www.")
+    if not expected_host or expected_host != actual_host:
+        return False
+    if expected_parts.path.rstrip("/") != actual_parts.path.rstrip("/"):
+        return False
+    actual_query = parse_qsl(actual_parts.query, keep_blank_values=True)
+    return all(
+        item in actual_query
+        for item in parse_qsl(expected_parts.query, keep_blank_values=True)
+    )
+
+
+def evaluate_expected_source_urls(
+    expected_source_urls: list[str] | tuple[str, ...] | None,
+    persisted_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """고정 대상과 실제 저장 URL이 일대일로 정확히 대응하는지 판정한다."""
+
+    expected_urls = [
+        str(url).strip() for url in expected_source_urls or [] if str(url).strip()
+    ]
+    actual_urls = [
+        str(item.get("url") or "").strip()
+        for item in persisted_items
+        if str(item.get("url") or "").strip()
+    ]
+    if not expected_urls:
+        return {
+            "required": False,
+            "passed": True,
+            "expected_count": 0,
+            "actual_count": len(actual_urls),
+            "matched_count": 0,
+            "missing_urls": [],
+            "unexpected_urls": [],
+        }
+
+    remaining_actual = list(actual_urls)
+    missing_urls: list[str] = []
+    for expected in expected_urls:
+        matched_index = next(
+            (
+                index
+                for index, actual in enumerate(remaining_actual)
+                if _matches_expected_source_url(expected, actual)
+            ),
+            None,
+        )
+        if matched_index is None:
+            missing_urls.append(expected)
+        else:
+            remaining_actual.pop(matched_index)
+
+    return {
+        "required": True,
+        "passed": not missing_urls and not remaining_actual,
+        "expected_count": len(expected_urls),
+        "actual_count": len(actual_urls),
+        "matched_count": len(expected_urls) - len(missing_urls),
+        "missing_urls": missing_urls,
+        "unexpected_urls": remaining_actual,
+    }
 
 
 def normalize_job_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -214,7 +284,11 @@ def evaluate_job_records(
     return result
 
 
-def evaluate_collection_summary(result: Any) -> dict[str, Any]:
+def evaluate_collection_summary(
+    result: Any,
+    *,
+    expected_source_urls: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     from agent.runtime.site_context import (
         looks_like_job_detail_url,
         site_profile_for_url,
@@ -227,6 +301,10 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
     persisted_items = [
         item for item in payload.get("persisted_items", []) if isinstance(item, dict)
     ]
+    target_contract = evaluate_expected_source_urls(
+        expected_source_urls,
+        persisted_items,
+    )
     detail_url_items = persisted_items
     valid_detail_urls = 0
     for item in detail_url_items:
@@ -264,7 +342,13 @@ def evaluate_collection_summary(result: Any) -> dict[str, Any]:
         "source_url_integrity": round(source_url_integrity, 6),
         "accepted": accepted,
         "finished": bool(payload.get("worker_finished")),
-        "passed": bool(accepted and target_met and source_url_integrity == 1.0),
+        "target_contract": target_contract,
+        "passed": bool(
+            accepted
+            and target_met
+            and source_url_integrity == 1.0
+            and target_contract["passed"]
+        ),
     }
 
 

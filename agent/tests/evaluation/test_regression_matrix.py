@@ -4,6 +4,7 @@ from benchmark.run_realtime_e2e import (
     _apply_execution_mode_environment,
     _finalize_experience_guided_preconditions,
 )
+from benchmark.quality_eval import evaluate_expected_source_urls
 from benchmark.run_regression_matrix import (
     _attach_promotion_metrics,
     _clear_jobs_for_collection_run,
@@ -16,7 +17,68 @@ from benchmark.run_regression_matrix import (
     _scenario_environment,
     _scenario_pair_key,
     _scenario_workload_key,
+    _target_contract_passed,
 )
+
+
+def test_expected_target_contract_requires_each_fixed_url_once() -> None:
+    expected_urls = [
+        "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=11",
+        "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=22",
+    ]
+
+    def persisted_items(*rec_indexes: int) -> list[dict[str, str]]:
+        return [
+            {
+                "url": (
+                    "https://www.saramin.co.kr/zf_user/jobs/relay/view"
+                    f"?view_type=search&rec_idx={rec_index}&searchword=AI"
+                )
+            }
+            for rec_index in rec_indexes
+        ]
+
+    matched = evaluate_expected_source_urls(expected_urls, persisted_items(11, 22))
+    duplicated = evaluate_expected_source_urls(expected_urls, persisted_items(11, 11))
+    extra = evaluate_expected_source_urls(
+        expected_urls,
+        persisted_items(11, 22, 33),
+    )
+    duplicate_variant = evaluate_expected_source_urls(
+        expected_urls[:1],
+        [
+            {
+                "url": (
+                    "https://www.saramin.co.kr/zf_user/jobs/relay/view"
+                    f"?rec_idx=11&search_uuid={search_uuid}"
+                )
+            }
+            for search_uuid in ("first", "second")
+        ],
+    )
+
+    assert matched["passed"] is True
+    assert matched["matched_count"] == 2
+    assert duplicated["passed"] is False
+    assert duplicated["matched_count"] == 1
+    assert duplicated["missing_urls"] == [expected_urls[1]]
+    assert duplicated["unexpected_urls"] == [persisted_items(11)[0]["url"]]
+    assert extra["passed"] is False
+    assert extra["unexpected_urls"] == [persisted_items(33)[0]["url"]]
+    assert duplicate_variant["passed"] is False
+    assert duplicate_variant["matched_count"] == 1
+    assert len(duplicate_variant["unexpected_urls"]) == 1
+
+
+def test_target_contract_must_be_explicit() -> None:
+    assert _target_contract_passed({}) is False
+    assert _target_contract_passed({"target_contract": {}}) is False
+    assert (
+        _target_contract_passed(
+            {"target_contract": {"required": False, "passed": True}}
+        )
+        is True
+    )
 
 
 def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
@@ -28,6 +90,10 @@ def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
             "target_count": 2,
             "count_mode": "explicit",
             "execution_mode": "experience_guided",
+            "expected_source_urls": [
+                "https://www.wanted.co.kr/wd/11",
+                "https://www.wanted.co.kr/wd/22",
+            ],
         },
         tmp_path / "run.log",
         tmp_path / "run.summary.json",
@@ -37,6 +103,15 @@ def test_e2e_command_uses_execution_mode_option(tmp_path) -> None:
     assert command[command.index("--search-keyword") + 1] == "iOS 개발자"
     assert "--query" not in command
     assert command[command.index("--execution-mode") + 1] == ("experience_guided")
+    assert [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "--expected-source-url"
+    ] == [
+        "https://www.wanted.co.kr/wd/11",
+        "https://www.wanted.co.kr/wd/22",
+    ]
+    assert command[-1] == str(tmp_path / "run.summary.json")
     assert "--run-mode" not in command
 
 
@@ -238,6 +313,7 @@ def test_mode_pair_efficiency_includes_critic_break_even() -> None:
                     "execution_mode": "autonomous",
                 },
                 "mode_contract_passed": True,
+                "target_contract": {"required": False, "passed": True},
                 "metrics": {
                     "quality_passed": True,
                     "execution_time_sec": 120,
@@ -253,6 +329,7 @@ def test_mode_pair_efficiency_includes_critic_break_even() -> None:
                     "execution_mode": "experience_guided",
                 },
                 "mode_contract_passed": True,
+                "target_contract": {"required": False, "passed": True},
                 "metrics": {
                     "quality_passed": True,
                     "experience_guided_performance_comparable": True,

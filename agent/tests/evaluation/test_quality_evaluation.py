@@ -1,5 +1,6 @@
 import pytest
 
+from benchmark.e2e_observability import build_e2e_observability
 from benchmark.manual_evaluation import RunManualJudgement, evaluate_manual_run
 from benchmark.quality_eval import (
     evaluate_collection_summary,
@@ -159,13 +160,49 @@ def test_collection_quality_requires_resolved_detail_records():
             assert result[field] == value, (summary, field)
 
 
+def test_fixed_target_failure_reaches_e2e_observability():
+    result = {
+        "target_count": 1,
+        "collected_count": 1,
+        "persisted_count": 1,
+        "resolved_count": 1,
+        "status": "completed",
+        "worker_finished": True,
+        "persisted_items": [
+            {
+                "job_id": 1,
+                "url": ("https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=22"),
+            }
+        ],
+    }
+    quality = evaluate_collection_summary(
+        result,
+        expected_source_urls=[
+            "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=11"
+        ],
+    )
+    observability = build_e2e_observability(
+        {
+            "status": "completed",
+            "quality": quality,
+            "result": result,
+            "metrics": {},
+        }
+    )
+
+    assert quality["passed"] is False
+    assert quality["target_contract"]["missing_urls"]
+    assert quality["target_contract"]["unexpected_urls"]
+    assert observability["e2e_success"] == 0
+    assert observability["outcome"] == "partial"
+    assert observability["terminal_failure_code"] == "quality_not_passed"
+
+
 @pytest.mark.parametrize(
     ("summary", "judged_jobs", "automatic", "manual", "outcome"),
     [
         (
-            _collection(
-                items=[{"job_id": 1, "url": "https://example.com/jobs/1"}]
-            ),
+            _collection(items=[{"job_id": 1, "url": "https://example.com/jobs/1"}]),
             [_job_judgement("https://example.com/jobs/1", semantic=False)],
             True,
             False,

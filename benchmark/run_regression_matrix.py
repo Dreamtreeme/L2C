@@ -19,6 +19,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from agent.observability.reflex_paths import summarize_reflex_paths
+from benchmark.quality_eval import evaluate_expected_source_urls
 
 
 def _expand_scenarios(
@@ -171,8 +172,13 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _target_contract_passed(result: dict[str, Any]) -> bool:
+    contract = result.get("target_contract")
+    return isinstance(contract, dict) and contract.get("passed") is True
+
+
 def _command(scenario: dict[str, Any], log_path: Path, summary_path: Path) -> list[str]:
-    return [
+    command = [
         sys.executable,
         str(ROOT_DIR / "benchmark" / "run_realtime_e2e.py"),
         "--site",
@@ -191,11 +197,18 @@ def _command(scenario: dict[str, Any], log_path: Path, summary_path: Path) -> li
         str(scenario["execution_mode"]),
         "--experiment-name",
         "architecture-regression",
-        "--log",
-        str(log_path),
-        "--summary",
-        str(summary_path),
     ]
+    for expected_url in scenario.get("expected_source_urls", []):
+        command.extend(("--expected-source-url", str(expected_url)))
+    command.extend(
+        [
+            "--log",
+            str(log_path),
+            "--summary",
+            str(summary_path),
+        ]
+    )
+    return command
 
 
 def _scenario_environment(
@@ -418,6 +431,8 @@ def _mode_pair_efficiency(
                     experience_metrics.get("quality_passed"),
                     autonomous.get("mode_contract_passed"),
                     experience.get("mode_contract_passed"),
+                    _target_contract_passed(autonomous),
+                    _target_contract_passed(experience),
                     experience_metrics.get("experience_guided_performance_comparable"),
                 )
             )
@@ -608,11 +623,16 @@ def _run_scenario_process(
     )
     summary_path = Path(command[-1])
     payload = _load_process_summary(summary_path, completed.returncode)
-    promotion = _promotion_result(
-        scenario,
-        payload,
-        return_code=completed.returncode,
-        db_path=db_path,
+    target_contract = dict(payload.get("target_contract") or {})
+    promotion = (
+        _promotion_result(
+            scenario,
+            payload,
+            return_code=completed.returncode,
+            db_path=db_path,
+        )
+        if target_contract.get("passed") is True
+        else {}
     )
     metrics = _attach_promotion_metrics(_metric_summary(payload), promotion)
     return {
@@ -621,6 +641,7 @@ def _run_scenario_process(
         "summary_path": str(summary_path),
         "metrics": metrics,
         "promotion": promotion,
+        "target_contract": target_contract,
         "job_reset_count": reset_count,
         "mode_contract_passed": _mode_contract_passed(
             scenario,
@@ -644,6 +665,10 @@ def _skipped_experience_guided_result(
             {},
         ),
         "promotion": {},
+        "target_contract": evaluate_expected_source_urls(
+            scenario.get("expected_source_urls", []),
+            [],
+        ),
         "job_reset_count": 0,
         "mode_contract_passed": False,
         "skipped_reason": "paired_autonomous_promotion_failed",
@@ -655,6 +680,7 @@ def _result_passed(result: dict[str, Any]) -> bool:
         result["process_exit_code"] == 0
         and result["metrics"]["quality_passed"]
         and result["mode_contract_passed"]
+        and _target_contract_passed(result)
     )
 
 
@@ -723,7 +749,7 @@ def main() -> int:
     )
 
     aggregate = {
-        "schema_version": 2,
+        "schema_version": 3,
         "matrix": str(matrix_path),
         "db_path": str(db_path),
         "created_at": datetime.now().astimezone().isoformat(),

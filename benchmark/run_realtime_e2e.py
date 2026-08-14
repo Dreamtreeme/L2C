@@ -208,6 +208,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--experiment-name", default="")
     parser.add_argument("--recipe-version", default="")
+    parser.add_argument("--expected-source-url", action="append", default=[])
     parser.add_argument("--log", required=True)
     parser.add_argument("--summary", default="")
     return parser.parse_args()
@@ -291,7 +292,10 @@ def _execute_collection(
         )
         result = build_collection_result(batch, persistence, experience)
         parsed_result = result.model_dump(mode="json")
-        quality = evaluate_collection_summary(parsed_result)
+        quality = evaluate_collection_summary(
+            parsed_result,
+            expected_source_urls=args.expected_source_url,
+        )
         if result.status == "failed":
             error = result.message or result.error_code
             context.emit(
@@ -390,6 +394,7 @@ def _build_summary(
         "target_count": max(0, args.target_count),
         "count_mode": args.count_mode,
         "original_query": args.original_query or args.search_keyword,
+        "expected_source_urls": list(args.expected_source_url),
         "execution_time_sec": round(float(execution["elapsed"]), 6),
         "git_commit": identity["commit"],
         "git_dirty": identity["git_dirty"],
@@ -402,6 +407,7 @@ def _build_summary(
         "metrics": metrics,
         "events": [event.model_dump(mode="json") for event in events],
         "quality": execution["quality"],
+        "target_contract": dict(execution["quality"]).get("target_contract", {}),
         "experience_guided_preconditions": preconditions,
         "recipe_promotion": promotion,
         "result": execution["result"],
