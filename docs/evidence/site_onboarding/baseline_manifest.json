@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+  "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+  "task_contract": {
+    "development_query": "백엔드 개발자",
+    "target_count": 2,
+    "required_fields": [
+      "company_name",
+      "position",
+      "url",
+      "main_tasks",
+      "requirements"
+    ],
+    "acceptance_queries": [
+      "프론트엔드 개발자",
+      "데이터 엔지니어",
+      "안드로이드 개발자"
+    ],
+    "reserve_queries": [
+      "QA 엔지니어",
+      "DevOps 엔지니어"
+    ],
+    "time_limit_minutes": 90
+  },
+  "foundation": {
+    "started_at": "2026-08-15T23:02:37.130428Z",
+    "finished_at": "2026-08-15T23:22:16.305979Z",
+    "changed_loc": 456,
+    "modified_files": [
+      "classic/automation/browser.py",
+      "classic/automation/capture.py",
+      "classic/automation/collection.py",
+      "classic/automation/sites/__init__.py",
+      "classic/automation/sites/base.py",
+      "classic/extractor/normalization.py",
+      "classic/main.py"
+    ],
+    "acceptance_path": "docs/evidence/site_onboarding/synthetic_classic_acceptance.json",
+    "notes": "첫 제품 파일 생성부터 최종 합성 품질 통과까지 1179.176초를 측정한 하한값이다. 코드 작성 전 설계 시간은 포함하지 않았다. changed_loc는 Classic 제품 코드의 추가·삭제 합계이며 테스트·벤치마크·문서 변경은 제외했다."
+  },
+  "records": []
+}
