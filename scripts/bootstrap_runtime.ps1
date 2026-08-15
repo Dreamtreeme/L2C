@@ -3,7 +3,6 @@ param(
     [switch]$SkipBrowserInstall,
     [switch]$SkipAssetDownload,
     [switch]$NoInstallPython,
-    [switch]$Development,
     [switch]$DryRun
 )
 
@@ -14,6 +13,7 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $MinimumFreeBytes = 12GB
 $MinimumVramMiB = 8192
 $MinimumCuda13DriverMajor = 580
+$MinimumNodeMajor = 22
 $PinnedPythonVersion = '3.13.14'
 $PythonInstallerUrl = "https://www.python.org/ftp/python/$PinnedPythonVersion/python-$PinnedPythonVersion-amd64.exe"
 $PythonInstallerSha256 = 'c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0'
@@ -83,6 +83,25 @@ function Find-NvidiaSmi {
     return ""
 }
 
+function Test-NodeRuntime {
+    $Node = Get-Command node -ErrorAction SilentlyContinue
+    $Npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $Node -or -not $Npm) {
+        throw (
+            "Node.js 22 이상과 npm이 필요합니다. " +
+            "https://nodejs.org/ko/download 에서 LTS 버전을 설치한 뒤 setup.cmd를 다시 실행하세요."
+        )
+    }
+
+    $VersionText = (& $Node.Source --version).Trim().TrimStart('v')
+    $Major = 0
+    [void][int]::TryParse(($VersionText -split '\.')[0], [ref]$Major)
+    if ($LASTEXITCODE -ne 0 -or $Major -lt $MinimumNodeMajor) {
+        throw "Node.js 22 이상이 필요합니다. 현재 버전: $VersionText"
+    }
+    Write-Host "Node.js 점검 완료: v$VersionText"
+}
+
 function Install-Python313 {
     $InstallerPath = Join-Path $env:TEMP "python-$PinnedPythonVersion-amd64.exe"
     try {
@@ -117,6 +136,8 @@ function Install-Python313 {
 if (-not [Environment]::Is64BitOperatingSystem) {
     throw "L2C는 64비트 Windows가 필요합니다."
 }
+
+Test-NodeRuntime
 
 $DriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
 $Drive = [System.IO.DriveInfo]::new($DriveRoot)
@@ -209,10 +230,6 @@ if ($SkipBrowserInstall) {
 if ($SkipAssetDownload) {
     $SetupParameters.SkipAssetDownload = $true
 }
-if ($Development) {
-    $SetupParameters.Development = $true
-}
-
 if ($DryRun) {
     $DisplayPython = $ResolvedPython
     if (-not $DisplayPython) {
@@ -224,9 +241,6 @@ if ($DryRun) {
     }
     if ($SkipAssetDownload) {
         $DisplayArguments += '-SkipAssetDownload'
-    }
-    if ($Development) {
-        $DisplayArguments += '-Development'
     }
     Write-Host "실행 예정: scripts\setup_runtime.ps1 $($DisplayArguments -join ' ')"
     exit 0

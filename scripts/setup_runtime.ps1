@@ -1,8 +1,7 @@
 param(
     [string]$PythonPath = "",
     [switch]$SkipBrowserInstall,
-    [switch]$SkipAssetDownload,
-    [switch]$Development
+    [switch]$SkipAssetDownload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,12 +22,7 @@ function Invoke-CheckedCommand {
 }
 
 if (-not $PythonPath) {
-    $DefaultPython = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python313\python.exe'
-    if (Test-Path -LiteralPath $DefaultPython) {
-        $PythonPath = $DefaultPython
-    } else {
-        $PythonPath = (& py -3.13 -c "import sys; print(sys.executable)").Trim()
-    }
+    throw "setup_runtime.ps1은 setup.cmd가 확인한 Python 경로로만 실행합니다."
 }
 
 if (-not (Test-Path -LiteralPath $PythonPath)) {
@@ -55,12 +49,7 @@ function Install-Environment {
 
 $AppEnvironment = Join-Path $RepoRoot '.venv-app'
 $OcrEnvironment = Join-Path $RepoRoot '.venv-ocr'
-$AppRequirementsName = if ($Development) {
-    'requirements-dev.txt'
-} else {
-    'requirements.txt'
-}
-$AppRequirements = Join-Path $RepoRoot $AppRequirementsName
+$AppRequirements = Join-Path $RepoRoot 'requirements-dev.txt'
 
 Install-Environment $AppEnvironment $AppRequirements
 Install-Environment $OcrEnvironment (Join-Path $RepoRoot 'requirements-ocr.txt')
@@ -70,6 +59,15 @@ $OcrPython = Join-Path $OcrEnvironment 'Scripts\python.exe'
 
 if (-not $SkipBrowserInstall) {
     Invoke-CheckedCommand $AppPython @('-m', 'playwright', 'install', 'chromium')
+}
+
+$FrontendPath = Join-Path $RepoRoot 'frontend'
+Push-Location $FrontendPath
+try {
+    Invoke-CheckedCommand 'npm.cmd' @('ci')
+    Invoke-CheckedCommand 'npm.cmd' @('run', 'build')
+} finally {
+    Pop-Location
 }
 
 $CompatibilityScript = Join-Path $RepoRoot 'scripts\check_runtime_compat.py'
@@ -83,6 +81,5 @@ if (-not $SkipAssetDownload) {
 }
 
 Write-Host "Python $PythonVersion 런타임 구성이 완료됐습니다."
-Write-Host "설치 프로필: $(if ($Development) { 'development' } else { 'runtime' })"
 Write-Host "앱: $AppPython"
 Write-Host "OCR: $OcrPython"

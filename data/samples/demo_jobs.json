@@ -1,0 +1,92 @@
+[
+  {
+    "company_name": "한빛소프트랩",
+    "position": "주니어 AI 에이전트 엔지니어",
+    "url": "https://example.com/l2c-demo/jobs/ai-agent-engineer",
+    "job_category": "AI 엔지니어",
+    "education": "학력 무관",
+    "employment_type": "정규직",
+    "location": "서울 성동구",
+    "posted_at": "2026-08-12",
+    "deadline": "2026-09-12",
+    "tech_stack": ["Python", "LangGraph", "FastAPI", "SQLite"],
+    "main_tasks": [
+      "도구를 사용하는 AI 에이전트 워크플로 개발",
+      "웹에서 수집한 근거를 구조화하고 답변에 연결"
+    ],
+    "requirements": [
+      "Python 애플리케이션 개발 경험",
+      "LLM API와 구조화 출력에 대한 이해"
+    ],
+    "preferred": [
+      "LangGraph 또는 유사한 에이전트 워크플로 경험",
+      "FastAPI와 SQLite 기반 서비스 개발 경험"
+    ],
+    "benefits": ["개발 장비 지원", "주 2회 원격근무"],
+    "source_platform": "demo",
+    "raw_ocr_text": "주니어 AI 에이전트 엔지니어. Python과 LangGraph로 도구 사용 워크플로를 개발하고 웹 수집 근거를 SQLite에 구조화합니다.",
+    "experience_min": 0,
+    "experience_max": 2,
+    "experience_text": "신입 또는 경력 2년 이하"
+  },
+  {
+    "company_name": "모두데이터",
+    "position": "LLM 애플리케이션 개발자",
+    "url": "https://example.com/l2c-demo/jobs/llm-application-developer",
+    "job_category": "AI 엔지니어",
+    "education": "초대졸 이상",
+    "employment_type": "정규직",
+    "location": "경기 성남시",
+    "posted_at": "2026-08-10",
+    "deadline": "2026-09-05",
+    "tech_stack": ["Python", "RAG", "FastAPI", "PostgreSQL"],
+    "main_tasks": [
+      "사내 문서 검색과 근거 기반 답변 서비스 개발",
+      "LLM 평가 데이터와 운영 지표 관리"
+    ],
+    "requirements": [
+      "Python 백엔드 개발 경험",
+      "검색 또는 데이터 처리 프로젝트 경험"
+    ],
+    "preferred": [
+      "RAG 파이프라인 구현 경험",
+      "LLM 평가와 관측 도구 사용 경험"
+    ],
+    "benefits": ["교육비 지원", "유연 출퇴근"],
+    "source_platform": "demo",
+    "raw_ocr_text": "LLM 애플리케이션 개발자. RAG 기반 사내 검색, 근거 답변, 평가 데이터와 운영 지표를 관리합니다.",
+    "experience_min": 1,
+    "experience_max": 3,
+    "experience_text": "경력 1년 이상 3년 이하"
+  },
+  {
+    "company_name": "클라우드웨이브",
+    "position": "머신러닝 플랫폼 엔지니어",
+    "url": "https://example.com/l2c-demo/jobs/ml-platform-engineer",
+    "job_category": "머신러닝 엔지니어",
+    "education": "4년제 학사 이상",
+    "employment_type": "정규직",
+    "location": "서울 강남구",
+    "posted_at": "2026-08-08",
+    "deadline": "2026-08-31",
+    "tech_stack": ["Python", "PyTorch", "Kubernetes", "AWS"],
+    "main_tasks": [
+      "머신러닝 학습과 배포 플랫폼 개발",
+      "GPU 추론 파이프라인 성능 최적화"
+    ],
+    "requirements": [
+      "컴퓨터공학 관련 전공 학사",
+      "PyTorch 모델 학습과 배포 경험"
+    ],
+    "preferred": [
+      "Kubernetes 운영 경험",
+      "AWS 기반 ML 인프라 경험"
+    ],
+    "benefits": ["GPU 서버 지원", "선택적 근로시간제"],
+    "source_platform": "demo",
+    "raw_ocr_text": "머신러닝 플랫폼 엔지니어. PyTorch 모델 학습과 GPU 추론 플랫폼을 개발하며 관련 전공 학사를 요구합니다.",
+    "experience_min": 2,
+    "experience_max": null,
+    "experience_text": "경력 2년 이상"
+  }
+]
