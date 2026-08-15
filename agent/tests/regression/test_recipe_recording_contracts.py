@@ -12,7 +12,7 @@ from agent.tests.worker_test_support import (
     node_runtime,
     worker_state,
 )
-from shared.schema.recipe_schema import ActionTarget, PhysicalAction
+from shared.schema.execution_record_schema import ActionTarget, ObservedAction
 
 
 def _append_recorded_step(steps, state, action_name, args, seq):
@@ -24,7 +24,7 @@ def _append_recorded_step(steps, state, action_name, args, seq):
 def test_roi_record_and_replay_uses_target_crop(tmp_path):
     from PIL import Image, ImageDraw
 
-    from agent.runtime.target_matching import match_local_target, roi_signature_match
+    from agent.runtime.target_matching import match_exact_target, roi_signature_match
 
     saved = tmp_path / "saved.png"
     current = tmp_path / "current.png"
@@ -36,7 +36,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
             draw.rectangle([0, 120, 200, 200], fill="black")
         image.save(path)
 
-    steps: list[PhysicalAction] = []
+    steps: list[ObservedAction] = []
     _append_recorded_step(
         steps,
         worker_state(
@@ -88,7 +88,6 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
             "marker_id": 1,
             "text": "AI 엔지니어",
             "slot_name": "search_keyword",
-            "replay_mode": "fixed",
         },
         1,
     )
@@ -98,7 +97,7 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
         str(current),
         current_signature={"size": [200, 200]},
     )
-    marker_id = match_local_target(
+    marker_id = match_exact_target(
         steps[0].target.model_dump(mode="json") if steps[0].target else None,
         [
             {
@@ -123,8 +122,8 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
         == "home"
     )
     assert steps[0].roi_signature["algorithm"] == "roi-phash-dct64-v2"
-    assert steps[0].replay_mode == "fixed"
-    assert steps[1].replay_mode == "parameterized"
+    assert "replay_mode" not in steps[0].model_dump()
+    assert "replay_mode" not in steps[1].model_dump()
     assert steps[1].slot_refs == ["search_keyword"]
     assert marker_id == 7
     assert trace["matched"] is True
@@ -134,10 +133,9 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
 def test_roi_replay_rejects_step_without_roi_signature():
     from agent.runtime.target_matching import roi_signature_match
 
-    action = PhysicalAction(
+    action = ObservedAction(
         source_seq=0,
         action="click_marker",
-        replay_mode="fixed",
         target=ActionTarget(
             text="검색",
             bbox_ratio=[0.79, 0.08, 0.83, 0.12],
@@ -154,7 +152,7 @@ def test_roi_replay_rejects_step_without_roi_signature():
 
 
 def test_local_target_match_rejects_merged_neighbor_text():
-    from agent.runtime.target_matching import match_local_target
+    from agent.runtime.target_matching import match_exact_target
 
     target = {
         "text": "JOB검색",
@@ -175,10 +173,10 @@ def test_local_target_match_rejects_merged_neighbor_text():
         "type": "text",
     }
 
-    assert match_local_target(target, [merged], [1000, 1000]) is None
-    assert match_local_target(target, [merged, exact], [1000, 1000]) == 2
+    assert match_exact_target(target, [merged], [1000, 1000]) is None
+    assert match_exact_target(target, [merged, exact], [1000, 1000]) == 2
     assert (
-        match_local_target(
+        match_exact_target(
             target,
             [
                 {
@@ -197,7 +195,7 @@ def test_local_target_match_rejects_merged_neighbor_text():
 def test_trajectory_records_context_actions_without_promoting_them():
     from agent.runtime.worker_actions import is_supported_recipe_action_group
 
-    steps: list[PhysicalAction] = []
+    steps: list[ObservedAction] = []
     state = worker_state(
         observation={
             "current_url": "https://www.wanted.co.kr",
@@ -214,25 +212,21 @@ def test_trajectory_records_context_actions_without_promoting_them():
         steps,
         state,
         "press_key",
-        {"key": "enter", "replay_mode": "fixed"},
+        {"key": "enter"},
         2,
     )
     _append_recorded_step(steps, state, "scroll", {"direction": "down"}, 3)
     _append_recorded_step(steps, state, "go_back", {}, 4)
 
     assert [step.action for step in steps] == ["press_key", "scroll", "go_back"]
-    assert [step.replay_mode for step in steps] == [
-        "fixed",
-        "reasoning",
-        "reasoning",
-    ]
+    assert all("replay_mode" not in step.model_dump() for step in steps)
     assert build_screen_checkpoint(state).screen_context_signature["phash"] == "a" * 16
     assert is_supported_recipe_action_group(steps) is False
     assert (
         is_supported_recipe_action_group(
             [
-                PhysicalAction(source_seq=1, action="type_in_marker"),
-                PhysicalAction(
+                ObservedAction(source_seq=1, action="type_in_marker"),
+                ObservedAction(
                     source_seq=2,
                     action="press_key",
                     param={"key": "enter"},
@@ -243,7 +237,7 @@ def test_trajectory_records_context_actions_without_promoting_them():
     )
 
 
-def test_replay_mode_is_derived_from_executed_tool_contract():
+def test_recording_keeps_only_explicit_input_slot():
 
     state = worker_state(
         observation={
@@ -256,33 +250,33 @@ def test_replay_mode_is_derived_from_executed_tool_contract():
             "current_markers": [],
         },
     )
-    steps: list[PhysicalAction] = []
+    steps: list[ObservedAction] = []
 
     _append_recorded_step(
         steps,
         state,
-        "press_key",
-        {"key": "enter"},
+        "type_in_marker",
+        {"text": "AI 엔지니어"},
         1,
     )
     _append_recorded_step(
         steps,
         state,
-        "press_key",
-        {"key": "enter", "replay_mode": "fixed"},
+        "type_in_marker",
+        {"text": "AI 엔지니어", "slot_name": "search_keyword"},
         2,
     )
     _append_recorded_step(
         steps,
         state,
         "press_key",
-        {"key": "escape", "replay_mode": "fixed"},
+        {"key": "enter"},
         3,
     )
 
-    assert steps[0].replay_mode == "fixed"
-    assert steps[1].replay_mode == "fixed"
-    assert steps[2].replay_mode == "reasoning"
+    assert steps[0].slot_refs == []
+    assert steps[1].slot_refs == ["search_keyword"]
+    assert all("replay_mode" not in step.model_dump() for step in steps)
 
 
 def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
@@ -331,15 +325,13 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
         transition={
             "transition_request": {
                 "action": "click_marker",
-                "replay_mode": "reasoning",
                 "action_seq": 3,
                 "before_observation_id": "worker-no-effect:observation:0004",
                 "source": "reflex",
-                "recipe_key": "roi#search",
+                "recipe_key": "experience-rule10#search",
                 "before_url": "https://example.com/jobs",
                 "before_screenshot": str(screenshot),
                 "started_at": time.time(),
-                "contract": {},
             }
         },
     )

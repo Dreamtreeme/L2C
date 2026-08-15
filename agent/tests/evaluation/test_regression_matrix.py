@@ -2,16 +2,17 @@ import sqlite3
 
 from benchmark.run_realtime_e2e import (
     _apply_execution_mode_environment,
-    _finalize_experience_guided_preconditions,
+    _experience_guided_preconditions,
 )
 from benchmark.quality_eval import evaluate_expected_source_urls
 from benchmark.run_regression_matrix import (
     _attach_promotion_metrics,
     _clear_jobs_for_collection_run,
     _command,
+    _expand_scenarios,
     _metric_summary,
     _mode_contract_passed,
-    _mode_pair_efficiency,
+    _experience_reuse_effectiveness,
     _paired_autonomous_failed,
     _promote_autonomous_candidate,
     _scenario_environment,
@@ -168,7 +169,7 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
     experience_metrics = {
         **summary,
         "reflex_path_completed_count": 1,
-        "experience_guided_performance_comparable": True,
+        "experience_guided_replay_ready": True,
     }
     assert _mode_contract_passed(
         {"execution_mode": "experience_guided"},
@@ -182,21 +183,78 @@ def test_metric_summary_prefers_ocr_request_metrics() -> None:
     )
 
 
-def test_experience_guided_comparison_rejects_existing_jobs() -> None:
-    preconditions = {
-        "required": True,
-        "roi_recipes": 2,
-        "performance_comparable": True,
-        "reasons": [],
-    }
-
-    result = _finalize_experience_guided_preconditions(
-        preconditions,
-        {"observed_existing_count": 3},
+def test_collection_success_does_not_require_recipe_promotion() -> None:
+    assert _mode_contract_passed(
+        {
+            "execution_mode": "autonomous",
+            "require_recipe_promotion": False,
+        },
+        {},
+        {},
+    )
+    assert not _mode_contract_passed(
+        {
+            "execution_mode": "autonomous",
+            "require_recipe_promotion": True,
+        },
+        {},
+        {"promoted": False},
+    )
+    assert _mode_contract_passed(
+        {
+            "execution_mode": "autonomous",
+            "require_recipe_promotion": True,
+        },
+        {},
+        {"promoted": True},
     )
 
-    assert result["performance_comparable"] is False
-    assert result["reasons"] == ["existing_jobs_observed"]
+
+def test_repeated_modes_are_expanded_as_same_round_pairs() -> None:
+    scenarios = _expand_scenarios(
+        [
+            {
+                "id": "wanted-autonomous",
+                "execution_mode": "autonomous",
+                "repeat": 2,
+            },
+            {
+                "id": "wanted-experience",
+                "execution_mode": "experience_guided",
+                "repeat": 2,
+            },
+        ]
+    )
+
+    assert [scenario["id"] for scenario in scenarios] == [
+        "wanted-autonomous-r1",
+        "wanted-experience-r1",
+        "wanted-autonomous-r2",
+        "wanted-experience-r2",
+    ]
+
+
+def test_experience_guided_preconditions_use_active_experience_rules(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from agent.recipe.store import ExperienceRuleStore
+
+    monkeypatch.setattr(
+        ExperienceRuleStore,
+        "active_counts",
+        lambda _store, _site: {"experience_rules": 1, "total": 1},
+    )
+
+    result = _experience_guided_preconditions(
+        "experience_guided",
+        "wanted",
+        db_path=tmp_path / "regression.db",
+    )
+
+    assert result["replay_ready"] is True
+    assert result["reasons"] == []
+    assert result["experience_rules"] == 1
 
 
 def test_execution_modes_control_reflex_environment(monkeypatch) -> None:
@@ -297,7 +355,7 @@ def test_promotion_metrics_are_added_to_collection_metrics() -> None:
     assert combined["workflow_estimated_cost"] == 0.013
 
 
-def test_mode_pair_efficiency_includes_critic_break_even() -> None:
+def test_experience_reuse_effectiveness_counts_validated_reasoning_bypass() -> None:
     base = {
         "site": "wanted",
         "search_keyword": "iOS 개발자",
@@ -305,7 +363,7 @@ def test_mode_pair_efficiency_includes_critic_break_even() -> None:
         "count_mode": "explicit",
         "repeat_index": 1,
     }
-    report = _mode_pair_efficiency(
+    report = _experience_reuse_effectiveness(
         [
             {
                 "scenario": {
@@ -332,19 +390,30 @@ def test_mode_pair_efficiency_includes_critic_break_even() -> None:
                 "target_contract": {"required": False, "passed": True},
                 "metrics": {
                     "quality_passed": True,
-                    "experience_guided_performance_comparable": True,
+                    "experience_guided_replay_ready": True,
                     "execution_time_sec": 90,
                     "reasoning_count": 10,
                     "total_tokens": 600,
                     "estimated_cost": 0.014,
+                    "reflex_reasoning_call_reduction": 2,
+                    "reflex_source_reasoning_replaced_count": 3,
+                    "reflex_resolver_reasoning_call_count": 1,
+                    "reflex_path_started_count": 1,
+                    "reflex_path_completed_count": 1,
+                    "reflex_path_failed_count": 0,
+                    "reflex_path_fallback_count": 0,
                 },
             },
         ]
     )
 
-    assert report[0]["median_execution_time_saved_sec"] == 30
-    assert report[0]["median_tokens_saved"] == 400
-    assert report[0]["break_even_repeat_count"] == 1.0
+    assert report[0]["experience_run_count"] == 1
+    assert report[0]["validated_run_count"] == 1
+    assert report[0]["validated_reasoning_call_reduction"] == 2
+    assert report[0]["validated_source_reasoning_replaced_count"] == 3
+    assert report[0]["validated_resolver_reasoning_call_count"] == 1
+    assert report[0]["reflex_path_completion_rate"] == 1.0
+    assert "median_execution_time_saved_sec" not in report[0]
 
 
 def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(

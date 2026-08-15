@@ -7,7 +7,7 @@ from typing import Any
 
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.runtime.worker_contracts import TransitionRequest
-from shared.schema.recipe_schema import ScreenCheckpoint
+from shared.schema.experience_rule_schema import ExpectedEffect
 
 
 def set_transition_request(
@@ -28,15 +28,15 @@ def set_transition_request(
             (state["replay"].get("reflex_trace", {}) or {}).get("recipe_key") or ""
         )
     request_metadata = dict(action_request.metadata or {})
-    before_state = (
-        dict(request_metadata.get("before_state") or {})
-        if isinstance(request_metadata.get("before_state"), dict)
+    before_rule_screen = (
+        dict(request_metadata.get("before_rule_screen") or {})
+        if isinstance(request_metadata.get("before_rule_screen"), dict)
         else {}
     )
-    raw_expected_after_state = request_metadata.get("expected_after_state")
-    expected_after_state = (
-        ScreenCheckpoint.model_validate(raw_expected_after_state)
-        if raw_expected_after_state
+    raw_expected_effect = request_metadata.get("expected_effect")
+    expected_effect = (
+        ExpectedEffect.model_validate(raw_expected_effect)
+        if raw_expected_effect
         else None
     )
     before_observation_id = str(
@@ -68,7 +68,7 @@ def set_transition_request(
         "before_observation_id": before_observation_id,
         "source": source,
         "recipe_key": recipe_key,
-        "expected_after_state": expected_after_state,
+        "expected_effect": expected_effect,
         "expected_after": str(
             args.get("expected_after")
             or (group.get("expected_after") if group else "")
@@ -87,7 +87,7 @@ def set_transition_request(
             )
         ),
         "before_page_role": str(
-            before_state.get("page_role")
+            before_rule_screen.get("page_role")
             or observation.get("current_page_role")
             or ""
         ),
@@ -109,12 +109,24 @@ def set_transition_request(
             or time.time()
         ),
     }
-    transition_index = request_metadata.get("transition_index")
-    if isinstance(transition_index, int):
-        transition_request["recipe_transition_index"] = transition_index
-    transition_count = request_metadata.get("transition_count")
-    if isinstance(transition_count, int):
-        transition_request["recipe_transition_count"] = transition_count
+    step_index = request_metadata.get("step_index")
+    if isinstance(step_index, int):
+        transition_request["recipe_step_index"] = step_index
+    step_count = request_metadata.get("step_count")
+    if isinstance(step_count, int):
+        transition_request["recipe_step_count"] = step_count
+    source_reasoning_call_count = request_metadata.get("source_reasoning_call_count")
+    if isinstance(source_reasoning_call_count, int):
+        transition_request["source_reasoning_call_count"] = (
+            source_reasoning_call_count
+        )
+    resolver_reasoning_call_count = request_metadata.get(
+        "resolver_reasoning_call_count"
+    )
+    if isinstance(resolver_reasoning_call_count, int):
+        transition_request["resolver_reasoning_call_count"] = (
+            resolver_reasoning_call_count
+        )
     state["transition"]["transition_request"] = transition_request
 
 

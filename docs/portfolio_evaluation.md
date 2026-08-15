@@ -75,18 +75,19 @@ git status --short
   --matrix benchmark\portfolio_reflex_matrix.json
 ```
 
-대표 3개 사이트에서 자율 탐색과 경험 기반 탐색을 각 3회 실행한다. 같은
-반복 번호에서 두 실행의 품질과 모드 계약이 모두 통과한 경우만 성능을
-짝 비교한다. `expected_source_urls`가 있는 시나리오는 두 실행 모두 고정 대상
-계약을 통과해야 한다.
+대표 사이트에서 자율탐색으로 후보를 만들고, 이어지는 경험 기반 탐색에서 승격된
+경로가 실제로 재생되는지 확인한다. `expected_source_urls`가 있는 시나리오는 저장
+품질 검증에 사용한다.
 
-matrix summary의 `mode_pair_efficiency`에는 다음 값이 들어간다.
+matrix summary의 `experience_reuse_effectiveness`에는 다음 값이 들어간다.
 
-- 실행시간 절감
-- 화면 추론 호출 절감
-- 토큰과 API 비용 절감
-- Critic 승격 비용
-- 비용 기준 손익분기 반복 횟수
+- 품질까지 통과한 실행의 추론 호출 순감소량
+- 경험 경로 시작·완료·실패 횟수
+- LLM 폴백 횟수
+- 경험 경로 완료율
+
+실행시간, 토큰과 비용은 개별 실행 결과에 남지만 자율탐색과의 차이를 경험 규칙의
+절감량으로 계산하지 않는다.
 
 ## 신규 사이트 적용 공수
 

@@ -1,4 +1,4 @@
-"""검증된 경험 경로를 SQLite에 저장하고 사이트별로 조회한다."""
+"""검증된 경험 규칙을 SQLite에 저장하고 사이트별로 조회한다."""
 
 from __future__ import annotations
 
@@ -10,30 +10,22 @@ from pydantic import BaseModel, ConfigDict
 
 from agent.recipe.sqlite_store import SQLiteStore
 from agent.recipe.task_category import normalize_task_category, task_category_matches
-from agent.runtime.site_context import normalize_page_role
 from agent.utils.text import normalize_text
-from shared.schema.recipe_schema import (
-    ExperiencePath,
-    PhysicalAction,
-    SiteExperience,
-)
+from shared.schema.experience_rule_schema import ExperienceRule
 from shared.schema.skill_schema import RecipeSkillMetadata
 
 
-_RECIPE_KEY_VERSION = 8
-_RECIPE_KEY_PREFIX = "experience8#"
+_RULE_KEY_VERSION = 10
+_RULE_KEY_PREFIX = "experience-rule10#"
 
 
-class StoredExperienceRecord(BaseModel):
-    """SQLite 행을 애플리케이션에서 사용하는 타입으로 변환한 결과."""
+class StoredExperienceRule(BaseModel):
+    """SQLite 행과 실제 재생 통계를 결합한 경험 규칙."""
 
     model_config = ConfigDict(extra="forbid")
 
-    recipe_key: str
-    site: str
-    goal: str
-    path: ExperiencePath
-    skill_metadata: RecipeSkillMetadata
+    rule_key: str
+    rule: ExperienceRule
     support_count: int
     replay_success_count: int
     replay_failure_count: int
@@ -41,133 +33,66 @@ class StoredExperienceRecord(BaseModel):
     updated_at: str
     source_count: int
 
-    def as_site_experience(self) -> SiteExperience:
-        return SiteExperience(
-            site=self.site,
-            goal=self.goal,
-            transitions=self.path.transitions,
-            skill_metadata=self.skill_metadata,
-            support_count=self.support_count,
-            replay_success_count=self.replay_success_count,
-            replay_failure_count=self.replay_failure_count,
-            updated_at=self.updated_at,
+    def active_rule(self) -> ExperienceRule:
+        return self.rule.model_copy(
+            deep=True,
+            update={
+                "support_count": self.support_count,
+                "replay_success_count": self.replay_success_count,
+                "replay_failure_count": self.replay_failure_count,
+                "updated_at": self.updated_at,
+            },
         )
 
     def as_payload(self) -> dict[str, object]:
         return {
-            "recipe_key": self.recipe_key,
-            "site": self.site,
-            "goal": self.goal,
-            **self.path.model_dump(mode="json", exclude_none=True),
-            "skill_metadata": self.skill_metadata.model_dump(mode="json"),
-            "support_count": self.support_count,
-            "replay_success_count": self.replay_success_count,
-            "replay_failure_count": self.replay_failure_count,
+            "rule_key": self.rule_key,
+            **self.active_rule().model_dump(mode="json", exclude_none=True),
             "last_replayed_at": self.last_replayed_at,
-            "updated_at": self.updated_at,
             "source_count": self.source_count,
         }
 
 
-def _persistent_path(path: ExperiencePath) -> ExperiencePath:
-    """실행마다 달라지는 관찰 ID와 실행 근거를 활성 경로에서 제외한다."""
-
-    transitions = [
-        transition.model_copy(
-            deep=True,
-            update={
-                "before": transition.before.model_copy(
-                    deep=True,
-                    update={"observation_id": ""},
-                ),
-                "after": transition.after.model_copy(
-                    deep=True,
-                    update={"observation_id": ""},
-                ),
-                "evidence": None,
-            },
-        )
-        for transition in path.transitions
-    ]
-    return ExperiencePath(transitions=transitions)
+def _persistent_rule(rule: ExperienceRule) -> ExperienceRule:
+    return rule.model_copy(
+        deep=True,
+        update={
+            "support_count": 1,
+            "replay_success_count": 0,
+            "replay_failure_count": 0,
+            "updated_at": "",
+        },
+    )
 
 
-def _action_path_identity(action: PhysicalAction) -> dict[str, object]:
-    """경로 분기를 구분하는 행동의 안정적인 의미 정보를 만든다."""
-
-    target = action.target
-    fixed_param: dict[str, str] = {}
-    if action.replay_mode == "fixed":
-        if action.action == "type_in_marker":
-            fixed_param["text"] = normalize_text(action.param.text)
-        elif action.action == "press_key":
-            fixed_param["key"] = action.param.key
-    return {
-        "action": action.action,
-        "component": action.component,
-        "target_role": action.target_role,
-        "slot_refs": (
-            sorted(action.slot_refs)
-            if action.replay_mode == "parameterized"
-            else []
-        ),
-        "target_region": target.region if target and target.region else "",
-        "target_label": normalize_text(
-            (target.semantic_label or target.text) if target else ""
-        ),
-        "fixed_param": fixed_param,
-    }
-
-
-def _recipe_key_for_path(
-    site: str,
-    path: ExperiencePath,
-    metadata: RecipeSkillMetadata | None = None,
-) -> str:
-    """전체 상태 전이 순서와 의미를 포함한 안정 경로 키를 만든다."""
-
+def _rule_key_for_purpose(site: str, metadata: RecipeSkillMetadata) -> str:
+    normalized_site = normalize_text(site).casefold()
+    task_category = normalize_task_category(metadata.task_category)
+    if not normalized_site or not task_category:
+        raise ValueError("경험 규칙 저장에는 site와 task_category가 필요합니다.")
     payload = {
-        "key_version": _RECIPE_KEY_VERSION,
-        "site": site,
-        "task_category": normalize_task_category(
-            metadata.task_category if metadata else ""
-        ),
-        "path": [
-            {
-                "before_url": transition.before.url_template,
-                "before_role": normalize_page_role(
-                    transition.before.page_role
-                ),
-                "actions": [
-                    _action_path_identity(action)
-                    for action in transition.actions
-                ],
-                "after_url": transition.after.url_template,
-            }
-            for transition in path.transitions
-        ],
+        "key_version": _RULE_KEY_VERSION,
+        "site": normalized_site,
+        "task_category": task_category,
     }
     digest = hashlib.sha1(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16]
-    return f"{_RECIPE_KEY_PREFIX}{digest}"
+    return f"{_RULE_KEY_PREFIX}{digest}"
 
 
-class RecipeStore(SQLiteStore):
+class ExperienceRuleStore(SQLiteStore):
+    """활성 경험 규칙의 단일 저장소."""
+
     def _ensure_schema(self) -> None:
         with self._conn() as conn:
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS recipes (
-                    recipe_key    TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS experience_rules (
+                    rule_key      TEXT PRIMARY KEY,
                     site          TEXT NOT NULL,
                     goal          TEXT,
-                    path_json     TEXT NOT NULL,
-                    metadata_json TEXT,
+                    rule_json     TEXT NOT NULL,
                     support_count INTEGER NOT NULL DEFAULT 0,
                     replay_success_count INTEGER NOT NULL DEFAULT 0,
                     replay_failure_count INTEGER NOT NULL DEFAULT 0,
@@ -178,217 +103,125 @@ class RecipeStore(SQLiteStore):
                 """
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_recipes_site ON recipes(site)"
+                "CREATE INDEX IF NOT EXISTS idx_experience_rules_site "
+                "ON experience_rules(site)"
             )
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS recipe_sources (
-                    recipe_key TEXT NOT NULL,
-                    run_id     TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS experience_rule_sources (
+                    rule_key  TEXT NOT NULL,
+                    run_id    TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    PRIMARY KEY (recipe_key, run_id),
-                    FOREIGN KEY (recipe_key)
-                        REFERENCES recipes(recipe_key) ON DELETE CASCADE
+                    PRIMARY KEY (rule_key, run_id),
+                    FOREIGN KEY (rule_key)
+                        REFERENCES experience_rules(rule_key) ON DELETE CASCADE
                 )
                 """
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_recipe_sources_run "
-                "ON recipe_sources(run_id)"
+                "CREATE INDEX IF NOT EXISTS idx_experience_rule_sources_run "
+                "ON experience_rule_sources(run_id)"
             )
+            conn.execute("DROP TABLE IF EXISTS recipe_sources")
+            conn.execute("DROP TABLE IF EXISTS recipes")
 
-    def _upsert_recipe_path(
+    def save_rule(
         self,
-        site: str,
-        goal: str,
-        path: ExperiencePath,
-        metadata: RecipeSkillMetadata | None = None,
+        rule: ExperienceRule,
+        *,
         source_run_id: str = "",
-    ) -> bool:
-        """같은 의미의 전체 안정 경로를 저장하거나 갱신한다."""
+    ) -> int:
+        """같은 사이트·작업 목적의 규칙을 최신 검증 결과로 저장한다."""
 
-        replay_path = _persistent_path(path)
-        recipe_key = _recipe_key_for_path(site, replay_path, metadata)
-
+        persistent = _persistent_rule(rule)
+        rule_key = _rule_key_for_purpose(rule.site, rule.skill_metadata)
+        payload = persistent.model_dump_json(exclude_none=True)
         now = datetime.now().isoformat(timespec="seconds")
-        path_payload = replay_path.model_dump_json(exclude_none=True)
-        metadata_payload = self.dump_json(
-            metadata.model_dump(mode="json") if metadata else {}
-        )
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT 1 FROM recipes WHERE recipe_key=?", (recipe_key,)
+                "SELECT rule_json FROM experience_rules WHERE rule_key=?",
+                (rule_key,),
             ).fetchone()
             source_exists = bool(
                 source_run_id
                 and conn.execute(
-                    "SELECT 1 FROM recipe_sources "
-                    "WHERE recipe_key=? AND run_id=?",
-                    (recipe_key, source_run_id),
+                    "SELECT 1 FROM experience_rule_sources "
+                    "WHERE rule_key=? AND run_id=?",
+                    (rule_key, source_run_id),
                 ).fetchone()
             )
-            if row:
+            if row and str(row["rule_json"]) == payload:
                 conn.execute(
-                    "UPDATE recipes "
-                    "SET site=?, goal=?, path_json=?, metadata_json=?, "
-                    "support_count=support_count+?, updated_at=? "
-                    "WHERE recipe_key=?",
-                    (
-                        site,
-                        goal,
-                        path_payload,
-                        metadata_payload,
-                        0 if source_exists else 1,
-                        now,
-                        recipe_key,
-                    ),
+                    "UPDATE experience_rules SET goal=?, "
+                    "support_count=support_count+?, updated_at=? WHERE rule_key=?",
+                    (rule.goal, 0 if source_exists else 1, now, rule_key),
                 )
+            elif row:
+                conn.execute(
+                    "DELETE FROM experience_rule_sources WHERE rule_key=?",
+                    (rule_key,),
+                )
+                conn.execute(
+                    "UPDATE experience_rules SET site=?, goal=?, rule_json=?, "
+                    "support_count=1, replay_success_count=0, "
+                    "replay_failure_count=0, last_replayed_at=NULL, updated_at=? "
+                    "WHERE rule_key=?",
+                    (rule.site, rule.goal, payload, now, rule_key),
+                )
+                source_exists = False
             else:
                 conn.execute(
-                    "INSERT INTO recipes "
-                    "(recipe_key, site, goal, path_json, metadata_json, "
-                    "support_count, created_at, updated_at) "
-                    "VALUES (?,?,?,?,?,1,?,?)",
-                    (
-                        recipe_key,
-                        site,
-                        goal,
-                        path_payload,
-                        metadata_payload,
-                        now,
-                        now,
-                    ),
+                    "INSERT INTO experience_rules "
+                    "(rule_key, site, goal, rule_json, support_count, created_at, "
+                    "updated_at) VALUES (?,?,?,?,1,?,?)",
+                    (rule_key, rule.site, rule.goal, payload, now, now),
                 )
             if source_run_id and not source_exists:
                 conn.execute(
-                    "INSERT INTO recipe_sources "
-                    "(recipe_key, run_id, created_at) VALUES (?,?,?)",
-                    (recipe_key, source_run_id, now),
+                    "INSERT INTO experience_rule_sources "
+                    "(rule_key, run_id, created_at) VALUES (?,?,?)",
+                    (rule_key, source_run_id, now),
                 )
-        return True
+        return 1
 
-    def commit_recipe_path(
-        self,
-        site: str,
-        goal: str,
-        path: ExperiencePath,
-        metadata: RecipeSkillMetadata | None = None,
-        source_run_id: str = "",
-    ) -> int:
-        """성공 후보의 상태 전이 경로 하나를 저장한다."""
-
-        return int(
-            self._upsert_recipe_path(
-                site,
-                goal,
-                path,
-                metadata=metadata,
-                source_run_id=source_run_id,
-            )
-        )
-
-    def _detach_run_paths(self, run_id: str) -> None:
-        """후보 근거를 떼고 다른 근거가 없는 경로만 제거한다."""
+    def clear_rules(self, site: str | None = None) -> int:
+        """활성 경험 규칙만 비우고 자율탐색 후보는 보존한다."""
 
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT recipe_key FROM recipe_sources WHERE run_id=?",
-                (run_id,),
-            ).fetchall()
-            previous_keys = [
-                str(row["recipe_key"]) for row in rows if str(row["recipe_key"])
-            ]
-            conn.execute("DELETE FROM recipe_sources WHERE run_id=?", (run_id,))
-            if not previous_keys:
-                return
-            placeholders = ",".join("?" for _ in previous_keys)
-            conn.execute(
-                "UPDATE recipes "
-                "SET support_count=MAX(0, support_count-1) "
-                f"WHERE recipe_key IN ({placeholders})",
-                previous_keys,
+            result = (
+                conn.execute("DELETE FROM experience_rules WHERE site=?", (site,))
+                if site
+                else conn.execute("DELETE FROM experience_rules")
             )
-            conn.execute(
-                "DELETE FROM recipes "
-                f"WHERE recipe_key IN ({placeholders}) "
-                "AND support_count<=0 "
-                "AND NOT EXISTS ("
-                "SELECT 1 FROM recipe_sources "
-                "WHERE recipe_sources.recipe_key=recipes.recipe_key"
-                ")",
-                previous_keys,
-            )
-
-    def clear_recipes(self, site: str | None = None) -> int:
-        """활성 경험 경로만 비우고 후보 증거는 보존한다."""
-
-        with self._conn() as conn:
-            if site:
-                result = conn.execute("DELETE FROM recipes WHERE site=?", (site,))
-            else:
-                result = conn.execute("DELETE FROM recipes")
             return int(result.rowcount or 0)
 
-    def replace_recipe_paths(
-        self,
-        site: str,
-        goal: str,
-        recipe_paths: list[ExperiencePath],
-        metadata: RecipeSkillMetadata | None = None,
-        source_run_id: str = "",
-    ) -> int:
-        """한 후보가 소유한 기존 경로만 지우고 새 안정 경로로 교체한다."""
-
-        if source_run_id:
-            self._detach_run_paths(source_run_id)
-        return sum(
-            self.commit_recipe_path(
-                site,
-                goal,
-                path,
-                metadata=metadata,
-                source_run_id=source_run_id,
-            )
-            for path in recipe_paths
-        )
-
-    def record_replay_result(self, recipe_key: str, succeeded: bool) -> bool:
-        """경험 기반 경로 전체의 실제 재생 결과를 누적한다."""
-
+    def record_replay_result(self, rule_key: str, succeeded: bool) -> bool:
         column = "replay_success_count" if succeeded else "replay_failure_count"
         now = datetime.now().isoformat(timespec="seconds")
         with self._conn() as conn:
             result = conn.execute(
-                f"UPDATE recipes SET {column}={column}+1, "
-                "last_replayed_at=?, updated_at=? WHERE recipe_key=?",
-                (now, now, recipe_key),
+                f"UPDATE experience_rules SET {column}={column}+1, "
+                "last_replayed_at=?, updated_at=? WHERE rule_key=?",
+                (now, now, rule_key),
             )
         return bool(result.rowcount)
 
-    def _site_records(self, site: str) -> list[StoredExperienceRecord]:
+    def _site_records(self, site: str) -> list[StoredExperienceRule]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT recipe_key, site, goal, path_json, metadata_json, "
-                "support_count, replay_success_count, replay_failure_count, "
-                "last_replayed_at, updated_at, "
-                "(SELECT COUNT(*) FROM recipe_sources "
-                "WHERE recipe_sources.recipe_key=recipes.recipe_key) "
-                "AS source_count FROM recipes "
-                "WHERE site=? AND recipe_key LIKE ? "
-                "ORDER BY replay_success_count DESC, "
-                "replay_failure_count ASC, support_count DESC, "
-                "updated_at DESC, recipe_key ASC",
-                (site, f"{_RECIPE_KEY_PREFIX}%"),
+                "SELECT rule_key, rule_json, support_count, "
+                "replay_success_count, replay_failure_count, last_replayed_at, "
+                "updated_at, (SELECT COUNT(*) FROM experience_rule_sources "
+                "WHERE experience_rule_sources.rule_key=experience_rules.rule_key) "
+                "AS source_count FROM experience_rules WHERE site=? "
+                "ORDER BY replay_success_count DESC, replay_failure_count ASC, "
+                "support_count DESC, updated_at DESC, rule_key ASC",
+                (site,),
             ).fetchall()
         return [
-            StoredExperienceRecord(
-                recipe_key=str(row["recipe_key"]),
-                site=str(row["site"]),
-                goal=str(row["goal"] or ""),
-                path=ExperiencePath.model_validate_json(row["path_json"]),
-                skill_metadata=RecipeSkillMetadata.model_validate_json(
-                    row["metadata_json"] or "{}"
-                ),
+            StoredExperienceRule(
+                rule_key=str(row["rule_key"]),
+                rule=ExperienceRule.model_validate_json(row["rule_json"]),
                 support_count=int(row["support_count"] or 0),
                 replay_success_count=int(row["replay_success_count"] or 0),
                 replay_failure_count=int(row["replay_failure_count"] or 0),
@@ -403,38 +236,33 @@ class RecipeStore(SQLiteStore):
         return [record.as_payload() for record in self._site_records(site)]
 
     def active_counts(self, site: str | None = None) -> dict[str, int]:
-        """E2E 사전조건 검사용 활성 자동화 데이터 개수를 반환한다."""
-
-        where = " WHERE recipe_key LIKE ?"
-        params: tuple[str, ...] = (f"{_RECIPE_KEY_PREFIX}%",)
-        if site:
-            where += " AND site=?"
-            params += (site,)
+        where = " WHERE site=?" if site else ""
+        params = (site,) if site else ()
         with self._conn() as conn:
-            recipe_count = int(
+            count = int(
                 conn.execute(
-                    f"SELECT COUNT(*) FROM recipes{where}",
+                    f"SELECT COUNT(*) FROM experience_rules{where}",
                     params,
                 ).fetchone()[0]
             )
-        return {"roi_recipes": recipe_count, "total": recipe_count}
+        return {"experience_rules": count, "total": count}
 
-    def get_site_recipes(
+    def get_site_rules(
         self,
         site: str,
         *,
         task_category: str | None = None,
-    ) -> list[tuple[str, SiteExperience]]:
-        """같은 사이트의 활성 경험을 실제 재생 결과 순으로 반환한다."""
+    ) -> list[tuple[str, ExperienceRule]]:
+        """같은 사이트의 활성 규칙을 실제 재생 결과 순으로 반환한다."""
 
         return [
-            (record.recipe_key, record.as_site_experience())
+            (record.rule_key, record.active_rule())
             for record in self._site_records(site)
             if task_category_matches(
                 task_category,
-                record.skill_metadata.task_category,
+                record.rule.skill_metadata.task_category,
             )
         ]
 
 
-__all__ = ["RecipeStore", "StoredExperienceRecord"]
+__all__ = ["ExperienceRuleStore", "StoredExperienceRule"]

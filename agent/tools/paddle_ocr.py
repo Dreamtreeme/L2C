@@ -70,6 +70,8 @@ class PaddleOcr:
 
     def _worker_env(self) -> dict[str, str]:
         env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
         settings = get_settings().ocr
         env["PADDLE_PDX_CACHE_HOME"] = str(self.cache_dir)
         env["PADDLE_PDX_MODEL_SOURCE"] = settings.model_source

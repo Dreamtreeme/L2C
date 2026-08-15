@@ -42,6 +42,19 @@ def marker_by_id(
     )
 
 
+def is_icon_marker(marker: Mapping[str, Any]) -> bool:
+    """마커가 텍스트 입력 대상이 아닌 아이콘 검출 결과인지 판정한다."""
+
+    text = str(marker.get("text") or "")
+    marker_type = str(marker.get("type") or "").strip().lower()
+    return (
+        marker_type == "icon"
+        or text == "icon"
+        or text.startswith("상호작용 가능한 요소 (")
+        or text == "상호작용 가능한 요소"
+    )
+
+
 def build_marker_target_snapshot(
     markers: list[dict[str, Any]],
     marker_id: Any,
@@ -120,5 +133,6 @@ __all__ = [
     "TARGET_MARKER_ACTIONS",
     "build_action_target_snapshot",
     "build_marker_target_snapshot",
+    "is_icon_marker",
     "marker_by_id",
 ]

@@ -7,9 +7,9 @@ from typing import Any, Dict, List, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.schema.collection_intent import CollectionIntent
-from shared.schema.recipe_schema import (
-    ExperienceTransition,
-    PhysicalAction,
+from shared.schema.execution_record_schema import (
+    ObservedAction,
+    ObservedTransition,
     ScreenCheckpoint,
 )
 
@@ -22,12 +22,12 @@ class ExecutionEvent(BaseModel):
     seq: int
     observation_id: str = ""
     result: Dict[str, Any] = Field(default_factory=dict)
-    candidate_action: PhysicalAction | None = None
+    candidate_action: ObservedAction | None = None
     before_checkpoint: ScreenCheckpoint | None = None
     before_marker_texts: List[str] = Field(default_factory=list)
     expected_after: str = ""
     intent: str = ""
-    transition: ExperienceTransition | None = None
+    transition: ObservedTransition | None = None
 
 
 class WorkerSubmission(BaseModel):
@@ -46,11 +46,11 @@ class WorkerSubmission(BaseModel):
     extracted_summary: Dict[str, Any] = Field(default_factory=dict)
 
     @property
-    def transitions(self) -> List[ExperienceTransition]:
+    def transitions(self) -> List[ObservedTransition]:
         return [event.transition for event in self.action_events if event.transition]
 
     @property
-    def actions(self) -> List[PhysicalAction]:
+    def actions(self) -> List[ObservedAction]:
         return [
             action
             for transition in self.transitions
@@ -116,18 +116,18 @@ class RecipeCandidate(BaseModel):
         return self.collection_intent.search_keyword
 
     @property
-    def transitions(self) -> List[ExperienceTransition]:
+    def transitions(self) -> List[ObservedTransition]:
         return [event.transition for event in self.action_events if event.transition]
 
     @property
-    def steps(self) -> List[PhysicalAction]:
+    def steps(self) -> List[ObservedAction]:
         return [
             action
             for transition in self.transitions
             for action in transition.actions
         ]
 
-    def transition_for_action(self, source_seq: int) -> ExperienceTransition | None:
+    def transition_for_action(self, source_seq: int) -> ObservedTransition | None:
         for transition in self.transitions:
             if any(action.source_seq == source_seq for action in transition.actions):
                 return transition

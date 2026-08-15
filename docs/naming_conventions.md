@@ -41,7 +41,7 @@ tags:
 | `replay_session` | 선택한 경로 키, 현재 전이 번호, 검증 대기 전이 번호와 전체 전이 수를 보관하는 작업 상태 |
 | `task_category` | 검색, 로그인, 결제, 사이트 탐색 같은 작업 카테고리 |
 | `page_role` | home, search, job_detail, popup처럼 행동 당시 화면을 설명하는 관측 메타데이터 |
-| `recipe_key` | active recipe row의 DB 식별자. `site`, `task_category`와 전체 단계의 순서·의미로 계산 |
+| `recipe_key` | active recipe row의 DB 식별자. 같은 목적을 한 행으로 유지하도록 `site`, `task_category`로 계산 |
 | `recipe_params` | 반복 실행 시 주입되는 런타임 입력값 |
 | `screen_signature` | 현재 전체 화면 관찰 서명. 기본 replay 판단용 이름으로 쓰지 않는다 |
 | `roi_signature` | 타깃 주변 crop의 pHash 서명. active replay 판단의 기준 |
@@ -180,6 +180,12 @@ screen_checkpoint + physical_action
 -> reflex_replay
 ```
 
+경험 재생의 추론 지표는 다음 의미로 고정한다.
+
+- `reflex_source_reasoning_replaced_count`: 성공한 재생 단계가 대체한 자율탐색 판단 수
+- `reflex_resolver_reasoning_call_count`: 경험 규칙을 현재 화면에 적용하기 위해 실제 호출한 의미 해석기 수
+- `reflex_reasoning_call_reduction`: 앞의 두 값의 차이. 음수는 재생이 추론 호출을 늘렸다는 뜻이다.
+
 ## 테스트 이름
 
 테스트 함수는 `test_<대상>_<조건>_<기대결과>` 형태로 쓴다.
@@ -199,7 +205,7 @@ def test_candidate_promotion_skips_non_target_action():
 1. [완료] `target_snapshot` 생성 로직을 `agent/vision/target_snapshot.py`로 공통화한다.
 2. [완료] `nodes.py`를 책임별 `worker_*` 모듈로 분리하고 원본 파일을 삭제한다.
 3. [완료] `application/recipe_candidate_review_service.py`에서 결정론적 promotion 로직을 `recipe/candidate_promotion.py`로 분리한다.
-4. [완료] `RecipeStore` 조회를 `recipe_key + site + task_category + URL 범위 + 단계별 화면 서명` 기준으로 정리한다.
+4. [완료] `RecipeStore` 조회를 목적 기반 `recipe_key + site + task_category`로 좁히고, 실행 시 URL 범위와 단계별 화면 서명을 검증한다.
 5. [완료] `investigation_workflow.py`를 조립부와 요청·근거·수집·답변 노드로 분리한다.
 6. [완료] 모델 변환과 좌표 계산을 `utils/model_conversion.py`, `vision/marker_geometry.py`, `vision/target_snapshot.py`로 통합한다.
 7. [완료] 수집 요청, 작업자 실행과 제출물 처리를 애플리케이션 서비스로 분리한다.

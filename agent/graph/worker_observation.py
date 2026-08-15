@@ -12,7 +12,6 @@ from agent.runtime.detail_runtime import (
     build_detail_lightweight_marked_image,
     build_detail_section_context,
     detail_context_matches,
-    is_icon_marker,
     marker_prompt_rank,
     update_job_detail_buffer,
 )
@@ -39,6 +38,7 @@ from agent.vision.screen_signature import (
     compute_screen_phash_signature,
     compute_screen_signature,
 )
+from agent.vision.target_snapshot import is_icon_marker
 
 def _build_ui_context(
     markers: list[ScreenMarker],
@@ -288,13 +288,6 @@ def _collect_job_detail_observation(
         page_role=str(observation.get("current_page_role") or ""),
         detail_key=detail_key,
     )
-    detail_followup = dict(collection.get("job_detail_followup", {}) or {})
-    if detail_followup and not detail_context_matches(
-        detail_followup,
-        current_url,
-        detail_key,
-    ):
-        detail_followup = {}
     detail_coverage = dict(collection.get("job_detail_coverage", {}) or {})
     if detail_context_matches(
         detail_buffer, current_url, detail_key
@@ -314,7 +307,6 @@ def _collect_job_detail_observation(
         "collection": {
             "job_detail_buffer": detail_buffer,
             "job_detail_coverage": detail_coverage,
-            "job_detail_followup": detail_followup,
         }
     }
 

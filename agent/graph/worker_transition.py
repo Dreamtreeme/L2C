@@ -16,9 +16,6 @@ from agent.recipe.replay_runtime import (
 from agent.runtime.site_context import (
     is_job_detail_context,
 )
-from agent.runtime.job_card_queue import (
-    release_active_job_card,
-)
 from agent.runtime.worker_contracts import (
     ObservationPatch,
     RecipeReplayPatch,
@@ -39,7 +36,7 @@ from agent.runtime.transition_runtime import (
     transition_result_without_request,
 )
 from agent.utils.logger import logger
-from shared.schema.recipe_schema import TransitionStatus
+from shared.schema.execution_record_schema import TransitionStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,46 +49,8 @@ class TransitionDecision:
     needs_ocr: bool = False
     records_outcome: bool = True
     block_recipe: bool = False
-    release_queue: bool = False
     reuse_previous_ocr: bool = False
     reset_no_effect: bool = False
-
-
-def _reflex_before_ocr_decision(
-    state: WorkerState,
-    request: TransitionRequest,
-) -> TransitionDecision | None:
-    """연속 경로의 다음 ROI 또는 마지막 URL을 원본 캡처로 확인한다."""
-
-    if str(request.get("source") or "") != "reflex":
-        return None
-    transition_index = request.get("recipe_transition_index")
-    transition_count = request.get("recipe_transition_count")
-    if not isinstance(transition_index, int) or not isinstance(transition_count, int):
-        return None
-    has_following = transition_index + 1 < transition_count
-    expected = request.get("expected_after_state")
-    if expected is None or (has_following and not expected.has_anchor()):
-        return None
-
-    matched, reason, after_state_match = verify_replay_after_state(request, state)
-    accepted_reason = (
-        "recipe_after_anchor_matched"
-        if has_following
-        else "recipe_after_url_matched"
-    )
-    if not matched or reason != accepted_reason:
-        return None
-
-    evaluated_request = request.copy()
-    evaluated_request["after_state_match"] = after_state_match
-    return TransitionDecision(
-        request=evaluated_request,
-        status="ready",
-        reason=reason,
-        needs_ocr=not has_following,
-        reset_no_effect=True,
-    )
 
 
 def _decide_before_ocr(
@@ -100,11 +59,19 @@ def _decide_before_ocr(
     *,
     visual_changed: bool,
 ) -> TransitionDecision:
-    reflex_decision = _reflex_before_ocr_decision(state, request)
-    if reflex_decision is not None:
-        return reflex_decision
     source = str(request.get("source") or "")
     action = str(request.get("action") or "")
+    if source == "reflex":
+        matched, _reason, _trace = verify_replay_after_state(request, state)
+        if matched:
+            return TransitionDecision(
+                request=request,
+                status="needs_ocr",
+                reason="rule_effect_ocr_required",
+                needs_ocr=True,
+                records_outcome=False,
+                reset_no_effect=True,
+            )
     if visual_changed or action == "type_in_marker":
         return TransitionDecision(
             request=request,
@@ -121,7 +88,6 @@ def _decide_before_ocr(
             "reflex_no_screen_change" if source == "reflex" else "no_screen_change"
         ),
         block_recipe=source == "reflex",
-        release_queue=source == "job_card_queue",
         reuse_previous_ocr=True,
     )
 
@@ -180,7 +146,6 @@ def _decide_after_ocr(
         status=status,
         reason=reason,
         block_recipe=block_recipe,
-        release_queue=source == "job_card_queue" and status != "ready",
     )
 
 
@@ -204,14 +169,7 @@ def _pending_transition_update(
     }
     if decision.reset_no_effect:
         transition["no_effect_count"] = 0
-    update: WorkerStateUpdate = {"transition": transition}
-    if decision.release_queue:
-        update["collection"] = {
-            "job_card_queue": release_active_job_card(
-                list(state["collection"].get("job_card_queue", []) or [])
-            )
-        }
-    return update
+    return WorkerStateUpdate(transition=transition)
 
 
 def _completed_transition_update(
@@ -297,12 +255,6 @@ def _completed_transition_update(
     }
     if observation:
         update["observation"] = observation
-    if decision.release_queue:
-        update["collection"] = {
-            "job_card_queue": release_active_job_card(
-                list(state["collection"].get("job_card_queue", []) or [])
-            )
-        }
     return update
 
 

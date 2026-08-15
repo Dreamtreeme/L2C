@@ -75,6 +75,18 @@ def test_paddle_ocr_rejects_missing_worker_environment(monkeypatch, tmp_path):
         raise AssertionError("OCR Python이 없으면 작업자 실행 전에 실패해야 합니다.")
 
 
+def test_paddle_worker_does_not_inherit_parent_python_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYTHONPATH", "app-site-packages")
+    monkeypatch.setenv("PYTHONHOME", "app-python-home")
+    get_settings.cache_clear()
+    paddle = PaddleOcr(root_dir=tmp_path)
+
+    worker_env = paddle._worker_env()
+
+    assert "PYTHONPATH" not in worker_env
+    assert "PYTHONHOME" not in worker_env
+
+
 def test_ocr_engine_combines_paddle_and_omni_results(tmp_path):
     image_path = tmp_path / "screen.jpg"
     Image.new("RGB", (800, 900), "white").save(image_path)

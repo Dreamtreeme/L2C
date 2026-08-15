@@ -16,7 +16,8 @@ class _DetailObservation(BaseModel):
     observed_fields: Dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "현재 상세 화면에서 실제로 확인한 공고 필드와 짧은 화면 근거. "
+            "현재 상세 화면에서 실제로 확인한 공고 필드와 실제 화면 내용. "
+            "섹션 제목이나 '확인됨' 같은 상태 표현은 근거가 아니다. "
             "상세 화면에서만 채우며 추측한 값은 넣지 않는다. 허용 키: "
             + ", ".join(JOB_FIELDS)
         ),
@@ -203,7 +204,10 @@ class finish_detail_reading(_DetailObservation):
     )
     page_exhausted: bool = Field(
         False,
-        description="더 펼칠 본문이나 아래쪽 공고 내용이 없음을 화면에서 확인했는지 여부",
+        description=(
+            "더 펼칠 본문이나 현재 화면 아래쪽에 남은 공고 내용이 없음을 "
+            "확인했는지 여부. 화면 하단에 섹션 제목만 보이면 false"
+        ),
     )
     expected_after: Optional[str] = Field(None, description="정제 후 정상이라면 다음에 기대되는 상태(expected_after)")
     page_role: Optional[str] = Field("job_detail", description="Current page role.")
@@ -328,7 +332,7 @@ def model_action_tool_schema(name: str) -> dict[str, Any]:
 def normalize_model_action_calls(
     raw_calls: List[dict[str, Any]],
 ) -> List[dict[str, Any]]:
-    """모델 전용 인자명을 내부 실행 계약의 인자명으로 되돌린다."""
+    """모델 출력을 실행 가능한 내부 행동 묶음으로 정규화한다."""
 
     calls = deepcopy(raw_calls)
     for call in calls:
@@ -337,6 +341,27 @@ def normalize_model_action_calls(
         args = call.get("args")
         if isinstance(args, dict) and "scroll_distance" in args:
             args["amount"] = args.pop("scroll_distance")
+    if len(calls) == 1:
+        input_call = calls[0]
+        input_args = input_call.get("args")
+        if (
+            input_call.get("name") == "type_in_marker"
+            and isinstance(input_args, dict)
+            and input_args.get("slot_name") == "search_keyword"
+        ):
+            calls.append(
+                {
+                    "name": "press_key",
+                    "args": {
+                        "key": "enter",
+                        "reason": "입력한 검색어를 제출합니다.",
+                        "expected_after": "검색 결과 화면이 보입니다.",
+                        "page_role": input_args.get("page_role"),
+                        "risk_level": "safe_navigation",
+                    },
+                    "id": f"{input_call.get('id') or 'search_input'}_submit",
+                }
+            )
     return calls
 
 

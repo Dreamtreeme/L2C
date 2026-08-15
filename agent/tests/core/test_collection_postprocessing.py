@@ -96,13 +96,6 @@ def test_extract_job_from_capture_uses_screen_evidence_and_preserves_source(
             "main_tasks",
             "requirements",
         ],
-        "field_evidence": {
-            "company_name": "예시회사",
-            "position": "AI 엔지니어",
-            "url": capture.url,
-            "main_tasks": "모델 운영",
-            "requirements": "Python",
-        },
         "unavailable_fields": [],
         "ocr_text": capture.raw_ocr_text,
     }
@@ -160,7 +153,7 @@ def test_postprocessing_applies_requested_date_range(monkeypatch):
     assert "posted_at_before_range" in result.rejected_items[0]["issues"][0]
 
 
-def test_postprocessing_preserves_visible_required_field_evidence(monkeypatch):
+def test_postprocessing_rejects_fields_missing_from_final_ocr_extraction(monkeypatch):
     monkeypatch.setattr(
         service,
         "extract_job_from_capture",
@@ -189,15 +182,6 @@ def test_postprocessing_preserves_visible_required_field_evidence(monkeypatch):
             )
         }
     )
-    result = service.postprocess_collection_batch(_batch(capture))
-
-    assert result.rejected_items == []
-    assert result.collected_jobs[0].posting.main_tasks == ["모델 운영"]
-    assert (
-        result.collected_jobs[0].posting.employment_type
-        == "정규직 수습기간 3개월"
-    )
-
     missing_evidence = capture.model_copy(
         update={
             "evidence": capture.evidence.model_copy(
@@ -214,7 +198,7 @@ def test_postprocessing_preserves_visible_required_field_evidence(monkeypatch):
     rejected = service.postprocess_collection_batch(_batch(missing_evidence))
 
     assert rejected.collected_jobs == []
-    assert "required_field_extraction_incomplete:main_tasks" in (
+    assert "required_field_extraction_incomplete:main_tasks,employment_type" in (
         rejected.rejected_items[0]["issues"][0]
     )
 

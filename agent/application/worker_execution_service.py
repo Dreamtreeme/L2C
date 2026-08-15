@@ -17,6 +17,7 @@ from agent.application.duplicate_job_service import (
     existing_job_url_trace,
     mark_existing_job_cards,
 )
+from agent.application.experience_rule_resolver import resolve_rule_targets
 from agent.application.collection_request_builder import build_site_goal
 from agent.config import get_settings
 from agent.observability.graph_events import forward_graph_event
@@ -42,7 +43,7 @@ from agent.runtime.worker_contracts import (
     create_worker_state,
 )
 from agent.runtime.worker_data_services import WorkerDataServices
-from agent.recipe.store import RecipeStore
+from agent.recipe.store import ExperienceRuleStore
 from agent.recipe.task_category import normalize_task_category
 from agent.sites import get_official_site_url, load_site_profile
 from agent.sites.profile import SiteProfile
@@ -64,12 +65,12 @@ class WorkerStartScreenError(RuntimeError):
 def build_worker_data_services(db_path: str | Path) -> WorkerDataServices:
     """작업자 그래프의 데이터 포트를 애플리케이션 구현에 연결한다."""
 
-    recipe_store = RecipeStore(db_path)
+    rule_store = ExperienceRuleStore(db_path)
     return WorkerDataServices(
         mark_existing_job_cards=partial(mark_existing_job_cards, db_path=db_path),
         find_existing_job_url=partial(existing_job_url_trace, db_path=db_path),
-        load_site_recipes=recipe_store.get_site_recipes,
-        record_recipe_replay=recipe_store.record_replay_result,
+        load_experience_rules=rule_store.get_site_rules,
+        record_recipe_replay=rule_store.record_replay_result,
     )
 
 
@@ -314,6 +315,7 @@ def run_graph_with_last_state(
             context=WorkerDependencies(
                 vision=worker_runtime,
                 data=data_services,
+                resolve_experience_rule=resolve_rule_targets,
             ),
             stream_mode=["values", "custom"],
         ):

@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from shared.schema.recipe_schema import (
+from shared.schema.execution_record_schema import (
+    COMMIT_ACTIONS,
     NAVIGATION_ACTIONS,
-    RECIPE_COMMIT_ACTIONS,
-    REVIEWABLE_REPLAY_ACTIONS,
-    TARGET_REPLAY_ACTIONS,
+    REVIEWABLE_ACTIONS,
+    TARGET_ACTIONS,
     TRAJECTORY_ACTIONS,
     UI_ACTIONS,
-    PhysicalAction,
+    ObservedAction,
 )
+
+RECIPE_COMMIT_ACTIONS = COMMIT_ACTIONS
+REVIEWABLE_REPLAY_ACTIONS = REVIEWABLE_ACTIONS
+TARGET_REPLAY_ACTIONS = TARGET_ACTIONS
 
 STATE_UPDATE_ACTIONS = frozenset(
     {
@@ -36,11 +40,18 @@ DIRECT_SCREEN_ACTION_SOURCES = frozenset(
 )
 
 
-def is_supported_recipe_action_group(actions: Sequence[PhysicalAction]) -> bool:
+def is_supported_recipe_action_group(actions: Sequence[ObservedAction]) -> bool:
     """중간 화면 관찰 없이 실행할 수 있는 행동 묶음인지 확인한다."""
 
     if len(actions) == 1:
-        return actions[0].action in TARGET_REPLAY_ACTIONS
+        action = actions[0]
+        if action.action in TARGET_REPLAY_ACTIONS:
+            return True
+        return bool(
+            action.action == "scroll"
+            and action.target is not None
+            and action.roi_signature
+        )
     if len(actions) != 2:
         return False
     first, second = actions

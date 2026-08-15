@@ -64,7 +64,7 @@ def test_detail_finish_captures_raw_ocr_and_clears_buffer():
     assert capture.evidence.screenshot_path == "detail.png"
 
 
-def test_detail_finish_waits_for_required_screen_evidence():
+def test_detail_finish_defers_required_field_validation_to_postprocessing():
     current_url = "https://www.wanted.co.kr/wd/1"
     outcome = worker_execution_dispatch.dispatch_state_action(
         "finish_detail_reading",
@@ -78,13 +78,41 @@ def test_detail_finish_waits_for_required_screen_evidence():
         data_services=worker_data_services(),
     )
 
-    assert outcome.result["status"] == "skipped"
-    assert outcome.result["reason"] == "required_field_evidence_incomplete"
-    assert set(outcome.result["field_coverage"]["missing_fields"]) == {
+    assert outcome.result["status"] == "success"
+    capture = outcome.state_update["collection"]["job_captures"][0]
+    assert [field.value for field in capture.evidence.required_fields] == [
+        "company_name",
         "position",
+        "url",
         "requirements",
-    }
-    assert "job_captures" not in outcome.state_update["collection"]
+    ]
+    assert capture.evidence.field_evidence["company_name"] == "예시회사"
+    assert "requirements" not in capture.evidence.field_evidence
+
+
+def test_detail_finish_preserves_primary_page_end_claim_as_metadata():
+    current_url = "https://www.wanted.co.kr/wd/1"
+    outcome = worker_execution_dispatch.dispatch_state_action(
+        "finish_detail_reading",
+        {
+            "observed_fields": {"company_name": "예시회사"},
+            "page_exhausted": True,
+        },
+        [],
+        current_url=current_url,
+        state=_detail_state(
+            current_url,
+            ["company_name", "position", "url", "requirements"],
+        ),
+        data_services=worker_data_services(),
+    )
+
+    assert outcome.result["status"] == "success"
+    capture = outcome.state_update["collection"]["job_captures"][0]
+    assert "자격 요건 Python" in capture.raw_ocr_text
+    assert capture.evidence.page_exhausted is True
+    assert capture.evidence.unavailable_fields == []
+    assert "requirements" not in capture.evidence.field_evidence
 
 
 def test_detail_finish_preserves_confirmed_unavailable_field():

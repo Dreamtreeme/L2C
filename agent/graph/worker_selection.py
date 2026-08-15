@@ -191,20 +191,13 @@ def _select_duplicate_detail(
 
 def _select_queued_card(
     state: WorkerState,
-    *,
-    current_url: str,
-    transition_result: TransitionResult,
 ) -> dict[str, Any] | None:
-    if not transition_result.get("action"):
-        return None
     observation = state["observation"]
     if not observation.get("ocr_complete"):
         return None
     markers = list(observation.get("current_markers") or [])
     request, trace = next_job_card_request(
         state,
-        transition_result,
-        current_url,
         markers,
     )
     if request is None:
@@ -234,6 +227,7 @@ def selection_node(
     if decision.get("pending_action") is not None:
         return {}
 
+    current_url = str(observation.get("current_url") or "")
     no_effect_count = int(transition.get("no_effect_count") or 0)
     if no_effect_count >= get_settings().vision.no_effect_action_limit:
         return _no_effect_stop(no_effect_count)
@@ -248,7 +242,6 @@ def selection_node(
         return {}
 
     transition_result = transition.get("transition_result", {}) or {}
-    current_url = str(observation.get("current_url") or "")
     duplicate_update = _select_duplicate_detail(
         state,
         runtime,
@@ -261,11 +254,7 @@ def selection_node(
     if navigation_update is not None:
         return navigation_update
     return (
-        _select_queued_card(
-            state,
-            current_url=current_url,
-            transition_result=transition_result,
-        )
+        _select_queued_card(state)
         or {}
     )
 

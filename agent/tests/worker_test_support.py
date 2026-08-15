@@ -17,6 +17,7 @@ from agent.runtime.worker_contracts import (
     create_worker_state,
 )
 from agent.runtime.worker_data_services import WorkerDataServices
+from shared.schema.experience_rule_schema import RuleApplication
 
 
 def worker_state(
@@ -53,7 +54,7 @@ def worker_data_services(
     *,
     mark_existing_job_cards=None,
     find_existing_job_url=None,
-    load_site_recipes=None,
+    load_experience_rules=None,
     record_recipe_replay=None,
 ) -> WorkerDataServices:
     """노드 단위 테스트에서 외부 DB와 모델 호출을 제거한다."""
@@ -66,8 +67,8 @@ def worker_data_services(
             find_existing_job_url
             or (lambda _url, _jobs: {"matched": False})
         ),
-        load_site_recipes=(
-            load_site_recipes
+        load_experience_rules=(
+            load_experience_rules
             or (lambda _site, *, task_category=None: [])
         ),
         record_recipe_replay=(
@@ -84,6 +85,10 @@ def node_runtime(
         context=WorkerDependencies(
             vision=cast(VisionWorkerRuntime, vision or object()),
             data=data or worker_data_services(),
+            resolve_experience_rule=lambda _step, _markers, _image: RuleApplication(
+                decision="decline",
+                reason="테스트 기본 해석기는 적용하지 않습니다.",
+            ),
         )
     )
 

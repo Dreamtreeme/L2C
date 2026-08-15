@@ -85,9 +85,10 @@ def build_site_goal(
         f"required_fields={json.dumps(required_field_items, ensure_ascii=False)}\n"
         f"required_record_shape={json.dumps(required_record_shape, ensure_ascii=False)}\n"
         "상세 화면의 scroll 또는 본문 펼치기 click_marker를 선택할 때마다 현재 화면에서 "
-        "확인한 필드를 observed_fields에 함께 기록하십시오. 모든 필수 필드에 화면 근거가 "
-        "모였을 때만 finish_detail_reading을 호출하십시오. 페이지 끝까지 확인했는데 공고가 "
-        "제공하지 않는 필드는 page_exhausted=true와 unavailable_fields로 명시하십시오. "
+        "확인한 필드를 observed_fields에 함께 기록하십시오. 모든 필수 필드의 근거가 모였거나 "
+        "페이지 끝에 도달하면 finish_detail_reading을 호출하십시오. 페이지 끝에서는 "
+        "page_exhausted=true로 기록하고, 화면에서 부재를 확인한 필드만 unavailable_fields에 "
+        "명시하십시오. 최종 구조화 단계가 누적 OCR에서 필드 충족 여부를 판정합니다. "
         "값을 추측해서 빈 필드를 채우지 마십시오.\n\n"
         f"[선택된 사이트 스킬]\n{profile.guidance.strip()}"
     )

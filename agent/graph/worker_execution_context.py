@@ -31,7 +31,6 @@ class WorkerExecutionContext:
     new_actions: list[dict[str, Any]] = field(default_factory=list)
     new_events: list[ActionEvent] = field(default_factory=list)
     screen_changed: bool = False
-    next_pending_action: ActionRequest | None = None
 
     @classmethod
     def from_state(
@@ -73,16 +72,17 @@ class WorkerExecutionContext:
         """행동 실행 결과가 반영된 전체 작업자 상태를 반환한다."""
 
         state = self.state
-        state["decision"]["pending_action"] = self.next_pending_action
+        state["decision"]["pending_action"] = None
         state["transition"]["action_events"] = [
             *self.prior_events,
             *self.new_events,
         ]
         transition_request = state["transition"].get("transition_request")
-        state["transition"]["transition_result"] = transition_result(
-            transition_request,
-            status="waiting_capture" if transition_request else "idle",
-        )
+        if transition_request:
+            state["transition"]["transition_result"] = transition_result(
+                transition_request,
+                status="waiting_capture",
+            )
         return {
             "request": state["request"],
             "observation": state["observation"],

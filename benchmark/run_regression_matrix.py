@@ -11,7 +11,6 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from statistics import median
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -25,13 +24,15 @@ from benchmark.quality_eval import evaluate_expected_source_urls
 def _expand_scenarios(
     scenarios: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """행렬의 반복 횟수를 독립 실행 시나리오로 확장한다."""
+    """같은 회차의 시나리오가 연이어 실행되도록 반복을 확장한다."""
 
     expanded = []
-    for raw in scenarios:
-        repeat = max(1, int(raw.get("repeat") or 1))
-        base_id = str(raw["id"])
-        for repeat_index in range(1, repeat + 1):
+    repeats = [max(1, int(raw.get("repeat") or 1)) for raw in scenarios]
+    for repeat_index in range(1, max(repeats, default=0) + 1):
+        for raw, repeat in zip(scenarios, repeats, strict=True):
+            if repeat_index > repeat:
+                continue
+            base_id = str(raw["id"])
             scenario = dict(raw)
             scenario["base_id"] = base_id
             scenario["repeat_index"] = repeat_index
@@ -156,11 +157,11 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
             and item.get("action_source") == "job_card_queue"
             for item in steps
         ),
-        "experience_guided_performance_comparable": bool(
-            experience_preconditions.get("performance_comparable", True)
+        "experience_guided_replay_ready": bool(
+            experience_preconditions.get("replay_ready", True)
         ),
-        "active_roi_recipe_count": int(
-            experience_preconditions.get("roi_recipes") or 0
+        "active_experience_rule_count": int(
+            experience_preconditions.get("experience_rules") or 0
         ),
         "input_tokens": int(totals.get("input_tokens") or 0),
         "output_tokens": int(totals.get("output_tokens") or 0),
@@ -399,119 +400,87 @@ def _attach_promotion_metrics(
     }
 
 
-def _mode_pair_efficiency(
+def _experience_reuse_effectiveness(
     results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """같은 반복 번호의 자율·경험 탐색을 품질 통과 실행끼리만 비교한다."""
+    """경험 기반 실행에서 실제로 생략한 판단과 폴백을 집계한다."""
 
-    grouped: dict[str, dict[int, dict[str, dict[str, Any]]]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for item in results:
         scenario = dict(item.get("scenario") or {})
+        if str(scenario.get("execution_mode") or "") != "experience_guided":
+            continue
         workload = _scenario_workload_key(scenario)
-        repeat_index = int(scenario.get("repeat_index") or 1)
-        mode = str(scenario.get("execution_mode") or "")
-        grouped.setdefault(workload, {}).setdefault(
-            repeat_index,
-            {},
-        )[mode] = item
+        metrics = dict(item.get("metrics") or {})
+        validated = all(
+            (
+                metrics.get("quality_passed"),
+                item.get("mode_contract_passed"),
+                _target_contract_passed(item),
+                metrics.get("experience_guided_replay_ready"),
+            )
+        )
+        grouped.setdefault(workload, []).append(
+            {
+                "repeat_index": int(scenario.get("repeat_index") or 1),
+                "validated": validated,
+                "reasoning_call_reduction": int(
+                    metrics.get("reflex_reasoning_call_reduction") or 0
+                ),
+                "source_reasoning_replaced_count": int(
+                    metrics.get("reflex_source_reasoning_replaced_count") or 0
+                ),
+                "resolver_reasoning_call_count": int(
+                    metrics.get("reflex_resolver_reasoning_call_count") or 0
+                ),
+                "reflex_path_started_count": int(
+                    metrics.get("reflex_path_started_count") or 0
+                ),
+                "reflex_path_completed_count": int(
+                    metrics.get("reflex_path_completed_count") or 0
+                ),
+                "reflex_path_failed_count": int(
+                    metrics.get("reflex_path_failed_count") or 0
+                ),
+                "reflex_path_fallback_count": int(
+                    metrics.get("reflex_path_fallback_count") or 0
+                ),
+            }
+        )
 
     summaries = []
-    for workload, repetitions in grouped.items():
-        pairs = []
-        for repeat_index, modes in sorted(repetitions.items()):
-            autonomous = modes.get("autonomous")
-            experience = modes.get("experience_guided")
-            if not autonomous or not experience:
-                continue
-            autonomous_metrics = dict(autonomous.get("metrics") or {})
-            experience_metrics = dict(experience.get("metrics") or {})
-            comparable = all(
-                (
-                    autonomous_metrics.get("quality_passed"),
-                    experience_metrics.get("quality_passed"),
-                    autonomous.get("mode_contract_passed"),
-                    experience.get("mode_contract_passed"),
-                    _target_contract_passed(autonomous),
-                    _target_contract_passed(experience),
-                    experience_metrics.get("experience_guided_performance_comparable"),
-                )
-            )
-            if not comparable:
-                continue
-            autonomous_cost = autonomous_metrics.get("estimated_cost")
-            experience_cost = experience_metrics.get("estimated_cost")
-            cost_saved = (
-                float(autonomous_cost) - float(experience_cost)
-                if autonomous_cost is not None and experience_cost is not None
-                else None
-            )
-            pairs.append(
-                {
-                    "repeat_index": repeat_index,
-                    "execution_time_saved_sec": round(
-                        float(autonomous_metrics.get("execution_time_sec") or 0.0)
-                        - float(experience_metrics.get("execution_time_sec") or 0.0),
-                        6,
-                    ),
-                    "reasoning_calls_saved": int(
-                        autonomous_metrics.get("reasoning_count") or 0
-                    )
-                    - int(experience_metrics.get("reasoning_count") or 0),
-                    "tokens_saved": int(autonomous_metrics.get("total_tokens") or 0)
-                    - int(experience_metrics.get("total_tokens") or 0),
-                    "estimated_cost_saved": (
-                        round(cost_saved, 10) if cost_saved is not None else None
-                    ),
-                    "promotion_estimated_cost": (
-                        autonomous_metrics.get("promotion_estimated_cost")
-                    ),
-                }
-            )
-        if not pairs:
-            continue
-        cost_savings = [
-            float(item["estimated_cost_saved"])
-            for item in pairs
-            if item["estimated_cost_saved"] is not None
-        ]
-        promotion_costs = [
-            float(item["promotion_estimated_cost"])
-            for item in pairs
-            if item["promotion_estimated_cost"] is not None
-        ]
-        median_cost_saved = median(cost_savings) if cost_savings else None
-        median_promotion_cost = median(promotion_costs) if promotion_costs else None
-        break_even = (
-            round(median_promotion_cost / median_cost_saved, 3)
-            if median_promotion_cost is not None
-            and median_cost_saved is not None
-            and median_cost_saved > 0
-            else None
-        )
+    for workload, runs in grouped.items():
+        validated_runs = [item for item in runs if item["validated"]]
+        started = sum(item["reflex_path_started_count"] for item in runs)
+        completed = sum(item["reflex_path_completed_count"] for item in runs)
         summaries.append(
             {
                 "workload": json.loads(workload),
-                "comparable_pair_count": len(pairs),
-                "median_execution_time_saved_sec": round(
-                    median(item["execution_time_saved_sec"] for item in pairs),
-                    6,
+                "experience_run_count": len(runs),
+                "validated_run_count": len(validated_runs),
+                "validated_reasoning_call_reduction": sum(
+                    item["reasoning_call_reduction"] for item in validated_runs
                 ),
-                "median_reasoning_calls_saved": median(
-                    item["reasoning_calls_saved"] for item in pairs
+                "validated_source_reasoning_replaced_count": sum(
+                    item["source_reasoning_replaced_count"]
+                    for item in validated_runs
                 ),
-                "median_tokens_saved": median(item["tokens_saved"] for item in pairs),
-                "median_estimated_cost_saved": (
-                    round(median_cost_saved, 10)
-                    if median_cost_saved is not None
-                    else None
+                "validated_resolver_reasoning_call_count": sum(
+                    item["resolver_reasoning_call_count"]
+                    for item in validated_runs
                 ),
-                "median_promotion_estimated_cost": (
-                    round(median_promotion_cost, 10)
-                    if median_promotion_cost is not None
-                    else None
+                "reflex_path_started_count": started,
+                "reflex_path_completed_count": completed,
+                "reflex_path_failed_count": sum(
+                    item["reflex_path_failed_count"] for item in runs
                 ),
-                "break_even_repeat_count": break_even,
-                "pairs": pairs,
+                "reflex_path_fallback_count": sum(
+                    item["reflex_path_fallback_count"] for item in runs
+                ),
+                "reflex_path_completion_rate": (
+                    round(completed / started, 6) if started else None
+                ),
+                "runs": runs,
             }
         )
     return summaries
@@ -535,8 +504,18 @@ def _selected_matrix_scenarios(
 ) -> tuple[Path, dict[str, Any], list[dict[str, Any]]]:
     matrix_path = Path(args.matrix).resolve()
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    require_recipe_promotion = bool(matrix.get("require_recipe_promotion", False))
     scenarios = _expand_scenarios(
-        [item for item in matrix.get("scenarios", []) if isinstance(item, dict)]
+        [
+            {
+                **item,
+                "require_recipe_promotion": bool(
+                    item.get("require_recipe_promotion", require_recipe_promotion)
+                ),
+            }
+            for item in matrix.get("scenarios", [])
+            if isinstance(item, dict)
+        ]
     )
     selected = set(args.scenario)
     if selected:
@@ -578,7 +557,8 @@ def _promotion_result(
     db_path: Path,
 ) -> dict[str, Any]:
     if (
-        str(scenario.get("execution_mode") or "") != "autonomous"
+        not scenario.get("require_recipe_promotion")
+        or str(scenario.get("execution_mode") or "") != "autonomous"
         or return_code != 0
         or payload.get("status") != "completed"
     ):
@@ -600,11 +580,13 @@ def _mode_contract_passed(
 ) -> bool:
     execution_mode = str(scenario["execution_mode"])
     if execution_mode == "autonomous":
+        if not scenario.get("require_recipe_promotion"):
+            return True
         return bool(promotion.get("promoted"))
     if execution_mode == "experience_guided":
         return (
             metrics["reflex_path_completed_count"] > 0
-            and metrics["experience_guided_performance_comparable"]
+            and metrics["experience_guided_replay_ready"]
         )
     return True
 
@@ -756,7 +738,7 @@ def main() -> int:
         "git": git_contract,
         "runtime": _runtime_execution_contract(),
         "passed": all(_result_passed(item) for item in results),
-        "mode_pair_efficiency": _mode_pair_efficiency(results),
+        "experience_reuse_effectiveness": _experience_reuse_effectiveness(results),
         "results": results,
     }
     aggregate_path = output_dir / "matrix.summary.json"

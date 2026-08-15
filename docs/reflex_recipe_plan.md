@@ -3,7 +3,7 @@ title: "Reflex Recipe 구현 기준"
 type: plan
 area: reflex
 status: active
-updated: 2026-08-13
+updated: 2026-08-15
 tags:
   - l2c
   - docs/reflex
@@ -11,7 +11,7 @@ tags:
 
 # L2C 반사 레시피(Reflex Recipe) 구현 기준
 
-> 네이밍 기준은 `docs/naming_conventions.md`를 따른다. 새 코드의 active recipe는 `state_key`나 코드가 분류한 화면 역할이 아니라 전체 안정 경로의 `recipe_key`, `site`, `task_category`, URL 범위와 단계별 화면 서명을 기준으로 동작한다.
+> 네이밍 기준은 `docs/naming_conventions.md`를 따른다. active recipe는 `site + task_category`로 식별하고, 선택된 경로의 URL 범위와 단계별 화면 서명으로 현재 재생 가능 여부를 확인한다.
 
 ## 목표
 
@@ -66,18 +66,18 @@ Critic이 중간 전이를 제거했을 때 삭제 전후 체크포인트가 같
 URL·화면 역할이 같고 화면 pHash까지 정확히 같을 때만 경로를 다시 연결한다.
 근사 pHash만으로는 두 상태를 같은 화면으로 취급하지 않는다. 남은 전이가 하나의
 연속 경로를 만들지 못하면 후보 전체를 승격하지 않는다.
-경로 키는
-전체 단계의 순서와 의미를 포함하므로 `A-B-C`와 `A-D-C`는 별도 레시피다.
-새 후보를 승격할 때도 단계가 겹친다는 이유로 다른 후보의 경로를 삭제하지 않는다.
-동일한 전체 경로를 여러 후보가 검증한 경우 레시피 행은 합치고
-`recipe_sources`에 후보별 근거를 따로 연결한다.
+활성 레시피의 동일성은 `site + task_category`로 정한다. 검색어, 마커 이름,
+화면 좌표와 행동 경로 표현은 레시피 키에 넣지 않는다. 같은 목적의 새 성공 경로가
+들어오면 기존 행을 최신 경로로 갱신한다. 경로가 바뀌면 이전 경로의 재생 성공·실패
+횟수와 후보 근거를 초기화해 서로 다른 경로의 성과가 섞이지 않게 한다. 동일한 경로를
+다른 후보가 다시 검증한 경우에만 `recipe_sources`에 근거를 추가한다.
 
 `state_key`, Jaccard anchor 유사도와 코드 기반 화면 역할 분류는 active replay의
 기본 조회 기준이 아니다.
 
-전체 경로 키는 `experience8#` 버전을 사용한다. 조회와 재생은 이 버전의 활성
-경로만 대상으로 한다. 후보 테이블도 `contract_version=3`만 검토한다. 이전 계약
-행은 실행 중 삭제하지 않고 DB에 보존하되 현재 경로에서 조회하지 않는다.
+목적 기반 키는 `experience9#` 버전을 사용한다. 조회와 재생은 이 버전의 활성
+경로만 대상으로 한다. 후보 테이블도 `contract_version=3`만 검토한다. 이전 경로
+내용 기반 키는 중복된 목적을 보존할 수 있으므로 저장소 초기화 시 삭제한다.
 
 ## Replay 순서
 

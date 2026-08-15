@@ -20,12 +20,16 @@ from agent.graph.worker_observation import (
 from agent.graph.worker_selection import selection_node
 from agent.graph.worker_transition import transition_node
 from agent.graph.worker_execution import execution_node
-from agent.runtime.job_card_queue import needs_job_results_navigation
+from agent.runtime.job_card_queue import (
+    can_select_pending_job_card,
+    has_unresolved_job_card_queue,
+    needs_job_results_navigation,
+)
 from agent.runtime.worker_state import current_observation_ready
 from agent.observability.graph_events import graph_step
 from agent.observability.reflex_paths import (
     reflex_selection_observation,
-    reflex_transition_observation,
+    reflex_step_observation,
 )
 from agent.recipe.replay_runtime import attempt_reflex_replay
 from agent.utils.logger import logger
@@ -68,22 +72,9 @@ def route_after_selection(state: WorkerState) -> str:
         return "capture"
     if not current_observation_ready(state):
         return _route_before_ocr(state, transition_result)
-    if needs_job_results_navigation(state):
+    if has_unresolved_job_card_queue(state):
         return "reasoning"
-    if state["collection"].get("job_detail_followup"):
-        return "reasoning"
-    if transition_result.get("status") == "unknown" and (
-        str(transition_result.get("source") or "").startswith("reflex")
-        or transition_result.get("source")
-        in {
-            "job_card_queue",
-            "job_results_navigation",
-            "page_policy",
-            "duplicate_job_policy",
-        }
-        or transition_result.get("reason")
-        in {"no_screen_change", "reflex_no_screen_change"}
-    ):
+    if transition_result.get("status") == "unknown":
         return "reasoning"
     if not get_settings().reflex.enabled:
         return "reasoning"
@@ -110,11 +101,9 @@ def route_after_execution(state: WorkerState) -> str:
     if state["transition"].get("error_count", 0) >= 3:
         logger.error("Too many errors. Forcing workflow to end.")
         return "end"
-    if state["decision"].get("pending_action") is not None:
-        return "execution"
     if state["transition"].get("transition_request"):
         return "capture"
-    if needs_job_results_navigation(state):
+    if needs_job_results_navigation(state) or can_select_pending_job_card(state):
         return "selection"
     return "reasoning"
 
@@ -154,7 +143,7 @@ def _instrument_node(
             if name == "reflex" and isinstance(result, dict):
                 observation.update(reflex_selection_observation(result))
             if name == "transition" and isinstance(result, dict):
-                observation.update(reflex_transition_observation(result))
+                observation.update(reflex_step_observation(result))
             if name == "reasoning":
                 observation["reasoning_mode"] = (
                     "card_selection" if action_source == "card_selector" else "general"
@@ -215,7 +204,6 @@ def build_graph():
         "execution",
         route_after_execution,
         {
-            "execution": "execution",
             "capture": "capture",
             "selection": "selection",
             "reasoning": "reasoning",

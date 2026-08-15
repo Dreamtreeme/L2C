@@ -9,6 +9,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from agent.observability.reflex_paths import summarize_reflex_paths
+
 
 def _percentile(values: list[float], ratio: float) -> float:
     ordered = sorted(values)
@@ -116,6 +118,7 @@ def profile_summary(path: Path) -> dict[str, Any]:
     llm_durations = _collect_llm_durations(
         (metrics.get("llm") or {}).get("calls") or []
     )
+    reflex_paths = summarize_reflex_paths(metrics.get("steps") or [])
 
     return {
         "path": str(path),
@@ -130,6 +133,7 @@ def profile_summary(path: Path) -> dict[str, Any]:
         "llm_cost": (metrics.get("llm") or {}).get("cost", {}),
         "quality": payload.get("quality", {}),
         "reflex_hits": reflex_hits,
+        **reflex_paths,
         "queue_replay_hits": queue_replay_hits,
         "reasoning_modes": dict(reasoning_modes),
     }
@@ -161,6 +165,18 @@ def _print_report(report: dict[str, Any]) -> None:
     if report.get("llm_calls"):
         _print_stats_group("llm_calls", report["llm_calls"])
     print(f"reflex_hits: {report.get('reflex_hits', 0)}")
+    print(
+        "reflex_reasoning_call_reduction: "
+        f"{report.get('reflex_reasoning_call_reduction', 0)}"
+    )
+    print(
+        "reflex_path_completed_count: "
+        f"{report.get('reflex_path_completed_count', 0)}"
+    )
+    print(
+        "reflex_path_fallback_count: "
+        f"{report.get('reflex_path_fallback_count', 0)}"
+    )
     print(f"queue_replay_hits: {report.get('queue_replay_hits', 0)}")
     print(f"reasoning_modes: {report.get('reasoning_modes', {})}")
 

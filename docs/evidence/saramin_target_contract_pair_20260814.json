@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "evidence_id": "saramin-target-contract-pair-20260814",
   "site": "saramin",
   "search_keyword": "AI 엔지니어",
@@ -75,13 +75,12 @@
     "total_tokens": 6122,
     "estimated_cost_usd": 0.013377
   },
-  "comparison": {
-    "comparable_pair_count": 1,
-    "execution_time_saved_sec": 31.324899,
-    "reasoning_calls_saved": 3,
-    "tokens_saved": 21198,
-    "estimated_cost_saved_usd": 0.0089422,
-    "break_even_repeat_count": 1.496
+  "observed_difference": {
+    "causal_interpretation": false,
+    "execution_time_difference_sec": 31.324899,
+    "reasoning_call_difference": 3,
+    "token_difference": 21198,
+    "estimated_cost_difference_usd": 0.0089422
   },
   "stored_job": {
     "company_name": "(주)제논",
@@ -99,6 +98,8 @@
   "source_artifact_directory": "logs/e2e_target_contract_live_20260814",
   "limitations": [
     "single paired sample",
+    "autonomous screen and model decisions cannot be reproduced",
+    "observed differences are not recipe savings",
     "measurement worktree was not clean",
     "LangSmith remote feedback was not published"
   ]

@@ -7,9 +7,7 @@ from typing import Any
 from agent.graph import worker_execution_dispatch
 from agent.graph.worker_transition_recording import set_transition_request
 from agent.runtime.worker_contracts import (
-    ActionRequest,
     apply_worker_state_update,
-    build_action_request,
 )
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.runtime.worker_state import (
@@ -123,50 +121,12 @@ def activate_clicked_job_card(
     )
 
 
-def _first_pending_job_card_action(
-    cards: list[dict[str, Any]],
-) -> ActionRequest | None:
-    if not cards:
-        return None
-    first_card = cards[0]
-    marker_id = first_card.get("source_marker_id")
-    if marker_id is None:
-        return None
-    queue_id = str(first_card.get("queue_id") or "")
-    return build_action_request(
-        "job_card_queue",
-        "job_card_queue_first_item",
-        [
-            {
-                "name": "click_marker",
-                "args": {
-                    "marker_id": marker_id,
-                    "target_label": first_card.get("title", ""),
-                    "target_role": "job_card",
-                    "target_component": "job_card_title",
-                    "page_role": "search",
-                    "reason": ("job card queue stored; open the first pending card"),
-                    "expected_after": "selected job detail page is visible",
-                },
-                "id": f"job_card_queue_{queue_id or 'first'}",
-                "metadata": {"queue_id": queue_id},
-            }
-        ],
-    )
-
-
-def _apply_job_card_queue_result(
+def _apply_job_card_queue_completion(
     context: WorkerExecutionContext,
     result: dict[str, Any],
-) -> ActionRequest | None:
+) -> None:
     state = context.state
-    collection = state["collection"]
-    job_card_queue = list(collection.get("job_card_queue", []) or [])
-    pending_cards = pending_job_cards(job_card_queue)
-    first_card_action = _first_pending_job_card_action(pending_cards)
-    if first_card_action is not None:
-        return first_card_action
-
+    job_card_queue = list(state["collection"].get("job_card_queue", []) or [])
     if job_card_queue_scope_complete(
         job_card_queue,
         count_mode=count_mode_from_state(state),
@@ -176,7 +136,6 @@ def _apply_job_card_queue_result(
         resolved_count = resolved_job_card_count(job_card_queue)
         result["auto_finished"] = True
         result["resolved_count"] = resolved_count
-    return None
 
 
 def _apply_job_detail_completion(
@@ -229,7 +188,7 @@ def execute_state_action(
     context: WorkerExecutionContext,
     action_name: str,
     args: dict[str, Any],
-) -> tuple[dict[str, Any], ActionRequest | None]:
+) -> dict[str, Any]:
     """상태 행동을 실행하고 카드·상세 완료 후속 효과를 반영한다."""
 
     state = context.state
@@ -247,9 +206,8 @@ def execute_state_action(
     raise_for_action_failure(outcome.result)
     context.state = apply_worker_state_update(context.state, outcome.state_update)
     result = outcome.result
-    follow_up: ActionRequest | None = None
     if action_name == "set_job_card_queue":
-        follow_up = _apply_job_card_queue_result(context, result)
+        _apply_job_card_queue_completion(context, result)
 
     is_successful_detail_update = (
         action_name == "finish_detail_reading" and result.get("status") == "success"
@@ -257,7 +215,7 @@ def execute_state_action(
     if is_successful_detail_update:
         _apply_job_detail_completion(context, result)
         _apply_collection_target_completion(context, result)
-    return result, follow_up
+    return result
 
 
 __all__ = [

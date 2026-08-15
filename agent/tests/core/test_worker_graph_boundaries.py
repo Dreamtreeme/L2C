@@ -183,8 +183,8 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
         replay={
             "replay_session": {
                 "recipe_key": "recipe-search-set",
-                "current_transition_index": 1,
-                "transition_count": 2,
+                "current_step_index": 1,
+                "step_count": 2,
             }
         },
     )
@@ -214,8 +214,8 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
         replay={
             "replay_session": {
                 "recipe_key": "recipe-search-set",
-                "current_transition_index": 1,
-                "transition_count": 2,
+                "current_step_index": 1,
+                "step_count": 2,
             }
         },
     )
@@ -545,6 +545,12 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
             },
         }
     ]
+    state["transition"]["transition_result"] = {
+        "status": "unknown",
+        "source": "job_card_queue",
+        "action": "click_marker",
+        "reason": "no_screen_change",
+    }
 
     result = _run_execution(state)
     action_result = action_event_results(result["transition"]["action_events"])[-1]
@@ -552,6 +558,8 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     assert action_result["status"] == "skipped"
     assert action_result["reason"] == "same_screen_no_effect_action_blocked"
     assert result["transition"]["error_count"] == 1
+    assert result["transition"]["transition_result"]["status"] == "unknown"
+    assert result["transition"]["transition_result"]["reason"] == "no_screen_change"
 
     close_request = _request(
         "llm",
@@ -675,24 +683,22 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
             },
         ],
         metadata={
-            "recipe_key": "path6#search",
-            "transition_index": 0,
-            "transition_count": 1,
+            "recipe_key": "experience-rule10#search",
+            "step_index": 0,
+            "step_count": 1,
             "transition_actions": [
                 "type_in_marker",
                 "press_key",
             ],
-            "before_state": {
+            "before_rule_screen": {
                 "url_template": "example.com/search-overlay",
                 "page_role": "search_overlay",
             },
-            "expected_after_state": {
-                "url_template": "example.com/jobs",
-                "page_role": "search",
-                "screen_context_signature": {
-                    "phash": "f" * 16,
-                    "size": [1920, 1080],
-                },
+            "expected_effect": {
+                "kind": "url_change",
+                "description": "검색 결과로 이동한다",
+                "expected_url_template": "example.com/jobs",
+                "expected_page_role": "search",
             },
         },
     )
@@ -709,7 +715,7 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
                 }
             ],
             reflex_trace={
-                "recipe_key": "path6#search",
+                "recipe_key": "experience-rule10#search",
                 "tool_calls": {},
             },
         )
@@ -728,7 +734,7 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
         == "search_overlay"
     )
     assert (
-        result["transition"]["transition_request"]["expected_after_state"].url_template
+        result["transition"]["transition_request"]["expected_effect"].expected_url_template
         == "example.com/jobs"
     )
 
@@ -819,12 +825,14 @@ def test_returned_state_error_is_recorded_as_failure(monkeypatch):
     assert result["collection"]["job_captures"][0].raw_ocr_text == "원래 회사 개발자"
 
 
-def test_stored_job_card_queue_schedules_first_card(monkeypatch):
+def test_stored_job_card_queue_is_selected_by_selection_node(monkeypatch):
     queued_card = {
         "queue_id": "card-1",
         "status": "pending",
         "title": "첫 번째 공고",
         "source_marker_id": 4,
+        "source_marker_text": "첫 번째 공고",
+        "source_observation_id": "worker-test:observation:0003",
     }
 
     def fake_dispatch(*args, **kwargs):
@@ -861,9 +869,31 @@ def test_stored_job_card_queue_schedules_first_card(monkeypatch):
             }
         ],
     )
-    result = _run_execution(_execution_state(request))
+    state = _execution_state(
+        request,
+        current_url="https://example.com/search",
+        current_markers=[
+            {
+                "id": 4,
+                "bbox": [0, 0, 100, 30],
+                "text": "첫 번째 공고",
+                "type": "text",
+            }
+        ],
+    )
+    state["observation"].update(
+        {
+            "current_page_role": "search",
+            "current_screenshot": "search.png",
+            "ocr_complete": True,
+        }
+    )
+    result = _run_execution(state)
 
-    follow_up = result["decision"]["pending_action"]
+    assert result["decision"]["pending_action"] is None
+    assert route_after_execution(result) == "selection"
+    selected = worker_selection.selection_node(result, node_runtime())
+    follow_up = selected["decision"]["pending_action"]
     assert follow_up.source == "job_card_queue"
     assert follow_up.tool_calls[0].name == "click_marker"
     assert follow_up.tool_calls[0].args["marker_id"] == 4

@@ -28,11 +28,11 @@ from agent.vision.screen_signature import (
     hamming_distance,
 )
 from shared.schema.feedback_schema import ExecutionEvent
-from shared.schema.recipe_schema import ExperienceTransition
+from shared.schema.execution_record_schema import ObservedTransition
 
 
 def detect_two_screen_transition_cycle(
-    observations: list[ExperienceTransition],
+    observations: list[ObservedTransition],
 ) -> dict[str, Any]:
     """최근 전환 화면이 A-B-A-B로 반복됐는지 pHash로 확인한다."""
 
@@ -117,6 +117,7 @@ def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
     result_args = latest_event.result.get("args")
     return {
         "action": action.action,
+        "source": str(latest_event.result.get("action_source") or ""),
         "step": {
             "args": (
                 dict(result_args)
@@ -461,8 +462,8 @@ def build_transition_observation(
         expected_after=str(transition_request.get("expected_after") or ""),
         source=source,
         recipe_key=transition_request.get("recipe_key", ""),
-        recipe_transition_index=transition_request.get("recipe_transition_index"),
-        recipe_transition_count=transition_request.get("recipe_transition_count"),
+        recipe_step_index=transition_request.get("recipe_step_index"),
+        recipe_step_count=transition_request.get("recipe_step_count"),
         transition_actions=list(transition_request.get("transition_actions") or []),
         after_state_match=dict(transition_request.get("after_state_match") or {}),
         attempt=attempt,

@@ -7,13 +7,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from agent.config import get_settings
 from agent.recipe.candidate_promotion import (
-    CandidatePromotionResult,
-    apply_candidate_promotion,
+    PrunedTransition,
+    continuous_transition_groups,
     is_preparation_transition,
+    retained_candidate_path,
     reviewable_candidate_transitions,
+    transitions_are_continuous,
 )
+from agent.recipe.store import ExperienceRuleStore
 from agent.recipe.task_category import normalize_task_category
 from agent.utils.text import normalize_text, url_template
 from agent.utils.image_utils import image_to_base64_jpeg
@@ -22,15 +27,28 @@ from shared.schema.feedback_schema import (
     RecipeCandidate,
     RecipeCandidateReview,
 )
-from shared.schema.recipe_schema import (
-    ExperienceTransition,
-    PhysicalAction,
+from shared.schema.execution_record_schema import (
+    ObservedAction,
+    ObservedTransition,
     ScreenCheckpoint,
 )
 
 
 CriticFn = Callable[[dict[str, Any]], dict[str, Any] | RecipeCandidateReview]
 ReviewProcessMode = Literal["review", "promote"]
+
+
+class RulePromotionResult(BaseModel):
+    """검토된 원본 경로를 경험 규칙으로 저장한 결과."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    promoted: bool = False
+    saved_count: int = 0
+    rule_step_count: int = 0
+    rule_action_count: int = 0
+    pruned_transitions: list[PrunedTransition] = Field(default_factory=list)
 
 
 def _without_empty_values(value: dict[str, Any]) -> dict[str, Any]:
@@ -78,7 +96,7 @@ def _compact_texts(values: list[Any]) -> list[str]:
     return texts
 
 
-def _compact_action(action: PhysicalAction) -> dict[str, Any]:
+def _compact_action(action: ObservedAction) -> dict[str, Any]:
     target = action.target
     param: dict[str, Any] = {}
     if action.action == "type_in_marker":
@@ -89,7 +107,6 @@ def _compact_action(action: PhysicalAction) -> dict[str, Any]:
         {
             "seq": action.source_seq,
             "action": action.action,
-            "replay_mode": action.replay_mode,
             "target": _without_empty_values(
                 {
                     "text": target.text if target else "",
@@ -110,14 +127,16 @@ def _compact_action(action: PhysicalAction) -> dict[str, Any]:
 
 
 def _compact_transition(
-    transition: ExperienceTransition,
+    transition: ObservedTransition,
     *,
+    can_follow_seqs: list[int],
     prepares_transition_seq: int | None = None,
 ) -> dict[str, Any]:
     evidence = transition.evidence
     return _without_empty_values(
         {
             "seq": transition.seq,
+            "can_follow_seqs": can_follow_seqs,
             "before": _compact_checkpoint(transition.before),
             "actions": [_compact_action(action) for action in transition.actions],
             "after": _compact_checkpoint(transition.after),
@@ -203,7 +222,7 @@ def _compact_collection_request(candidate: RecipeCandidate) -> dict[str, Any]:
 
 def _candidate_screen_evidence(
     candidate: RecipeCandidate,
-    transitions: list[ExperienceTransition],
+    transitions: list[ObservedTransition],
 ) -> list[tuple[str, Path]]:
     """비평가가 행동 순서를 직접 볼 수 있도록 전이 전후 화면을 고른다."""
 
@@ -254,6 +273,14 @@ def build_candidate_review_payload(
 
     all_transitions = candidate.transitions
     transitions, _pruned = reviewable_candidate_transitions(candidate)
+    can_follow_by_seq = {
+        transition.seq: [
+            following.seq
+            for following in transitions[index + 1 :]
+            if transitions_are_continuous(transition, following)
+        ]
+        for index, transition in enumerate(transitions)
+    }
     following_by_seq = {
         transition.seq: all_transitions[index + 1]
         for index, transition in enumerate(all_transitions[:-1])
@@ -275,6 +302,7 @@ def build_candidate_review_payload(
         "candidate_transitions": [
             _compact_transition(
                 transition,
+                can_follow_seqs=can_follow_by_seq[transition.seq],
                 prepares_transition_seq=(
                     following.seq
                     if (
@@ -356,9 +384,13 @@ def _llm_review_candidate(
                 "A transition with prepares_transition_seq is a successful input that "
                 "prepared the following submit action even though the screen stayed stable; "
                 "keep it when the successful route needs that input. "
-                "Judge semantic reuse only. Deterministic code checks screen connectivity "
-                "and separates kept groups into replay chains. Return accept when at least "
-                "one reusable group remains. "
+                "The kept transitions, in seq order, must form one continuous screen path. "
+                "For every kept transition except the last, the next kept seq must be listed "
+                "in its can_follow_seqs. This relation already allows a later action to "
+                "reconnect after dropped detours only when the recorded screen is exactly "
+                "the same. If multiple disconnected reusable paths exist, keep the one that "
+                "most directly supports the recurring request and drop the others. Return "
+                "accept when that one path retains at least one transition. "
                 "Example 1: parameterized search input followed by search submit should be "
                 "kept, while clicking one job card chosen from current search results should "
                 "be dropped as variable-choice. "
@@ -401,7 +433,7 @@ def _llm_review_candidate(
 
 
 def _verdict_contract_errors(
-    transitions: list[ExperienceTransition],
+    transitions: list[ObservedTransition],
     review: RecipeCandidateReview,
 ) -> list[str]:
     required = {transition.seq for transition in transitions}
@@ -420,6 +452,18 @@ def _verdict_contract_errors(
         verdict.keep for verdict in review.transition_verdicts
     ):
         errors.append("accepted review kept no transition")
+    kept_seqs = {
+        verdict.seq for verdict in review.transition_verdicts if verdict.keep
+    }
+    retained = [
+        transition for transition in transitions if transition.seq in kept_seqs
+    ]
+    retained_group_count = len(continuous_transition_groups(retained))
+    if review.decision == "accept" and retained_group_count != 1:
+        errors.append(
+            "accepted review kept "
+            f"{retained_group_count} disconnected transition groups"
+        )
     return errors
 
 
@@ -459,6 +503,7 @@ def review_and_apply_candidate(
     run_id: str,
     db_path=None,
     critic: CriticFn | None = None,
+    compiler=None,
     mode: str = "review",
     raise_on_critic_error: bool = False,
 ) -> dict[str, Any]:
@@ -477,23 +522,46 @@ def review_and_apply_candidate(
         critic=critic,
         raise_on_error=raise_on_critic_error,
     )
-    promotion = CandidatePromotionResult(
+    promotion = RulePromotionResult(
         enabled=allow_promotion,
-        promoted=False,
-        saved_count=0,
-        promoted_action_count=0,
-        promoted_transition_count=0,
-        promoted_path_count=0,
     )
     if allow_promotion and review.decision == "accept":
-        promotion = apply_candidate_promotion(candidate, review, db_path=db_path)
-        if not promotion.promoted:
+        retained, pruned = retained_candidate_path(candidate, review)
+        try:
+            if not retained:
+                raise ValueError("critic kept no continuous source path")
+            from agent.application.experience_rule_compiler import (
+                compile_experience_rule,
+            )
+
+            rule = compile_experience_rule(
+                candidate,
+                retained,
+                compiler=compiler,
+            )
+            saved_count = ExperienceRuleStore(db_path).save_rule(
+                rule,
+                source_run_id=candidate.run_id,
+            )
+            promotion = RulePromotionResult(
+                enabled=True,
+                promoted=saved_count > 0,
+                saved_count=saved_count,
+                rule_step_count=len(rule.steps),
+                rule_action_count=sum(len(step.actions) for step in rule.steps),
+                pruned_transitions=pruned,
+            )
+        except Exception as exc:
+            promotion = RulePromotionResult(
+                enabled=True,
+                pruned_transitions=pruned,
+            )
             review = review.model_copy(
                 update={
                     "decision": "reject",
                     "reasons": [
                         *review.reasons,
-                        "no replayable transition remained after deterministic filtering",
+                        f"experience_rule_compilation_failed: {str(exc)[:200]}",
                     ],
                 }
             )
@@ -519,6 +587,7 @@ def _process_mode(mode: str | None) -> ReviewProcessMode:
 
 __all__ = [
     "CriticFn",
+    "RulePromotionResult",
     "build_candidate_review_payload",
     "review_and_apply_candidate",
     "review_candidate",

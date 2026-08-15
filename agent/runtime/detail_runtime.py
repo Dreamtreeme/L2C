@@ -25,6 +25,7 @@ from agent.runtime.worker_contracts import (
 )
 from agent.utils.logger import logger
 from agent.vision.marker_geometry import marker_bbox
+from agent.vision.target_snapshot import is_icon_marker
 
 
 def marker_prompt_rank(marker: ScreenMarker) -> tuple[int, int, int]:
@@ -35,17 +36,6 @@ def marker_prompt_rank(marker: ScreenMarker) -> tuple[int, int, int]:
     x = int(bbox[0]) if len(bbox) == 4 else 0
     marker_id = int(marker.get("id") or 0)
     return (y, x, marker_id)
-
-
-def is_icon_marker(marker: ScreenMarker) -> bool:
-    text = str(marker.get("text") or "")
-    marker_type = str(marker.get("type") or "").strip().lower()
-    return (
-        marker_type == "icon"
-        or text == "icon"
-        or text.startswith("상호작용 가능한 요소 (")
-        or text == "상호작용 가능한 요소"
-    )
 
 
 def line_bbox(markers: list[ScreenMarker]) -> list[int]:
@@ -508,8 +498,6 @@ def compact_job_detail_buffer_context(
     first_preview = [line for line in first_preview if line]
     preview = [str(item.get("text") or "").strip() for item in lines[-8:]]
     preview = [line for line in preview if line]
-    followup = dict(collection.get("job_detail_followup") or {})
-    followup_active = detail_context_matches(followup, current_url, detail_key)
     required_fields = required_fields_from_state(state)
     coverage = detail_coverage_status(
         dict(collection.get("job_detail_coverage") or {}),
@@ -546,25 +534,11 @@ def compact_job_detail_buffer_context(
         ),
         "- 더 읽어야 하면 scroll 또는 현재 사이트 안내에 선언된 상세 펼치기 버튼을 선택하고, "
         "현재 화면에서 확인한 필드를 observed_fields에 함께 넣으십시오.",
-        "- 모든 필수 필드가 확인되었을 때만 finish_detail_reading을 호출하십시오. "
-        "페이지 끝까지 확인해도 제공되지 않은 필드는 page_exhausted=true와 "
-        "unavailable_fields로 명시하십시오.",
+        "- 모든 필수 필드가 확인되었거나 페이지 끝에 도달하면 "
+        "finish_detail_reading을 호출하십시오. 페이지 끝에서는 page_exhausted=true로 "
+        "기록하고, 화면에서 부재를 확인한 필드만 unavailable_fields로 명시하십시오. "
+        "최종 구조화 단계가 누적 OCR의 필드 충족 여부를 판정합니다.",
     ]
-    if followup_active:
-        parts.extend(
-            [
-                "- 직전 상세 완료는 필수 필드 근거 부족으로 거부되었습니다.",
-                "- 거부된 누락 필드: "
-                + json.dumps(
-                    followup.get("missing_fields") or [],
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-                "- 누적 OCR과 화면을 보고 원문 공고 이동 수단 또는 추가 본문 공개 수단이 있는지 판단하십시오.",
-                "- 원문 이동 수단이 현재 화면에 없으면 위로 스크롤하고, 보이면 해당 마커를 click_marker로 선택하십시오.",
-                "- URL을 추측해 open_browser를 호출하지 마십시오.",
-            ]
-        )
     if first_preview:
         parts.append(
             "- 처음 누적 본문 미리보기: "
@@ -623,7 +597,6 @@ __all__ = [
     "detail_buffer_text",
     "detail_evidence_screenshot",
     "detail_context_matches",
-    "is_icon_marker",
     "marker_prompt_rank",
     "update_job_detail_buffer",
 ]

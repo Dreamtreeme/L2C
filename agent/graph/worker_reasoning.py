@@ -37,6 +37,7 @@ from agent.runtime.transition_runtime import (
     detect_two_screen_transition_cycle,
 )
 from agent.utils.logger import logger
+from agent.vision.target_snapshot import is_icon_marker, marker_by_id
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 
 
@@ -179,7 +180,34 @@ def _invoke_reasoning_model(
     )
     if not request.tool_calls:
         raise ValueError("모델이 실행할 도구를 선택하지 않았습니다.")
+    _validate_reasoning_target_markers(state, request)
     return request
+
+
+def _validate_reasoning_target_markers(
+    state: WorkerState,
+    request: ActionRequest,
+) -> None:
+    """입력 도구가 현재 화면의 실제 텍스트 입력 대상을 가리키는지 확인한다."""
+
+    markers = list(state["observation"].get("current_markers") or [])
+    for call in request.tool_calls:
+        if call.name != "type_in_marker":
+            continue
+        marker = marker_by_id(markers, int(call.args["marker_id"]))
+        if marker is None:
+            raise ValueError("입력 대상 마커가 현재 화면에 없습니다.")
+        if is_icon_marker(marker):
+            allowed_marker_ids = [
+                int(item["id"])
+                for item in markers
+                if item.get("id") is not None and not is_icon_marker(item)
+            ]
+            raise ValueError(
+                f"type_in_marker 대상 [{call.args['marker_id']}]은 아이콘 마커입니다. "
+                "현재 화면에서 입력 영역 또는 placeholder 텍스트 마커를 다시 선택하십시오. "
+                f"허용된 텍스트 마커 ID: {allowed_marker_ids}"
+            )
 
 
 def _choose_reasoning_action(
@@ -198,6 +226,7 @@ def _choose_reasoning_action(
         else ("lightweight", "primary")
     )
     spent_usd = 0.0
+    retry_warning = loop_warning
     for tier in tiers:
         call_count, spent_usd, stop_reason = _reasoning_budget(
             state,
@@ -209,10 +238,20 @@ def _choose_reasoning_action(
             request = _invoke_reasoning_model(
                 state,
                 runtime,
-                loop_warning,
+                retry_warning,
                 tier=tier,
             )
-            return request, call_count + 1, tier, "", spent_usd
+            call_count += 1
+            if tier == "lightweight" and any(
+                call.name == "finish_detail_reading" for call in request.tool_calls
+            ):
+                retry_warning = (
+                    f"{loop_warning}\n\n[상세 읽기 완료 재검토]\n"
+                    "경량 모델이 상세 읽기 완료를 제안했습니다. 현재 화면과 누적 OCR을 "
+                    "다시 확인하고, 필수 본문 근거가 부족하면 scroll을 선택하십시오."
+                )
+                continue
+            return request, call_count, tier, "", spent_usd
         except (RunCancelled, RunDeadlineExceeded):
             raise
         except Exception as exc:
@@ -221,6 +260,11 @@ def _choose_reasoning_action(
                 "Worker reasoning attempt failed",
                 tier=tier,
                 error=str(exc),
+            )
+            retry_warning = (
+                f"{loop_warning}\n\n[직전 화면 판단의 도구 호출이 거부됨]\n"
+                f"- 오류: {exc}\n"
+                "같은 잘못된 도구 인자를 반복하지 말고 현재 화면 근거로 수정하십시오."
             )
     _, spent_usd, _ = _reasoning_budget(state, call_count)
     return None, call_count, "primary", "primary_reasoning_failed", spent_usd

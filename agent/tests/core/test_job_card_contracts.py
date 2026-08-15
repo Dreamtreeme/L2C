@@ -3,6 +3,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from agent.graph import worker_reasoning
 from agent.graph.worker_reasoning_prompt import build_reasoning_messages
 from agent.runtime.worker_contracts import build_action_event
@@ -79,12 +81,12 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
     assert len(request.tool_calls[0].args["cards"]) == 1
 
 
-def test_selector_does_not_refill_an_existing_queue(tmp_path, monkeypatch):
+def test_selector_does_not_replace_an_unresolved_queue(tmp_path, monkeypatch):
     from agent.runtime import job_card_selector as selector
 
     state = _state(tmp_path / "unused.jpg")
     state["collection"]["job_card_queue"] = [
-        {"queue_id": "card-1", "status": "done", "title": "iOS 개발자"}
+        {"queue_id": "card-1", "status": "pending", "title": "iOS 개발자"}
     ]
     monkeypatch.setattr(
         selector,
@@ -98,6 +100,84 @@ def test_selector_does_not_refill_an_existing_queue(tmp_path, monkeypatch):
 
     assert request is None
     assert trace == {"attempted": False, "reason": "selector_not_applicable"}
+
+
+def test_selector_refills_a_resolved_queue_with_only_new_cards(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from agent.runtime import job_card_selector as selector
+
+    image_path = tmp_path / "marked.jpg"
+    Image.new("RGB", (200, 100), "white").save(image_path)
+    state = _state(image_path)
+    state["collection"]["job_card_queue"] = [
+        {
+            "queue_id": "card-1",
+            "status": "done",
+            "title": "iOS 개발자",
+            "company": "회사 A",
+        }
+    ]
+
+    class FakeModel:
+        def invoke(self, inputs, config=None):
+            return selector.JobCardSelection(
+                is_job_results_page=True,
+                cards=[
+                    selector.VisibleJobCard(
+                        marker_id=10,
+                        title="iOS 개발자",
+                        company="회사 A",
+                    ),
+                    selector.VisibleJobCard(
+                        marker_id=20,
+                        title="백엔드 개발자",
+                        company="회사 B",
+                    ),
+                ],
+            )
+
+    monkeypatch.setattr(selector, "_get_job_card_selector_model", lambda: FakeModel())
+
+    request, trace = selector.select_job_cards(state)
+
+    assert trace["reason"] == "cards_selected"
+    assert trace["marker_ids"] == [20]
+    assert request.tool_calls[0].args["cards"] == [
+        {"marker_id": 20, "title": "백엔드 개발자", "company": "회사 B"}
+    ]
+
+
+def test_selector_continues_when_result_list_has_no_related_card(
+    tmp_path,
+    monkeypatch,
+):
+    from PIL import Image
+
+    from agent.runtime import job_card_selector as selector
+
+    image_path = tmp_path / "marked.jpg"
+    Image.new("RGB", (200, 100), "white").save(image_path)
+
+    class FakeModel:
+        def invoke(self, inputs, config=None):
+            return selector.JobCardSelection(
+                is_job_results_page=True,
+                cards=[],
+            )
+
+    monkeypatch.setattr(
+        selector,
+        "_get_job_card_selector_model",
+        lambda: FakeModel(),
+    )
+
+    request, trace = selector.select_job_cards(_state(image_path))
+
+    assert trace["reason"] == "no_valid_card_continue"
+    assert request.source == "card_selector"
+    assert request.tool_calls[0].name == "scroll"
+    assert request.tool_calls[0].args["amount"] == "page"
 
 
 def test_queue_click_requires_an_exact_queue_id():
@@ -221,6 +301,136 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     )
     assert exhausted["decision"]["pending_action"].source == "reasoning_policy"
     assert exhausted["decision"]["pending_action"].tool_calls[0].name == "finish_task"
+
+
+def test_reasoning_rejects_icon_marker_as_text_input_target():
+    from agent.runtime.worker_contracts import action_request_from_model_response
+
+    completed = action_request_from_model_response(
+        SimpleNamespace(
+            content="검색어를 입력합니다.",
+            tool_calls=[
+                {
+                    "name": "type_in_marker",
+                    "args": {
+                        "marker_id": 18,
+                        "text": "데이터 엔지니어",
+                        "slot_name": "search_keyword",
+                    },
+                    "id": "type-search",
+                }
+            ],
+        ),
+        allowed_tool_names=("type_in_marker", "press_key"),
+    )
+    state = worker_state(
+        observation={
+            "current_markers": [
+                {
+                    "id": 17,
+                    "type": "text",
+                    "text": "JOB 검색",
+                    "bbox": [200, 100, 500, 150],
+                },
+                {
+                    "id": 18,
+                    "type": "icon",
+                    "text": "icon",
+                    "bbox": [510, 100, 560, 150],
+                },
+            ]
+        }
+    )
+    assert [call.name for call in completed.tool_calls] == [
+        "type_in_marker",
+        "press_key",
+    ]
+    with pytest.raises(
+        ValueError,
+        match=r"대상 \[18\]은 아이콘 마커.*허용된 텍스트 마커 ID: \[17\]",
+    ):
+        worker_reasoning._validate_reasoning_target_markers(state, completed)
+
+
+def test_reasoning_primary_retry_receives_lightweight_validation_error(monkeypatch):
+    warnings = []
+
+    def invoke(_state, _runtime, loop_warning, *, tier):
+        warnings.append((tier, loop_warning))
+        if tier == "lightweight":
+            raise ValueError("type_in_marker 대상 [18]은 아이콘 마커입니다.")
+        return worker_reasoning.build_action_request(
+            "llm",
+            "검색어를 입력합니다.",
+            [{"name": "press_key", "args": {"key": "Enter"}}],
+        )
+
+    monkeypatch.setattr(worker_reasoning, "_invoke_reasoning_model", invoke)
+
+    request, call_count, tier, stop_reason, _ = (
+        worker_reasoning._choose_reasoning_action(
+            worker_state(),
+            node_runtime(),
+            "기존 경고",
+            initial_tier="lightweight",
+            call_count=0,
+        )
+    )
+
+    assert request is not None
+    assert request.tool_calls[0].name == "press_key"
+    assert call_count == 2
+    assert tier == "primary"
+    assert stop_reason == ""
+    assert warnings[0] == ("lightweight", "기존 경고")
+    assert warnings[1][0] == "primary"
+    assert "대상 [18]은 아이콘 마커" in warnings[1][1]
+
+
+def test_detail_completion_is_confirmed_by_primary_model(monkeypatch):
+    tiers = []
+
+    def invoke(_state, _runtime, loop_warning, *, tier):
+        tiers.append((tier, loop_warning))
+        if tier == "lightweight":
+            return worker_reasoning.build_action_request(
+                "llm",
+                "상세 읽기를 마칩니다.",
+                [
+                    {
+                        "name": "finish_detail_reading",
+                        "args": {
+                            "observed_fields": {"benefits": "복지 및 근무환경"},
+                            "page_exhausted": False,
+                        },
+                    }
+                ],
+            )
+        return worker_reasoning.build_action_request(
+            "llm",
+            "복지 본문을 더 읽습니다.",
+            [{"name": "scroll", "args": {"direction": "down"}}],
+        )
+
+    monkeypatch.setattr(worker_reasoning, "_invoke_reasoning_model", invoke)
+
+    request, call_count, tier, stop_reason, _ = (
+        worker_reasoning._choose_reasoning_action(
+            worker_state(observation={"current_page_role": "job_detail"}),
+            node_runtime(),
+            "",
+            initial_tier="lightweight",
+            call_count=0,
+        )
+    )
+
+    assert request is not None
+    assert request.tool_calls[0].name == "scroll"
+    assert call_count == 2
+    assert tier == "primary"
+    assert stop_reason == ""
+    assert [item[0] for item in tiers] == ["lightweight", "primary"]
+    assert "상세 읽기 완료 재검토" in tiers[1][1]
 
 
 def test_reasoning_prompt_reuses_already_compacted_queue_action_args():

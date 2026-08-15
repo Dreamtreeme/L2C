@@ -19,7 +19,11 @@ from agent.runtime.worker_contracts import (
 )
 from agent.runtime.tool_schema import VisibleJobCard
 from agent.runtime.site_context import normalize_page_role, site_runtime_guidance
-from agent.runtime.job_card_queue import resolved_job_card_count
+from agent.runtime.job_card_queue import (
+    has_unresolved_job_card_queue,
+    job_card_is_known,
+    resolved_job_card_count,
+)
 from agent.runtime.worker_state import (
     job_capture_count,
     count_mode_from_state,
@@ -49,14 +53,9 @@ class JobCardSelection(BaseModel):
 
 
 def should_select_job_cards(state: WorkerState) -> bool:
-    """최초 검색 결과 화면에서만 카드 선택 모델을 사용한다."""
+    """목표가 남은 검색 결과 화면에서 새 카드 후보를 선택한다."""
 
-    queue = [
-        item
-        for item in (state["collection"].get("job_card_queue") or [])
-        if isinstance(item, dict)
-    ]
-    if queue:
+    if has_unresolved_job_card_queue(state):
         return False
 
     target_count = target_count_from_state(state)
@@ -180,6 +179,14 @@ def _selection_messages(
         "remaining_count": remaining_count,
         "current_url": current_url,
         "allowed_markers": markers,
+        "processed_cards": [
+            {
+                "title": str(item.get("title") or ""),
+                "company": str(item.get("company") or ""),
+            }
+            for item in state["collection"].get("job_card_queue", []) or []
+            if isinstance(item, dict)
+        ][-20:],
     }
     return [
         SystemMessage(content=instruction),
@@ -200,42 +207,56 @@ def _selection_messages(
     ]
 
 
-def _validated_cards(
-    selection: dict[str, Any],
-    markers: list[ScreenMarker],
-    limit: int | None,
-) -> list[dict[str, Any]]:
+def _marker_index(markers: list[ScreenMarker]) -> dict[int, ScreenMarker]:
     marker_ids: dict[int, ScreenMarker] = {}
     for marker in markers or []:
         raw_marker_id = marker.get("id")
         if raw_marker_id is None or not str(raw_marker_id).lstrip("-").isdigit():
             continue
         marker_ids[int(raw_marker_id)] = marker
+    return marker_ids
+
+
+def _selected_card(
+    raw: Any,
+    marker_ids: dict[int, ScreenMarker],
+) -> dict[str, Any] | None:
+    if not isinstance(raw, dict) or raw.get("marker_id") is None:
+        return None
+    try:
+        marker_id = int(raw["marker_id"])
+    except (TypeError, ValueError):
+        return None
+    marker = marker_ids.get(marker_id)
+    if marker is None:
+        return None
+    title = str(raw.get("title") or marker.get("text") or "").strip()
+    if not title:
+        return None
+    return {
+        "marker_id": marker_id,
+        "title": title,
+        "company": str(raw.get("company") or "").strip(),
+    }
+
+
+def _validated_cards(
+    selection: dict[str, Any],
+    markers: list[ScreenMarker],
+    limit: int | None,
+    known_cards: list[dict],
+) -> list[dict[str, Any]]:
+    marker_ids = _marker_index(markers)
     cards: list[dict[str, Any]] = []
     used_ids: set[int] = set()
     for raw in selection.get("cards") or []:
-        if not isinstance(raw, dict):
+        card = _selected_card(raw, marker_ids)
+        if card is None or card["marker_id"] in used_ids:
             continue
-        raw_selected_marker_id = raw.get("marker_id")
-        if raw_selected_marker_id is None:
+        if job_card_is_known(card, known_cards):
             continue
-        try:
-            marker_id = int(raw_selected_marker_id)
-        except (TypeError, ValueError):
-            continue
-        if marker_id not in marker_ids or marker_id in used_ids:
-            continue
-        title = str(raw.get("title") or marker_ids[marker_id].get("text") or "").strip()
-        if not title:
-            continue
-        cards.append(
-            {
-                "marker_id": marker_id,
-                "title": title,
-                "company": str(raw.get("company") or "").strip(),
-            }
-        )
-        used_ids.add(marker_id)
+        cards.append(card)
+        used_ids.add(card["marker_id"])
         if limit is not None and len(cards) >= limit:
             break
     return cards
@@ -318,10 +339,45 @@ def _build_queue_selection(
     }
 
 
+def _build_continue_selection(
+    availability: dict[str, Any],
+) -> tuple[ActionRequest, dict[str, Any]]:
+    """현재 결과 화면에 관련 공고가 없으면 다음 화면 범위를 확인한다."""
+
+    request = build_action_request(
+        "card_selector",
+        "현재 화면에 직접 관련된 공고가 없어 다음 결과를 확인합니다.",
+        [
+            {
+                "name": "scroll",
+                "args": {
+                    "direction": "down",
+                    "amount": "page",
+                    "target_role": "job_results",
+                    "target_component": "job_card_list",
+                    "reason": "현재 화면에 직접 관련된 공고 카드가 없습니다.",
+                    "expected_after": "다음 검색 결과 카드가 보입니다.",
+                    "page_role": "search",
+                    "risk_level": "safe_read",
+                },
+                "id": "card_selector_continue",
+            },
+        ],
+    )
+    logger.info("Job card selector continues to next visible results")
+    return request, {
+        "attempted": True,
+        "reason": "no_valid_card_continue",
+        "card_count": 0,
+        "model": _selector_model_name(),
+        **availability,
+    }
+
+
 def select_job_cards(
     state: WorkerState,
 ) -> tuple[ActionRequest | None, dict[str, Any]]:
-    """전용 VLM 결과를 카드 큐 저장과 첫 카드 클릭 요청으로 변환한다."""
+    """전용 VLM 결과를 아직 처리하지 않은 카드 큐로 변환한다."""
 
     if not should_select_job_cards(state):
         return None, {"attempted": False, "reason": "selector_not_applicable"}
@@ -352,11 +408,16 @@ def select_job_cards(
         selection,
         list(state["observation"].get("current_markers") or []),
         remaining_count,
+        [
+            dict(item)
+            for item in state["collection"].get("job_card_queue", []) or []
+            if isinstance(item, dict)
+        ],
     )
     if availability and availability["available_job_count"] < len(cards):
         availability = {}
     if not cards:
-        return None, {"attempted": True, "reason": "no_valid_card", **availability}
+        return _build_continue_selection(availability)
     return _build_queue_selection(cards, availability)
 
 

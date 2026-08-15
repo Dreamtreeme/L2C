@@ -35,15 +35,6 @@ class StateActionOutcome:
     state_update: WorkerStateUpdate = field(default_factory=_empty_state_update)
 
 
-@dataclass(frozen=True)
-class DetailReadingAssessment:
-    """상세 화면 근거가 최종 정제를 실행할 만큼 모였는지 판정한 결과."""
-
-    coverage: dict[str, Any]
-    coverage_status: dict[str, Any]
-    required_fields: list[str]
-
-
 def dispatch_ui_action(
     action_name: str,
     args: dict[str, Any],
@@ -101,104 +92,6 @@ def _active_source_card_key(
     return source_card_key(current_url, company, title)
 
 
-def _detail_followup(
-    state: WorkerState,
-    *,
-    current_url: str,
-    reason: str,
-    missing_fields: list[str],
-) -> dict[str, Any]:
-    """같은 상세 화면의 추가 판독 횟수와 누락 필드를 기록한다."""
-
-    detail_key = job_detail_key_from_state(state)
-    previous = dict(state["collection"].get("job_detail_followup", {}) or {})
-    same_detail = previous.get("url") == current_url or (
-        detail_key and previous.get("detail_key") == detail_key
-    )
-    attempts = int(previous.get("attempts") or 0) + 1 if same_detail else 1
-    return {
-        "url": current_url,
-        "detail_key": detail_key,
-        "reason": reason,
-        "missing_fields": list(missing_fields),
-        "attempts": attempts,
-    }
-
-
-def _assess_detail_reading(
-    args: dict[str, Any],
-    state: WorkerState,
-    current_url: str,
-) -> DetailReadingAssessment:
-    detail_key = job_detail_key_from_state(state)
-    coverage = merge_job_detail_coverage(
-        dict(state["collection"].get("job_detail_coverage", {}) or {}),
-        args,
-        state=state,
-        current_url=current_url,
-        detail_key=detail_key,
-    )
-    required_fields = required_fields_from_state(state)
-    return DetailReadingAssessment(
-        coverage=coverage,
-        coverage_status=detail_coverage_status(coverage, required_fields),
-        required_fields=required_fields,
-    )
-
-
-def _detail_retry_update(
-    state: WorkerState,
-    assessment: DetailReadingAssessment,
-    *,
-    current_url: str,
-    reason: str,
-    missing_fields: list[str],
-) -> WorkerStateUpdate:
-    return {
-        "collection": {
-            "job_detail_buffer": (
-                state["collection"].get("job_detail_buffer") or {}
-            ).copy(),
-            "job_detail_coverage": assessment.coverage,
-            "job_detail_followup": _detail_followup(
-                state,
-                current_url=current_url,
-                reason=reason,
-                missing_fields=missing_fields,
-            ),
-        }
-    }
-
-
-def _incomplete_detail_evidence_outcome(
-    current_captures: list[JobCapture],
-    state: WorkerState,
-    assessment: DetailReadingAssessment,
-    current_url: str,
-) -> StateActionOutcome:
-    missing = list(assessment.coverage_status["missing_fields"])
-    return StateActionOutcome(
-        result={
-            "action": "finish_detail_reading",
-            "status": "skipped",
-            "result": (
-                "Detail reading is not complete because required field "
-                f"evidence is missing: {', '.join(missing)}"
-            ),
-            "reason": "required_field_evidence_incomplete",
-            "required_fields": assessment.required_fields,
-            "field_coverage": assessment.coverage_status,
-        },
-        state_update=_detail_retry_update(
-            state,
-            assessment,
-            current_url=current_url,
-            reason="required_field_evidence_incomplete",
-            missing_fields=missing,
-        ),
-    )
-
-
 def _empty_detail_outcome(
     current_captures: list[JobCapture],
 ) -> StateActionOutcome:
@@ -220,7 +113,8 @@ def _empty_detail_outcome(
 
 def _prepare_job_capture(
     state: WorkerState,
-    assessment: DetailReadingAssessment,
+    coverage_status: dict[str, Any],
+    required_fields: list[str],
     *,
     current_url: str,
     raw_ocr_text: str,
@@ -230,10 +124,10 @@ def _prepare_job_capture(
         url=current_url,
         raw_ocr_text=raw_ocr_text,
         evidence=JobCollectionEvidence(
-            required_fields=assessment.required_fields,
-            unavailable_fields=assessment.coverage_status["unavailable_fields"],
-            page_exhausted=bool(assessment.coverage_status["page_exhausted"]),
-            field_evidence=dict(assessment.coverage_status["field_evidence"]),
+            required_fields=required_fields,
+            unavailable_fields=coverage_status["unavailable_fields"],
+            page_exhausted=bool(coverage_status["page_exhausted"]),
+            field_evidence=dict(coverage_status["field_evidence"]),
             screenshot_path=detail_evidence_screenshot(buffer),
             source_card_key=_active_source_card_key(state, current_url),
         ),
@@ -261,7 +155,6 @@ def _merge_completed_detail(
                 "job_captures": merged_captures,
                 "job_detail_buffer": {},
                 "job_detail_coverage": {},
-                "job_detail_followup": {},
             }
         },
     )
@@ -275,22 +168,22 @@ def _finish_detail_reading(
     state: WorkerState,
 ) -> StateActionOutcome:
     try:
-        assessment = _assess_detail_reading(args, state, current_url)
-        if assessment.coverage_status["missing_fields"]:
-            return _incomplete_detail_evidence_outcome(
-                current_captures,
-                state,
-                assessment,
-                current_url,
-            )
-
         buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
         raw_ocr_text = detail_buffer_text(buffer)
         if not raw_ocr_text:
             return _empty_detail_outcome(current_captures)
+        coverage = merge_job_detail_coverage(
+            dict(state["collection"].get("job_detail_coverage", {}) or {}),
+            args,
+            state=state,
+            current_url=current_url,
+            detail_key=job_detail_key_from_state(state),
+        )
+        required_fields = required_fields_from_state(state)
         capture = _prepare_job_capture(
             state,
-            assessment,
+            detail_coverage_status(coverage, required_fields),
+            required_fields,
             current_url=current_url,
             raw_ocr_text=raw_ocr_text,
         )

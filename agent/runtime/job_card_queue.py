@@ -7,13 +7,13 @@ from typing import Any
 from agent.runtime.worker_contracts import (
     ActionRequest,
     ScreenMarker,
-    TransitionResult,
     WorkerState,
     build_action_request,
 )
 from agent.utils.text import normalize_text
-from agent.runtime.site_context import looks_like_job_detail_url
+from agent.runtime.site_context import looks_like_job_detail_url, normalize_page_role
 from agent.runtime.worker_state import target_count_from_state
+from agent.vision.marker_geometry import marker_bbox
 from agent.vision.target_snapshot import marker_by_id
 
 
@@ -30,6 +30,23 @@ def job_card_entries_from_args(args: dict) -> list[dict]:
 def job_card_match_text(value: Any) -> str:
     text = normalize_text(value)
     return "".join(char for char in text.casefold() if char.isalnum())
+
+
+def job_card_is_known(card: dict, known_cards: list[dict]) -> bool:
+    """제목과 회사가 같은 카드를 이미 처리한 카드로 판정한다."""
+
+    title = job_card_match_text(card.get("title"))
+    company = job_card_match_text(card.get("company"))
+    if not title:
+        return False
+    for known in known_cards:
+        known_title = job_card_match_text(known.get("title"))
+        known_company = job_card_match_text(known.get("company"))
+        if title != known_title:
+            continue
+        if not company or not known_company or company == known_company:
+            return True
+    return False
 
 
 def _queue_limit(
@@ -52,6 +69,7 @@ def _normalized_job_card(
     raw: dict[str, Any],
     markers: list[ScreenMarker],
     queue: list[dict],
+    observation_id: str,
 ) -> dict[str, Any] | None:
     marker_id = int(raw["marker_id"])
     marker = marker_by_id(markers, marker_id)
@@ -67,6 +85,9 @@ def _normalized_job_card(
         "title": label,
         "company": company,
         "source_marker_id": marker_id,
+        "source_marker_text": str(marker.get("text") or "").strip(),
+        "source_marker_bbox": marker_bbox(marker),
+        "source_observation_id": observation_id,
     }
 
 
@@ -85,24 +106,13 @@ def normalize_job_card_queue(
         for item in (collection.get("job_card_queue", []) or [])
         if isinstance(item, dict) and str(item.get("status") or "") != "pending"
     ]
-    existing_labels = {
-        (
-            job_card_match_text(item.get("title")),
-            job_card_match_text(item.get("company")),
-        )
-        for item in queue
-    }
+    observation_id = str(observation.get("observation_id") or "")
     for raw in cards[: _queue_limit(state, queue, len(cards))]:
-        card = _normalized_job_card(raw, markers, queue)
+        card = _normalized_job_card(raw, markers, queue, observation_id)
         if card is None:
             continue
-        identity = (
-            job_card_match_text(card["title"]),
-            job_card_match_text(card["company"]),
-        )
-        if identity in existing_labels or (identity[0], "") in existing_labels:
+        if job_card_is_known(card, queue):
             continue
-        existing_labels.add(identity)
         queue.append(card)
     return queue
 
@@ -113,6 +123,31 @@ def pending_job_cards(queue: list[dict]) -> list[dict]:
         for item in queue or []
         if isinstance(item, dict) and str(item.get("status") or "pending") == "pending"
     ]
+
+
+def has_unresolved_job_card_queue(state: WorkerState) -> bool:
+    """현재 큐에 아직 선택하거나 수집 중인 카드가 있는지 반환한다."""
+
+    return any(
+        str(item.get("status") or "pending") in {"pending", "active"}
+        for item in state["collection"].get("job_card_queue", []) or []
+        if isinstance(item, dict)
+    )
+
+
+def can_select_pending_job_card(state: WorkerState) -> bool:
+    """현재 관찰에서 대기 중인 다음 카드를 안전하게 선택할 수 있는지 판정한다."""
+
+    observation = state["observation"]
+    queue = list(state["collection"].get("job_card_queue", []) or [])
+    current_url = str(observation.get("current_url") or "")
+    return bool(
+        observation.get("ocr_complete")
+        and normalize_page_role(observation.get("current_page_role")) == "search"
+        and not looks_like_job_detail_url(current_url)
+        and pending_job_cards(queue)
+        and not active_job_card(queue)
+    )
 
 
 def resolved_job_card_count(queue: list[dict]) -> int:
@@ -155,6 +190,23 @@ def job_card_queue_scope_complete(
 def needs_job_results_navigation(state: WorkerState) -> bool:
     """상세 처리가 끝났고 다음 공고를 위해 목록 화면이 필요한지 계산한다."""
 
+    transition = dict(state["transition"].get("transition_result") or {})
+    action = str(transition.get("action") or "")
+    source = str(transition.get("source") or "")
+    outcome = str(transition.get("outcome") or transition.get("reason") or "")
+    observation = state["observation"]
+    current_url = str(observation.get("current_url") or "")
+    detail_completed = any(
+        capture.url == current_url
+        for capture in state["collection"].get("job_captures", [])
+    ) or outcome == "existing_job_detail"
+    navigation_continuing = (
+        source == "job_results_navigation"
+        and action in {"go_back", "close_current_tab"}
+    )
+    if not detail_completed and not navigation_continuing:
+        return False
+
     queue = [
         dict(item)
         for item in state["collection"].get("job_card_queue", []) or []
@@ -172,11 +224,10 @@ def needs_job_results_navigation(state: WorkerState) -> bool:
     )
     if not needs_more_cards:
         return False
-    observation = state["observation"]
     return str(
         observation.get("current_page_role") or ""
     ) == "job_detail" or looks_like_job_detail_url(
-        str(observation.get("current_url") or "")
+        current_url
     )
 
 
@@ -217,23 +268,6 @@ def activate_job_card(queue: list[dict], args: dict) -> list[dict]:
             activated = True
         updated.append(item)
     return updated
-
-
-def release_active_job_card(queue: list[dict]) -> list[dict]:
-    """화면 전환이 없었던 카드 클릭을 다시 대기 상태로 돌린다."""
-
-    return [
-        {
-            **dict(item),
-            "status": (
-                "pending"
-                if str(item.get("status") or "") == "active"
-                else item.get("status", "pending")
-            ),
-        }
-        for item in queue or []
-        if isinstance(item, dict)
-    ]
 
 
 def job_card_click_matches_queue(queue: list[dict], args: dict) -> bool:
@@ -286,10 +320,19 @@ def skip_active_job_card(
 def job_card_marker_for_item(
     item: dict,
     markers: list[ScreenMarker],
+    *,
+    observation_id: str = "",
 ) -> tuple[int | None, dict]:
     """현재 OCR에서 큐에 저장된 공고 제목과 가장 잘 맞는 마커를 찾는다."""
 
-    saved_text = job_card_match_text(item.get("title"))
+    if observation_id and observation_id == str(item.get("source_observation_id") or ""):
+        source_marker = marker_by_id(markers, item.get("source_marker_id"))
+        if source_marker is not None:
+            return int(source_marker["id"]), {"reason": "source_observation_marker"}
+
+    saved_text = job_card_match_text(
+        item.get("source_marker_text") or item.get("title")
+    )
     if not saved_text:
         return None, {"reason": "queued_card_title_missing"}
 
@@ -320,16 +363,12 @@ def job_card_marker_for_item(
 
 def next_job_card_request(
     state: WorkerState,
-    transition_result: TransitionResult,
-    current_url: str,
     markers: list[ScreenMarker],
 ) -> tuple[ActionRequest | None, dict]:
     """목록 화면과 현재 OCR이 확인되면 큐의 다음 카드 행동을 만든다."""
 
-    if not str(transition_result.get("action") or ""):
-        return None, {"reason": "return_transition_missing"}
-    if looks_like_job_detail_url(current_url):
-        return None, {"reason": "still_on_detail_url", "url": current_url}
+    if not can_select_pending_job_card(state):
+        return None, {"reason": "pending_card_not_selectable"}
     queue = [
         dict(item)
         for item in (state["collection"].get("job_card_queue", []) or [])
@@ -353,6 +392,7 @@ def next_job_card_request(
     marker_id, marker_trace = job_card_marker_for_item(
         item,
         markers,
+        observation_id=str(state["observation"].get("observation_id") or ""),
     )
     if marker_id is None:
         return None, marker_trace
@@ -399,11 +439,13 @@ __all__ = [
     "needs_job_results_navigation",
     "pending_job_cards",
     "job_card_queue_scope_complete",
+    "can_select_pending_job_card",
+    "has_unresolved_job_card_queue",
     "job_detail_key_from_state",
+    "job_card_is_known",
     "job_card_label",
     "job_card_marker_for_item",
     "job_card_match_text",
-    "release_active_job_card",
     "next_job_card_request",
     "job_card_click_matches_queue",
     "job_card_entries_from_args",

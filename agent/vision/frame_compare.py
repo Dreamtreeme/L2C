@@ -71,6 +71,39 @@ def changed_pixel_ratio(
     return float(cv2.countNonZero(changed)) / float(changed.size)
 
 
+def crop_frame_ratio(
+    frame: np.ndarray,
+    region_ratio: list[float],
+) -> np.ndarray:
+    """정규화된 화면 비율로 같은 상호작용 영역을 자른다."""
+
+    source = gray_frame(frame)
+    if len(region_ratio) != 4:
+        raise ValueError("영역 비율은 [x1, y1, x2, y2] 형식이어야 합니다.")
+    height, width = source.shape[:2]
+    left = max(0, min(width - 1, round(region_ratio[0] * width)))
+    top = max(0, min(height - 1, round(region_ratio[1] * height)))
+    right = max(left + 1, min(width, round(region_ratio[2] * width)))
+    bottom = max(top + 1, min(height, round(region_ratio[3] * height)))
+    return source[top:bottom, left:right]
+
+
+def changed_region_ratio(
+    left: np.ndarray,
+    right: np.ndarray,
+    region_ratio: list[float],
+    *,
+    intensity_threshold: int,
+) -> float:
+    """두 캡처의 같은 화면 영역에서 달라진 픽셀 비율을 반환한다."""
+
+    return changed_pixel_ratio(
+        crop_frame_ratio(left, region_ratio),
+        crop_frame_ratio(right, region_ratio),
+        intensity_threshold=intensity_threshold,
+    )
+
+
 def mean_difference_percent(
     left: np.ndarray,
     right: np.ndarray,
@@ -91,6 +124,8 @@ def mean_difference_percent(
 
 __all__ = [
     "changed_pixel_ratio",
+    "changed_region_ratio",
+    "crop_frame_ratio",
     "gray_frame",
     "load_gray_frame",
     "mean_difference_percent",

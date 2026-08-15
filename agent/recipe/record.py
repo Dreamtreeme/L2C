@@ -6,7 +6,6 @@ from typing import Any
 
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.worker_actions import (
-    REVIEWABLE_REPLAY_ACTIONS,
     TARGET_REPLAY_ACTIONS,
     UI_ACTIONS,
 )
@@ -18,9 +17,9 @@ from agent.vision.screen_signature import (
     compute_target_roi_signature,
 )
 from agent.vision.target_snapshot import build_marker_target_snapshot, marker_by_id
-from shared.schema.recipe_schema import (
+from shared.schema.execution_record_schema import (
     ActionTarget,
-    PhysicalAction,
+    ObservedAction,
     ScreenCheckpoint,
 )
 
@@ -43,30 +42,11 @@ def _marker_region(marker: ScreenMarker, markers: list[ScreenMarker]) -> str:
     return f"{vertical}-{horizontal}"
 
 
-def _replay_mode(action_name: str, args: dict, slot_name: str) -> str:
-    if action_name not in REVIEWABLE_REPLAY_ACTIONS:
-        return "reasoning"
-    if action_name == "type_in_marker":
-        return "parameterized" if slot_name else "reasoning"
-    if action_name == "press_key":
-        key = normalize_text(args.get("key")).casefold()
-        return "fixed" if key in {"enter", "return"} else "reasoning"
-    return "fixed"
+def _input_slot(action_name: str, args: dict) -> str:
+    """모델이 실제 도구 호출에 명시한 입력 슬롯만 기록한다."""
 
-
-def _input_slot(state: WorkerState, action_name: str, args: dict) -> str:
     slot_name = normalize_text(args.get("slot_name"))
-    if action_name != "type_in_marker" or slot_name:
-        return slot_name
-    intent = state["request"].get("collection_intent")
-    search_keyword = normalize_text(
-        intent.get("search_keyword", "")
-        if isinstance(intent, dict)
-        else getattr(intent, "search_keyword", "")
-    )
-    if search_keyword and normalize_text(args.get("text")) == search_keyword:
-        return "search_keyword"
-    return ""
+    return slot_name if action_name == "type_in_marker" else ""
 
 
 def build_screen_checkpoint(
@@ -158,21 +138,18 @@ def build_physical_action(
     action_name: str,
     args: dict,
     seq: int,
-) -> PhysicalAction | None:
+) -> ObservedAction | None:
     """실행한 UI 도구를 경험 전이에 넣을 물리 행동으로 만든다."""
 
     if action_name not in UI_ACTIONS:
         return None
-    slot_name = _input_slot(state, action_name, args)
+    slot_name = _input_slot(action_name, args)
     target = None
     roi_signature: dict = {}
     if action_name in TARGET_REPLAY_ACTIONS or args.get("marker_id") is not None:
         target, roi_signature = _target(state, args)
 
-    replay_mode = _replay_mode(action_name, args, slot_name)
-    if action_name in TARGET_REPLAY_ACTIONS and target is None:
-        replay_mode = "reasoning"
-    return PhysicalAction(
+    return ObservedAction(
         source_seq=seq,
         action=action_name,
         target=target,
@@ -183,7 +160,6 @@ def build_physical_action(
         component=normalize_text(args.get("target_component")),
         slot_refs=[slot_name] if slot_name else [],
         risk_level=normalize_text(args.get("risk_level")),
-        replay_mode=replay_mode,
     )
 
 

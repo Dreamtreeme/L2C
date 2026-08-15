@@ -7,7 +7,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-ReplayMode = Literal["fixed", "parameterized", "reasoning"]
 RecipeInputName = Literal["search_keyword"]
 RECIPE_INPUT_NAMES = frozenset({"search_keyword"})
 

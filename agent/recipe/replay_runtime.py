@@ -1,4 +1,4 @@
-"""첫 ROI가 일치하는 경험 기반 탐색 경로를 상태 전이 단위로 재생한다."""
+"""현재 화면에 적용된 경험 규칙을 실행하고 관찰 가능한 효과를 검증한다."""
 
 from __future__ import annotations
 
@@ -9,28 +9,35 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from agent.runtime.site_context import normalize_page_role
-from agent.runtime.target_matching import (
-    roi_signature_match,
-    screen_context_signature_match,
-)
-from agent.runtime.worker_contracts import (
-    ScreenMarker,
-    TransitionRequest,
-    WorkerState,
-    build_action_request,
-)
-from agent.runtime.worker_state import current_frame_signature
-from agent.runtime.vision_worker_runtime import WorkerDependencies
+from agent.config import get_settings
 from agent.recipe.replay import (
     ReflexReplayContext,
     ReflexSelection,
     load_reflex_replay_context,
     select_reflex_replay,
 )
+from agent.runtime.site_context import normalize_page_role
+from agent.runtime.vision_worker_runtime import WorkerDependencies
+from agent.runtime.worker_contracts import (
+    ScreenMarker,
+    TransitionRequest,
+    WorkerState,
+    build_action_request,
+)
 from agent.utils.logger import logger
-from agent.utils.text import recipe_url_scope_matches, url_template
-from shared.schema.recipe_schema import PhysicalAction, ReplaySession
+from agent.utils.text import recipe_url_scope_matches
+from agent.vision.frame_compare import (
+    changed_pixel_ratio,
+    changed_region_ratio,
+    load_gray_frame,
+)
+from shared.schema.experience_rule_schema import (
+    ExpectedEffect,
+    ExperienceRuleStep,
+    ReplaySession,
+    RuleApplication,
+    RuleAction,
+)
 
 
 def replay_session_from_state(state: WorkerState) -> ReplaySession | None:
@@ -73,105 +80,98 @@ def blocked_recipe_keys_after(
     return keys
 
 
+def _effect_frame_ratio(
+    request: TransitionRequest,
+    current_image_path: str,
+    effect: ExpectedEffect,
+) -> float:
+    before_image_path = str(request.get("before_screenshot") or "")
+    if not before_image_path or not current_image_path:
+        raise ValueError("effect verification requires before and after captures")
+    left = load_gray_frame(before_image_path)
+    right = load_gray_frame(current_image_path)
+    threshold = get_settings().reflex.visual_change_pixel_threshold
+    if effect.kind == "target_region_change":
+        return changed_region_ratio(
+            left,
+            right,
+            effect.target_region_ratio,
+            intensity_threshold=threshold,
+        )
+    return changed_pixel_ratio(left, right, intensity_threshold=threshold)
+
+
 def verify_replay_after_state(
     request: TransitionRequest,
     state: WorkerState,
 ) -> tuple[bool, str, dict[str, Any]]:
-    """저장된 레시피 도착 화면과 현재 관찰이 같은지 확인한다."""
+    """저장된 규칙의 기대 효과가 현재 캡처에서 실제로 발생했는지 확인한다."""
 
     if request.get("execution_failed"):
-        return False, "recipe_action_group_failed", {}
-    expected = request.get("expected_after_state")
-    if expected is None:
-        return False, "recipe_after_state_missing", {}
-
-    expected_url = expected.url_template
+        return False, "rule_action_group_failed", {}
+    raw_effect = request.get("expected_effect")
+    if raw_effect is None:
+        return False, "rule_expected_effect_missing", {}
+    effect = (
+        raw_effect
+        if isinstance(raw_effect, ExpectedEffect)
+        else ExpectedEffect.model_validate(raw_effect)
+    )
     observation = state["observation"]
     current_url = str(observation.get("current_url") or "")
-    if (
-        expected_url
-        and current_url
-        and not recipe_url_scope_matches(expected_url, current_url)
-    ):
-        return (
-            False,
-            "recipe_after_url_mismatch",
-            {
-                "expected_url_template": expected_url,
-                "current_url": current_url,
-            },
-        )
-
-    before_role = normalize_page_role(request.get("before_page_role"))
-    expected_role = normalize_page_role(expected.page_role)
     current_role = normalize_page_role(observation.get("current_page_role"))
-    if before_role and expected_role and expected_role != before_role and current_role:
-        if current_role != expected_role:
-            return (
-                False,
-                "recipe_after_page_role_mismatch",
-                {
-                    "before_page_role": before_role,
-                    "expected_page_role": expected_role,
-                    "current_page_role": current_role,
-                },
-            )
 
-    before_url = url_template(str(request.get("before_url") or ""))
-    if (
-        expected_url
-        and current_url
-        and expected_url != before_url
-        and recipe_url_scope_matches(expected_url, current_url)
+    if effect.expected_url_template and not recipe_url_scope_matches(
+        effect.expected_url_template,
+        current_url,
     ):
-        return (
-            True,
-            "recipe_after_url_matched",
-            {
-                "expected_url_template": expected_url,
-                "current_url": current_url,
-            },
-        )
+        return False, "rule_effect_url_mismatch", {"current_url": current_url}
+    expected_role = normalize_page_role(effect.expected_page_role)
+    if expected_role and current_role and expected_role != current_role:
+        return False, "rule_effect_page_role_mismatch", {
+            "expected_page_role": expected_role,
+            "current_page_role": current_role,
+        }
 
-    anchor_target = expected.anchor_target
-    anchor_signature = dict(expected.anchor_roi_signature)
-    current_signature = current_frame_signature(state)
-    if anchor_target is not None and anchor_signature:
-        match = roi_signature_match(
-            anchor_signature,
+    if effect.kind == "url_change":
+        before_url = str(request.get("before_url") or "")
+        changed = bool(
+            current_url
+            and before_url
+            and current_url != before_url
+            and effect.expected_url_template
+        )
+        return changed, (
+            "rule_url_change_verified" if changed else "rule_url_did_not_change"
+        ), {"before_url": before_url, "current_url": current_url}
+
+    if effect.kind == "page_change":
+        before_role = normalize_page_role(request.get("before_page_role"))
+        changed = bool(current_role and before_role and current_role != before_role)
+        return changed, (
+            "rule_page_change_verified" if changed else "rule_page_did_not_change"
+        ), {"before_page_role": before_role, "current_page_role": current_role}
+
+    try:
+        ratio = _effect_frame_ratio(
+            request,
             str(observation.get("current_screenshot") or ""),
-            current_signature=current_signature,
+            effect,
         )
-        if not match.get("matched"):
-            return (
-                False,
-                str(match.get("reason") or "recipe_after_anchor_mismatch"),
-                match,
-            )
-        return (
-            True,
-            "recipe_after_anchor_matched",
-            match,
-        )
-
-    context_signature = dict(expected.screen_context_signature)
-    if context_signature:
-        match = screen_context_signature_match(
-            context_signature,
-            current_signature,
-        )
-        matched = bool(match.get("matched"))
-        return (
-            matched,
-            (
-                "recipe_after_context_matched"
-                if matched
-                else str(match.get("reason") or "recipe_after_context_mismatch")
-            ),
-            match,
-        )
-
-    return False, "recipe_after_state_unverifiable", {}
+    except (OSError, ValueError) as exc:
+        return False, "rule_effect_frame_unavailable", {"error": str(exc)[:200]}
+    minimum = get_settings().reflex.visual_change_min_ratio
+    changed = ratio >= max(0.0, minimum)
+    reason = (
+        "rule_target_region_change_verified"
+        if effect.kind == "target_region_change" and changed
+        else "rule_screen_change_verified"
+        if changed
+        else "rule_expected_region_unchanged"
+        if effect.kind == "target_region_change"
+        else "rule_expected_screen_unchanged"
+    )
+    return changed, reason, {"visual_change_ratio": ratio}
 
 
 def record_replay_outcome(
@@ -181,8 +181,6 @@ def record_replay_outcome(
     status: str,
     persist_result: Callable[[str, bool], object],
 ) -> None:
-    """경로가 끝났거나 실패했을 때 한 번만 실제 재생 결과를 저장한다."""
-
     if str(request.get("source") or "") != "reflex":
         return
     session = replay_session_from_state(state)
@@ -192,13 +190,13 @@ def record_replay_outcome(
     if not recipe_key or not session or not session.pending_is_current():
         return
     succeeded = status == "ready"
-    if succeeded and not session.is_last_transition():
+    if succeeded and not session.is_last_step():
         return
     try:
         persist_result(recipe_key, succeeded)
     except Exception as exc:
         logger.warning(
-            "Recipe replay outcome persistence failed",
+            "Experience rule outcome persistence failed",
             recipe_key=recipe_key,
             error=str(exc),
         )
@@ -209,54 +207,50 @@ def _miss_result(
     reason: str,
     trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """현재 활성 경로를 차단하고 자율 탐색 폴백 상태를 만든다."""
-
-    reflex_trace = dict(trace or {})
-    reflex_trace.update(
-        {
-            "hit": False,
-            "reason": reason,
-        }
-    )
-    replay_session = replay_session_from_state(state)
-    blocked_keys = blocked_recipe_keys(state)
-    if replay_session and replay_session.recipe_key:
-        active_recipe_key = replay_session.recipe_key
+    reflex_trace = {**dict(trace or {}), "hit": False, "reason": reason}
+    session = replay_session_from_state(state)
+    blocked = blocked_recipe_keys(state)
+    if session and session.recipe_key:
         reflex_trace.update(
             {
-                "recipe_key": active_recipe_key,
-                "recipe_transition_index": replay_session.current_transition_index,
-                "recipe_transition_count": replay_session.transition_count,
+                "recipe_key": session.recipe_key,
+                "recipe_step_index": session.current_step_index,
+                "recipe_step_count": session.step_count,
                 "path_failed": True,
             }
         )
-        if active_recipe_key not in blocked_keys:
-            blocked_keys.append(active_recipe_key)
+        if session.recipe_key not in blocked:
+            blocked.append(session.recipe_key)
     return {
         "replay": {
             "reflex_trace": reflex_trace,
             "replay_session": None,
-            "reflex_blocked_recipe_keys": blocked_keys,
-        },
+            "reflex_blocked_recipe_keys": blocked,
+        }
     }
 
 
-def _build_request(selection: ReflexSelection):
-    """검증을 통과한 레시피 전이를 실행 요청으로 조립한다."""
-
-    transition_count = len(selection.recipe.transitions)
+def _build_request(
+    selection: ReflexSelection,
+    resolver_reasoning_call_count: int,
+):
     return build_action_request(
         "reflex",
-        "cached recipe transition",
+        "resolved experience rule step",
         selection.tool_calls,
         metadata={
-            "recipe_key": selection.recipe_key,
-            "transition_index": selection.transition_index,
-            "transition_count": transition_count,
-            "before_state": selection.transition.before.model_dump(mode="json"),
-            "expected_after_state": selection.transition.after.model_dump(mode="json"),
+            "recipe_key": selection.rule_key,
+            "step_index": selection.step_index,
+            "step_count": len(selection.rule.steps),
+            "source_reasoning_call_count": len(
+                selection.step.source_transition_seqs
+            ),
+            "resolver_reasoning_call_count": resolver_reasoning_call_count,
+            "before_rule_screen": selection.step.before.model_dump(mode="json"),
+            "expected_effect": selection.step.expected_effect.model_dump(mode="json"),
+            "resolved_step": selection.resolved_step.model_dump(mode="json"),
             "transition_actions": [
-                str(action.action) for action in selection.transition.actions
+                str(action.action) for action in selection.step.actions
             ],
         },
     )
@@ -265,31 +259,62 @@ def _build_request(selection: ReflexSelection):
 def _hit_result(
     context: ReflexReplayContext,
     selection: ReflexSelection,
+    resolver_reasoning_call_count: int,
 ) -> dict[str, Any]:
-    """요청, 활성 경로 상태와 관측 trace를 함께 만든다."""
-
-    transition_count = len(selection.recipe.transitions)
-    replay_session = ReplaySession(
-        recipe_key=selection.recipe_key,
-        current_transition_index=selection.transition_index,
-        pending_transition_index=selection.transition_index,
-        transition_count=transition_count,
+    step_count = len(selection.rule.steps)
+    handles = (
+        dict(context.replay_session.interaction_handles)
+        if context.replay_session
+        else {}
+    )
+    for rule_action, resolved_action in zip(
+        selection.step.actions,
+        selection.resolved_step.actions,
+    ):
+        if rule_action.action != "scroll" or resolved_action.target is None:
+            continue
+        target = rule_action.target
+        if target is None:
+            continue
+        key = "|".join(
+            value.strip().casefold()
+            for value in (target.component, target.role, target.description)
+            if value.strip()
+        )
+        if key:
+            handles[key] = resolved_action.target.model_copy(deep=True)
+    session = ReplaySession(
+        recipe_key=selection.rule_key,
+        current_step_index=selection.step_index,
+        pending_step_index=selection.step_index,
+        step_count=step_count,
+        interaction_handles=handles,
     )
     return {
         "observation": {"current_markers": selection.markers},
-        "decision": {"pending_action": _build_request(selection)},
+        "decision": {
+            "pending_action": _build_request(
+                selection,
+                resolver_reasoning_call_count,
+            )
+        },
         "replay": {
             "reflex_trace": {
                 "hit": True,
-                "recipe_key": selection.recipe_key,
+                "recipe_key": selection.rule_key,
                 "candidate_count": context.candidate_count,
                 "task_category": context.task_category,
                 "actions": [call["name"] for call in selection.tool_calls],
                 "tool_calls": selection.tool_call_traces,
-                "recipe_transition_index": selection.transition_index,
-                "recipe_transition_count": transition_count,
+                "resolution_mode": selection.resolution_mode,
+                "recipe_step_index": selection.step_index,
+                "recipe_step_count": step_count,
+                "source_reasoning_call_count": len(
+                    selection.step.source_transition_seqs
+                ),
+                "resolver_reasoning_call_count": resolver_reasoning_call_count,
             },
-            "replay_session": replay_session,
+            "replay_session": session,
         },
     }
 
@@ -297,32 +322,35 @@ def _hit_result(
 def _detect_target_markers(
     runtime: Runtime[WorkerDependencies],
     context: ReflexReplayContext,
-    action: PhysicalAction,
+    action: RuleAction,
 ) -> list[ScreenMarker]:
     target = action.target
-    crop_rect_ratio = list(action.roi_signature.get("crop_rect_ratio") or [])
-    if target is None or not crop_rect_ratio or not context.current_image_path:
+    if target is None or target.reference is None or not context.current_image_path:
         return []
+    crop = list(target.reference_roi_signature.get("crop_rect_ratio") or [])
+    if not crop:
+        return []
+    marker_type = target.reference.marker_type
     try:
         perception = runtime.context.vision.get_perception()
         markers = perception.detect_target_roi(
             Path(context.current_image_path),
-            crop_rect_ratio,
-            target.marker_type,
+            crop,
+            marker_type,
         )
-        if markers or target.marker_type not in {"text", "icon"}:
+        if markers or marker_type not in {"text", "icon"}:
             return markers
-        fallback_type = "icon" if target.marker_type == "text" else "text"
+        fallback_type = "icon" if marker_type == "text" else "text"
         return perception.detect_target_roi(
             Path(context.current_image_path),
-            crop_rect_ratio,
+            crop,
             fallback_type,
         )
     except Exception as exc:
         logger.warning(
-            "Target ROI detection failed",
+            "Experience target ROI detection failed",
             action=action.action,
-            marker_type=target.marker_type,
+            marker_type=marker_type,
             error=str(exc),
         )
         return []
@@ -332,23 +360,23 @@ def attempt_reflex_replay(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
 ) -> dict[str, Any]:
-    """후보 조회, 검증과 요청 조립을 순서대로 실행한다."""
+    """후보 조회, 현재 화면 해석과 실행 요청 조립을 순서대로 수행한다."""
 
     started = time.perf_counter()
     logger.info("Executing Reflex Node")
     context = load_reflex_replay_context(
         state,
-        runtime.context.data.load_site_recipes,
+        runtime.context.data.load_experience_rules,
     )
-    if not context.recipe_candidates:
+    if not context.rule_candidates:
         logger.info(
-            "Reflex miss: no recipe",
+            "Reflex miss: no experience rule",
             site=context.site,
             task_category=context.task_category,
         )
         return _miss_result(
             state,
-            "no_recipe",
+            "no_rule",
             {
                 "candidate_count": 0,
                 "site": context.site,
@@ -356,36 +384,45 @@ def attempt_reflex_replay(
             },
         )
 
+    resolver_reasoning_call_count = 0
+
+    def resolve_rule_targets(
+        step: ExperienceRuleStep,
+        markers: list[ScreenMarker],
+        image_path: str,
+    ) -> RuleApplication:
+        nonlocal resolver_reasoning_call_count
+        resolver_reasoning_call_count += 1
+        return runtime.context.resolve_experience_rule(step, markers, image_path)
+
     selection, rejection_log = select_reflex_replay(
         state,
         context,
         lambda action: _detect_target_markers(runtime, context, action),
+        resolve_rule_targets,
     )
     if selection is None:
         trace = rejection_log.trace_payload(context.candidate_count)
+        trace["resolver_reasoning_call_count"] = resolver_reasoning_call_count
         logger.info(
-            "Reflex miss: no candidate passed marker matching",
+            "Reflex miss: no rule applied",
             candidates=context.candidate_count,
             last_reason=rejection_log.last_reason,
             reject_reasons=rejection_log.reason_counts,
-            candidate_rejections=rejection_log.candidates[:12],
         )
-        return _miss_result(state, "no_candidate_passed", trace)
+        return _miss_result(state, "no_rule_applied", trace)
 
     elapsed = time.perf_counter() - started
     logger.info(
         "Reflex hit",
-        recipe_key=selection.recipe_key[:24],
+        recipe_key=selection.rule_key[:24],
         actions=[call["name"] for call in selection.tool_calls],
-        recipe_transition=(
-            f"{selection.transition_index + 1}/{len(selection.recipe.transitions)}"
-            if len(selection.recipe.transitions) > 1
-            else ""
-        ),
-        goal=selection.recipe.goal[:80],
+        resolution_mode=selection.resolution_mode,
+        recipe_step=f"{selection.step_index + 1}/{len(selection.rule.steps)}",
+        goal=selection.rule.goal[:80],
         duration=f"{elapsed:.3f}s",
     )
-    return _hit_result(context, selection)
+    return _hit_result(context, selection, resolver_reasoning_call_count)
 
 
 __all__ = [

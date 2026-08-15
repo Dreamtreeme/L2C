@@ -60,14 +60,12 @@ Standard 유료 단가만 기록하며, 출력 단가는 공개 답변과 내부
 
 실행 결과는 로그 옆의 `.summary.json`에도 남습니다. `git_commit`, 변경 파일 유무, 설정 fingerprint, 모델, 레시피 버전을 저장하므로 성능 변화가 코드와 설정 중 어디에서 발생했는지 비교할 수 있습니다.
 
-`experience_guided_preconditions.performance_comparable=true`인 실행만 경험 기반
-탐색 성능 표본으로 사용합니다. `active_roi_recipe_missing`처럼 사전조건이 실패한
-실행은 수집에 성공해도 자율 탐색 폴백으로 분류합니다. Reflex와 작업 목록 재생이
-모두 0회인 기록도 같은 기준으로 비교 대상에서 제외합니다. 기존 DB 공고를 화면에서
-확인하고 상세 수집을 생략한 실행은 `existing_jobs_observed`로 표시하며 신규 수집
-성능과 분리합니다.
+`experience_guided_preconditions.replay_ready=true`는 실행 전에 활성 경험 규칙이
+있었음을 뜻합니다. `active_experience_rule_missing`이면 수집에 성공하더라도 경험 기반
+실행 계약은 실패합니다. 기존 DB 공고를 확인한 수치는 품질 결과에 남기지만, 재생
+단계가 성공했다면 원본 판단 대체 수와 재생 해석기 호출 수를 함께 보존합니다.
 
-성능 비교의 단일 원본은 `.summary.json`입니다. 텍스트 로그는 화면·행동 원인을 조사할 때만 사용하며, 정규식으로 OCR·추론·Reflex 횟수나 시간을 다시 계산하지 않습니다.
+실행 관측의 단일 원본은 `.summary.json`입니다. 텍스트 로그는 화면·행동 원인을 조사할 때만 사용하며, 정규식으로 OCR·추론·Reflex 횟수나 시간을 다시 계산하지 않습니다.
 
 ```powershell
 .\.venv-app\Scripts\python.exe -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
@@ -84,14 +82,14 @@ Standard 유료 단가만 기록하며, 출력 단가는 공개 답변과 내부
   --scenario wanted-ios-experience-guided
 ```
 
-자율 탐색 프로세스에서는 자동승격을 끕니다. 수집이 끝나면 부모 프로세스가 실제 서비스와 같은 `RecipePromotionWorker`를 사용해 해당 후보만 재시도하며 검토합니다. 최종 실행 판정은 프로세스 종료, 수집 품질과 실행 모드 계약을 한 번씩 조합합니다. 자율 탐색의 모드 계약은 실제 레시피 승격이며, 경험 기반 탐색의 모드 계약은 완료된 재생 경로가 한 개 이상이고 비교 전제조건이 충족되는 것입니다. 자율 탐색이 실패하면 짝 실행은 `paired_autonomous_promotion_failed`로 건너뜁니다.
+자율 탐색 프로세스에서는 자동승격을 끕니다. 수집이 끝나면 부모 프로세스가 실제 서비스와 같은 `RecipePromotionWorker`를 사용해 해당 후보만 재시도하며 검토합니다. 최종 실행 판정은 프로세스 종료, 수집 품질과 실행 모드 계약을 한 번씩 조합합니다. 자율 탐색의 모드 계약은 실제 레시피 승격이며, 경험 기반 탐색의 모드 계약은 활성 경험 규칙이 있고 완료된 재생 경로가 한 개 이상인 것입니다. 자율 탐색이 실패하면 뒤의 경험 기반 실행은 `paired_autonomous_promotion_failed`로 건너뜁니다.
 
 행렬 시나리오에 `expected_source_urls`가 있으면 저장 결과의 각 URL을 기대 URL과
 일대일로 대조합니다. 기대 URL의 쿼리 식별자가 실제 URL에 포함되어야 하며,
 누락되거나 남는 저장 URL이 있으면 실패합니다. 이 판정은 자식 E2E의 `quality`에
 포함되므로 프로세스 종료 코드, summary의 `observability.e2e_success`와 LangSmith
-피드백에도 동일하게 반영됩니다. 계약을 통과하지 못한 실행은
-`mode_pair_efficiency`에서도 제외합니다.
+피드백에도 동일하게 반영됩니다. `experience_reuse_effectiveness`는 경험 기반 실행에서
+대체한 원본 판단에서 재생 해석기 호출을 뺀 순감소량과 경로 완료·실패·폴백을 집계합니다.
 
 수집과 승격 비용은 다음 필드로 분리합니다.
 
@@ -153,7 +151,9 @@ LangSmith에서 root run 이름 `l2c.e2e`를 기준으로 다음 지표를 구�
 | 토큰 소비 | `total_tokens`, `tokens_per_persisted_item` | 합계와 공고당 평균 |
 | 비용 | `estimated_cost_usd`, `cost_per_persisted_item_usd` | 단가 파일이 있을 때만 |
 | OCR 안정성 | `ocr_timeout_count`, `recovered_failure_count` | 합계와 성공 실행 비교 |
-| 경험 기반 탐색 성과 | `reflex_path_completed_count`, `reflex_hits`, `queue_replay_hits` | 완료 경로 수와 경험 기반 탐색 실행의 평균 |
+| 경험 기반 탐색 성과 | `reflex_reasoning_call_reduction`, `reflex_path_completed_count`, `reflex_path_fallback_count` | 추론 호출 순감소량과 경로 결과 |
 | 변경 영향 | `git_commit`, `git_dirty`, `config_fingerprint`, `recipe_version` | 필터와 그룹 |
 
-비교할 때는 `scenario_id`, `site`, `target_count`, `execution_mode`가 같은 실행만 묶습니다. 서로 다른 검색 난이도나 수집 개수를 한 그래프에 섞으면 실행시간과 토큰 변화의 원인을 판단할 수 없습니다.
+실행시간, 토큰과 비용은 각 실행의 병목 진단과 운영 추세에 사용합니다. 자율탐색 당시의
+화면과 모델 판단은 재현할 수 없으므로 경험 기반 탐색의 절감량이나 손익분기점을 이
+값들의 차이로 계산하지 않습니다.

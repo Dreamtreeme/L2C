@@ -16,14 +16,14 @@ from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
 from shared.schema.collection_intent import CollectionIntent
 from shared.schema.jd_schema import JobCapture
 from shared.schema.feedback_schema import ExecutionEvent
-from shared.schema.recipe_schema import (
-    ExperienceTransition,
-    PhysicalAction,
-    ReplaySession,
+from shared.schema.execution_record_schema import (
+    ObservedAction,
+    ObservedTransition,
+    ObservedTransitionEvidence,
     ScreenCheckpoint,
-    TransitionEvidence,
     TransitionStatus,
 )
+from shared.schema.experience_rule_schema import ExpectedEffect, ReplaySession
 
 
 def _message_text(content: Any) -> str:
@@ -130,8 +130,8 @@ class CompletedTransitionObservation(BaseModel):
     outcome: str = ""
     reason: str = ""
     recipe_key: str = ""
-    recipe_transition_index: int | None = None
-    recipe_transition_count: int | None = None
+    recipe_step_index: int | None = None
+    recipe_step_count: int | None = None
     transition_actions: list[str] = Field(default_factory=list)
     after_state_match: dict[str, Any] = Field(default_factory=dict)
     attempt: int = 0
@@ -153,7 +153,7 @@ def build_action_event(
     result: dict[str, Any],
     *,
     observation_id: str = "",
-    candidate_action: PhysicalAction | None = None,
+    candidate_action: ObservedAction | None = None,
     before_checkpoint: ScreenCheckpoint | None = None,
     before_marker_texts: Sequence[str] | None = None,
     expected_after: str = "",
@@ -183,7 +183,7 @@ def action_event_results(events: Sequence[ActionEvent]) -> list[dict[str, Any]]:
 
 def action_event_transitions(
     events: Sequence[ActionEvent],
-) -> list[ExperienceTransition]:
+) -> list[ObservedTransition]:
     return [
         parsed.transition
         for event in events
@@ -238,7 +238,7 @@ def attach_action_transition(
         result_status = ""
     final_event = selected_events[-1]
     final_result = final_event.result
-    evidence = TransitionEvidence(
+    evidence = ObservedTransitionEvidence(
         source=observation.source,
         result_status=result_status,
         result_reason=str(
@@ -248,8 +248,8 @@ def attach_action_transition(
         outcome=observation.outcome,
         reason=observation.reason,
         recipe_key=observation.recipe_key,
-        recipe_transition_index=observation.recipe_transition_index,
-        recipe_transition_count=observation.recipe_transition_count,
+        recipe_step_index=observation.recipe_step_index,
+        recipe_step_count=observation.recipe_step_count,
         transition_actions=observation.transition_actions,
         after_state_match=observation.after_state_match,
         attempt=observation.attempt,
@@ -262,7 +262,7 @@ def attach_action_transition(
         screenshot=observation.screenshot,
         marked_image=observation.marked_image,
     )
-    observed = ExperienceTransition(
+    observed = ObservedTransition(
         seq=action_seqs[0],
         before=first_event.before_checkpoint,
         actions=recorded_actions,
@@ -388,8 +388,8 @@ class ReflexTrace(TypedDict, total=False):
     reject_reasons: dict[str, int]
     candidate_rejections: list[dict[str, Any]]
     recipe_key: str
-    recipe_transition_index: int
-    recipe_transition_count: int
+    recipe_step_index: int
+    recipe_step_count: int
     path_failed: bool
     actions: list[str]
     tool_calls: dict[str, dict[str, Any]]
@@ -442,7 +442,7 @@ class TransitionRequest(TypedDict):
     source: str
     recipe_key: str
     transition_actions: list[str]
-    expected_after_state: ScreenCheckpoint | None
+    expected_effect: ExpectedEffect | None
     expected_after: str
     input_text: str
     target_marker_id: int | None
@@ -450,8 +450,10 @@ class TransitionRequest(TypedDict):
     before_page_role: str
     before_screenshot: str
     started_at: float
-    recipe_transition_index: NotRequired[int]
-    recipe_transition_count: NotRequired[int]
+    recipe_step_index: NotRequired[int]
+    recipe_step_count: NotRequired[int]
+    source_reasoning_call_count: NotRequired[int]
+    resolver_reasoning_call_count: NotRequired[int]
     after_state_match: NotRequired[dict[str, Any]]
     execution_failed: NotRequired[bool]
 
@@ -466,7 +468,7 @@ class TransitionResult(TypedDict, total=False):
     source: str
     recipe_key: str
     transition_actions: list[str]
-    expected_after_state: ScreenCheckpoint | None
+    expected_effect: ExpectedEffect | None
     expected_after: str
     input_text: str
     target_marker_id: int | None
@@ -474,8 +476,10 @@ class TransitionResult(TypedDict, total=False):
     before_page_role: str
     before_screenshot: str
     started_at: float
-    recipe_transition_index: int
-    recipe_transition_count: int
+    recipe_step_index: int
+    recipe_step_count: int
+    source_reasoning_call_count: int
+    resolver_reasoning_call_count: int
     after_state_match: dict[str, Any]
     execution_failed: bool
     status: str
@@ -549,7 +553,6 @@ class JobCollectionState(TypedDict):
     job_results_availability: dict[str, Any]
     job_detail_buffer: JobDetailBuffer
     job_detail_coverage: dict[str, Any]
-    job_detail_followup: dict[str, Any]
 
 
 class WorkerLifecycleState(TypedDict):
@@ -609,7 +612,6 @@ class JobCollectionPatch(TypedDict, total=False):
     job_results_availability: dict[str, Any]
     job_detail_buffer: JobDetailBuffer
     job_detail_coverage: dict[str, Any]
-    job_detail_followup: dict[str, Any]
 
 
 class WorkerLifecyclePatch(TypedDict, total=False):
@@ -754,7 +756,6 @@ def create_worker_state(
             "job_results_availability": {},
             "job_detail_buffer": {},
             "job_detail_coverage": {},
-            "job_detail_followup": {},
         },
         "lifecycle": {"is_finished": False},
     }

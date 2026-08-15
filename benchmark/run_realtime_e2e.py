@@ -141,50 +141,31 @@ def _experience_guided_preconditions(
     if execution_mode != "experience_guided":
         return {
             "required": False,
-            "performance_comparable": True,
+            "replay_ready": True,
             "reasons": [],
         }
     try:
-        from agent.recipe.store import RecipeStore
+        from agent.recipe.store import ExperienceRuleStore
 
-        counts = RecipeStore(db_path).active_counts(site)
+        counts = ExperienceRuleStore(db_path).active_counts(site)
     except Exception as exc:
         return {
             "required": True,
             "site": site,
-            "performance_comparable": False,
+            "replay_ready": False,
             "reasons": ["active_recipe_lookup_failed"],
             "error": str(exc)[:200],
         }
     reasons = []
-    if int(counts.get("roi_recipes") or 0) <= 0:
-        reasons.append("active_roi_recipe_missing")
+    if int(counts.get("experience_rules") or 0) <= 0:
+        reasons.append("active_experience_rule_missing")
     return {
         "required": True,
         "site": site,
         **counts,
-        "performance_comparable": not reasons,
+        "replay_ready": not reasons,
         "reasons": reasons,
     }
-
-
-def _finalize_experience_guided_preconditions(
-    preconditions: dict[str, object],
-    quality: dict[str, object],
-) -> dict[str, object]:
-    """기존 DB 공고가 섞인 경험 기반 탐색을 성능 비교에서 제외한다."""
-
-    out = dict(preconditions)
-    if not out.get("required"):
-        return out
-    reasons = list(out.get("reasons") or [])
-    observed_existing_count = int(quality.get("observed_existing_count") or 0)
-    if observed_existing_count > 0:
-        reasons.append("existing_jobs_observed")
-    out["observed_existing_count"] = observed_existing_count
-    out["reasons"] = list(dict.fromkeys(reasons))
-    out["performance_comparable"] = not out["reasons"]
-    return out
 
 
 def _parse_args() -> argparse.Namespace:
@@ -507,10 +488,6 @@ def _run_e2e(args: argparse.Namespace, log_path: Path, summary_path: Path) -> in
         print(json.dumps(result, ensure_ascii=False, indent=2))
         print(f"EXECUTION_TIME_SEC={float(execution['elapsed']):.3f}")
         print(f"LOG_TARGET={log_path}")
-        final_preconditions = _finalize_experience_guided_preconditions(
-            preconditions,
-            dict(execution["quality"]),
-        )
         summary = _build_summary(
             args,
             identity,
@@ -519,7 +496,7 @@ def _run_e2e(args: argparse.Namespace, log_path: Path, summary_path: Path) -> in
             started_at=started_at,
             metrics=metrics,
             events=events,
-            preconditions=final_preconditions,
+            preconditions=preconditions,
             promotion=promotion,
         )
         _write_summary(summary, summary_path)

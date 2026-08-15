@@ -1,26 +1,22 @@
-"""비평가가 남긴 자율탐색 전이를 활성 경험 경로로 승격한다."""
+"""자율탐색 원본 기록에서 비평가가 남긴 연속 성공 경로를 고른다."""
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
-from agent.recipe.store import RecipeStore
-from agent.recipe.task_category import normalize_task_category
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.target_matching import screen_context_signature_match
 from agent.runtime.worker_actions import is_supported_recipe_action_group
-from shared.schema.feedback_schema import RecipeCandidate, RecipeCandidateReview
-from shared.schema.recipe_schema import (
-    ExperiencePath,
-    ExperienceTransition,
+from shared.schema.execution_record_schema import (
+    ObservedTransition,
     PhysicalActionName,
     ScreenCheckpoint,
 )
-from shared.schema.skill_schema import RECIPE_INPUT_NAMES, RecipeSkillMetadata
+from shared.schema.feedback_schema import RecipeCandidate, RecipeCandidateReview
 
 
 class PrunedTransition(BaseModel):
-    """승격 대상에서 제외된 전이와 이유."""
+    """경험 규칙 생성 대상에서 제외된 전이와 이유."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -29,21 +25,7 @@ class PrunedTransition(BaseModel):
     reason: str
 
 
-class CandidatePromotionResult(BaseModel):
-    """후보 하나를 활성 경험 경로로 승격한 결과."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    promoted: bool
-    saved_count: int
-    promoted_action_count: int
-    promoted_transition_count: int
-    promoted_path_count: int
-    pruned_transitions: list[PrunedTransition] = Field(default_factory=list)
-
-
-def _has_verifiable_result(transition: ExperienceTransition) -> bool:
+def _has_verifiable_result(transition: ObservedTransition) -> bool:
     before = transition.before
     after = transition.after
     if after.has_anchor() or after.has_context_phash():
@@ -55,11 +37,19 @@ def _has_verifiable_result(transition: ExperienceTransition) -> bool:
     return bool(after.url_template and after.url_template != before.url_template)
 
 
+def _has_target_evidence(transition: ObservedTransition) -> bool:
+    return all(
+        action.action not in {"click_marker", "type_in_marker", "scroll"}
+        or (action.target is not None and bool(action.roi_signature))
+        for action in transition.actions
+    )
+
+
 def is_preparation_transition(
-    transition: ExperienceTransition,
-    following: ExperienceTransition | None,
+    transition: ObservedTransition,
+    following: ObservedTransition | None,
 ) -> bool:
-    """화면은 유지됐지만 바로 다음 성공 행동에 입력을 제공한 전이인지 확인한다."""
+    """화면은 유지됐지만 바로 다음 성공 행동에 입력을 제공했는지 확인한다."""
 
     evidence = transition.evidence
     following_evidence = following.evidence if following else None
@@ -71,7 +61,7 @@ def is_preparation_transition(
         and evidence.reason == "no_screen_change"
         and len(transition.actions) == 1
         and transition.actions[0].action == "type_in_marker"
-        and transition.actions[0].is_supported_replay_action()
+        and _has_target_evidence(transition)
         and following
         and following_evidence
         and transition.after.same_observation_as(following.before)
@@ -79,20 +69,20 @@ def is_preparation_transition(
         and following_evidence.result_status == "success"
         and following_evidence.status == "ready"
         and is_supported_recipe_action_group(following.actions)
-        and all(action.is_supported_replay_action() for action in following.actions)
         and not any(
             action.risk_level.strip().casefold() == "sensitive"
             for action in following.actions
         )
+        and _has_target_evidence(following)
         and _has_verifiable_result(following)
     )
 
 
 def transition_rejection_reason(
-    transition: ExperienceTransition,
-    following: ExperienceTransition | None = None,
+    transition: ObservedTransition,
+    following: ObservedTransition | None = None,
 ) -> str:
-    """기록된 전이를 그대로 재생할 수 없는 첫 번째 이유를 반환한다."""
+    """비평가에게 전달할 수 없는 원본 전이의 첫 번째 이유를 반환한다."""
 
     evidence = transition.evidence
     if evidence is None:
@@ -115,8 +105,8 @@ def transition_rejection_reason(
         return "sensitive_action"
     if not is_supported_recipe_action_group(transition.actions):
         return "unsupported_action_group"
-    if not all(action.is_supported_replay_action() for action in transition.actions):
-        return "unsupported_replay_action"
+    if not _has_target_evidence(transition):
+        return "target_evidence_missing"
     if not _has_verifiable_result(transition):
         return "after_state_unverifiable"
     return ""
@@ -124,10 +114,10 @@ def transition_rejection_reason(
 
 def reviewable_candidate_transitions(
     candidate: RecipeCandidate,
-) -> tuple[list[ExperienceTransition], list[PrunedTransition]]:
-    """실행 계약이 완성된 자율탐색 전이만 비평가 입력으로 고른다."""
+) -> tuple[list[ObservedTransition], list[PrunedTransition]]:
+    """원본 근거가 완성된 자율탐색 전이만 비평가 입력으로 고른다."""
 
-    reviewable: list[ExperienceTransition] = []
+    reviewable: list[ObservedTransition] = []
     pruned: list[PrunedTransition] = []
     transitions = candidate.transitions
     for index, transition in enumerate(transitions):
@@ -149,9 +139,7 @@ def reviewable_candidate_transitions(
 def _same_screen(left: ScreenCheckpoint, right: ScreenCheckpoint) -> bool:
     if left.same_observation_as(right):
         return True
-    left_role = normalize_page_role(left.page_role)
-    right_role = normalize_page_role(right.page_role)
-    if left_role != right_role:
+    if normalize_page_role(left.page_role) != normalize_page_role(right.page_role):
         return False
     if left.url_template != right.url_template:
         return False
@@ -160,87 +148,48 @@ def _same_screen(left: ScreenCheckpoint, right: ScreenCheckpoint) -> bool:
         dict(right.screen_context_signature),
     )
     distance = match.get("distance")
-    return bool(
-        match.get("matched")
-        and isinstance(distance, int)
-        and distance == 0
-    )
+    return bool(match.get("matched") and isinstance(distance, int) and distance == 0)
 
 
-def _replay_path(transitions: list[ExperienceTransition]) -> ExperiencePath:
-    """상태 사슬에 다음 행동의 검증 지점을 연결하고 순서를 다시 매긴다."""
+def transitions_are_continuous(
+    previous: ObservedTransition,
+    current: ObservedTransition,
+) -> bool:
+    """앞 전이의 도착 화면과 다음 전이의 시작 화면이 같은지 판정한다."""
 
-    replay_transitions = [
-        transition.model_copy(deep=True, update={"seq": index})
-        for index, transition in enumerate(transitions)
-    ]
-    for index, following in enumerate(replay_transitions[1:]):
-        next_action = following.actions[0]
-        if next_action.target is None or not next_action.roi_signature:
+    return _same_screen(previous.after, current.before)
+
+
+def continuous_transition_groups(
+    transitions: list[ObservedTransition],
+) -> list[list[ObservedTransition]]:
+    """전이를 같은 도착·시작 화면이 이어지는 경로로 묶는다."""
+
+    if not transitions:
+        return []
+    groups: list[list[ObservedTransition]] = []
+    current_group = [transitions[0]]
+    for transition in transitions[1:]:
+        if transitions_are_continuous(current_group[-1], transition):
+            current_group.append(transition)
             continue
-        current = replay_transitions[index]
-        replay_transitions[index] = current.model_copy(
-            update={
-                "after": current.after.model_copy(
-                    deep=True,
-                    update={
-                        "anchor_target": next_action.target.model_copy(deep=True),
-                        "anchor_roi_signature": dict(next_action.roi_signature),
-                    },
-                )
-            }
-        )
-    return ExperiencePath(transitions=replay_transitions)
+        groups.append(current_group)
+        current_group = [transition]
+    groups.append(current_group)
+    return groups
 
 
-def _split_replay_chains(
-    transitions: list[ExperienceTransition],
-) -> list[ExperiencePath]:
-    """앞 행동의 결과와 다음 행동의 시작이 맞는 전이끼리 묶는다."""
-
-    paths: list[ExperiencePath] = []
-    current: list[ExperienceTransition] = []
-    for transition in transitions:
-        if current and not _same_screen(current[-1].after, transition.before):
-            paths.append(_replay_path(current))
-            current = []
-        current.append(transition)
-    if current:
-        paths.append(_replay_path(current))
-    return paths
-
-
-def _candidate_skill_metadata(
-    candidate: RecipeCandidate,
-    transitions: list[ExperienceTransition],
-) -> RecipeSkillMetadata:
-    slots = {
-        name
-        for transition in transitions
-        for action in transition.actions
-        for name in action.slot_refs
-        if name in RECIPE_INPUT_NAMES
-    }
-    return RecipeSkillMetadata(
-        task_category=normalize_task_category(
-            candidate.collection_intent.task_category
-        ),
-        inputs=[{"name": name} for name in sorted(slots)],
-    )
-
-
-def apply_candidate_promotion(
+def retained_candidate_path(
     candidate: RecipeCandidate,
     review: RecipeCandidateReview,
-    db_path=None,
-) -> CandidatePromotionResult:
-    """비평가가 유지한 전이를 변경하지 않고 활성 경로로 저장한다."""
+) -> tuple[list[ObservedTransition], list[PrunedTransition]]:
+    """비평가가 남긴 전이가 하나의 연속 경로일 때 원본 그대로 반환한다."""
 
     reviewable, pruned = reviewable_candidate_transitions(candidate)
     kept_seqs = {
         verdict.seq for verdict in review.transition_verdicts if verdict.keep
     }
-    retained: list[ExperienceTransition] = []
+    retained: list[ObservedTransition] = []
     for transition in reviewable:
         if transition.seq in kept_seqs:
             retained.append(transition)
@@ -252,37 +201,17 @@ def apply_candidate_promotion(
                     reason="critic_pruned",
                 )
             )
-
-    paths = _split_replay_chains(retained)
-    metadata = _candidate_skill_metadata(candidate, retained)
-    saved_count = RecipeStore(db_path).replace_recipe_paths(
-        candidate.site,
-        candidate.goal,
-        paths,
-        metadata=metadata,
-        source_run_id=candidate.run_id,
-    )
-    return CandidatePromotionResult(
-        promoted=saved_count > 0,
-        saved_count=saved_count,
-        promoted_action_count=sum(
-            len(transition.actions)
-            for path in paths
-            for transition in path.transitions
-        ),
-        promoted_transition_count=sum(
-            len(path.transitions) for path in paths
-        ),
-        promoted_path_count=saved_count,
-        pruned_transitions=pruned,
-    )
+    if len(continuous_transition_groups(retained)) != 1:
+        return [], pruned
+    return retained, pruned
 
 
 __all__ = [
-    "CandidatePromotionResult",
     "PrunedTransition",
-    "apply_candidate_promotion",
+    "continuous_transition_groups",
     "is_preparation_transition",
+    "retained_candidate_path",
     "reviewable_candidate_transitions",
     "transition_rejection_reason",
+    "transitions_are_continuous",
 ]

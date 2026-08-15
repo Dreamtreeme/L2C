@@ -213,7 +213,7 @@ def _bbox_iou(left: list[float], right: list[float]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
-def match_target_by_ratio(
+def _match_target_geometry(
     target: dict[str, Any] | None,
     markers: list[ScreenMarker],
     screen_size: list[int],
@@ -255,7 +255,7 @@ def match_target_by_ratio(
     return candidates[0][2]
 
 
-def match_local_target(
+def match_exact_target(
     target: dict[str, Any] | None,
     markers: list[ScreenMarker],
     screen_size: list[int],
@@ -282,17 +282,16 @@ def match_local_target(
         if not same_type:
             return None
     if same_type:
-        return match_target_by_ratio(target, same_type, screen_size)
+        return _match_target_geometry(target, same_type, screen_size)
     if target_type not in {"text", "icon"} or not markers:
         return None
     fallback_target = {**target, "marker_type": ""}
-    return match_target_by_ratio(fallback_target, markers, screen_size)
+    return _match_target_geometry(fallback_target, markers, screen_size)
 
 
 __all__ = [
     "capture_context_match",
-    "match_local_target",
-    "match_target_by_ratio",
+    "match_exact_target",
     "roi_signature_match",
     "screen_context_signature_match",
 ]

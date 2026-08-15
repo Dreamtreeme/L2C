@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from shared.schema.recipe_schema import SiteExperience
+from shared.schema.experience_rule_schema import ExperienceRule
 from shared.schema.jd_schema import JobCapture
 
 
@@ -15,7 +15,7 @@ ExistingJobCardMarker = Callable[
     tuple[list[dict[str, Any]], list[dict[str, Any]]],
 ]
 ExistingJobUrlLookup = Callable[[str, Sequence[JobCapture]], dict[str, Any]]
-SiteExperienceLoader = Callable[..., list[tuple[str, SiteExperience]]]
+ExperienceRuleLoader = Callable[..., list[tuple[str, ExperienceRule]]]
 RecipeReplayRecorder = Callable[[str, bool], bool]
 
 
@@ -25,8 +25,8 @@ class WorkerDataServices:
 
     mark_existing_job_cards: ExistingJobCardMarker
     find_existing_job_url: ExistingJobUrlLookup
-    load_site_recipes: SiteExperienceLoader
+    load_experience_rules: ExperienceRuleLoader
     record_recipe_replay: RecipeReplayRecorder
 
 
-__all__ = ["SiteExperienceLoader", "WorkerDataServices"]
+__all__ = ["ExperienceRuleLoader", "WorkerDataServices"]

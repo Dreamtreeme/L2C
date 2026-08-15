@@ -2,6 +2,7 @@
   "schema_version": 2,
   "description": "고정 조건에서 5개 사이트의 엄격 수집 성공률을 측정한다.",
   "require_clean_worktree": true,
+  "require_recipe_promotion": false,
   "scenarios": [
     {"id": "wanted-ios", "site": "wanted", "search_keyword": "iOS 개발자", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},
     {"id": "wanted-ai", "site": "wanted", "search_keyword": "AI 엔지니어", "target_count": 2, "count_mode": "explicit", "execution_mode": "autonomous", "repeat": 3},

@@ -4,13 +4,15 @@ from agent.graph import (
     worker_selection,
     worker_transition,
 )
-from agent.graph.workflow import route_after_execution
+from agent.graph.workflow import route_after_execution, route_after_selection
 from agent.tests.worker_test_support import (
+    apply_update,
     node_runtime,
     worker_data_services,
     worker_state,
 )
-from shared.schema.recipe_schema import ScreenCheckpoint
+from shared.schema.jd_schema import JobCapture
+from shared.schema.experience_rule_schema import ExpectedEffect
 
 
 def test_completed_detail_uses_deterministic_results_navigation():
@@ -23,10 +25,17 @@ def test_completed_detail_uses_deterministic_results_navigation():
         transition={
             "transition_result": {
                 "status": "ready",
-                "action": "finish_detail_reading",
+                "action": "scroll",
+                "source": "llm",
             },
         },
         collection={
+            "job_captures": [
+                JobCapture(
+                    url="https://www.wanted.co.kr/wd/1",
+                    raw_ocr_text="첫 번째 공고 상세 원문",
+                )
+            ],
             "job_card_queue": [
                 {
                     "queue_id": "card-2",
@@ -54,6 +63,7 @@ def test_completed_detail_uses_deterministic_results_navigation():
                 "status": "unknown",
                 "action": "go_back",
                 "reason": "no_screen_change",
+                "source": "job_results_navigation",
             },
         },
         collection=state["collection"],
@@ -62,6 +72,36 @@ def test_completed_detail_uses_deterministic_results_navigation():
     close_request = close["decision"]["pending_action"]
     assert close_request.source == "job_results_navigation"
     assert close_request.tool_calls[0].name == "close_current_tab"
+
+
+def test_detail_click_does_not_return_before_detail_reading_finishes():
+    state = worker_state(
+        observation={
+            "current_url": "https://www.wanted.co.kr/wd/1",
+            "current_page_role": "job_detail",
+            "ocr_complete": False,
+        },
+        transition={
+            "transition_result": {
+                "status": "ready",
+                "action": "click_marker",
+                "source": "llm",
+            },
+        },
+        collection={
+            "job_card_queue": [
+                {
+                    "queue_id": "card-2",
+                    "status": "pending",
+                    "title": "두 번째 iOS 개발자",
+                },
+            ]
+        },
+    )
+
+    selected = worker_selection.selection_node(state, node_runtime())
+
+    assert selected == {}
 
 
 def test_returned_results_selects_next_card_from_current_ocr():
@@ -102,6 +142,61 @@ def test_returned_results_selects_next_card_from_current_ocr():
     assert request.source == "job_card_queue"
     assert request.tool_calls[0].name == "click_marker"
     assert request.tool_calls[0].args["marker_id"] == 29
+
+
+def test_queue_click_without_screen_change_keeps_active_card(monkeypatch):
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (False, 0.0),
+    )
+    state = worker_state(
+        observation={
+            "current_url": "https://www.saramin.co.kr/zf_user/search",
+            "current_page_role": "search",
+            "current_screenshot": "same-search.png",
+            "ocr_complete": True,
+            "current_markers": [{"id": 28, "text": "백엔드 개발자"}],
+        },
+        transition={
+            "transition_request": {
+                "action": "click_marker",
+                "action_seq": 3,
+                "source": "job_card_queue",
+                "before_url": "https://www.saramin.co.kr/zf_user/search",
+                "before_screenshot": "same-search.png",
+                "started_at": time.time(),
+            }
+        },
+        collection={
+            "job_card_queue": [
+                {
+                    "queue_id": "card-1",
+                    "status": "active",
+                    "title": "백엔드 개발자",
+                },
+                {
+                    "queue_id": "card-2",
+                    "status": "pending",
+                    "title": "백엔드 개발자 팀원",
+                },
+            ]
+        },
+    )
+
+    updated = apply_update(
+        state,
+        worker_transition.transition_node(state, node_runtime()),
+    )
+
+    assert updated["transition"]["transition_result"]["status"] == "unknown"
+    assert (
+        updated["transition"]["transition_result"]["reason"]
+        == "job_card_detail_not_reached"
+    )
+    assert updated["collection"]["job_card_queue"][0]["status"] == "active"
+    assert worker_selection.selection_node(updated, node_runtime()) == {}
+    assert route_after_selection(updated) == "reasoning"
 
 
 def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
@@ -170,7 +265,7 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
         "action": "press_key",
         "action_seq": 2,
         "source": "reflex",
-        "recipe_key": "path6#search",
+        "recipe_key": "experience-rule10#search",
         "before_url": "https://www.wanted.co.kr/search",
         "started_at": time.time(),
     }
@@ -186,10 +281,10 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
             },
             replay={
                 "replay_session": {
-                    "recipe_key": "path6#search",
-                    "current_transition_index": 0,
-                    "pending_transition_index": 0,
-                    "transition_count": 1,
+                    "recipe_key": "experience-rule10#search",
+                    "current_step_index": 0,
+                    "pending_step_index": 0,
+                    "step_count": 1,
                 }
             },
         ),
@@ -205,10 +300,12 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
     assert transition["transition"]["transition_result"]["status"] == "unknown"
     assert (
         transition["transition"]["transition_result"]["reason"]
-        == "recipe_after_state_missing"
+        == "rule_expected_effect_missing"
     )
-    assert transition["replay"]["reflex_blocked_recipe_keys"] == ["path6#search"]
-    assert replay_results == [("path6#search", False)]
+    assert transition["replay"]["reflex_blocked_recipe_keys"] == [
+        "experience-rule10#search"
+    ]
+    assert replay_results == [("experience-rule10#search", False)]
 
 
 def test_reflex_transition_accepts_changed_url_with_dynamic_content(
@@ -226,13 +323,11 @@ def test_reflex_transition_accepts_changed_url_with_dynamic_content(
                     "source": "reflex",
                     "before_page_role": "search_overlay",
                     "before_url": "https://www.wanted.co.kr/",
-                    "expected_after_state": ScreenCheckpoint(
-                        url_template="wanted.co.kr/search?query",
-                        page_role="search_results",
-                        screen_context_signature={
-                            "phash": "0" * 16,
-                            "size": [1920, 1080],
-                        },
+                    "expected_effect": ExpectedEffect(
+                        kind="url_change",
+                        description="검색 결과로 이동한다",
+                        expected_url_template="wanted.co.kr/search?query",
+                        expected_page_role="search",
                     ),
                 }
             },
@@ -252,10 +347,10 @@ def test_reflex_transition_accepts_changed_url_with_dynamic_content(
 
     transition = result["transition"]["transition_result"]
     assert transition["status"] == "ready"
-    assert transition["reason"] == "recipe_after_url_matched"
+    assert transition["reason"] == "rule_url_change_verified"
 
 
-def test_reflex_final_transition_accepts_url_before_ocr(monkeypatch):
+def test_reflex_url_effect_requests_ocr_before_completing(monkeypatch):
     replay_results = []
     monkeypatch.setattr(
         worker_transition,
@@ -267,15 +362,16 @@ def test_reflex_final_transition_accepts_url_before_ocr(monkeypatch):
             transition={
                 "transition_request": {
                     "source": "reflex",
-                    "recipe_key": "experience8#search",
+                    "recipe_key": "experience-rule10#search",
                     "before_page_role": "home",
                     "before_url": "https://www.saramin.co.kr/zf_user/",
-                    "expected_after_state": ScreenCheckpoint(
-                        url_template="saramin.co.kr/zf_user/search?searchword",
-                        page_role="search_results",
+                    "expected_effect": ExpectedEffect(
+                        kind="url_change",
+                        description="검색 결과로 이동한다",
+                        expected_url_template="saramin.co.kr/zf_user/search?searchword",
                     ),
-                    "recipe_transition_index": 1,
-                    "recipe_transition_count": 2,
+                    "recipe_step_index": 1,
+                    "recipe_step_count": 2,
                 }
             },
             observation={
@@ -289,10 +385,10 @@ def test_reflex_final_transition_accepts_url_before_ocr(monkeypatch):
             },
             replay={
                 "replay_session": {
-                    "recipe_key": "experience8#search",
-                    "current_transition_index": 1,
-                    "pending_transition_index": 1,
-                    "transition_count": 2,
+                    "recipe_key": "experience-rule10#search",
+                    "current_step_index": 1,
+                    "pending_step_index": 1,
+                    "step_count": 2,
                 }
             },
         ),
@@ -306,91 +402,8 @@ def test_reflex_final_transition_accepts_url_before_ocr(monkeypatch):
     )
 
     transition = result["transition"]["transition_result"]
-    assert transition["status"] == "ready"
-    assert transition["reason"] == "recipe_after_url_matched"
+    assert transition["status"] == "needs_ocr"
+    assert transition["reason"] == "rule_effect_ocr_required"
     assert transition["needs_ocr"] is True
-    assert result["replay"]["replay_session"] is None
-    assert replay_results == [("experience8#search", True)]
-
-
-def test_reflex_transition_does_not_accept_page_role_without_screen_match(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        worker_transition,
-        "transition_has_visual_change",
-        lambda *_args: (True, 0.5),
-    )
-    result = worker_transition.transition_node(
-        worker_state(
-            transition={
-                "transition_request": {
-                    "source": "reflex",
-                    "before_page_role": "search_overlay",
-                    "before_url": "https://www.wanted.co.kr/search",
-                    "expected_after_state": ScreenCheckpoint(
-                        url_template="wanted.co.kr/search",
-                        page_role="search_results",
-                        screen_context_signature={
-                            "phash": "0" * 16,
-                            "size": [1920, 1080],
-                        },
-                    ),
-                }
-            },
-            observation={
-                "current_url": "https://www.wanted.co.kr/search",
-                "current_page_role": "search",
-                "current_markers": [{"id": 1, "text": "검색 결과"}],
-                "screen_signature": {
-                    "phash": "f" * 16,
-                    "size": [1920, 1080],
-                },
-                "ocr_complete": True,
-            },
-        ),
-        node_runtime(),
-    )
-
-    transition = result["transition"]["transition_result"]
-    assert transition["status"] == "unknown"
-    assert transition["reason"] == "screen_context_phash_distance"
-
-
-def test_reflex_transition_keeps_phash_check_within_same_page_role(monkeypatch):
-    monkeypatch.setattr(
-        worker_transition,
-        "transition_has_visual_change",
-        lambda *_args: (True, 0.5),
-    )
-    result = worker_transition.transition_node(
-        worker_state(
-            transition={
-                "transition_request": {
-                    "source": "reflex",
-                    "before_page_role": "job_detail",
-                    "expected_after_state": ScreenCheckpoint(
-                        page_role="job_detail",
-                        screen_context_signature={
-                            "phash": "0" * 16,
-                            "size": [1920, 1080],
-                        },
-                    ),
-                }
-            },
-            observation={
-                "current_page_role": "job_detail",
-                "current_markers": [{"id": 1, "text": "상세"}],
-                "screen_signature": {
-                    "phash": "f" * 16,
-                    "size": [1920, 1080],
-                },
-                "ocr_complete": True,
-            },
-        ),
-        node_runtime(),
-    )
-
-    transition = result["transition"]["transition_result"]
-    assert transition["status"] == "unknown"
-    assert transition["reason"] == "screen_context_phash_distance"
+    assert result.get("replay") is None
+    assert replay_results == []

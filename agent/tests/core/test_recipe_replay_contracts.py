@@ -1,569 +1,348 @@
-import time
+from PIL import Image, ImageDraw
 
-from agent.graph import (
-    worker_transition,
+from agent.application.experience_rule_resolver import resolve_rule_targets
+from agent.recipe.replay import ReflexReplayContext, ReplayInputs, select_reflex_replay
+from agent.recipe.replay_runtime import (
+    replay_session_after_transition,
+    verify_replay_after_state,
 )
-from agent.recipe.replay_runtime import attempt_reflex_replay as reflex_node
-from agent.tests.worker_test_support import (
-    node_runtime,
-    worker_data_services,
-    worker_state,
+from agent.tests.worker_test_support import worker_state
+from shared.schema.experience_rule_schema import (
+    ExpectedEffect,
+    ExperienceRule,
+    ExperienceRuleStep,
+    InteractionRegionHandle,
+    ReplaySession,
+    RuleAction,
+    RuleApplication,
+    RuleScreen,
+    RuleTarget,
 )
-from shared.schema.collection_intent import CollectionIntent
-from shared.schema.recipe_schema import ScreenCheckpoint
 
 
-class _TargetPerception:
-    def __init__(self, markers_by_screenshot):
-        self.markers_by_screenshot = markers_by_screenshot
-
-    def detect_target_roi(self, image_path, _crop_rect_ratio, marker_type):
-        markers = self.markers_by_screenshot[image_path.name]
-        if isinstance(markers, dict):
-            return markers.get(marker_type, [])
-        return markers
-
-
-class _TargetVision:
-    def __init__(self, markers_by_screenshot):
-        self.perception = _TargetPerception(markers_by_screenshot)
-
-    def get_perception(self):
-        return self.perception
-
-
-def test_reflex_replays_one_parameterized_roi_step(tmp_path):
-    from PIL import Image, ImageDraw
-
-    from agent.vision.screen_signature import compute_target_roi_signature
-    from shared.schema.recipe_schema import (
-        ExperienceTransition,
-        PhysicalAction,
-        ScreenCheckpoint,
-        SiteExperience,
-    )
-
-    screenshot = tmp_path / "screen.png"
-    image = Image.new("RGB", (200, 120), "white")
-    ImageDraw.Draw(image).rectangle([10, 10, 70, 40], fill="black")
-    image.save(screenshot)
-    roi_signature = compute_target_roi_signature(
-        screenshot,
-        [10, 10, 70, 40],
-        [200, 120],
-    )
-
-    def load_site_recipes(site, *, task_category=None):
-        assert site == "wanted"
-        return [
-            (
-                "recipe-search",
-                SiteExperience(
-                    site="wanted",
-                    goal="검색",
-                    transitions=[
-                        ExperienceTransition(
-                            seq=0,
-                            before=ScreenCheckpoint(
-                                url_template="wanted.co.kr/",
-                                page_role="home",
-                            ),
-                            actions=[
-                                PhysicalAction(
-                                    source_seq=0,
-                                    action="type_in_marker",
-                                    replay_mode="parameterized",
-                                    roi_signature=roi_signature,
-                                    target={
-                                        "text": "검색",
-                                        "marker_type": "text",
-                                        "bbox_ratio": [0.05, 0.0833, 0.35, 0.3333],
-                                        "center_ratio": [0.2, 0.2083],
-                                    },
-                                    param={"slot_name": "search_keyword"},
-                                    slot_refs=["search_keyword"],
-                                )
-                            ],
-                            after=ScreenCheckpoint(
-                                url_template="wanted.co.kr/search",
-                                page_role="search_results",
-                                screen_context_signature={
-                                    "phash": "f" * 16,
-                                    "size": [200, 120],
-                                },
-                            ),
-                        )
-                    ],
+def _rule():
+    return ExperienceRule(
+        site="wanted",
+        goal="채용공고 검색",
+        skill_metadata={"task_category": "검색"},
+        steps=[
+            ExperienceRuleStep(
+                step_id="step-1",
+                source_transition_seqs=[3],
+                before=RuleScreen(
+                    url_template="example.com/search",
+                    page_role="search",
+                    reference_signature={"phash": "1" * 16, "size": [1000, 800]},
                 ),
-            )
-        ]
-
-    result = reflex_node(
-        worker_state(
-            goal="AI 엔지니어 공고",
-            observation={
-                "current_url": "https://www.wanted.co.kr",
-                "current_page_role": "home",
-                "screen_signature": {"size": [200, 120]},
-                "current_screenshot": str(screenshot),
-                "current_markers": [
-                    {
-                        "id": 7,
-                        "bbox": [10, 10, 70, 40],
-                        "text": "지역 전체 JOB검색",
-                        "type": "text",
-                    },
-                ],
-            },
-            request={
-                "collection_intent": CollectionIntent(
-                    site="wanted",
-                    task_category="검색",
-                    search_keyword="AI 엔지니어",
-                ),
-            },
-        ),
-        node_runtime(
-            vision=_TargetVision(
-                {
-                    screenshot.name: [
-                        {
-                            "id": 0,
-                            "bbox": [10, 10, 70, 40],
-                            "text": "검색",
-                            "type": "text",
-                        }
-                    ]
-                }
-            ),
-            data=worker_data_services(
-                load_site_recipes=load_site_recipes,
-            ),
-        ),
-    )
-
-    call = result["decision"]["pending_action"].tool_calls[0]
-    assert result["replay"]["reflex_trace"]["hit"] is True
-    assert call.name == "type_in_marker"
-    assert call.args["marker_id"] == 8
-    assert call.args["text"] == "AI 엔지니어"
-    assert result["observation"]["current_markers"][-1]["text"] == "검색"
-    assert len(result["decision"]["pending_action"].tool_calls) == 1
-
-
-def test_reflex_uses_current_icon_marker_before_roi_redetection(tmp_path):
-    from PIL import Image, ImageDraw
-
-    from agent.vision.screen_signature import compute_target_roi_signature
-    from shared.schema.recipe_schema import (
-        ExperienceTransition,
-        PhysicalAction,
-        SiteExperience,
-    )
-
-    screenshot = tmp_path / "icon-screen.png"
-    image = Image.new("RGB", (200, 120), "white")
-    ImageDraw.Draw(image).rectangle([130, 10, 150, 30], fill="black")
-    image.save(screenshot)
-    roi_signature = compute_target_roi_signature(
-        screenshot,
-        [130, 10, 150, 30],
-        [200, 120],
-    )
-    target = {
-        "text": "Q",
-        "marker_type": "icon",
-        "bbox_ratio": [0.65, 0.0833, 0.75, 0.25],
-        "center_ratio": [0.7, 0.1667],
-    }
-    recipe = SiteExperience(
-        site="saramin",
-        transitions=[
-            ExperienceTransition(
-                seq=0,
-                before={
-                    "url_template": "saramin.co.kr/zf_user/",
-                    "page_role": "home",
-                },
                 actions=[
-                    PhysicalAction(
-                        source_seq=0,
-                        action="click_marker",
-                        replay_mode="fixed",
-                        roi_signature=roi_signature,
-                        target=target,
-                    )
-                ],
-                after={
-                    "url_template": "saramin.co.kr/zf_user/",
-                    "page_role": "home",
-                    "screen_context_signature": {
-                        "phash": "f" * 16,
-                        "size": [200, 120],
-                    },
-                },
-            )
-        ],
-    )
-
-    result = reflex_node(
-        worker_state(
-            observation={
-                "current_url": "https://www.saramin.co.kr/zf_user/",
-                "current_page_role": "home",
-                "screen_signature": {"size": [200, 120]},
-                "current_screenshot": str(screenshot),
-                "current_markers": [
-                    {
-                        "id": 17,
-                        "bbox": [130, 10, 150, 30],
-                        "text": "Q",
-                        "type": "icon",
-                    }
-                ],
-            },
-            request={
-                "collection_intent": CollectionIntent(
-                    site="saramin",
-                    task_category="검색",
-                )
-            },
-        ),
-        node_runtime(
-            vision=_TargetVision({screenshot.name: {"icon": [], "text": []}}),
-            data=worker_data_services(
-                load_site_recipes=lambda _site, **_kwargs: [
-                    ("recipe-icon", recipe)
-                ]
-            ),
-        ),
-    )
-
-    request = result["decision"]["pending_action"]
-    assert result["replay"]["reflex_trace"]["hit"] is True
-    assert request.tool_calls[0].args["marker_id"] == 18
-    assert result["replay"]["reflex_trace"]["tool_calls"][
-        request.tool_calls[0].id
-    ]["match_mode"] == "current_marker_ratio"
-
-
-def test_reflex_replays_action_group_then_advances_after_verification(
-    tmp_path,
-):
-    from PIL import Image, ImageDraw
-
-    from agent.vision.screen_signature import (
-        compute_screen_signature,
-        compute_target_roi_signature,
-    )
-    from shared.schema.recipe_schema import (
-        ExperienceTransition,
-        PhysicalAction,
-        ScreenCheckpoint,
-        SiteExperience,
-    )
-
-    input_screen = tmp_path / "recipe-input.png"
-    input_image = Image.new("RGB", (240, 120), "white")
-    ImageDraw.Draw(input_image).rectangle(
-        [10, 10, 130, 40],
-        fill="black",
-    )
-    input_image.save(input_screen)
-    result_screen = tmp_path / "recipe-result.png"
-    result_image = Image.new("RGB", (240, 120), "white")
-    ImageDraw.Draw(result_image).rectangle(
-        [160, 10, 220, 40],
-        fill="gray",
-    )
-    result_image.save(result_screen)
-
-    input_roi = compute_target_roi_signature(
-        input_screen,
-        [10, 10, 130, 40],
-        [240, 120],
-    )
-    result_roi = compute_target_roi_signature(
-        result_screen,
-        [160, 10, 220, 40],
-        [240, 120],
-    )
-    input_context = compute_screen_signature(input_screen, [])
-    result_context = compute_screen_signature(result_screen, [])
-    input_target = {
-        "text": "검색어",
-        "marker_type": "text",
-        "bbox_ratio": [0.0417, 0.0833, 0.5417, 0.3333],
-        "center_ratio": [0.2917, 0.2083],
-    }
-    result_target = {
-        "text": "검색",
-        "marker_type": "text",
-        "bbox_ratio": [0.6667, 0.0833, 0.9167, 0.3333],
-        "center_ratio": [0.7917, 0.2083],
-    }
-    before = ScreenCheckpoint(
-        url_template="saramin.co.kr/zf_user/",
-        page_role="home",
-        screen_context_signature=input_context,
-        anchor_target=input_target,
-        anchor_roi_signature=input_roi,
-    )
-    result_state = ScreenCheckpoint(
-        url_template="saramin.co.kr/zf_user/",
-        page_role="search_results",
-        screen_context_signature=result_context,
-        anchor_target=result_target,
-        anchor_roi_signature=result_roi,
-    )
-    completion = ScreenCheckpoint(
-        url_template="saramin.co.kr/zf_user/search",
-        page_role="search_results",
-        screen_context_signature=result_context,
-    )
-    recipe = SiteExperience(
-        site="saramin",
-        goal="검색",
-        transitions=[
-            ExperienceTransition(
-                seq=0,
-                before=before,
-                actions=[
-                    PhysicalAction(
-                        source_seq=1,
-                        action="type_in_marker",
-                        replay_mode="parameterized",
-                        roi_signature=input_roi,
-                        target=input_target,
-                        param={"slot_name": "search_keyword"},
-                        slot_refs=["search_keyword"],
-                    ),
-                    PhysicalAction(
-                        source_seq=2,
-                        action="press_key",
-                        replay_mode="fixed",
-                        param={"key": "enter"},
-                    ),
-                ],
-                after=result_state,
-            ),
-            ExperienceTransition(
-                seq=1,
-                before=result_state,
-                actions=[
-                    PhysicalAction(
+                    RuleAction(
                         source_seq=3,
                         action="click_marker",
-                        replay_mode="fixed",
-                        roi_signature=result_roi,
-                        target=result_target,
+                        target=RuleTarget(
+                            description="검색 버튼",
+                            role="button",
+                            component="search_panel",
+                            spatial_relation="검색 입력창 오른쪽",
+                            reference={
+                                "text": "검색",
+                                "marker_type": "text",
+                                "bbox_ratio": [0.7, 0.1, 0.9, 0.2],
+                                "center_ratio": [0.8, 0.15],
+                            },
+                            reference_roi_signature={
+                                "phash": "a" * 16,
+                                "crop_rect_ratio": [0.65, 0.05, 0.95, 0.25],
+                            },
+                        ),
                     )
                 ],
-                after=completion,
-            ),
+                intent="검색을 실행한다",
+                applicable_when="검색 버튼이 하나 보인다",
+                decline_when="검색 버튼이 여러 개다",
+                expected_effect=ExpectedEffect(
+                    kind="screen_change",
+                    description="검색 결과가 보인다",
+                    expected_url_template="example.com/search",
+                    expected_page_role="search",
+                ),
+            )
         ],
     )
 
-    def load_site_recipes(_site, *, task_category=None):
-        return [("recipe-search-set", recipe)]
 
-    replay_runtime = node_runtime(
-        vision=_TargetVision(
-            {
-                input_screen.name: [
-                    {
-                        "id": 0,
-                        "bbox": [10, 10, 130, 40],
-                        "text": "검색어",
-                        "type": "text",
-                    }
-                ],
-                result_screen.name: {
-                    "text": [],
-                    "icon": [
-                        {
-                            "id": 0,
-                            "bbox": [160, 10, 220, 40],
-                            "text": "icon",
-                            "type": "icon",
-                        }
-                    ],
-                },
-            }
-        ),
-        data=worker_data_services(load_site_recipes=load_site_recipes),
-    )
-    first = reflex_node(
-        worker_state(
-            goal="AI 엔지니어 공고",
-            observation={
-                "current_url": "https://www.saramin.co.kr/zf_user/",
-                "current_page_role": "home",
-                "screen_signature": input_context,
-                "current_screenshot": str(input_screen),
-                "current_markers": [
-                    {
-                        "id": 7,
-                        "bbox": [10, 10, 130, 40],
-                        "text": "검색어",
-                        "type": "text",
-                    },
-                ],
-            },
-            request={
-                "collection_intent": CollectionIntent(
-                    site="saramin",
-                    task_category="검색",
-                    search_keyword="AI 엔지니어",
-                ),
-            },
-        ),
-        replay_runtime,
+def _marker(marker_id=7, text="검색"):
+    return {
+        "id": marker_id,
+        "bbox": [700, 80, 900, 160],
+        "text": text,
+        "type": "text",
+    }
+
+
+def _context(marker, *, url="https://example.com/search"):
+    return ReflexReplayContext(
+        markers=[marker],
+        inputs=ReplayInputs(),
+        task_category="검색",
+        site="wanted",
+        current_image_path="screen.png",
+        current_page_role="search",
+        current_url=url,
+        current_url_template="example.com/search",
+        observation_id="observation:1",
+        screen_size=[1000, 800],
+        blocked_rule_keys=set(),
+        used_rule_keys=set(),
+        replay_session=None,
+        rule_candidates=[("experience-rule10#test", _rule())],
     )
 
-    assert first["replay"]["reflex_trace"]["hit"] is True
-    assert first["decision"]["pending_action"].summary == "cached recipe transition"
-    assert [call.name for call in first["decision"]["pending_action"].tool_calls] == [
-        "type_in_marker",
-        "press_key",
-    ]
-    assert (
-        first["decision"]["pending_action"].tool_calls[0].args["text"] == "AI 엔지니어"
-    )
-    assert first["replay"]["replay_session"].current_transition_index == 0
-    assert first["replay"]["replay_session"].pending_transition_index == 0
 
-    verified = worker_transition.transition_node(
-        worker_state(
-            observation={
-                "ocr_complete": False,
-                "current_url": "https://www.saramin.co.kr/zf_user/",
-                "current_screenshot": str(result_screen),
-                "observation_id": "observation:0002",
-                "raw_screen_signature": result_context,
-            },
-            transition={
-                "transition_request": {
-                    "action": "press_key",
-                    "source": "reflex",
-                    "recipe_key": "recipe-search-set",
-                    "before_url": "https://www.saramin.co.kr/zf_user/",
-                    "before_screenshot": str(input_screen),
-                    "expected_after_state": result_state,
-                    "recipe_transition_index": 0,
-                    "recipe_transition_count": 2,
-                    "started_at": time.time(),
-                }
-            },
-            replay={"replay_session": first["replay"]["replay_session"]},
-        ),
-        replay_runtime,
+def _state():
+    return worker_state(
+        observation={
+            "observation_id": "observation:1",
+            "current_url": "https://example.com/search",
+            "current_page_role": "search",
+            "current_screenshot": "screen.png",
+            "screen_signature": {"phash": "1" * 16, "size": [1000, 800]},
+        }
     )
 
-    assert verified["transition"]["transition_result"]["status"] == "ready"
-    assert verified["transition"]["transition_result"]["needs_ocr"] is False
-    assert verified["replay"]["replay_session"].current_transition_index == 1
-    assert verified["replay"]["replay_session"].pending_transition_index is None
 
-    second = reflex_node(
-        worker_state(
-            goal="AI 엔지니어 공고",
-            observation={
-                "current_url": "https://www.saramin.co.kr/zf_user/",
-                "current_screenshot": str(result_screen),
-                "raw_screen_signature": result_context,
-                "ocr_complete": False,
-            },
-            request={
-                "collection_intent": CollectionIntent(
-                    site="saramin",
-                    task_category="검색",
-                    search_keyword="AI 엔지니어",
-                ),
-            },
-            replay={"replay_session": verified["replay"]["replay_session"]},
-        ),
-        replay_runtime,
+def test_exact_roi_and_marker_match_skips_semantic_resolver(monkeypatch):
+    monkeypatch.setattr(
+        "agent.recipe.replay.roi_signature_match",
+        lambda *_args, **_kwargs: {"matched": True, "mode": "roi_phash"},
     )
 
-    assert second["replay"]["reflex_trace"]["hit"] is True
-    assert len(second["decision"]["pending_action"].tool_calls) == 1
-    assert second["decision"]["pending_action"].tool_calls[0].name == "click_marker"
-    assert second["decision"]["pending_action"].tool_calls[0].args["marker_id"] == 0
-    assert second["replay"]["replay_session"].current_transition_index == 1
+    def resolver(*_args):
+        raise AssertionError("정확히 일치한 대상은 모델에 다시 물으면 안 됩니다.")
+
+    selection, _log = select_reflex_replay(
+        _state(),
+        _context(_marker()),
+        lambda _action: [],
+        resolver,
+    )
+
+    assert selection is not None
+    assert selection.resolution_mode == "exact"
+    assert selection.tool_calls[0]["args"]["marker_id"] == 7
 
 
-def test_replay_success_is_recorded_only_after_final_transition():
-    replay_results = []
-    runtime = node_runtime(
-        data=worker_data_services(
-            record_recipe_replay=lambda recipe_key, succeeded: (
-                replay_results.append((recipe_key, succeeded)) or True
-            ),
+def test_ocr_text_change_uses_semantic_resolver_once(monkeypatch):
+    monkeypatch.setattr(
+        "agent.recipe.replay.roi_signature_match",
+        lambda *_args, **_kwargs: {"matched": False, "reason": "roi_phash_distance"},
+    )
+    calls = []
+
+    def resolver(_step, _markers, _image_path):
+        calls.append(1)
+        return RuleApplication(
+            decision="apply",
+            reason="같은 검색 패널의 버튼",
+            target_bindings=[{"source_action_seq": 3, "marker_id": 9}],
         )
+
+    selection, _log = select_reflex_replay(
+        _state(),
+        _context(_marker(9, "돋보기")),
+        lambda _action: [],
+        resolver,
     )
-    observation = {
-        "ocr_complete": True,
-        "current_url": "https://www.saramin.co.kr/zf_user/search",
-        "current_screenshot": "",
-        "observation_id": "observation:0002",
-        "current_markers": [
-            {"id": 1, "bbox": [0, 0, 20, 20], "text": "검색 결과"},
-        ],
-        "screen_signature": {
-            "phash": "a" * 16,
-            "size": [1920, 1080],
+
+    assert selection is not None
+    assert selection.resolution_mode == "semantic"
+    assert len(calls) == 1
+    assert selection.tool_calls[0]["args"]["marker_id"] == 9
+
+
+def test_wrong_url_rejects_rule_without_model_call(monkeypatch):
+    monkeypatch.setattr(
+        "agent.recipe.replay.roi_signature_match",
+        lambda *_args, **_kwargs: {"matched": True},
+    )
+
+    def resolver(*_args):
+        raise AssertionError("URL 범위가 다르면 의미 판단을 호출하면 안 됩니다.")
+
+    selection, log = select_reflex_replay(
+        _state(),
+        _context(_marker(), url="https://example.com/login"),
+        lambda _action: [],
+        resolver,
+    )
+
+    assert selection is None
+    assert log.last_reason == "url_scope_mismatch"
+
+
+def test_resolver_accepts_only_current_allowed_marker_ids():
+    step = _rule().steps[0]
+    application = resolve_rule_targets(
+        step,
+        [_marker(4)],
+        "missing.png",
+        resolver=lambda _payload: {
+            "decision": "apply",
+            "reason": "검색 버튼",
+            "target_bindings": [{"source_action_seq": 3, "marker_id": 4}],
         },
-    }
-    transition_request = {
-        "action": "click_marker",
+    )
+    assert application.target_bindings[0].marker_id == 4
+
+    try:
+        resolve_rule_targets(
+            step,
+            [_marker(4)],
+            "missing.png",
+            resolver=lambda _payload: {
+                "decision": "apply",
+                "reason": "허용되지 않은 ID",
+                "target_bindings": [{"source_action_seq": 3, "marker_id": 99}],
+            },
+        )
+    except ValueError as exc:
+        assert "allowed_markers" in str(exc)
+    else:
+        raise AssertionError("현재 화면에 없는 마커 ID를 허용했습니다.")
+
+
+def test_target_region_effect_ignores_changes_outside_region(tmp_path):
+    before = tmp_path / "before.png"
+    outside = tmp_path / "outside.png"
+    inside = tmp_path / "inside.png"
+    Image.new("RGB", (200, 100), "white").save(before)
+    for path, box in ((outside, [0, 0, 80, 100]), (inside, [120, 0, 200, 100])):
+        image = Image.new("RGB", (200, 100), "white")
+        ImageDraw.Draw(image).rectangle(box, fill="black")
+        image.save(path)
+
+    request = {
         "source": "reflex",
-        "recipe_key": "recipe-search-set",
-        "before_url": "https://www.saramin.co.kr/zf_user/",
-        "expected_after_state": ScreenCheckpoint(
-            url_template="saramin.co.kr/zf_user/search",
-            page_role="search_results",
-            screen_context_signature={
-                "phash": "a" * 16,
-                "size": [1920, 1080],
-            },
+        "before_screenshot": str(before),
+        "before_url": "https://example.com/search",
+        "before_page_role": "search",
+        "expected_effect": ExpectedEffect(
+            kind="target_region_change",
+            description="오른쪽 결과 패널이 바뀐다",
+            expected_url_template="example.com/search",
+            expected_page_role="search",
+            target_region_ratio=[0.5, 0.0, 1.0, 1.0],
         ),
-        "started_at": time.time(),
     }
 
-    intermediate = worker_transition.transition_node(
-        worker_state(
-            observation=observation,
-            transition={"transition_request": transition_request},
-            replay={
-                "replay_session": {
-                    "recipe_key": "recipe-search-set",
-                    "current_transition_index": 1,
-                    "pending_transition_index": 1,
-                    "transition_count": 3,
-                }
-            },
-        ),
-        runtime,
+    def state_for(path):
+        return worker_state(
+            observation={
+                "current_screenshot": str(path),
+                "current_url": "https://example.com/search",
+                "current_page_role": "search",
+            }
+        )
+
+    outside_match = verify_replay_after_state(request, state_for(outside))
+    inside_match = verify_replay_after_state(request, state_for(inside))
+    assert outside_match[0] is False
+    assert inside_match[0] is True
+
+
+def test_successful_rule_step_advances_session():
+    session = ReplaySession(
+        recipe_key="experience-rule10#test",
+        current_step_index=0,
+        pending_step_index=0,
+        step_count=2,
     )
-    completed = worker_transition.transition_node(
-        worker_state(
-            observation=observation,
-            transition={"transition_request": transition_request},
-            replay={
-                "replay_session": {
-                    "recipe_key": "recipe-search-set",
-                    "current_transition_index": 2,
-                    "pending_transition_index": 2,
-                    "transition_count": 3,
-                }
-            },
+    state = worker_state(replay={"replay_session": session})
+
+    advanced = replay_session_after_transition(state, source="reflex", status="ready")
+
+    assert advanced is not None
+    assert advanced.current_step_index == 1
+    assert advanced.pending_step_index is None
+
+
+def test_scroll_step_reuses_session_interaction_point_without_ocr_target():
+    base = _rule()
+    scroll_target = RuleTarget(
+        description="오른쪽 상세 패널",
+        role="detail_panel",
+        component="job_detail_panel",
+        reference={
+            "text": "상세",
+            "marker_type": "text",
+            "bbox_ratio": [0.6, 0.1, 0.95, 0.9],
+            "center_ratio": [0.8, 0.5],
+        },
+        reference_roi_signature={
+            "phash": "b" * 16,
+            "crop_rect_ratio": [0.55, 0.05, 1.0, 0.95],
+        },
+    )
+    step = ExperienceRuleStep(
+        step_id="step-2",
+        source_transition_seqs=[4],
+        before=base.steps[0].before,
+        actions=[
+            RuleAction(
+                source_seq=4,
+                action="scroll",
+                target=scroll_target,
+                param={"direction": "down", "amount": "page"},
+            )
+        ],
+        intent="상세 패널을 더 읽는다",
+        applicable_when="오른쪽 상세 패널이 열려 있다",
+        decline_when="상세 패널이 닫혀 있다",
+        expected_effect=ExpectedEffect(
+            kind="target_region_change",
+            description="오른쪽 상세 본문이 이동한다",
+            expected_url_template="example.com/search",
+            expected_page_role="search",
+            target_region_ratio=[0.55, 0.05, 1.0, 0.95],
         ),
-        runtime,
+    )
+    rule = base.model_copy(update={"steps": [base.steps[0], step]})
+    key = "job_detail_panel|detail_panel|오른쪽 상세 패널"
+    session = ReplaySession(
+        recipe_key="experience-rule10#scroll",
+        current_step_index=1,
+        pending_step_index=None,
+        step_count=2,
+        interaction_handles={
+            key: InteractionRegionHandle(
+                marker_id=8,
+                center_ratio=[0.8, 0.5],
+                bbox_ratio=[0.79, 0.49, 0.81, 0.51],
+                effect_region_ratio=[0.55, 0.05, 1.0, 0.95],
+            )
+        },
+    )
+    context = _context(_marker())
+    context = ReflexReplayContext(
+        **{
+            **context.__dict__,
+            "markers": [],
+            "replay_session": session,
+            "rule_candidates": [("experience-rule10#scroll", rule)],
+        }
     )
 
-    assert intermediate["transition"]["transition_result"]["status"] == "ready"
-    assert intermediate["replay"]["replay_session"].current_transition_index == 2
-    assert completed["transition"]["transition_result"]["status"] == "ready"
-    assert completed["replay"]["replay_session"] is None
-    assert replay_results == [("recipe-search-set", True)]
+    def unexpected(*_args):
+        raise AssertionError("저장된 물리 지점은 OCR이나 모델로 다시 찾으면 안 됩니다.")
+
+    selection, _log = select_reflex_replay(
+        _state(),
+        context,
+        unexpected,
+        unexpected,
+    )
+
+    assert selection is not None
+    assert selection.tool_calls[0]["name"] == "scroll"
+    assert selection.tool_call_traces[next(iter(selection.tool_call_traces))][
+        "match_mode"
+    ] == "session_interaction_point"

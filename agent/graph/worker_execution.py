@@ -108,7 +108,7 @@ def _execute_tool_call(
     action_sequence: int,
     before_snapshot: dict[str, Any],
     step_started: float,
-) -> tuple[dict[str, Any], bool, ActionRequest | None] | None:
+) -> tuple[dict[str, Any], bool] | None:
     """가드가 허용한 도구 하나를 유형에 맞는 실행기로 전달한다."""
 
     state = context.state
@@ -135,19 +135,19 @@ def _execute_tool_call(
             action_name,
             {**args, **call_metadata},
         )
-        return result, screen_changed, None
+        return result, screen_changed
     if action_name in STATE_UPDATE_ACTIONS:
-        result, follow_up = execute_state_action(
+        result = execute_state_action(
             context,
             action_name,
             args,
         )
-        return result, False, follow_up
+        return result, False
     if action_name in TERMINAL_ACTIONS:
         result = context.worker_runtime.get_action_tools().finish_task(args["result"])
         raise_for_action_failure(result)
         state["lifecycle"]["is_finished"] = True
-        return result, False, None
+        return result, False
     raise ValueError(f"Unknown tool: {action_name}")
 
 
@@ -186,7 +186,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
             )
             if outcome is None:
                 break
-            result, screen_changed, follow_up = outcome
+            result, screen_changed = outcome
 
             record_action_result(
                 context,
@@ -208,11 +208,7 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
                 reason=result.get("reason", ""),
                 duration_sec=round(time.perf_counter() - step_started, 6),
             )
-            is_finished = bool(state["lifecycle"].get("is_finished", False))
-            if follow_up is not None and not is_finished:
-                context.next_pending_action = follow_up
-                break
-            if is_finished:
+            if state["lifecycle"].get("is_finished", False):
                 break
         except Exception as exc:
             logger.error(

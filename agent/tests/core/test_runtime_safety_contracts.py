@@ -215,7 +215,6 @@ def test_explicit_sensitive_action_is_not_promotion_eligible():
                 "candidate_action": {
                     "source_seq": 1,
                     "action": "click_marker",
-                    "replay_mode": "fixed",
                     "risk_level": "sensitive",
                     "target": {"text": "결제", "center_ratio": [0.5, 0.5]},
                     "roi_signature": {"phash": "1" * 16},
@@ -230,7 +229,6 @@ def test_explicit_sensitive_action_is_not_promotion_eligible():
                         {
                             "source_seq": 1,
                             "action": "click_marker",
-                            "replay_mode": "fixed",
                             "risk_level": "sensitive",
                             "target": {
                                 "text": "결제",
