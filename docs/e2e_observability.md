@@ -3,7 +3,7 @@ title: "E2E 관측 환경"
 type: guide
 area: observability
 status: active
-updated: 2026-08-14
+updated: 2026-08-15
 tags:
   - l2c
   - docs/observability
@@ -45,7 +45,7 @@ Standard 유료 단가만 기록하며, 출력 단가는 공개 답변과 내부
 비교할 실행에는 같은 `scenario-id`와 `experiment-name`을 사용합니다. 저장된 경험 없이 화면마다 판단하는 실행은 `autonomous`, 검증된 레시피를 우선 활용하고 불일치 구간만 다시 판단하는 실행은 `experience_guided`로 구분합니다.
 
 ```powershell
-python -m benchmark.run_realtime_e2e `
+.\.venv-app\Scripts\python.exe -m benchmark.run_realtime_e2e `
   --site wanted `
   --search-keyword "iOS 개발자" `
   --original-query "ios 개발자 공고 2개" `
@@ -70,7 +70,7 @@ python -m benchmark.run_realtime_e2e `
 성능 비교의 단일 원본은 `.summary.json`입니다. 텍스트 로그는 화면·행동 원인을 조사할 때만 사용하며, 정규식으로 OCR·추론·Reflex 횟수나 시간을 다시 계산하지 않습니다.
 
 ```powershell
-python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
+.\.venv-app\Scripts\python.exe -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 ```
 
 ### 자율 탐색과 경험 기반 탐색 회귀
@@ -78,7 +78,7 @@ python -m benchmark.profile_reflex_trace logs/e2e_wanted_ios2.summary.json
 `benchmark.run_regression_matrix`는 격리 DB에서 같은 작업의 자율 탐색과 경험 기반 탐색을 순서대로 실행합니다.
 
 ```powershell
-python -m benchmark.run_regression_matrix `
+.\.venv-app\Scripts\python.exe -m benchmark.run_regression_matrix `
   --matrix benchmark/portfolio_reflex_matrix.json `
   --scenario wanted-ios-autonomous `
   --scenario wanted-ios-experience-guided
@@ -110,7 +110,7 @@ Critic 호출은 별도 실행 문맥과 LangSmith trace를 사용합니다. 재
 DB를 사용합니다.
 
 ```powershell
-python -m benchmark.run_product_chat_matrix `
+.\.venv-app\Scripts\python.exe -m benchmark.run_product_chat_matrix `
   --source-db data/jobs.db `
   --db-path logs/product_matrix.db `
   --log logs/product_matrix.log `

@@ -3,7 +3,7 @@ title: "문서 작성 규칙"
 type: reference
 area: documentation
 status: active
-updated: 2026-07-23
+updated: 2026-08-15
 tags:
   - l2c
   - docs/documentation
@@ -58,10 +58,12 @@ tags:
 | `README.md` | 프로젝트 목적, 검증 결과, 실행 방법을 보여주는 포트폴리오 진입점 |
 | `ARCHITECTURE.md` | 현재 구현된 시스템 구조의 단일 기준 |
 | `docs/index.md` | 모든 사람이 관리하는 문서의 탐색 진입점 |
+| `docs/development_history.md` | 완료한 Phase와 구현 범위의 변경 기록 |
 | `docs/design_decisions.md` | 채택한 결정과 트레이드오프 |
 | `troubleshooting.md` | 재현한 장애, 원인과 최종 해결 기록 |
 
-`ARCHITECTURE.md`에는 현재 동작만 기록하고 진행 중인 작업은 GitHub Issues에서 관리한다.
+`ARCHITECTURE.md`에는 현재 동작만 기록하고 완료한 단계 기록은
+`docs/development_history.md`에 보존한다.
 
 ## Callout
 

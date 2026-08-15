@@ -3,7 +3,7 @@ title: "제품 데모 및 검증"
 type: guide
 area: project
 status: active
-updated: 2026-08-11
+updated: 2026-08-15
 tags:
   - l2c
   - docs/project
@@ -36,17 +36,19 @@ UI는 조사 진행 단계, 질문 보완 선택지, 취소 상태, 답변의 �
 최초 환경 구성:
 
 ```powershell
-setup.cmd -DryRun
 setup.cmd
 ```
 
-앱 실행:
+합성 공고 3건으로 DB 근거 답변을 재현합니다.
 
 ```powershell
-run.cmd
+demo.cmd
 ```
 
-기본 주소는 `http://127.0.0.1:8000`입니다. `run.cmd`는 React 빌드가 없거나 소스보다 오래됐을 때만 다시 빌드하고, FastAPI와 같은 로컬 주소에서 제공합니다. 런타임 조합은 [런타임 호환 기준](runtime_compatibility.md)을 따릅니다.
+`demo.cmd`는 `data/samples/demo_jobs.json`을 `data/demo_jobs.db`로 다시 만든 뒤
+React UI와 FastAPI를 `http://127.0.0.1:8000`에서 실행합니다. 실제 사이트 수집에는
+`run.cmd`를 사용합니다. 런타임 조합은 [런타임 호환 기준](runtime_compatibility.md)을
+따릅니다.
 
 ## 데모 시나리오
 
@@ -55,7 +57,7 @@ run.cmd
 질문:
 
 ```text
-웹 수집은 하지 말고 현재 DB에 저장된 iOS 개발자 공고 2개를 비교해서 주요 업무와 요구 기술을 근거와 함께 알려줘
+샘플 DB에 있는 AI 엔지니어 공고를 비교해줘
 ```
 
 확인할 내용:
@@ -63,10 +65,7 @@ run.cmd
 - 진행 단계에 `웹 수집`이 나타나지 않습니다.
 - 서로 다른 회사 2곳을 비교하고 각 사실에 `출처` 버튼을 표시합니다.
 - 출처를 누르면 오른쪽 패널에 회사명, 직무명, 원본 URL과 수집 원문이 표시됩니다.
-
-2026-07-28 실제 Chat API 검증에서는 25.63초에 완료됐고, DB 91건은
-변경되지 않았습니다. 답변은 비모소프트 `job_id:6`과 스토어링크
-`job_id:9`만 인용했으며 두 ID 모두 테스트 DB에 존재했습니다.
+- 실행 전후 `data/demo_jobs.db`의 공고 수는 3건으로 유지됩니다.
 
 ### 모호한 요청의 단계적 보완
 

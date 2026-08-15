@@ -3,7 +3,7 @@ title: "포트폴리오 평가 실행 규격"
 type: reference
 area: evaluation
 status: active
-updated: 2026-08-14
+updated: 2026-08-15
 tags:
   - l2c
   - docs/evaluation
@@ -17,7 +17,7 @@ E2E 로그는 원인 분석 자료로 유지하고 성공률 분모에는 포함
 ## 준비
 
 ```powershell
-.\setup.cmd -Development
+.\setup.cmd
 .\scripts\test.cmd agent\tests -q
 git status --short
 ```

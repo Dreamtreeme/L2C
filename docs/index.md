@@ -3,7 +3,7 @@ title: "L2C 문서 인덱스"
 type: hub
 area: documentation
 status: active
-updated: 2026-08-11
+updated: 2026-08-15
 tags:
   - l2c
   - docs/documentation
@@ -21,6 +21,7 @@ tags:
 | [`README.md`](../README.md) | 프로젝트 목적, 차별점, 검증 결과, 실행 방법 |
 | [`ARCHITECTURE.md`](../ARCHITECTURE.md) | 현재 구현된 시스템 구조 |
 | [제품 데모 및 검증](product_demo.md) | 실제 UI 실행, 재현 시나리오, 검증 수치 |
+| [개발 단계 기록](development_history.md) | Phase별 구현 범위와 축소 과정 |
 
 ## 아키텍처와 런타임
 
