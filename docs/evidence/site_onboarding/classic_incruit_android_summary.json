@@ -1,0 +1,234 @@
+{
+  "site": "incruit",
+  "homepage": "https://job.incruit.com/",
+  "query": "안드로이드 개발자",
+  "started_at": "2026-08-15T23:43:33.451262+00:00",
+  "finished_at": "2026-08-15T23:43:52.936955+00:00",
+  "runtime_sec": 19.483428,
+  "total_tokens": 3390,
+  "estimated_cost_usd": 0.0028716,
+  "metrics": {
+    "run_id": "classic-incruit-20260816084333-95b3d6e7",
+    "duration_sec": 19.482682,
+    "deadline_remaining_sec": 5380.517307,
+    "steps": [],
+    "llm": {
+      "totals": {
+        "input_tokens": 2547,
+        "output_tokens": 843,
+        "total_tokens": 3390,
+        "input_token_details": {
+          "cache_read": 0
+        },
+        "output_token_details": {}
+      },
+      "by_model": {
+        "gemini-3.5-flash-lite": {
+          "input_tokens": 2547,
+          "output_tokens": 843,
+          "total_tokens": 3390,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        }
+      },
+      "cost": {
+        "currency": "USD",
+        "estimated_total": 0.0028716,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\config\\model_pricing.json",
+        "priced_model_count": 1,
+        "unpriced_models": [],
+        "items": [
+          {
+            "model": "gemini-3.5-flash-lite",
+            "input_tokens": 2547,
+            "cached_input_tokens": 0,
+            "output_tokens": 843,
+            "estimated_cost_usd": 0.0028716
+          }
+        ]
+      },
+      "calls": [
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 1184,
+          "output_tokens": 290,
+          "total_tokens": 1474,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.366556,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 1363,
+          "output_tokens": 553,
+          "total_tokens": 1916,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.974322,
+          "success": true,
+          "error": ""
+        }
+      ]
+    },
+    "outcome": {
+      "status": "completed",
+      "last_phase": "received",
+      "failure_stage": "",
+      "failure_code": ""
+    },
+    "langsmith": {
+      "enabled": false,
+      "project": "l2c-local",
+      "trace_id": ""
+    }
+  },
+  "result": {
+    "status": "completed",
+    "message": "Classic 수집 2/2건 완료",
+    "error_code": "",
+    "site": "incruit",
+    "site_name": "incruit",
+    "search_keyword": "안드로이드 개발자",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 2,
+    "resolved_count": 2,
+    "persisted_count": 2,
+    "created_count": 2,
+    "updated_count": 0,
+    "rejected_count": 0,
+    "persisted_items": [
+      {
+        "job_id": 7,
+        "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608150000039&src=gsw*www",
+        "company_name": "아이엠뱅크",
+        "position": "[iM뱅크] 안드로이드 개발자 채용",
+        "operation": "created"
+      },
+      {
+        "job_id": 8,
+        "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607080004521&src=gsw*www",
+        "company_name": "힐링페이퍼",
+        "position": "[플랫폼 사업] Android 개발자",
+        "operation": "created"
+      }
+    ],
+    "observed_job_ids": [],
+    "document_ids": [
+      7,
+      8
+    ],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "classic-b9bd45a9-be72-4d1e-a03c-2cd958d46805"
+  },
+  "jobs": [
+    {
+      "company_name": "아이엠뱅크",
+      "position": "[iM뱅크] 안드로이드 개발자 채용",
+      "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608150000039&src=gsw*www",
+      "job_category": "모바일 앱 개발",
+      "education": null,
+      "employment_type": "전문계약직",
+      "location": "서울",
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "JAVA",
+        "Kotlin",
+        "RxJava",
+        "Coroutine",
+        "MVVM"
+      ],
+      "main_tasks": [
+        "안드로이드 Native 앱 개발 및 운영",
+        "기존 앱 지속적 개선 및 안정적 운영"
+      ],
+      "requirements": [
+        "안드로이드 Native 앱 개발 및 운영 경력 5년 이상"
+      ],
+      "preferred": [
+        "금융권 앱 출시 및 운영 경험",
+        "국가유공자 등 취업보호 대상자 우대",
+        "장애인고용촉진법에 따른 장애인 우대"
+      ],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "Incruit",
+      "raw_ocr_text": "회사명: 아이엠뱅크\n공고 제목: [iM뱅크] 안드로이드 개발자 채용\n\n아이엠뱅크, 안드로이드 개발자 채용\n아이엠뱅크가 안드로이드 개발자 채용을 진행한다. 이번 채용은 전문계약직 형태로 진행되며, 모집 분야는 안드로이드 개발자 부문이다. 은행권에서 모바일 앱 개발 경력을 갖춘 인재를 찾는 채용으로, 실무 경력을 갖춘 지원자들의 관심이 예상된다.\n채용 후에는 안드로이드 Native 앱 개발 및 운영 업무를 맡게 된다. 은행 앱이라는 특성상 안정성과 보안이 중요한 만큼, JAVA와 Kotlin, RxJava, Coroutine, MVVM 등의 기술을 활용해 서비스를 개발하고 운영하는 과정을 경험하게 된다. 단순히 신규 기능을 만드는 것을 넘어 기존 앱을 지속적으로 개선하고 안정적으로 운영하는 역할까지 포괄한다.\n지원 자격을 살펴보면 학력과 성별, 나이에 제한이 없어 경력만 갖췄다면 누구나 지원할 수 있다는 점이 눈에 띈다. 다만 안드로이드 Native 앱 개발 및 운영 경력을 5년 이상 보유해야 한다는 조건이 붙는다. 우대사항으로는 금융권 앱 출시 및 운영 경험이 있는 지원자를 우대하며, 국가유공자 등 취업보호 대상자와 장애인 고용촉진법에 따른 장애인도 우대 대상에 포함된다.\n근무지는 서울로 확인된다. 자세한 내용은 아이엠뱅크의 홈페이지에서 확인할 수 있다.",
+      "content_hash": "8e91b400803e5058684bf32bd8ac8df35bb78c800f522dcfe0dd12d0814815a9",
+      "evidence_hash": "8abe108c050cfb5a89976f0bde74bce52b5ffbf2c22ce34376cb508bf0d8d706",
+      "experience_min": 5,
+      "experience_max": null,
+      "experience_text": "5년 이상",
+      "id": 7
+    },
+    {
+      "company_name": "힐링페이퍼",
+      "position": "[플랫폼 사업] Android 개발자",
+      "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607080004521&src=gsw*www",
+      "job_category": "개발",
+      "education": null,
+      "employment_type": null,
+      "location": "서울특별시 강남구 테헤란로 142 아크플레이스 15층 힐링페이퍼 본사",
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Kotlin",
+        "Jetpack",
+        "MVVM",
+        "Clean Architecture",
+        "Kotlin Coroutine"
+      ],
+      "main_tasks": [
+        "Kotlin과 Jetpack 라이브러리를 활용한 강남언니 Android 앱 개발 및 개선",
+        "다양한 Android 기기와 OS 버전에서 최적의 유저 경험을 제공하는 UI/UX 구현",
+        "앱 성능 최적화 및 안정성 향상을 위한 개선 작업 수행",
+        "MVVM과 Clean Architecture 등의 아키텍처 패턴을 적용해 유지보수가 용이한 코드 작성",
+        "백엔드 개발자, 디자이너와의 협업을 통한 효율적인 서비스 개발",
+        "최신 Android 개발 동향을 파악하고 적용해 앱 경쟁력 유지",
+        "테스트 자동화와 지속적 통합/배포(CI/CD) 구축을 통한 개발 프로세스 개선"
+      ],
+      "requirements": [
+        "안드로이드 개발 경력 3년 이상 또는 그에 준하는 실력을 갖춘 분",
+        "Kotlin 기반의 실무 안드로이드 프로젝트 경험",
+        "Android Architecture Component 사용 경험",
+        "MVP/MVVM/Clean Architecture 등 아키텍처 설계와 디자인 패턴 적용 경험",
+        "Android Platform에 대한 폭넓은 이해 보유"
+      ],
+      "preferred": [
+        "유닛 테스트 및 UI 테스트 작성 및 자동화 경험이 있는 분",
+        "오픈소스 등 다양한 코드 리딩 경험과 리팩토링 경험이 있는 분",
+        "다양한 디자인 요구사항과 UX에 관심이 많고 프로토타이핑을 좋아하는 분",
+        "Kotlin Coroutine 사용 경험이 있는 분",
+        "UX에 대한 깊은 고민과 철학을 가진 분",
+        "함수형 프로그래밍에 대한 기본적인 이해와 경험이 있는 분"
+      ],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "Incruit",
+      "raw_ocr_text": "회사명: 힐링페이퍼\n공고 제목: [플랫폼 사업] Android 개발자\n\n강남언니, 플랫폼 사업부문 Android 개발자 채용\n미용의료 플랫폼 강남언니를 운영하는 힐링페이퍼가 플랫폼 사업부문 Android 개발자 채용을 진행한다. 이번 채용은 강남언니 앱의 개발 역량을 강화하고 유저 경험을 지속적으로 개선해 나갈 인재를 찾기 위해 마련됐다.\n이번에 합류하게 되는 Android 개발자는 Kotlin과 Jetpack 라이브러리를 활용한 강남언니 Android 앱 개발 및 개선을 담당하게 되며, 다양한 Android 기기와 OS 버전에서 최적의 유저 경험을 제공하는 UI/UX 구현 업무도 맡게 된다. 앱 성능 최적화 및 안정성 향상을 위한 개선 작업을 수행하고, MVVM과 Clean Architecture 등의 아키텍처 패턴을 적용해 유지보수가 용이한 코드를 작성하는 역할도 함께 경험하게 된다. 백엔드 개발자, 디자이너와의 협업을 통한 효율적인 서비스 개발은 물론, 최신 Android 개발 동향을 파악하고 적용해 앱 경쟁력을 유지하며, 테스트 자동화와 지속적 통합/배포(CI/CD) 구축을 통한 개발 프로세스 개선 업무도 담당하게 된다.\n지원을 위해서는 안드로이드 개발 경력 3년 이상 또는 그에 준하는 실력을 갖춘 분이어야 하며, Kotlin 기반의 실무 안드로이드 프로젝트 경험과 Android Architecture Component 사용 경험, MVP/MVVM/Clean Architecture 등 아키텍처 설계와 디자인 패턴 적용 경험, Android Platform에 대한 폭넓은 이해를 보유한 분을 모집한다. 유닛 테스트 및 UI 테스트 작성 및 자동화 경험이 있는 분, 오픈소스 등 다양한 코드 리딩 경험과 리팩토링 경험이 있는 분, 다양한 디자인 요구사항과 UX에 관심이 많고 프로토타이핑을 좋아하는 분, Kotlin Coroutine 사용 경험이 있는 분, UX에 대한 깊은 고민과 철학을 가진 분, 함수형 프로그래밍에 대한 기본적인 이해와 경험이 있는 분이라면 우대를 받을 수 있다.\n근무지는 서울특별시 강남구 테헤란로 142 아크플레이스 15층 힐링페이퍼 본사이며, 자세한 내용은 '강남언니'의 홈페이지에서 확인할 수 있다.",
+      "content_hash": "fff2e5688115c9d36fd6a103d12cc2fe503945d5e95dfb5ad9adfef425a825bd",
+      "evidence_hash": "9f77eaafb1758bafed7b01538079ba9532c4eab4e40b1d4cbd9dce3a8df08cd8",
+      "experience_min": 3,
+      "experience_max": null,
+      "experience_text": "3년 이상",
+      "id": 8
+    }
+  ]
+}

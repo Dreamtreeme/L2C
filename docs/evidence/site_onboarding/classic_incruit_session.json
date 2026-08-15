@@ -1,0 +1,78 @@
+{
+  "site": "인크루트",
+  "homepage": "https://job.incruit.com/",
+  "approach": "classic",
+  "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+  "result_sha": "1d48ddbbfd72d79741b194f9e099976c96f072cd",
+  "task_id": "",
+  "codex_model": "gpt-5-codex",
+  "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+  "started_at": "2026-08-15T23:30:20.972066Z",
+  "first_success_at": "2026-08-15T23:39:15.114368Z",
+  "finished_at": "2026-08-15T23:52:51.733965Z",
+  "status": "completed",
+  "human_interventions": [],
+  "fix_iterations": [
+    "지정된 .venv-app 실행기가 삭제된 Python 3.13 경로를 참조해 시작 명령이 실패함; 저장소의 portable Python에 .venv-app site-packages를 연결해 동일 의존성 환경으로 실행하도록 수정",
+    "Playwright DOM 조사용 일회성 명령의 PowerShell/JavaScript 중첩 인용이 깨져 Python 구문 오류 발생; JavaScript 평가를 제거하고 단순 접근성 속성 조회 명령으로 수정",
+    "PowerShell이 python -c 인수의 문자열 따옴표를 제거해 두 번째 DOM 조사 명령도 구문 오류 발생; 셸 인용 의존성을 없애기 위해 tmp의 독립 Playwright 조사 스크립트로 전환",
+    "최초 수집 결과에서 LLM이 상세 H1/JSON-LD 제목보다 설명 문장의 확장 명칭을 우선해 정확한 공고 제목과 불일치함; DOM에서 확정한 회사명·제목이 LLM 추출값보다 우선하도록 공통 결합 순서를 수정",
+    "tmp 사전 검색 스크립트 실행 시 sys.path가 tmp로 고정되어 classic 패키지를 찾지 못함; PYTHONPATH에 저장소 루트와 기존 site-packages를 함께 지정하도록 실행 설정 수정",
+    "프론트엔드 자동 판정이 인크루트의 쿼리형 공고 식별자(job)를 모든 쿼리와 함께 제거해 서로 다른 URL을 중복으로 계산함; 공통 URL 정규화가 추적 파라미터만 제거하고 식별 쿼리는 보존하도록 수정",
+    "최종 evidence 집계용 PowerShell에서 foreach 출력을 직접 파이프해 빈 파이프 구문 오류 발생; 결과를 배열에 수집한 뒤 Format-Table로 전달하도록 검증 명령 수정",
+    "최종 git diff --cached --check에서 생성된 classic_incruit.patch의 빈 추가 줄에 후행 공백이 발견됨; 증거 패치의 줄 끝 공백만 정규화"
+  ],
+  "site_specific_changed_loc": 157,
+  "common_runtime_changed_loc": 4,
+  "modified_product_files": [
+    "classic/automation/sites/incruit.py",
+    "classic/automation/sites/__init__.py",
+    "classic/extractor/normalization.py",
+    "classic/main.py"
+  ],
+  "locator_count": 5,
+  "profile_line_count": 0,
+  "acceptance_runs": [
+    {
+      "query": "프론트엔드 개발자",
+      "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_frontend_summary.json",
+      "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_frontend_acceptance.json",
+      "passed": true,
+      "runtime_sec": 16.366697,
+      "total_tokens": 5344,
+      "estimated_cost_usd": 0.0048196
+    },
+    {
+      "query": "데이터 엔지니어",
+      "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_data_engineer_summary.json",
+      "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_data_engineer_acceptance.json",
+      "passed": true,
+      "runtime_sec": 17.413971,
+      "total_tokens": 4266,
+      "estimated_cost_usd": 0.0040408
+    },
+    {
+      "query": "안드로이드 개발자",
+      "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_android_summary.json",
+      "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_android_acceptance.json",
+      "passed": true,
+      "runtime_sec": 19.483428,
+      "total_tokens": 3390,
+      "estimated_cost_usd": 0.0028716
+    }
+  ],
+  "evidence_paths": [
+    "docs/evidence/site_onboarding/classic_incruit.db",
+    "docs/evidence/site_onboarding/classic_incruit.patch",
+    "docs/evidence/site_onboarding/classic_incruit_acceptance.json",
+    "docs/evidence/site_onboarding/classic_incruit_backend_summary.json",
+    "docs/evidence/site_onboarding/classic_incruit_backend_acceptance.json",
+    "docs/evidence/site_onboarding/classic_incruit_frontend_summary.json",
+    "docs/evidence/site_onboarding/classic_incruit_frontend_acceptance.json",
+    "docs/evidence/site_onboarding/classic_incruit_data_engineer_summary.json",
+    "docs/evidence/site_onboarding/classic_incruit_data_engineer_acceptance.json",
+    "docs/evidence/site_onboarding/classic_incruit_android_summary.json",
+    "docs/evidence/site_onboarding/classic_incruit_android_acceptance.json"
+  ],
+  "notes": "세 미사용 검색어의 사전 상세 결과는 각각 5건이어서 예비 검색어를 사용하지 않았다. result_sha는 커밋 전 classic_incruit.patch의 Git blob SHA이며 실제 커밋 SHA는 최종 보고에 기록한다."
+}

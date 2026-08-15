@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import ValidationError
 
@@ -21,6 +21,18 @@ from shared.schema.jd_schema import (
 
 REQUIRED_FIELDS = tuple(field.value for field in JOB_IDENTITY_FIELDS)
 CONTENT_FIELDS = tuple(field.value for field in JOB_DETAIL_FIELDS)
+TRACKING_QUERY_KEYS = {
+    "fbclid",
+    "from",
+    "gclid",
+    "igshid",
+    "mc_cid",
+    "mc_eid",
+    "ref",
+    "referrer",
+    "source",
+    "src",
+}
 
 
 def _normalized_text(value: Any) -> str:
@@ -34,8 +46,21 @@ def _normalized_url(value: Any) -> str:
     parts = urlsplit(raw)
     if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
         return ""
+    # 쿼리에 공고 ID를 두는 사이트가 있으므로 추적 파라미터만 제거한다.
+    identity_query = sorted(
+        (key, item)
+        for key, item in parse_qsl(parts.query, keep_blank_values=True)
+        if key.casefold() not in TRACKING_QUERY_KEYS
+        and not key.casefold().startswith("utm_")
+    )
     return urlunsplit(
-        (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", "")
+        (
+            parts.scheme.lower(),
+            parts.netloc.lower(),
+            parts.path.rstrip("/"),
+            urlencode(identity_query),
+            "",
+        )
     )
 
 

@@ -1,0 +1,35 @@
+{
+  "site": "incruit",
+  "homepage": "https://job.incruit.com/",
+  "development": {
+    "query": "백엔드 개발자",
+    "summary_path": "docs/evidence/site_onboarding/classic_incruit_backend_summary.json",
+    "acceptance_path": "docs/evidence/site_onboarding/classic_incruit_backend_acceptance.json",
+    "automatic_passed": true
+  },
+  "acceptance_runs": [
+    {
+      "query": "프론트엔드 개발자",
+      "preflight_result_count": 5,
+      "summary_path": "docs/evidence/site_onboarding/classic_incruit_frontend_summary.json",
+      "acceptance_path": "docs/evidence/site_onboarding/classic_incruit_frontend_acceptance.json",
+      "automatic_passed": true
+    },
+    {
+      "query": "데이터 엔지니어",
+      "preflight_result_count": 5,
+      "summary_path": "docs/evidence/site_onboarding/classic_incruit_data_engineer_summary.json",
+      "acceptance_path": "docs/evidence/site_onboarding/classic_incruit_data_engineer_acceptance.json",
+      "automatic_passed": true
+    },
+    {
+      "query": "안드로이드 개발자",
+      "preflight_result_count": 5,
+      "summary_path": "docs/evidence/site_onboarding/classic_incruit_android_summary.json",
+      "acceptance_path": "docs/evidence/site_onboarding/classic_incruit_android_acceptance.json",
+      "automatic_passed": true
+    }
+  ],
+  "query_substitutions": [],
+  "automatic_passed": true
+}

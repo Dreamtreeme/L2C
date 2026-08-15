@@ -6,6 +6,7 @@ URL 매칭과 페이지에서 본문을 추출하는 책임만 가집니다.
 """
 
 from .base import CollectionSiteAdapter, SiteAdapter
+from .incruit import IncruitAdapter
 from .wanted import WantedAdapter
 from .jobkorea import JobKoreaAdapter
 from .rocketpunch import RocketpunchAdapter
@@ -13,6 +14,7 @@ from .rocketpunch import RocketpunchAdapter
 # 디스패처가 순서대로 matches()를 호출하므로,
 # 더 구체적인 어댑터를 위에 두는 게 안전합니다.
 ADAPTERS: list[SiteAdapter] = [
+    IncruitAdapter(),
     WantedAdapter(),
     JobKoreaAdapter(),
     RocketpunchAdapter(),
@@ -42,6 +44,7 @@ def resolve_collection_adapter(url: str) -> CollectionSiteAdapter:
 __all__ = [
     "SiteAdapter",
     "CollectionSiteAdapter",
+    "IncruitAdapter",
     "WantedAdapter",
     "JobKoreaAdapter",
     "RocketpunchAdapter",

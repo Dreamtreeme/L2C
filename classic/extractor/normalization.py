@@ -44,8 +44,8 @@ def normalize_dom_posting(
     posting = JobPosting.model_validate(engine.extract_from_text(full_text))
     posting = posting.model_copy(
         update={
-            "company_name": posting.company_name or extraction.get("company_name"),
-            "position": posting.position or extraction.get("position"),
+            "company_name": extraction.get("company_name") or posting.company_name,
+            "position": extraction.get("position") or posting.position,
         }
     )
     posting = complete_extracted_job(

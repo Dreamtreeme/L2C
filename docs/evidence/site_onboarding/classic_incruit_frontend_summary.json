@@ -1,0 +1,268 @@
+{
+  "site": "incruit",
+  "homepage": "https://job.incruit.com/",
+  "query": "프론트엔드 개발자",
+  "started_at": "2026-08-15T23:42:14.276045+00:00",
+  "finished_at": "2026-08-15T23:42:30.645658+00:00",
+  "runtime_sec": 16.366697,
+  "total_tokens": 5344,
+  "estimated_cost_usd": 0.0048196,
+  "metrics": {
+    "run_id": "classic-incruit-20260816084214-680f6495",
+    "duration_sec": 16.365711,
+    "deadline_remaining_sec": 5383.634274,
+    "steps": [],
+    "llm": {
+      "totals": {
+        "input_tokens": 3882,
+        "output_tokens": 1462,
+        "total_tokens": 5344,
+        "input_token_details": {
+          "cache_read": 0
+        },
+        "output_token_details": {}
+      },
+      "by_model": {
+        "gemini-3.5-flash-lite": {
+          "input_tokens": 3882,
+          "output_tokens": 1462,
+          "total_tokens": 5344,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        }
+      },
+      "cost": {
+        "currency": "USD",
+        "estimated_total": 0.0048196,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\config\\model_pricing.json",
+        "priced_model_count": 1,
+        "unpriced_models": [],
+        "items": [
+          {
+            "model": "gemini-3.5-flash-lite",
+            "input_tokens": 3882,
+            "cached_input_tokens": 0,
+            "output_tokens": 1462,
+            "estimated_cost_usd": 0.0048196
+          }
+        ]
+      },
+      "calls": [
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 2533,
+          "output_tokens": 1060,
+          "total_tokens": 3593,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 3.307567,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 1349,
+          "output_tokens": 402,
+          "total_tokens": 1751,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.684361,
+          "success": true,
+          "error": ""
+        }
+      ]
+    },
+    "outcome": {
+      "status": "completed",
+      "last_phase": "received",
+      "failure_stage": "",
+      "failure_code": ""
+    },
+    "langsmith": {
+      "enabled": false,
+      "project": "l2c-local",
+      "trace_id": ""
+    }
+  },
+  "result": {
+    "status": "completed",
+    "message": "Classic 수집 2/2건 완료",
+    "error_code": "",
+    "site": "incruit",
+    "site_name": "incruit",
+    "search_keyword": "프론트엔드 개발자",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 2,
+    "resolved_count": 2,
+    "persisted_count": 2,
+    "created_count": 2,
+    "updated_count": 0,
+    "rejected_count": 0,
+    "persisted_items": [
+      {
+        "job_id": 3,
+        "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607230002325&src=gsw*www",
+        "company_name": "인프랩",
+        "position": "[인프런] 프론트엔드 개발자",
+        "operation": "created"
+      },
+      {
+        "job_id": 4,
+        "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607220004392&src=gsw*www",
+        "company_name": "힐링페이퍼",
+        "position": "[병원 운영 솔루션] 웹 프론트엔드 개발자 (B2B SaaS)",
+        "operation": "created"
+      }
+    ],
+    "observed_job_ids": [],
+    "document_ids": [
+      3,
+      4
+    ],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "classic-ea724537-34e0-424e-b3a6-231e7013c46e"
+  },
+  "jobs": [
+    {
+      "company_name": "인프랩",
+      "position": "[인프런] 프론트엔드 개발자",
+      "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607230002325&src=gsw*www",
+      "job_category": "프론트엔드 개발",
+      "education": null,
+      "employment_type": "정규직",
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "TypeScript",
+        "React",
+        "Next.js",
+        "React Native",
+        "pnpm",
+        "Turborepo",
+        "Module Federation",
+        "TanStack Query",
+        "SSR",
+        "CSR",
+        "Mantine",
+        "Mixpanel",
+        "GTM",
+        "Hackle",
+        "i18next",
+        "locize",
+        "Datadog",
+        "HTML",
+        "CSS",
+        "Webpack",
+        "Vite",
+        "SSG",
+        "Storybook"
+      ],
+      "main_tasks": [
+        "TypeScript, React, Next.js(Pages Router) 기반으로 인프런 서비스의 웹 프론트엔드를 개발하고 배포합니다.",
+        "React Native 기반으로 인프런 Android/iOS 모바일 앱을 개발하고 배포합니다.",
+        "pnpm + Turborepo 모노레포 환경에서 웹과 모바일이 함께 사용하는 공용 패키지와 서비스 코드를 관리합니다.",
+        "Module Federation(Micro Frontend)을 활용해 독립적으로 개발·배포 가능한 프론트엔드 아키텍처를 운영합니다.",
+        "TanStack Query를 활용한 서버 상태 관리와 SSR/CSR을 상황에 맞게 적절히 선택하여 최적의 사용자 경험을 제공합니다.",
+        "상황에 맞게 네이티브 구현과 WebView 구현을 적절히 나눠 진행합니다.",
+        "Mantine 기반 자체 디자인 시스템을 활용해 일관된 UI를 구현하고, 재사용 가능한 컴포넌트를 개발합니다.",
+        "Mixpanel, GTM 등을 활용한 사용자 행동 분석과 Hackle을 통한 A/B 테스트로 데이터 기반의 제품 개선에 참여합니다.",
+        "i18next, locize를 활용해 한국어, 영어, 일본어, 베트남어 등 다국어 서비스를 지원합니다.",
+        "Datadog을 통해 웹/모바일 에러 추적, 페이지 로드 시간, API 응답 속도 등을 실시간으로 모니터링하며 성능 병목 지점을 발견하고 개선합니다.",
+        "코드리뷰(온라인 PR, 오프라인 페어프로그래밍)를 통해 함께 성장하는 문화를 만들어 갑니다."
+      ],
+      "requirements": [
+        "TypeScript에 대한 이해가 있으며, 정적 타입 기반의 안정적인 개발을 지향하시는 분",
+        "React 기반 프론트엔드 개발 경험이 있으신 분",
+        "HTML, CSS 등 마크업에 대한 충분한 이해도가 있으신 분",
+        "SSR, CSR에 대한 기본적인 이해가 있으신 분",
+        "HTTP 통신에 대한 기본적인 이해, RESTful API에 대한 설계나 개발 경험이 있으신 분",
+        "반응형 웹 개발에 대한 이해가 있으신 분",
+        "Git과 Github에 대한 기본적인 사용법을 알고 있고, Git Flow를 이해하고 계신 분"
+      ],
+      "preferred": [
+        "Next.js 기반의 SSR/SSG 프로젝트 경험이 있으신 분",
+        "모노레포(pnpm, Turborepo 등) 환경에서 개발해본 경험이 있으신 분",
+        "Micro Frontend(Module Federation) 아키텍처를 다뤄본 경험이 있으신 분",
+        "TanStack Query 등 서버 상태 관리 라이브러리를 실무에서 활용해본 경험이 있으신 분",
+        "Webpack, Vite 등 번들러를 직접 구성하거나, 빌드 관련 문제를 해결해본 경험이 있으신 분",
+        "웹표준, 웹접근성에 대한 이해 또는 실무 경험이 있으신 분",
+        "i18n(다국어) 서비스 개발 경험이 있으신 분",
+        "A/B 테스트, 기능 플래그 등 실험 기반 개발 경험이 있으신 분",
+        "React Native를 활용한 모바일 앱 개발 및 배포 경험이 있으신 분",
+        "Android/iOS 다양한 환경과 디바이스에 적합한 UI/UX에 대한 이해가 있으신 분",
+        "모바일 앱에서의 네이티브 모듈 연동 등 효율적인 배포 관리 경험이 있으신 분",
+        "모바일 OS별 다양한 트러블 슈팅(WebView, 영상 플레이어, OAuth 등) 경험이 있으신 분",
+        "오픈소스에 기여해본 경험이 있으신 분"
+      ],
+      "benefits": [],
+      "salary": "회사내규",
+      "source_platform": "Incruit",
+      "raw_ocr_text": "회사명: 인프랩\n공고 제목: [인프런] 프론트엔드 개발자\n\n주식회사 인프랩\n[인프런] 프론트엔드 개발자\n모집부문 및 자격요건\n인프런 서비스의 핵심인 프론트엔드 시스템 개발 업무를 담당합니다.\nTypeScript / React / Next.js 기반의 웹 프론트엔드와 React Native 기반의 모바일 앱을 빠르고 안정적으로 구축하며, 기술적 완성도뿐 아니라 비즈니스 임팩트와 사용자 경험을 함께 고민하는 프론트엔드 엔지니어를 찾습니다.\n[담당업무]\n- TypeScript, React, Next.js(Pages Router) 기반으로 인프런 서비스의 웹 프론트엔드를 개발하고 배포합니다.\n- React Native 기반으로 인프런 Android/iOS 모바일 앱을 개발하고 배포합니다.\n- pnpm + Turborepo 모노레포 환경에서 웹과 모바일이 함께 사용하는 공용 패키지와 서비스 코드를 관리합니다.\n- Module Federation(Micro Frontend)을 활용해 독립적으로 개발·배포 가능한 프론트엔드 아키텍처를 운영합니다.\n-TanStack Query를 활용한 서버 상태 관리와 SSR/CSR을 상황에 맞게 적절히 선택하여 최적의 사용자 경험을 제공합니다.\n- 상황에 맞게 네이티브 구현과 WebView 구현을 적절히 나눠 진행합니다.\n- Mantine 기반 자체 디자인 시스템을 활용해 일관된 UI를 구현하고, 재사용 가능한 컴포넌트를 개발합니다.\n- Mixpanel, GTM 등을 활용한 사용자 행동 분석과 Hackle을 통한 A/B 테스트로 데이터 기반의 제품 개선에 참여합니다.\n- i18next, locize를 활용해 한국어, 영어, 일본어, 베트남어 등 다국어 서비스를 지원합니다.\n- Datadog을 통해 웹/모바일 에러 추적, 페이지 로드 시간, API 응답 속도 등을 실시간으로 모니터링하며 성능 병목 지점을 발견하고 개선합니다.\n- 코드리뷰(온라인 PR, 오프라인 페어프로그래밍)를 통해 함께 성장하는 문화를 만들어 갑니다.\n[자격요건]\n아래 개발팀의 미션과 가치에 동의하시는 분이어야 합니다.\nhttps://tech.inflab.com/20231117-devteam-value/\n- TypeScript에 대한 이해가 있으며, 정적 타입 기반의 안정적인 개발을 지향하시는 분\n- React 기반 프론트엔드 개발 경험이 있으신 분\n- HTML, CSS 등 마크업에 대한 충분한 이해도가 있으신 분\n- SSR, CSR에 대한 기본적인 이해가 있으신 분\n- HTTP 통신에 대한 기본적인 이해, RESTful API에 대한 설계나 개발 경험이 있으신 분\n- 반응형 웹 개발에 대한 이해가 있으신 분\n- Git과 Github에 대한 기본적인 사용법을 알고 있고, Git Flow를 이해하고 계신 분\n[우대사항]\n아래 기술 경험이 꼭 있어야만 하진 않습니다. 🙂\n- Next.js 기반의 SSR/SSG 프로젝트 경험이 있으신 분\n- 모노레포(pnpm, Turborepo 등) 환경에서 개발해본 경험이 있으신 분\n- Micro Frontend(Module Federation) 아키텍처를 다뤄본 경험이 있으신 분\n- TanStack Query 등 서버 상태 관리 라이브러리를 실무에서 활용해본 경험이 있으신 분\n- Webpack, Vite 등 번들러를 직접 구성하거나, 빌드 관련 문제를 해결해본 경험이 있으신 분\n- 웹표준, 웹접근성에 대한 이해 또는 실무 경험이 있으신 분\n- i18n(다국어) 서비스 개발 경험이 있으신 분\n- A/B 테스트, 기능 플래그 등 실험 기반 개발 경험이 있으신 분\n- React Native를 활용한 모바일 앱 개발 및 배포 경험이 있으신 분\n- Android/iOS 다양한 환경과 디바이스에 적합한 UI/UX에 대한 이해가 있으신 분\n- 모바일 앱에서의 네이티브 모듈 연동 등 효율적인 배포 관리 경험이 있으신 분\n- 모바일 OS별 다양한 트러블 슈팅(WebView, 영상 플레이어, OAuth 등) 경험이 있으신 분\n- 오픈소스에 기여해본 경험이 있으신 분\n- (주니어분들이라면) 위 언급되어 있는 개념들을 몰라도 빠르게 내 것으로 만들 수 있는 나만의 학습법을 가지고 계신 분\n- (경력무관) 운영/기획 파트 등 개발자가 아닌 분들께 상황을 설명할 때 그들의 입장에서, 그들의 언어로 이야기하는 게 당연하신 분\n- (경력무관) 대화보다 하나의 문서를 작성하고 공유하길 좋아하시는 분\n위 기술적 경험 외에 팀원으로서 다음과 같은 분들과 함께하고 싶어요.\n소통과 투명성\n- 작업 진행 상황, 이슈, 완료 예정일을 먼저 공유하여 동료(PM, BE, PD)가 다음 단계를 예측할 수 있게 만드시는 분\n- \"안 돼요\"가 아니라, 어떤 시도를 했고 원인이 무엇인지 맥락을 함께 전달해주시는 분\n- 타 직군에게 기술적 제약을 설명할 때, 그들의 언어로 이해하기 쉽게 풀어서 이야기하시는 분\n- 문서화(기능명세서, 운영 매뉴얼, 인수인계 문서 등)를 통해 지식을 팀에 공유하시는 분\n말보다 시각화로 증명하는 태도\n- 아이디어 제안 시 빠르게 프로토타입을 만들어 눈으로 보여주시는 분\n- 기술 도입 전 POC(Proof of Concept)를 통해 검증한 뒤 팀에 제안하시는 분\n- 본인이 만든 서비스를 실제 운영까지 해보신 분\n비즈니스 임팩트를 우선하는 관점\n- \"왜 이 기능을 만드는가?\"를 먼저 묻고, 기획 의도에 맞춰 기술적 대안을 제시하시는 분\n- 화려한 기술 스택보다 서비스의 안정성과 사용자 편의를 최우선으로 두시는 분\n- 기획서를 보고 기술적으로 문제가 될 부분을 미리 파악해 공유하시는 분\n- 사용자 행동 데이터를 기반으로 제품 개선에 참여하신 경험이 있으신 분\n팀의 짐을 덜어주는 완결성\n- 테스트코드 작성, Storybook 문서화 등 자체 검증 체계를 갖추고 계신 분\n- 팀의 비효율(반복 작업, 문서화 부재)을 스스로 찾아 개선하고 자동화해본 경험이 있으신 분\n- 디자인 시스템, UI 라이브러리 구축 등 팀 전체의 생산성 향상에 기여해본 경험이 있으신 분\n- 웹 서비스 성능 개선(Lighthouse, code splitting, 번들 최적화 등)을 진행해본 경험이 있으신 분\n- Datadog 등 모니터링 도구를 활용해 에러를 추적하고 장애를 해결해본 경험이 있으신 분\n- 동일 장애 재발 방지를 위해 시스템/프로세스 개선을 해보신 분\n근무조건\n고용형태: 정규직(수습기간3개월)\n급여조건: 회사내규\n전형단계 및 제출서류\n전형단계: 서류전형 > 시험진행 > 면접진행 > 2차면접진행 > 최종합격\n추가 제출서류\n이력서, 자기소개서\n접수방법\n접수방법: 자사 홈페이지\n기타 유의사항\n입사지원서 및 제출서류에 허위사실이 있을 경우 채용이 취소될 수 있습니다.\n00",
+      "content_hash": "855dfb30e72778bda6c0a756eb3c2ab6ab3a3a1ccd3bc0725d61e8d99cb71c59",
+      "evidence_hash": "31440cd3084b4d1786ce355cd302f7cef12c462611097bfd6aad5d9f79ae380a",
+      "experience_min": null,
+      "experience_max": null,
+      "experience_text": null,
+      "id": 3
+    },
+    {
+      "company_name": "힐링페이퍼",
+      "position": "[병원 운영 솔루션] 웹 프론트엔드 개발자 (B2B SaaS)",
+      "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607220004392&src=gsw*www",
+      "job_category": "프론트엔드 개발자",
+      "education": null,
+      "employment_type": "경력직",
+      "location": "서울특별시 강남구 테헤란로 142 아크플레이스 15층 힐링페이퍼 본사",
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "TypeScript",
+        "React",
+        "Next.js",
+        "Node.js"
+      ],
+      "main_tasks": [
+        "병원의 운영 체계부터 고객 관리까지 담당하는 제품의 프론트엔드 개발",
+        "미용 의료 병원 도메인과 비즈니스 문제를 이해하고 제품을 통해 해결",
+        "유지보수와 확장에 유리한 소프트웨어 설계 고민 및 적용"
+      ],
+      "requirements": [
+        "React 기반 웹 애플리케이션 3년 이상 개발 및 유지보수 경험 또는 이에 준하는 역량",
+        "TypeScript 및 Node.js 생태계에 대한 능숙한 활용 능력",
+        "문제의 본질을 이해하고 동료의 의견에 집중하며 자신의 생각을 합리적으로 표현하는 역량"
+      ],
+      "preferred": [
+        "도메인 주도 설계에 대한 깊은 이해와 복잡한 비즈니스 문제 해결 능력",
+        "Micro Frontends 및 Module Federation에 대한 이해",
+        "글로벌 제품 혹은 SaaS 애플리케이션 운영 경험",
+        "내부 라이브러리 개발 등 팀 개발 효율을 높인 경험"
+      ],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "Incruit",
+      "raw_ocr_text": "회사명: 힐링페이퍼\n공고 제목: [병원 운영 솔루션] 웹 프론트엔드 개발자 (B2B SaaS)\n\n(주)힐링페이퍼, 병원 운영 솔루션 웹 프론트엔드 개발자 모집\n(주)힐링페이퍼가 병원 운영 솔루션 부문의 웹 프론트엔드 개발자 경력직 채용을 진행할 예정이다. 이번 채용은 미용 의료 병원을 대상으로 한 B2B SaaS 제품 개발을 함께할 인재를 찾는 자리로, 병원 운영 체계 전반을 다루는 엔터프라이즈 글로벌 SaaS 서비스 개발에 참여하게 된다.\n이번에 합류하는 개발자는 병원의 운영 체계부터 고객 관리까지 담당하는 제품의 프론트엔드를 개발하는 역할을 맡게 된다. 미용 의료 병원 도메인과 비즈니스 문제를 이해하고 제품을 통해 해결하는 과정에도 깊이 관여하며, 단순한 UI 구현에 그치지 않고 유지보수와 확장에 유리한 소프트웨어 설계를 고민하고 적용하는 일도 담당하게 된다. TypeScript와 React, Next.js를 기반으로 Micro Frontends 아키텍처를 활용한 개발 환경에서 도메인 주도 설계를 실무에 적용하며 제품을 만들어 나가게 된다.\n지원을 위해서는 React 기반 웹 애플리케이션을 3년 이상 개발·유지보수한 경험이 있거나 이에 준하는 역량을 보유해야 하며, TypeScript와 Node.js 생태계에 익숙하고 능숙하게 다룰 수 있어야 한다. 문제의 본질을 이해하고 동료의 의견에 집중하며 자신의 생각을 말, 글, 그림을 통해 합리적으로 표현할 수 있는 역량도 요구된다. 도메인 주도 설계에 대한 깊은 이해와 복잡한 비즈니스 문제 해결 능력, Micro Frontends 및 Module Federation에 대한 이해, 글로벌 제품 혹은 SaaS 애플리케이션 운영 경험, 내부 라이브러리 개발 등 팀 개발 효율을 높인 경험이 있는 경우 우대한다.\n근무지는 서울특별시 강남구 테헤란로 142 아크플레이스 15층 힐링페이퍼 본사이며, 자세한 내용은 '(주)힐링페이퍼'의 홈페이지에서 확인할 수 있다.",
+      "content_hash": "1d454b42ac5ffb4d114f8f7da6820fa53c517d6693a69ae69b59afe713f0cfe2",
+      "evidence_hash": "72f53e10a9cfdbd9059ab960a61e3c37783102cda11ed06773a2e0bc469b14e3",
+      "experience_min": 3,
+      "experience_max": null,
+      "experience_text": "3년 이상",
+      "id": 4
+    }
+  ]
+}

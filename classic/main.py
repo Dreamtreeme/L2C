@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ext = sub.add_parser("extract", help="URL에서 공고 추출", parents=[common])
     p_ext.add_argument(
         "url",
-        help=("채용공고 URL (지원: 원티드 · 잡코리아 · 로켓펀치)"),
+        help=("채용공고 URL (지원: 인크루트 · 원티드 · 잡코리아 · 로켓펀치)"),
     )
     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")
     p_ext.add_argument("--model", help="이번 실행에만 사용할 Gemini 모델명")

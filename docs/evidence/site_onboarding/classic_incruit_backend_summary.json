@@ -1,0 +1,246 @@
+{
+  "site": "incruit",
+  "homepage": "https://job.incruit.com/",
+  "query": "백엔드 개발자",
+  "started_at": "2026-08-15T23:40:33.383565+00:00",
+  "finished_at": "2026-08-15T23:40:48.434373+00:00",
+  "runtime_sec": 15.048371,
+  "total_tokens": 3353,
+  "estimated_cost_usd": 0.0028297,
+  "metrics": {
+    "run_id": "classic-incruit-20260816084033-0312975a",
+    "duration_sec": 15.047554,
+    "deadline_remaining_sec": 5384.952435,
+    "steps": [],
+    "llm": {
+      "totals": {
+        "input_tokens": 2524,
+        "output_tokens": 829,
+        "total_tokens": 3353,
+        "input_token_details": {
+          "cache_read": 0
+        },
+        "output_token_details": {}
+      },
+      "by_model": {
+        "gemini-3.5-flash-lite": {
+          "input_tokens": 2524,
+          "output_tokens": 829,
+          "total_tokens": 3353,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        }
+      },
+      "cost": {
+        "currency": "USD",
+        "estimated_total": 0.0028297,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\config\\model_pricing.json",
+        "priced_model_count": 1,
+        "unpriced_models": [],
+        "items": [
+          {
+            "model": "gemini-3.5-flash-lite",
+            "input_tokens": 2524,
+            "cached_input_tokens": 0,
+            "output_tokens": 829,
+            "estimated_cost_usd": 0.0028297
+          }
+        ]
+      },
+      "calls": [
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 1269,
+          "output_tokens": 351,
+          "total_tokens": 1620,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.872913,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 1255,
+          "output_tokens": 478,
+          "total_tokens": 1733,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.86568,
+          "success": true,
+          "error": ""
+        }
+      ]
+    },
+    "outcome": {
+      "status": "completed",
+      "last_phase": "received",
+      "failure_stage": "",
+      "failure_code": ""
+    },
+    "langsmith": {
+      "enabled": false,
+      "project": "l2c-local",
+      "trace_id": ""
+    }
+  },
+  "result": {
+    "status": "completed",
+    "message": "Classic 수집 2/2건 완료",
+    "error_code": "",
+    "site": "incruit",
+    "site_name": "incruit",
+    "search_keyword": "백엔드 개발자",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 2,
+    "resolved_count": 2,
+    "persisted_count": 2,
+    "created_count": 0,
+    "updated_count": 2,
+    "rejected_count": 0,
+    "persisted_items": [
+      {
+        "job_id": 1,
+        "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607310000052&src=gsw*www",
+        "company_name": "카카오뱅크",
+        "position": "백엔드 개발자",
+        "operation": "updated"
+      },
+      {
+        "job_id": 2,
+        "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608040000395&src=gsw*www",
+        "company_name": "카카오모빌리티",
+        "position": "물류 & 에이전트 개발실 백엔드 개발자",
+        "operation": "updated"
+      }
+    ],
+    "observed_job_ids": [],
+    "document_ids": [
+      1,
+      2
+    ],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "classic-481e4eb6-038c-4eda-b940-639a60dac65b"
+  },
+  "jobs": [
+    {
+      "company_name": "카카오뱅크",
+      "position": "백엔드 개발자",
+      "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607310000052&src=gsw*www",
+      "job_category": "백엔드 개발",
+      "education": null,
+      "employment_type": "정규직",
+      "location": "경기도 성남시 분당구",
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Java",
+        "Kotlin",
+        "Spring Framework",
+        "Redis",
+        "Kafka",
+        "Spring WebFlux",
+        "Kotlin Coroutines",
+        "Tomcat",
+        "JVM"
+      ],
+      "main_tasks": [
+        "카카오뱅크 홈 화면, 회원 시스템, 인증 시스템 및 금융 AI 서비스 백엔드 개발과 운영",
+        "대용량 트래픽을 처리하는 회원 시스템 신규 구축 주도"
+      ],
+      "requirements": [
+        "Java, Kotlin, Spring Framework 기반 백엔드 개발 실무 경험"
+      ],
+      "preferred": [
+        "Spring Framework, Tomcat, JVM, OS, 네트워크 등 다양한 레이어에서 발생한 문제 해결 및 성능 개선 경험",
+        "Spring WebFlux, Kotlin Coroutines 등 비동기/논블로킹 프로그래밍 모델 실제 업무 적용 경험",
+        "대용량 실시간 데이터 처리 및 복잡한 네트워크 환경 이해 및 프로그래밍 경험",
+        "국가유공자 및 장애인 등 취업보호대상자 관계법령에 따른 우대"
+      ],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "Incruit",
+      "raw_ocr_text": "회사명: 카카오뱅크\n공고 제목: 백엔드 개발자\n\n카카오뱅크, AI서버팀 백엔드 개발자 모집\n카카오뱅크가 AI서버팀 백엔드 개발자 채용을 진행한다. 이번 채용은 카카오뱅크의 핵심 서비스 영역을 담당할 경력직 개발자를 영입하기 위한 것으로, 4년 이상 12년 이하의 백엔드 개발 실무 경험을 갖춘 인재를 대상으로 한다.\n이번에 합류하게 될 개발자는 카카오뱅크 홈 화면, 회원 시스템, 인증 시스템 및 금융 AI 서비스의 백엔드 개발과 운영을 맡게 된다. 수천만 고객이 앱을 열었을 때 가장 먼저 마주하는 홈 화면부터 다양한 서비스를 연결하는 인증 시스템, 그리고 새로운 전환점이 될 금융 AI 서비스까지 카카오뱅크의 핵심적인 영역을 책임지게 되며, 대용량 트래픽을 처리하는 회원 시스템 신규 구축이라는 도전적인 과제도 주도하게 된다. 기술적으로는 Java/Kotlin과 Spring Framework를 기반으로 Redis, Kafka 등을 활용해 대규모 동시성 문제를 해결하고 개선하는 업무를 경험하게 된다.\n지원 자격은 4년 이상 12년 이하의 Java, Kotlin, Spring Framework 기반 백엔드 개발 실무 경험을 보유한 분으로, 어려운 문제 앞에서 포기하지 않고 고객을 위한 가치 있는 변화를 만들어내는 끈기, 코드와 서비스에 대한 깊은 책임감, 그리고 강력한 실행력을 갖춘 분을 찾고 있다. Spring Framework·Tomcat·JVM·OS·네트워크 등 다양한 레이어에서 발생한 문제를 해결하고 성능을 개선한 경험이 있거나, Spring WebFlux·Kotlin Coroutines 등 비동기/논블로킹 프로그래밍 모델을 실제 업무에 적용해 본 경험, 또는 대용량 실시간 데이터 처리 및 복잡한 네트워크 환경을 이해하고 프로그래밍해 본 경험이 있다면 우대하며, 국가유공자 및 장애인 등 취업보호대상자는 관계법령에 따라 우대한다.\n근무지는 경기도 성남시 분당구에 위치한 카카오뱅크 판교오피스이며, 소속 부서는 AI서버팀이다. 자세한 내용은 카카오뱅크의 홈페이지에서 확인할 수 있다.",
+      "content_hash": "3e4eff0327dac90416dd836a6fc4c76d8751c550396418de34edbf2f4f638db8",
+      "evidence_hash": "6f3148cf776abbfd90a33c8d73e392985c852626c0f9f9c63c688f69e15381b7",
+      "experience_min": 4,
+      "experience_max": 12,
+      "experience_text": "4년 이상 12년 이하",
+      "id": 1
+    },
+    {
+      "company_name": "카카오모빌리티",
+      "position": "물류 & 에이전트 개발실 백엔드 개발자",
+      "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608040000395&src=gsw*www",
+      "job_category": "백엔드 개발자",
+      "education": "학사 이상",
+      "employment_type": "정규직",
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Kotlin",
+        "Java",
+        "MySQL",
+        "Docker",
+        "Kubernetes",
+        "NoSQL",
+        "MongoDB",
+        "ElasticSearch",
+        "Redis",
+        "Kafka",
+        "ELK",
+        "Prometheus"
+      ],
+      "main_tasks": [
+        "라스트마일 물류 플랫폼 관련 백엔드 시스템 개발 및 운영",
+        "서버 API 설계 및 성능 최적화",
+        "데이터베이스 설계 및 운영",
+        "성능 모니터링 및 개선 진행",
+        "어드민 시스템 유지 보수"
+      ],
+      "requirements": [
+        "백엔드 서버 개발 경력 3년 이상",
+        "Kotlin 또는 Java 기반의 서비스 개발 경험",
+        "RDBMS(MySQL 등) 사용 경험",
+        "컴퓨터과학 및 공학 관련 학사 이상 전공자 (유사 전공 포함) 혹은 충분한 유관 경력",
+        "Docker와 Kubernetes에 대한 개념과 클라우드 인프라에 대한 경험"
+      ],
+      "preferred": [
+        "NoSQL(MongoDB, ElasticSearch) 사용 경험",
+        "Redis, Kafka 등 메시징 및 캐싱 시스템 사용 경험",
+        "모니터링 및 장애 대응 경험 (예: ELK, Prometheus 등)",
+        "기술적인 문제를 적극적으로 해결하고 개선점을 제안하는 분",
+        "오버엔지니어링, 언더엔지니어링을 인지하며 개발하시는 분",
+        "협업과 커뮤니케이션을 중요하게 생각하는 분",
+        "물류 도메인에 대한 이해도가 높으신 분",
+        "적극적 협업 마인드를 가진 팀 플레이어"
+      ],
+      "benefits": [],
+      "salary": "회사내규",
+      "source_platform": "Incruit",
+      "raw_ocr_text": "회사명: 카카오모빌리티\n공고 제목: 물류 & 에이전트 개발실 백엔드 개발자\n\n(주)카카오모빌리티\n물류 & 에이전트 개발실 백엔드 개발자\n모집부문 및 자격요건\n모집부문\t담당업무\t자격요건\t인원\n물류 & 에이전트\n개발실 백엔드 개발자\n[담당업무]\n- 라스트마일 물류 플랫폼 관련 백엔드 시스템 개발 및 운영\n- 서버 API 설계 및 성능 최적화\n- 데이터베이스 설계 및 운영\n- 성능 모니터링 및 개선 진행\n- 어드민 시스템 유지 보수\n[자격요건]\n- 백엔드 서버 개발 경력 3년 이상\n- Kotlin 또는 Java 기반의 서비스 개발 경험\n- RDBMS(MySQL 등) 사용 경험\n- 컴퓨터과학 및 공학 관련 학사 이상 전공자 (유사 전공 포함) 혹은 충분한 유관 경력\n- Docker와 Kubernetes에 대한 개념과 클라우드 인프라에 대한 경험\n[우대사항]\n- NoSQL(MongoDB, ElasticSearch) 사용 경험\n- Redis, Kafka 등 메시징 및 캐싱 시스템 사용 경험\n- 모니터링 및 장애 대응 경험 (예: ELK, Prometheus 등)\n- 기술적인 문제를 적극적으로 해결하고 개선점을 제안하는 분\n- 오버엔지니어링, 언더엔지니어링을 인지하며 개발하시는 분\n- 협업과 커뮤니케이션을 중요하게 생각하는 분\n- 물류 도메인에 대한 이해도가 높으신 분\n- 적극적 협업 마인드를 가진 팀 플레이어\n0 명\n근무조건\n고용형태: 정규직\n급여조건: 회사내규\n전형단계 및 제출서류\n전형단계: 서류전형 > 코딩 테스트 > 1차 인터뷰 > 2차 인터뷰 > 처우 협의\n접수방법\n접수방법: 자사 홈페이지\n기타 유의사항\n입사지원서 및 제출서류에 허위사실이 있을 경우 채용이 취소될 수 있습니다.\n00",
+      "content_hash": "62069a9dd88f324064f7923f57af9ca9c58ef34a5b92df977e215de0a1e07c2f",
+      "evidence_hash": "2bc94cd331a8cbc1be8485db536e1b585a80644fbb18540c864d7dc7c51e5b4f",
+      "experience_min": 3,
+      "experience_max": null,
+      "experience_text": "3년 이상",
+      "id": 2
+    }
+  ]
+}
