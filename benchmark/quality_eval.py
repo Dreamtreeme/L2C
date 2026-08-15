@@ -110,7 +110,7 @@ def evaluate_expected_source_urls(
 
 
 def normalize_job_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {name: record.get(name) for name in JOB_FIELDS}
+    return {name: record[name] for name in JOB_FIELDS if name in record}
 
 
 def extract_job_records(payload: Any) -> list[dict[str, Any]]:

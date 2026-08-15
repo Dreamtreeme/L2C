@@ -1,43 +1,54 @@
 {
-  "schema_version": 1,
-  "commit_sha": "REPLACE_WITH_GIT_SHA",
+  "schema_version": 2,
+  "baseline_sha": "REPLACE_WITH_T0_SHA",
+  "prompt_sha256": "REPLACE_WITH_PROMPT_SHA256",
   "task_contract": {
+    "development_query": "백엔드 개발자",
     "target_count": 2,
     "required_fields": [
       "company_name",
-      "job_title",
-      "responsibilities",
-      "requirements",
-      "source_url"
+      "position",
+      "url",
+      "main_tasks",
+      "requirements"
     ],
-    "success_rule": "3 consecutive strict successes"
+    "acceptance_queries": [
+      "프론트엔드 개발자",
+      "데이터 엔지니어",
+      "안드로이드 개발자"
+    ],
+    "reserve_queries": [
+      "QA 엔지니어",
+      "DevOps 엔지니어"
+    ],
+    "time_limit_minutes": 90
+  },
+  "foundation": {
+    "started_at": "REPLACE_WITH_ISO_TIME",
+    "finished_at": "REPLACE_WITH_ISO_TIME",
+    "changed_loc": 0,
+    "modified_files": [],
+    "acceptance_path": "docs/evidence/site_onboarding/synthetic_classic_acceptance.json",
+    "notes": ""
   },
   "records": [
     {
-      "site": "REPLACE_SITE_1",
+      "site": "REPLACE_SITE",
+      "homepage": "https://example.com/",
       "approach": "classic",
-      "implementation_minutes": 0,
-      "site_specific_code_lines": 0,
-      "modified_file_count": 0,
-      "common_runtime_code_lines": 0,
-      "fix_iteration_count": 0,
-      "successful_runs": 0,
-      "attempted_runs": 3,
-      "runtime_sec": [],
-      "notes": ""
+      "baseline_sha": "REPLACE_WITH_T0_SHA",
+      "codex_model": "REPLACE_WITH_MODEL",
+      "prompt_sha256": "REPLACE_WITH_PROMPT_SHA256",
+      "started_at": "REPLACE_WITH_ISO_TIME"
     },
     {
-      "site": "REPLACE_SITE_1",
+      "site": "REPLACE_SITE",
+      "homepage": "https://example.com/",
       "approach": "vision",
-      "implementation_minutes": 0,
-      "site_specific_code_lines": 0,
-      "modified_file_count": 0,
-      "common_runtime_code_lines": 0,
-      "fix_iteration_count": 0,
-      "successful_runs": 0,
-      "attempted_runs": 3,
-      "runtime_sec": [],
-      "notes": ""
+      "baseline_sha": "REPLACE_WITH_T0_SHA",
+      "codex_model": "REPLACE_WITH_MODEL",
+      "prompt_sha256": "REPLACE_WITH_PROMPT_SHA256",
+      "started_at": "REPLACE_WITH_ISO_TIME"
     }
   ]
 }

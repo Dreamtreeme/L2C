@@ -1,0 +1,164 @@
+{
+  "passed": true,
+  "result": {
+    "status": "completed",
+    "message": "Classic 수집 2/2건 완료",
+    "error_code": "",
+    "site": "synthetic",
+    "site_name": "synthetic",
+    "search_keyword": "백엔드 개발자",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 2,
+    "resolved_count": 2,
+    "persisted_count": 2,
+    "created_count": 2,
+    "updated_count": 0,
+    "rejected_count": 0,
+    "persisted_items": [
+      {
+        "job_id": 1,
+        "url": "http://127.0.0.1:61347/job-1.html",
+        "company_name": "테스트랩",
+        "position": "백엔드 개발자",
+        "operation": "created"
+      },
+      {
+        "job_id": 2,
+        "url": "http://127.0.0.1:61347/job-2.html",
+        "company_name": "샘플테크",
+        "position": "플랫폼 백엔드 개발자",
+        "operation": "created"
+      }
+    ],
+    "observed_job_ids": [],
+    "document_ids": [
+      1,
+      2
+    ],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "classic-f2f070f6-daa0-4e0c-b7e7-01f667208087"
+  },
+  "jobs": [
+    {
+      "company_name": "테스트랩",
+      "position": "백엔드 개발자",
+      "url": "http://127.0.0.1:61347/job-1.html",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [],
+      "main_tasks": [
+        "백엔드 개발자\n테스트랩\n주요 업무\n\nPython과 FastAPI로 채용 서비스를 개발합니다.\n\n자격 요건\n\nPython 웹 서비스 개발 경험이 필요합니다."
+      ],
+      "requirements": [
+        "백엔드 개발자\n테스트랩\n주요 업무\n\nPython과 FastAPI로 채용 서비스를 개발합니다.\n\n자격 요건\n\nPython 웹 서비스 개발 경험이 필요합니다."
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "synthetic",
+      "raw_ocr_text": "백엔드 개발자\n테스트랩\n주요 업무\n\nPython과 FastAPI로 채용 서비스를 개발합니다.\n\n자격 요건\n\nPython 웹 서비스 개발 경험이 필요합니다.",
+      "content_hash": null,
+      "evidence_hash": "b2977c2e5956da1047280cb8595b266a20a5323c3e3356ee5509170199aeedaf",
+      "experience_min": null,
+      "experience_max": null,
+      "experience_text": null,
+      "id": 1
+    },
+    {
+      "company_name": "샘플테크",
+      "position": "플랫폼 백엔드 개발자",
+      "url": "http://127.0.0.1:61347/job-2.html",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [],
+      "main_tasks": [
+        "플랫폼 백엔드 개발자\n샘플테크\n주요 업무\n\nJava와 Spring으로 플랫폼 API를 개발합니다.\n\n자격 요건\n\n관계형 데이터베이스 사용 경험이 필요합니다."
+      ],
+      "requirements": [
+        "플랫폼 백엔드 개발자\n샘플테크\n주요 업무\n\nJava와 Spring으로 플랫폼 API를 개발합니다.\n\n자격 요건\n\n관계형 데이터베이스 사용 경험이 필요합니다."
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "synthetic",
+      "raw_ocr_text": "플랫폼 백엔드 개발자\n샘플테크\n주요 업무\n\nJava와 Spring으로 플랫폼 API를 개발합니다.\n\n자격 요건\n\n관계형 데이터베이스 사용 경험이 필요합니다.",
+      "content_hash": null,
+      "evidence_hash": "66ae40181c763c827ec6fea2ffeb23bf28dcef91e5769fc9d406aff512c26f1b",
+      "experience_min": null,
+      "experience_max": null,
+      "experience_text": null,
+      "id": 2
+    }
+  ],
+  "quality": {
+    "passed": true,
+    "automatic_passed": true,
+    "manual_required": false,
+    "manual_passed": null,
+    "collection_quality": {
+      "target_count": 2,
+      "collected_count": 2,
+      "persisted_count": 2,
+      "observed_existing_count": 0,
+      "resolved_count": 2,
+      "target_fulfillment": 1.0,
+      "persistence_rate": 1.0,
+      "detail_url_checked_count": 2,
+      "detail_url_valid_count": 2,
+      "source_url_integrity": 1.0,
+      "accepted": true,
+      "finished": true,
+      "target_contract": {
+        "required": false,
+        "passed": true,
+        "expected_count": 0,
+        "actual_count": 2,
+        "matched_count": 0,
+        "missing_urls": [],
+        "unexpected_urls": []
+      },
+      "passed": true
+    },
+    "job_quality": {
+      "record_count": 2,
+      "required_fields": [
+        "company_name",
+        "position",
+        "url",
+        "main_tasks",
+        "requirements"
+      ],
+      "schema_valid_rate": 1.0,
+      "required_field_coverage": 1.0,
+      "content_field_coverage": 0.4,
+      "valid_url_count": 2,
+      "unique_url_rate": 1.0
+    },
+    "domain_quality": {
+      "allowed_domains": [
+        "127.0.0.1"
+      ],
+      "invalid_urls": [],
+      "passed": true
+    },
+    "hardcoding_quality": {
+      "checked": false,
+      "matched_literals": [],
+      "passed": true
+    },
+    "manual_quality": null
+  }
+}

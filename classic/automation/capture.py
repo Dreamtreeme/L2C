@@ -10,10 +10,9 @@ from __future__ import annotations
 import logging
 import time
 
-from playwright.sync_api import sync_playwright
-
 from agent.config import get_settings
 
+from .browser import open_browser_page
 from .sites import resolve_adapter
 
 logger = logging.getLogger(__name__)
@@ -39,24 +38,7 @@ def capture_and_extract_dom(url: str) -> dict:
         "full_text": None,
     }
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=browser_settings.playwright_headless,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        context = browser.new_context(
-            viewport={
-                "width": browser_settings.chrome_window_width,
-                "height": browser_settings.chrome_window_height,
-            },
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-        )
-        page = context.new_page()
-
+    with open_browser_page() as page:
         try:
             logger.info(
                 "페이지 접속 시도 중... (timeout=%sms)",
@@ -78,7 +60,5 @@ def capture_and_extract_dom(url: str) -> dict:
 
         except Exception as e:
             logger.error(f"DOM 추출 중 오류 발생: {e}")
-        finally:
-            browser.close()
 
     return dom_data

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>합성 채용 사이트</title>
+</head>
+<body>
+  <header><h1>합성 채용 사이트</h1></header>
+  <main>
+    <form id="search-form">
+      <label for="job-query">채용공고 검색</label>
+      <input id="job-query" name="query" type="search">
+      <button type="submit">검색</button>
+    </form>
+    <p id="search-status" role="status">검색어를 입력하세요.</p>
+    <ul aria-label="채용공고 검색 결과">
+      <li hidden data-keywords="백엔드 개발자 Python FastAPI">
+        <a href="job-1.html">백엔드 개발자</a>
+      </li>
+      <li hidden data-keywords="백엔드 개발자 Java Spring">
+        <a href="job-2.html">플랫폼 백엔드 개발자</a>
+      </li>
+      <li hidden data-keywords="프론트엔드 개발자 TypeScript React">
+        <a href="job-3.html">프론트엔드 개발자</a>
+      </li>
+    </ul>
+  </main>
+  <script>
+    const form = document.querySelector("#search-form");
+    const status = document.querySelector("#search-status");
+    const items = Array.from(document.querySelectorAll("li[data-keywords]"));
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const query = new FormData(form).get("query").trim().toLocaleLowerCase();
+      let count = 0;
+      for (const item of items) {
+        const matched = item.dataset.keywords.toLocaleLowerCase().includes(query);
+        item.hidden = !matched;
+        count += Number(matched);
+      }
+      status.textContent = `${count}개 공고를 찾았습니다.`;
+    });
+  </script>
+</body>
+</html>

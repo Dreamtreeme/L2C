@@ -1,4 +1,4 @@
-"""신규 사이트의 Classic·Vision 적용 공수를 같은 단위로 비교한다."""
+"""신규 사이트의 Classic·Vision 증분 적용 공수를 비교한다."""
 
 from __future__ import annotations
 
@@ -7,30 +7,68 @@ import json
 from collections import defaultdict
 from pathlib import Path
 from statistics import median
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, Field
-
-
-class SiteAdaptationRecord(BaseModel):
-    site: str
-    approach: Literal["classic", "vision"]
-    implementation_minutes: float = Field(ge=0)
-    site_specific_code_lines: int = Field(ge=0)
-    modified_file_count: int = Field(ge=0)
-    common_runtime_code_lines: int = Field(ge=0)
-    fix_iteration_count: int = Field(ge=0)
-    successful_runs: int = Field(ge=0)
-    attempted_runs: int = Field(default=3, ge=1)
-    runtime_sec: list[float] = Field(default_factory=list)
-    notes: str = ""
+from benchmark.site_onboarding_contract import (
+    SiteAdaptationManifest,
+    SiteAdaptationRecord,
+)
 
 
-class SiteAdaptationManifest(BaseModel):
-    schema_version: int = 1
-    commit_sha: str
-    task_contract: dict[str, Any]
-    records: list[SiteAdaptationRecord]
+def _record_summary(record: SiteAdaptationRecord) -> dict[str, Any]:
+    runtimes = [run.runtime_sec for run in record.acceptance_runs]
+    return {
+        **record.model_dump(mode="json"),
+        "human_intervention_count": len(record.human_interventions),
+        "fix_iteration_count": len(record.fix_iterations),
+        "modified_file_count": len(record.modified_product_files),
+        "acceptance_success_count": sum(run.passed for run in record.acceptance_runs),
+        "acceptance_attempt_count": len(record.acceptance_runs),
+        "prompt_to_first_success_sec": record.prompt_to_first_success_sec,
+        "prompt_to_acceptance_sec": record.prompt_to_acceptance_sec,
+        "runtime_median_sec": round(median(runtimes), 3) if runtimes else None,
+        "llm_tokens": sum(run.total_tokens for run in record.acceptance_runs),
+        "llm_cost_usd": round(
+            sum(run.estimated_cost_usd for run in record.acceptance_runs),
+            9,
+        ),
+    }
+
+
+def _contract_passed(
+    record: SiteAdaptationRecord,
+    manifest: SiteAdaptationManifest,
+) -> bool:
+    expected_queries = manifest.task_contract.acceptance_queries
+    actual_queries = [run.query for run in record.acceptance_runs]
+    return bool(
+        record.status == "completed"
+        and record.baseline_sha == manifest.baseline_sha
+        and record.prompt_sha256 == manifest.prompt_sha256
+        and record.finished_at is not None
+        and actual_queries == expected_queries
+        and all(run.passed for run in record.acceptance_runs)
+    )
+
+
+def _decision(sites: list[dict[str, Any]]) -> str:
+    if not sites or any(not site["classic_contract_passed"] for site in sites):
+        return "비교 불가"
+    if any(not site["vision_contract_passed"] for site in sites):
+        return "기각"
+    vision_wins = [
+        site["prompt_to_acceptance_sec_saved"] > 0
+        and site["site_specific_changed_loc_saved"] > 0
+        for site in sites
+    ]
+    if all(vision_wins):
+        return "지지"
+    classic_wins = [
+        site["prompt_to_acceptance_sec_saved"] < 0
+        and site["site_specific_changed_loc_saved"] < 0
+        for site in sites
+    ]
+    return "기각" if all(classic_wins) else "혼합"
 
 
 def evaluate_site_adaptation(
@@ -40,66 +78,49 @@ def evaluate_site_adaptation(
     for record in manifest.records:
         grouped[record.site][record.approach] = record
 
-    sites = []
+    sites: list[dict[str, Any]] = []
     for site, approaches in sorted(grouped.items()):
         classic = approaches.get("classic")
         vision = approaches.get("vision")
         if classic is None or vision is None:
-            raise ValueError(
-                f"{site}에는 classic과 vision 기록이 모두 필요합니다."
-            )
-        classic_contract_passed = (
-            classic.attempted_runs >= 3
-            and classic.successful_runs == classic.attempted_runs
-            and len(classic.runtime_sec) == classic.attempted_runs
-        )
-        vision_contract_passed = (
-            vision.attempted_runs >= 3
-            and vision.successful_runs == vision.attempted_runs
-            and len(vision.runtime_sec) == vision.attempted_runs
-        )
-        comparison_valid = (
-            classic_contract_passed and vision_contract_passed
-        )
+            raise ValueError(f"{site}에는 classic과 vision 기록이 모두 필요합니다.")
+        classic_summary = _record_summary(classic)
+        vision_summary = _record_summary(vision)
+        classic_contract_passed = _contract_passed(classic, manifest)
+        vision_contract_passed = _contract_passed(vision, manifest)
+        classic_time = classic.prompt_to_acceptance_sec
+        vision_time = vision.prompt_to_acceptance_sec
         sites.append(
             {
                 "site": site,
-                "classic": classic.model_dump(),
-                "vision": vision.model_dump(),
+                "classic": classic_summary,
+                "vision": vision_summary,
                 "classic_contract_passed": classic_contract_passed,
                 "vision_contract_passed": vision_contract_passed,
-                "comparison_valid": comparison_valid,
-                "implementation_minutes_saved": round(
-                    classic.implementation_minutes
-                    - vision.implementation_minutes,
+                "comparison_valid": (
+                    classic_contract_passed and vision_contract_passed
+                ),
+                "prompt_to_acceptance_sec_saved": round(
+                    (classic_time or 0.0) - (vision_time or 0.0),
                     3,
                 ),
-                "site_specific_code_lines_saved": (
-                    classic.site_specific_code_lines
-                    - vision.site_specific_code_lines
-                ),
-                "vision_profile_only": (
-                    comparison_valid
-                    and vision.common_runtime_code_lines == 0
-                    and vision.site_specific_code_lines == 0
-                ),
-                "classic_runtime_median_sec": (
-                    round(median(classic.runtime_sec), 3)
-                    if classic.runtime_sec
-                    else None
-                ),
-                "vision_runtime_median_sec": (
-                    round(median(vision.runtime_sec), 3)
-                    if vision.runtime_sec
-                    else None
+                "site_specific_changed_loc_saved": (
+                    classic.site_specific_changed_loc - vision.site_specific_changed_loc
                 ),
             }
         )
+
     return {
-        "schema_version": 1,
-        "commit_sha": manifest.commit_sha,
-        "task_contract": manifest.task_contract,
+        "schema_version": 2,
+        "baseline_sha": manifest.baseline_sha,
+        "prompt_sha256": manifest.prompt_sha256,
+        "task_contract": manifest.task_contract.model_dump(mode="json"),
+        "foundation": {
+            **manifest.foundation.model_dump(mode="json"),
+            "duration_sec": manifest.foundation.duration_sec,
+        },
         "site_count": len(sites),
+        "decision": _decision(sites),
         "sites": sites,
     }
 
@@ -128,3 +149,10 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+__all__ = [
+    "SiteAdaptationManifest",
+    "SiteAdaptationRecord",
+    "evaluate_site_adaptation",
+]

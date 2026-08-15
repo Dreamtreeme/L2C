@@ -5,7 +5,7 @@ URL 매칭과 페이지에서 본문을 추출하는 책임만 가집니다.
 브라우저 lifecycle은 capture.py가 관리합니다.
 """
 
-from .base import SiteAdapter
+from .base import CollectionSiteAdapter, SiteAdapter
 from .wanted import WantedAdapter
 from .jobkorea import JobKoreaAdapter
 from .rocketpunch import RocketpunchAdapter
@@ -30,11 +30,22 @@ def resolve_adapter(url: str) -> SiteAdapter:
     )
 
 
+def resolve_collection_adapter(url: str) -> CollectionSiteAdapter:
+    """URL을 검색부터 처리할 수 있는 어댑터를 반환한다."""
+
+    adapter = resolve_adapter(url)
+    if isinstance(adapter, CollectionSiteAdapter):
+        return adapter
+    raise ValueError(f"{adapter.name} 어댑터는 홈페이지 검색을 지원하지 않습니다.")
+
+
 __all__ = [
     "SiteAdapter",
+    "CollectionSiteAdapter",
     "WantedAdapter",
     "JobKoreaAdapter",
     "RocketpunchAdapter",
     "ADAPTERS",
     "resolve_adapter",
+    "resolve_collection_adapter",
 ]

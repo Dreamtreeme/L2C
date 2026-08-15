@@ -10,7 +10,15 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, TypedDict
+
+
+class DomExtraction(TypedDict):
+    """상세 페이지 어댑터가 공통 정제 단계에 넘기는 원문."""
+
+    company_name: str | None
+    position: str | None
+    full_text: str | None
 
 
 class SiteAdapter(ABC):
@@ -25,7 +33,7 @@ class SiteAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def extract(self, page: Any) -> dict:
+    def extract(self, page: Any) -> DomExtraction:
         """페이지에서 채용공고 정보를 추출한다.
 
         반환 딕셔너리 스키마(현행 호환):
@@ -39,6 +47,20 @@ class SiteAdapter(ABC):
         full_text는 비어 있으면 LLM 단계에서 의미 있는 결과가 나오지 않으니,
         가능한 한 본문을 채워야 합니다.
         """
+        raise NotImplementedError
+
+
+class CollectionSiteAdapter(SiteAdapter):
+    """홈페이지에서 검색해 상세 URL을 찾을 수 있는 Classic 어댑터."""
+
+    @abstractmethod
+    def submit_search(self, page: Any, keyword: str) -> None:
+        """현재 페이지의 검색 UI로 검색어를 제출한다."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_detail_urls(self, page: Any, limit: int | None) -> list[str]:
+        """검색 결과에서 상세 공고 URL을 중복 없이 반환한다."""
         raise NotImplementedError
 
 

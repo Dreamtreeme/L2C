@@ -10,6 +10,9 @@ from benchmark.site_adaptation_eval import (
     SiteAdaptationManifest,
     evaluate_site_adaptation,
 )
+from benchmark.site_onboarding_acceptance import (
+    evaluate_site_onboarding_acceptance,
+)
 
 
 def _collection(*, target=1, resolved=1, status="completed", items=None):
@@ -270,15 +273,26 @@ def test_manual_evaluation_contracts(summary, judged_jobs, automatic, manual, ou
 def _adaptation_record(approach, **overrides):
     record = {
         "site": "example",
+        "homepage": "https://example.com",
         "approach": approach,
-        "implementation_minutes": 10,
-        "site_specific_code_lines": 0,
-        "modified_file_count": 1,
-        "common_runtime_code_lines": 0,
-        "fix_iteration_count": 0,
-        "successful_runs": 0,
-        "attempted_runs": 3,
-        "runtime_sec": [],
+        "baseline_sha": "abc123",
+        "result_sha": "def456",
+        "codex_model": "same-model",
+        "prompt_sha256": "prompt-hash",
+        "started_at": "2026-08-16T00:00:00Z",
+        "first_success_at": "2026-08-16T00:00:10Z",
+        "finished_at": "2026-08-16T00:01:30Z",
+        "status": "completed",
+        "site_specific_changed_loc": 0,
+        "modified_product_files": ["adapter.py"],
+        "acceptance_runs": [
+            {
+                "query": "검증 검색어",
+                "summary_path": "summary.json",
+                "passed": True,
+                "runtime_sec": 10,
+            }
+        ],
     }
     record.update(overrides)
     return record
@@ -287,37 +301,85 @@ def _adaptation_record(approach, **overrides):
 def test_site_adaptation_reports_common_runtime_work_and_validity():
     valid = SiteAdaptationManifest.model_validate(
         {
-            "commit_sha": "abc123",
-            "task_contract": {"target_count": 2},
+            "baseline_sha": "abc123",
+            "prompt_sha256": "prompt-hash",
+            "task_contract": {
+                "target_count": 2,
+                "acceptance_queries": ["검증 검색어"],
+            },
+            "foundation": {
+                "started_at": "2026-08-15T23:55:00Z",
+                "finished_at": "2026-08-16T00:00:00Z",
+                "changed_loc": 100,
+                "modified_files": ["classic/automation/collection.py"],
+                "acceptance_path": "synthetic.json",
+            },
             "records": [
                 _adaptation_record(
                     "classic",
-                    implementation_minutes=90,
-                    site_specific_code_lines=120,
-                    successful_runs=3,
-                    runtime_sec=[10, 11, 12],
+                    site_specific_changed_loc=120,
                 ),
                 _adaptation_record(
                     "vision",
-                    implementation_minutes=30,
-                    common_runtime_code_lines=20,
-                    successful_runs=3,
-                    runtime_sec=[90, 95, 100],
+                    finished_at="2026-08-16T00:00:30Z",
+                    common_runtime_changed_loc=20,
                 ),
             ],
         }
     )
     incomplete = SiteAdaptationManifest.model_validate(
         {
-            "commit_sha": "abc123",
-            "task_contract": {},
-            "records": [_adaptation_record(mode) for mode in ("classic", "vision")],
+            **valid.model_dump(mode="json"),
+            "records": [
+                _adaptation_record("classic", status="running"),
+                _adaptation_record("vision", status="running"),
+            ],
         }
     )
 
     valid_result = evaluate_site_adaptation(valid)["sites"][0]
     incomplete_result = evaluate_site_adaptation(incomplete)["sites"][0]
-    assert valid_result["implementation_minutes_saved"] == 60
-    assert valid_result["vision_profile_only"] is False
+    assert valid_result["prompt_to_acceptance_sec_saved"] == 60
+    assert valid_result["site_specific_changed_loc_saved"] == 120
     assert valid_result["comparison_valid"] is True
     assert incomplete_result["comparison_valid"] is False
+
+
+def test_site_onboarding_acceptance_checks_schema_domain_and_hardcoding():
+    summary = _collection(
+        items=[{"job_id": 1, "url": "https://jobs.example.com/jobs/1"}]
+    )
+    jobs = [
+        {
+            "company_name": "예시회사",
+            "position": "백엔드 개발자",
+            "url": "https://jobs.example.com/jobs/1",
+            "main_tasks": ["API 개발"],
+            "requirements": ["Python"],
+        }
+    ]
+    required_fields = [
+        "company_name",
+        "position",
+        "url",
+        "main_tasks",
+        "requirements",
+    ]
+
+    passed = evaluate_site_onboarding_acceptance(
+        summary,
+        homepage="https://example.com",
+        required_fields=required_fields,
+        jobs=jobs,
+    )
+    hardcoded = evaluate_site_onboarding_acceptance(
+        summary,
+        homepage="https://example.com",
+        required_fields=required_fields,
+        jobs=jobs,
+        patch_text='TARGET = "https://jobs.example.com/jobs/1"',
+    )
+
+    assert passed["passed"] is True
+    assert hardcoded["passed"] is False
+    assert hardcoded["hardcoding_quality"]["matched_literals"]

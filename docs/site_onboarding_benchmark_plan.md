@@ -46,12 +46,12 @@ Classic과 Vision은 다음 정보만 입력받는다.
   "homepage": "사이트 공식 홈페이지",
   "development_query": "백엔드 개발자",
   "target_count": 2,
-  "required_fields": [
-    "company_name",
-    "position",
-    "responsibilities",
-    "requirements",
-    "source_url"
+    "required_fields": [
+      "company_name",
+      "position",
+      "main_tasks",
+      "requirements",
+      "url"
   ],
   "time_limit_minutes": 90
 }
@@ -62,14 +62,16 @@ Classic과 Vision은 다음 정보만 입력받는다.
 
 ## 0단계: 비교 기반 준비
 
-- [ ] 대상 사이트와 무관한 합성 채용 페이지를 준비한다.
-- [ ] Classic에 `홈페이지 -> 검색 -> 결과 URL 수집 -> 상세 추출 -> 정제 -> 저장`을
+- [x] 대상 사이트와 무관한 합성 채용 페이지를 준비한다.
+- [x] Classic에 `홈페이지 -> 검색 -> 결과 URL 수집 -> 상세 추출 -> 정제 -> 저장`을
       연결하는 공통 실행기를 만든다.
-- [ ] Classic 공통 실행기는 합성 페이지와 기존 지원 사이트만 사용해 검증한다.
-- [ ] Vision은 현재 공통 물리 도구로 같은 합성 수집 계약을 통과하는지 확인한다.
-- [ ] 두 방식의 결과를 같은 품질 검사기로 판정한다.
+- [x] Classic 공통 실행기는 합성 페이지와 기존 지원 사이트만 사용해 검증한다.
+- [x] ~~Vision은 현재 공통 물리 도구로 같은 합성 수집 계약을 통과하는지 확인한다.~~
+      Vision의 기존 `CollectionResult`와 DB `JobPosting`을 공통 품질 검사기가 읽는
+      계약 테스트로 대체한다. 실제 화면 실행은 두 후보 사이트의 Vision 세션에서 한다.
+- [x] 두 방식의 결과를 같은 품질 검사기로 판정한다.
 - [ ] Classic 공통 기반 준비시간과 변경 줄 수를 별도 기록한다.
-- [ ] 제품 코드에 `incruit`, `rallit`, `인크루트`, `랠릿` 전용 구현이 없는지 확인한다.
+- [x] 제품 코드에 `incruit`, `rallit`, `인크루트`, `랠릿` 전용 구현이 없는지 확인한다.
 - [ ] 작업 트리를 정리하고 비교 기준 커밋 SHA를 확정한다.
 
 이 단계가 끝난 커밋을 `T0`로 사용한다. `T0` 이전 비용은 사이트별 적용시간에 포함하지
@@ -236,7 +238,7 @@ docs/evidence/site_onboarding/
 ## 실행 체크리스트
 
 - [ ] Classic 공통 기반 준비 및 비용 기록
-- [ ] 공통 계약·프롬프트·품질 검사기 고정
+- [x] 공통 계약·프롬프트·품질 검사기 고정
 - [ ] `T0` 커밋과 네 개 worktree 생성
 - [ ] 인크루트 Classic 실행
 - [ ] 인크루트 Vision 실행
@@ -250,3 +252,11 @@ docs/evidence/site_onboarding/
 
 실행 중 계약이나 판정 기준을 바꾸면 기존 문장을 삭제하지 않고 취소선으로 남긴 뒤,
 바로 아래에 변경 날짜와 이유를 기록한다. 결과를 본 뒤 유리한 기준으로 바꾸지 않는다.
+
+- 2026-08-16: 최초 초안의 필드명 `responsibilities`, `source_url`을 각각 공통
+  `JobPosting` 계약의 `main_tasks`, `url`로 수정했다. ~~별도 벤치마크 필드명을
+  사용한다.~~ 두 실행 방식과 DB가 이미 공유하는 정규 필드명을 그대로 사용한다.
+- 2026-08-16: 로컬 합성 사이트는 HTTP이고 Vision `SiteProfile`은 공식 HTTPS 주소를
+  요구한다. 합성 프로필·인증서 예외를 제품 기준선에 추가하면 비교 대상과 무관한
+  변경이 생긴다. 따라서 합성 Vision E2E는 공통 결과·DB 입력 계약 테스트로 바꾸고,
+  실제 Vision 실행은 인크루트와 랠릿에서 검증한다.

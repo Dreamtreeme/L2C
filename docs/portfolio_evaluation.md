@@ -91,19 +91,20 @@ matrix summary의 `experience_reuse_effectiveness`에는 다음 값이 들어간
 
 ## 신규 사이트 적용 공수
 
-`benchmark/site_adaptation_template.json`에 미지원 사이트 2개의 Classic과
-Vision 기록을 각각 작성한다.
+[[site_onboarding_benchmark_plan]]의 고정 계약으로 미지원 사이트 2개의 Classic과
+Vision 세션을 각각 기록한다. `benchmark.site_onboarding_session`이 시작·최초 성공·
+수정·사용자 개입·최종 승인 시각을 같은 JSON 계약으로 남긴다.
 
 ```powershell
 .\.venv-app\Scripts\python.exe -m benchmark.site_adaptation_eval `
-  logs\portfolio\site_adaptation.json `
-  --output logs\portfolio\site_adaptation_report.json
+  docs\evidence\site_onboarding\comparison_manifest.json `
+  --output docs\evidence\site_onboarding\comparison_report.json
 ```
 
-Vision에서 공통 Python 코드를 수정했다면 `common_runtime_code_lines`에
-기록한다. 값이 0이고 사이트 전용 Python 코드도 0인 경우만 프로필 적용으로
-분류한다. Classic과 Vision이 각각 3회 모두 성공하고 모든 실행시간을
-기록한 경우에만 `comparison_valid=true`가 된다.
+각 방식은 개발에 사용하지 않은 검색어 3개를 같은 품질 검사기로 통과해야 한다.
+비교 보고서는 최종 승인 시간, 사이트 전용 변경 줄 수, 공통 런타임 변경 줄 수,
+사용자 개입, 실행시간, Vision 토큰과 비용을 분리해서 보여준다. 공통 Classic 기반을
+준비한 비용은 `foundation`에 기록하며 사이트별 증분 공수에 합산하지 않는다.
 
 ## 자원 측정
 

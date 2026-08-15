@@ -1,8 +1,9 @@
 """
-Wanted JD Text Extractor — CLI 엔트리포인트 (Playwright 기반).
+L2C Classic CLI 엔트리포인트 (Playwright 기반).
 
 서브커맨드:
   extract <url>   채용공고 URL을 받아 텍스트 추출 실행
+  collect <url>   홈페이지에서 검색해 공고 여러 건 수집
 """
 
 from __future__ import annotations
@@ -14,13 +15,15 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from agent.config import get_settings
 from shared.db import Database
-from zoneinfo import ZoneInfo
+from shared.schema.jd_schema import JobField
 
 logger = logging.getLogger("l2c.classic")
 _PATHS = get_settings().paths
+
 
 class KSTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -28,6 +31,7 @@ class KSTFormatter(logging.Formatter):
         if datefmt:
             return dt.strftime(datefmt)
         return dt.strftime("%Y-%m-%d %H:%M:%S")
+
 
 def _setup_logging(verbose: bool, log_file: Path | None = None) -> Path:
     """
@@ -101,7 +105,8 @@ def _phase(name: str):
         try:
             yield
         finally:
-            logger.info(f"━━━ {name} 끝 ({time.time()-t0:.2f}s) ━━━")
+            logger.info(f"━━━ {name} 끝 ({time.time() - t0:.2f}s) ━━━")
+
     return _cm()
 
 
@@ -128,33 +133,21 @@ def cmd_extract(args: argparse.Namespace) -> int:
             dom_raw = capture_and_extract_dom(url=args.url)
 
         with _phase(f"[2/2] LLM 텍스트 정제 ({args.model or '기본 경량 모델'})"):
-            from agent.application.job_normalization_service import (
-                complete_extracted_job,
-            )
+            from classic.automation.sites import resolve_adapter
             from classic.extractor.llm_engine import LLMEngine
-            from shared.schema.jd_schema import JobPosting
+            from classic.extractor.normalization import normalize_dom_posting
 
-            # DOM에서 가져온 텍스트 전문을 LLM에 전달
-            full_text = dom_raw.get("full_text", "")
-            extracted = LLMEngine(args.model).extract_from_text(full_text)
-            
-            # 메타데이터 보완 (LLM이 놓쳤을 경우 대비)
-            posting = JobPosting.model_validate(extracted)
-            posting = posting.model_copy(
-                update={
-                    "company_name": posting.company_name
-                    or dom_raw.get("company_name"),
-                    "position": posting.position or dom_raw.get("position"),
-                }
-            )
-            posting = complete_extracted_job(
-                posting,
-                current_url=args.url,
-                raw_ocr_text=full_text,
+            posting = normalize_dom_posting(
+                dom_raw,
+                url=args.url,
+                source_platform=resolve_adapter(args.url).name,
+                engine=LLMEngine(args.model),
             )
             data = posting.model_dump(mode="json")
-            
-        logger.info(f"데이터 정제 완료: {data.get('company_name')} - {data.get('position')}")
+
+        logger.info(
+            f"데이터 정제 완료: {data.get('company_name')} - {data.get('position')}"
+        )
 
         _PATHS.json_dir.mkdir(parents=True, exist_ok=True)
         json_path = _PATHS.json_dir / f"{slug}.json"
@@ -179,15 +172,47 @@ def cmd_extract(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_collect(args: argparse.Namespace) -> int:
+    """홈페이지에서 검색해 여러 상세 공고를 공통 스키마로 저장한다."""
+
+    from classic.automation.collection import ClassicCollectionRunner
+    from classic.extractor.normalization import LLMDomJobNormalizer
+    from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
+    from shared.schema.collection_intent import CollectionIntent
+
+    required_fields = [
+        JobField(value)
+        for value in (
+            args.required_field
+            or [field.value for field in DEFAULT_JOB_COLLECTION_FIELDS]
+        )
+    ]
+    intent = CollectionIntent(
+        original_query=args.query,
+        search_keyword=args.query,
+        target_count=args.count,
+        required_fields=required_fields,
+    )
+    runner = ClassicCollectionRunner(
+        db_path=args.db_path,
+        normalizer=LLMDomJobNormalizer(args.model),
+    )
+    result = runner.run(args.homepage, intent)
+    print(result.model_dump_json(indent=2))
+    return 0 if result.status == "completed" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("-v", "--verbose", action="store_true", help="콘솔에 DEBUG 로그까지 출력")
+    common.add_argument(
+        "-v", "--verbose", action="store_true", help="콘솔에 DEBUG 로그까지 출력"
+    )
 
     parser = argparse.ArgumentParser(
         prog="l2c-classic",
         description=(
-            "L2C Classic — 3개 채용 사이트(원티드·잡코리아·로켓펀치)"
-            "에서 공고를 Playwright로 추출하고 LLM으로 정형화"
+            "L2C Classic — 등록된 채용 사이트에서 공고를 Playwright로 "
+            "추출하고 LLM으로 정형화"
         ),
         parents=[common],
     )
@@ -197,14 +222,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_ext = sub.add_parser("extract", help="URL에서 공고 추출", parents=[common])
     p_ext.add_argument(
         "url",
-        help=(
-            "채용공고 URL "
-            "(지원: 원티드 · 잡코리아 · 로켓펀치)"
-        ),
+        help=("채용공고 URL (지원: 원티드 · 잡코리아 · 로켓펀치)"),
     )
     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")
     p_ext.add_argument("--model", help="이번 실행에만 사용할 Gemini 모델명")
     p_ext.set_defaults(func=cmd_extract)
+
+    p_collect = sub.add_parser(
+        "collect",
+        help="홈페이지에서 검색해 공고 여러 건 수집",
+        parents=[common],
+    )
+    p_collect.add_argument("homepage", help="수집을 시작할 공식 홈페이지")
+    p_collect.add_argument("--query", required=True, help="채용공고 검색어")
+    p_collect.add_argument("--count", type=int, default=2, help="수집할 공고 수")
+    p_collect.add_argument("--db-path", type=Path, help="격리 SQLite DB 경로")
+    p_collect.add_argument("--model", help="이번 실행에 사용할 경량 모델명")
+    p_collect.add_argument(
+        "--required-field",
+        action="append",
+        choices=[field.value for field in JobField],
+        help="필수 공고 필드. 여러 번 지정할 수 있음",
+    )
+    p_collect.set_defaults(func=cmd_collect)
 
     return parser
 
