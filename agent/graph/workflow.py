@@ -20,6 +20,8 @@ from agent.graph.worker_observation import (
 from agent.graph.worker_selection import selection_node
 from agent.graph.worker_transition import transition_node
 from agent.graph.worker_execution import execution_node
+from agent.graph.worker_review import review_node
+from shared.schema.jd_schema import JobReviewStatus
 from agent.runtime.job_card_queue import (
     can_select_pending_job_card,
     has_unresolved_job_card_queue,
@@ -46,14 +48,26 @@ def route_after_start(state: WorkerState) -> str:
 
 
 def _route_before_ocr(state: WorkerState, transition_result: dict[str, Any]) -> str:
-    """연속 재생 중이면 다음 전이로, 아니면 필요한 화면 해석으로 보낸다."""
+    """행동 결과 확인은 OCR로, 새 화면의 경험 규칙은 OCR 전에 검사한다."""
 
-    if (
-        state["replay"].get("replay_session")
-        and transition_result.get("status") == "ready"
-    ):
+    status = str(transition_result.get("status") or "")
+    if status == "unknown":
+        return "reasoning"
+    if status == "needs_ocr":
+        return "ocr"
+    if get_settings().reflex.enabled and not _reflex_missed_current_observation(state):
         return "reflex"
     return "ocr" if transition_result.get("needs_ocr") else "reasoning"
+
+
+def _reflex_missed_current_observation(state: WorkerState) -> bool:
+    trace = dict(state["replay"].get("reflex_trace") or {})
+    observation_id = str(state["observation"].get("observation_id") or "")
+    return bool(
+        observation_id
+        and trace.get("hit") is False
+        and str(trace.get("observation_id") or "") == observation_id
+    )
 
 
 def route_after_selection(state: WorkerState) -> str:
@@ -78,18 +92,18 @@ def route_after_selection(state: WorkerState) -> str:
         return "reasoning"
     if not get_settings().reflex.enabled:
         return "reasoning"
+    if _reflex_missed_current_observation(state):
+        return "reasoning"
     return "reflex"
 
 
 def route_after_reflex(state: WorkerState) -> str:
-    """Reflex가 요청을 만들었을 때만 실행하고 나머지는 LLM으로 보낸다."""
+    """적중하면 실행하고, OCR 전 불일치는 전체 화면 해석으로 보낸다."""
 
     request = state["decision"].get("pending_action")
-    return (
-        "execution"
-        if request is not None and request.source == "reflex"
-        else "reasoning"
-    )
+    if request is not None and request.source == "reflex":
+        return "execution"
+    return "reasoning" if current_observation_ready(state) else "ocr"
 
 
 def route_after_execution(state: WorkerState) -> str:
@@ -101,11 +115,24 @@ def route_after_execution(state: WorkerState) -> str:
     if state["transition"].get("error_count", 0) >= 3:
         logger.error("Too many errors. Forcing workflow to end.")
         return "end"
+    if state["collection"].get("pending_job_draft") is not None:
+        return "review"
     if state["transition"].get("transition_request"):
         return "capture"
     if needs_job_results_navigation(state) or can_select_pending_job_card(state):
         return "selection"
     return "reasoning"
+
+
+def route_after_review(state: WorkerState) -> str:
+    """검토 결과에 따라 같은 상세를 계속 읽거나 다음 카드로 이동한다."""
+
+    if state["lifecycle"].get("is_finished", False):
+        return "end"
+    review = state["collection"].get("last_job_review")
+    if review and review.status == JobReviewStatus.NEEDS_MORE:
+        return "reasoning"
+    return "selection"
 
 
 def _instrument_node(
@@ -170,6 +197,7 @@ def build_graph():
         "reflex": attempt_reflex_replay,
         "reasoning": reasoning_node,
         "execution": execution_node,
+        "review": review_node,
     }
     for name, node in nodes.items():
         workflow.add_node(name, _instrument_node(name, node))
@@ -197,7 +225,7 @@ def build_graph():
     workflow.add_conditional_edges(
         "reflex",
         route_after_reflex,
-        {"execution": "execution", "reasoning": "reasoning"},
+        {"execution": "execution", "ocr": "ocr", "reasoning": "reasoning"},
     )
     workflow.add_edge("reasoning", "execution")
     workflow.add_conditional_edges(
@@ -205,10 +233,16 @@ def build_graph():
         route_after_execution,
         {
             "capture": "capture",
+            "review": "review",
             "selection": "selection",
             "reasoning": "reasoning",
             "end": END,
         },
+    )
+    workflow.add_conditional_edges(
+        "review",
+        route_after_review,
+        {"selection": "selection", "reasoning": "reasoning", "end": END},
     )
     app = workflow.compile()
     logger.info("Atomic worker StateGraph compiled")
@@ -218,6 +252,7 @@ def build_graph():
 __all__ = [
     "build_graph",
     "route_after_execution",
+    "route_after_review",
     "route_after_reflex",
     "route_after_selection",
     "route_after_start",

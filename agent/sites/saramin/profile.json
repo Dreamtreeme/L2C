@@ -25,8 +25,5 @@
       "navigation_notes": ["상세가 새 탭이면 뒤로가기 대신 현재 탭 닫기가 필요할 수 있다."]
     }
   },
-  "collection_policy": {
-    "required_fields": ["company_name", "position", "main_tasks", "requirements", "preferred", "location", "employment_type", "url"]
-  },
   "guidance": "보이는 공고를 직무명과 회사명으로 식별한다. 배지, 추천, 광고는 공고로 취급하지 않고 실제 상세 본문에서 확인한 사실만 수집한다."
 }

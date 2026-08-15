@@ -93,7 +93,9 @@ def build_e2e_observability(summary: dict[str, Any]) -> dict[str, Any]:
         and item.get("action_source") == "job_card_queue"
     )
     reasoning_calls = sum(
-        1 for item in llm_calls if item.get("component") == "vision_reasoning"
+        1
+        for item in llm_calls
+        if str(item.get("component") or "").startswith("vision_reasoning")
     )
     reflex_paths = summarize_reflex_paths(steps)
 
@@ -161,7 +163,6 @@ def build_langsmith_feedback(observability: dict[str, Any]) -> list[dict[str, An
         "reflex_step_hit_count",
         "reflex_step_completed_count",
         "reflex_source_reasoning_replaced_count",
-        "reflex_resolver_reasoning_call_count",
         "reflex_reasoning_call_reduction",
         "reflex_path_started_count",
         "reflex_path_completed_count",

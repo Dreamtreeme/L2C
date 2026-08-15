@@ -242,15 +242,6 @@ def _choose_reasoning_action(
                 tier=tier,
             )
             call_count += 1
-            if tier == "lightweight" and any(
-                call.name == "finish_detail_reading" for call in request.tool_calls
-            ):
-                retry_warning = (
-                    f"{loop_warning}\n\n[상세 읽기 완료 재검토]\n"
-                    "경량 모델이 상세 읽기 완료를 제안했습니다. 현재 화면과 누적 OCR을 "
-                    "다시 확인하고, 필수 본문 근거가 부족하면 scroll을 선택하십시오."
-                )
-                continue
             return request, call_count, tier, "", spent_usd
         except (RunCancelled, RunDeadlineExceeded):
             raise

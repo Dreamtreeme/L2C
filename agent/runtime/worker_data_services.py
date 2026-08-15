@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from shared.schema.experience_rule_schema import ExperienceRule
-from shared.schema.jd_schema import JobCapture
+from shared.schema.collection_intent import CollectionIntent
+from shared.schema.jd_schema import JobCapture, JobDraft, JobReview
 
 
 ExistingJobCardMarker = Callable[
@@ -17,6 +18,7 @@ ExistingJobCardMarker = Callable[
 ExistingJobUrlLookup = Callable[[str, Sequence[JobCapture]], dict[str, Any]]
 ExperienceRuleLoader = Callable[..., list[tuple[str, ExperienceRule]]]
 RecipeReplayRecorder = Callable[[str, bool], bool]
+JobDraftReviewer = Callable[[JobDraft, CollectionIntent], JobReview]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +29,7 @@ class WorkerDataServices:
     find_existing_job_url: ExistingJobUrlLookup
     load_experience_rules: ExperienceRuleLoader
     record_recipe_replay: RecipeReplayRecorder
+    review_job_draft: JobDraftReviewer
 
 
-__all__ = ["ExperienceRuleLoader", "WorkerDataServices"]
+__all__ = ["ExperienceRuleLoader", "JobDraftReviewer", "WorkerDataServices"]

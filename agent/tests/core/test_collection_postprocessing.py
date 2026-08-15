@@ -1,65 +1,68 @@
-"""OCR 원문 구조화와 후처리의 의미 판정 경계를 검증한다."""
+"""공고 검토 서비스와 저장 전 전달 경계를 검증한다."""
 
 import json
 
-import pytest
-
-from agent.application import collection_postprocessing as service
-from agent.observability.run_context import ModelRequestTimeout
+from agent.application import job_review_service as service
+from agent.application.collection_postprocessing import postprocess_collection_batch
 from shared.schema.collection_intent import CollectionIntent, JobSearchFilters
 from shared.schema.collection_run import CollectionBatch
 from shared.schema.feedback_schema import WorkerSubmission
 from shared.schema.jd_schema import (
-    JobCapture,
+    CollectedJob,
     JobCollectionEvidence,
+    JobDraft,
     JobField,
     JobPosting,
+    JobReviewStatus,
 )
 
 
-def _batch(
-    capture: JobCapture,
-    *,
-    intent: CollectionIntent | None = None,
-) -> CollectionBatch:
-    return CollectionBatch(
-        submission=WorkerSubmission(
-            run_id="worker-1",
-            collection_intent=intent or CollectionIntent(site="wanted"),
-        ),
-        job_captures=[capture],
-        site_name="Wanted",
-    )
+REQUIRED_FIELDS = [
+    "company_name",
+    "position",
+    "url",
+    "main_tasks",
+    "requirements",
+]
 
 
-def _capture(*, page_exhausted: bool = False) -> JobCapture:
-    return JobCapture(
+def _draft() -> JobDraft:
+    return JobDraft(
         url="https://www.wanted.co.kr/wd/1",
-        raw_ocr_text="예시회사 AI 엔지니어 주요 업무 모델 운영 자격 요건 Python",
-        evidence=JobCollectionEvidence(
-            required_fields=[
-                "company_name",
-                "position",
-                "url",
-                "main_tasks",
-                "requirements",
-            ],
-            field_evidence={
-                "company_name": "예시회사",
-                "position": "AI 엔지니어",
-                "url": "https://www.wanted.co.kr/wd/1",
-                "main_tasks": "모델 운영",
-                "requirements": "Python",
-            },
-            page_exhausted=page_exhausted,
+        detail_key="card-1",
+        raw_ocr_text=(
+            "예시회사 AI 엔지니어 주요 업무 모델 운영 자격 요건 Python"
         ),
+        required_fields=REQUIRED_FIELDS,
+        screenshot_path="detail.png",
+        screen_count=2,
+        last_action="scroll",
+        transition_status="unknown",
+        transition_reason="no_screen_change",
     )
 
 
-def test_extract_job_from_capture_uses_screen_evidence_and_preserves_source(
-    monkeypatch,
-):
-    capture = _capture()
+def _extraction(*, source_exhausted: bool, complete: bool = True):
+    return service.JobReviewExtraction(
+        posting=JobPosting(
+            company_name="예시회사",
+            position="AI 엔지니어",
+            main_tasks=["모델 운영"] if complete else [],
+            requirements=["Python"],
+        ),
+        is_job_posting=True,
+        source_exhausted=source_exhausted,
+        field_evidence={
+            "company_name": "예시회사",
+            "position": "AI 엔지니어",
+            **({"main_tasks": "주요 업무 모델 운영"} if complete else {}),
+            "requirements": "자격 요건 Python",
+        },
+        reason="누적 OCR 검토 결과",
+    )
+
+
+def _stub_model(monkeypatch, extraction):
     invocation = {}
 
     def fake_invoke(model, messages, component, *, stream=False):
@@ -69,76 +72,72 @@ def test_extract_job_from_capture_uses_screen_evidence_and_preserves_source(
             component=component,
             stream=stream,
         )
-        return JobPosting(
-            company_name="예시회사",
-            position="AI 엔지니어",
-            main_tasks=["모델 운영"],
-            requirements=["Python"],
-        )
+        return extraction
 
     model = object()
-    monkeypatch.setattr(service, "get_detail_extraction_llm", lambda: model)
+    monkeypatch.setattr(service, "get_job_review_llm", lambda _tier="lightweight": model)
     monkeypatch.setattr(service, "invoke_with_metrics", fake_invoke)
-    monkeypatch.setattr(service, "detail_extraction_model_spec", lambda: "test-model")
+    monkeypatch.setattr(
+        service,
+        "job_review_model_spec",
+        lambda _tier="lightweight": "test-model",
+    )
+    return model, invocation
 
-    posting = service.extract_job_from_capture(capture)
+
+def test_review_structures_ocr_and_preserves_source(monkeypatch):
+    model, invocation = _stub_model(
+        monkeypatch,
+        _extraction(source_exhausted=False),
+    )
+
+    review = service.review_job_draft(_draft(), CollectionIntent(site="wanted"))
     payload = json.loads(invocation["messages"][1].content)
 
     assert invocation["model"] is model
-    assert invocation["component"] == "detail_extraction"
+    assert invocation["component"] == "detail_review"
     assert invocation["stream"] is True
-    assert payload == {
-        "current_url": capture.url,
-        "required_fields": [
-            "company_name",
-            "position",
-            "url",
-            "main_tasks",
-            "requirements",
-        ],
-        "unavailable_fields": [],
-        "ocr_text": capture.raw_ocr_text,
-    }
-    assert posting.url == capture.url
-    assert posting.source_platform == "Wanted"
-    assert posting.raw_ocr_text == capture.raw_ocr_text
-    assert posting.content_hash
+    assert payload["required_fields"] == REQUIRED_FIELDS
+    assert payload["transition_reason"] == "no_screen_change"
+    assert review.status == JobReviewStatus.COMPLETE
+    assert review.posting.url == _draft().url
+    assert review.posting.source_platform == "Wanted"
+    assert review.posting.raw_ocr_text == _draft().raw_ocr_text
 
 
-def test_postprocessing_structures_capture_without_worker_state(monkeypatch):
-    monkeypatch.setattr(
-        service,
-        "extract_job_from_capture",
-        lambda capture: JobPosting(
-            company_name="예시회사",
-            position="AI 엔지니어",
-            url=capture.url,
-            main_tasks=["모델 운영"],
-            requirements=["Python"],
-            raw_ocr_text=capture.raw_ocr_text,
-        ),
+def test_review_requests_more_when_required_field_is_missing(monkeypatch):
+    _stub_model(monkeypatch, _extraction(source_exhausted=True, complete=False))
+    draft = _draft().model_copy(
+        update={
+            "transition_status": "ready",
+            "transition_reason": "screen_change_pixels_matched",
+        }
     )
 
-    result = service.postprocess_collection_batch(_batch(_capture()))
+    review = service.review_job_draft(draft, CollectionIntent(site="wanted"))
 
-    assert result.rejected_items == []
-    assert result.collected_jobs[0].posting.position == "AI 엔지니어"
-    assert result.collected_jobs[0].posting.raw_ocr_text
+    assert review.status == JobReviewStatus.NEEDS_MORE
+    assert [field.value for field in review.missing_fields] == ["main_tasks"]
 
 
-def test_postprocessing_applies_requested_date_range(monkeypatch):
-    monkeypatch.setattr(
-        service,
-        "extract_job_from_capture",
-        lambda capture: JobPosting(
-            company_name="예시회사",
-            position="AI 엔지니어",
-            url=capture.url,
-            main_tasks=["모델 운영"],
-            requirements=["Python"],
-            posted_at="2026-06-01",
-        ),
+def test_review_rejects_source_after_exhausted_missing_field(monkeypatch):
+    _stub_model(monkeypatch, _extraction(source_exhausted=True, complete=False))
+
+    review = service.review_job_draft(_draft(), CollectionIntent(site="wanted"))
+
+    assert review.status == JobReviewStatus.SOURCE_INCOMPLETE
+
+
+def test_review_rejects_requested_date_mismatch(monkeypatch):
+    extraction = _extraction(source_exhausted=True)
+    extraction.posting.posted_at = "2026-06-01"
+    extraction.field_evidence["posted_at"] = "2026-06-01"
+    draft = _draft().model_copy(
+        update={
+            "required_fields": [*_draft().required_fields, JobField.POSTED_AT]
+        }
     )
+    _stub_model(monkeypatch, extraction)
     intent = CollectionIntent(
         site="wanted",
         filters=JobSearchFilters(
@@ -147,105 +146,42 @@ def test_postprocessing_applies_requested_date_range(monkeypatch):
         ),
     )
 
-    result = service.postprocess_collection_batch(_batch(_capture(), intent=intent))
+    review = service.review_job_draft(draft, intent)
 
-    assert result.collected_jobs == []
-    assert "posted_at_before_range" in result.rejected_items[0]["issues"][0]
+    assert review.status == JobReviewStatus.INVALID_TARGET
+    assert "posted_at_before_range" in review.issues[0]
 
 
-def test_postprocessing_rejects_fields_missing_from_final_ocr_extraction(monkeypatch):
-    monkeypatch.setattr(
-        service,
-        "extract_job_from_capture",
-        lambda capture: JobPosting(
+def test_postprocessing_passes_reviewed_jobs_without_model_call():
+    draft = _draft()
+    evidence = JobCollectionEvidence(
+        required_fields=draft.required_fields,
+        field_evidence={
+            "company_name": "예시회사",
+            "position": "AI 엔지니어",
+            "url": draft.url,
+            "main_tasks": "모델 운영",
+            "requirements": "Python",
+        },
+    )
+    collected = CollectedJob(
+        posting=JobPosting(
             company_name="예시회사",
             position="AI 엔지니어",
-            url=capture.url,
+            url=draft.url,
+            main_tasks=["모델 운영"],
             requirements=["Python"],
         ),
+        evidence=evidence,
+    )
+    batch = CollectionBatch(
+        submission=WorkerSubmission(run_id="worker-1"),
+        collected_jobs=[collected],
+        rejected_items=[{"url": "rejected", "issues": ["invalid_target"]}],
+        site_name="Wanted",
     )
 
-    capture = _capture(page_exhausted=True)
-    capture = capture.model_copy(
-        update={
-            "evidence": capture.evidence.model_copy(
-                update={
-                    "required_fields": [
-                        *capture.evidence.required_fields,
-                        JobField.EMPLOYMENT_TYPE,
-                    ],
-                    "field_evidence": {
-                        **capture.evidence.field_evidence,
-                        JobField.EMPLOYMENT_TYPE: "정규직 수습기간 3개월",
-                    },
-                }
-            )
-        }
-    )
-    missing_evidence = capture.model_copy(
-        update={
-            "evidence": capture.evidence.model_copy(
-                update={
-                    "field_evidence": {
-                        key: value
-                        for key, value in capture.evidence.field_evidence.items()
-                        if key.value != "main_tasks"
-                    }
-                }
-            )
-        }
-    )
-    rejected = service.postprocess_collection_batch(_batch(missing_evidence))
+    result = postprocess_collection_batch(batch)
 
-    assert rejected.collected_jobs == []
-    assert "required_field_extraction_incomplete:main_tasks,employment_type" in (
-        rejected.rejected_items[0]["issues"][0]
-    )
-
-
-def test_model_timeout_stops_batch_instead_of_becoming_rejection(monkeypatch):
-    def fail_extraction(_capture):
-        raise ModelRequestTimeout("detail timeout")
-
-    monkeypatch.setattr(service, "extract_job_from_capture", fail_extraction)
-
-    with pytest.raises(ModelRequestTimeout, match="detail timeout"):
-        service.postprocess_collection_batch(_batch(_capture()))
-
-
-def test_one_invalid_capture_does_not_discard_later_valid_capture(monkeypatch):
-    valid_capture = _capture()
-    first = valid_capture.model_copy(
-        update={
-            "evidence": valid_capture.evidence.model_copy(
-                update={
-                    "field_evidence": {
-                        key: value
-                        for key, value in valid_capture.evidence.field_evidence.items()
-                        if key.value != "main_tasks"
-                    }
-                }
-            )
-        }
-    )
-    second = valid_capture.model_copy(
-        update={"url": "https://www.wanted.co.kr/wd/2"}
-    )
-    batch = _batch(first)
-    batch.job_captures.append(second)
-
-    def extract(capture):
-        return JobPosting(
-            company_name="예시회사",
-            position="AI 엔지니어",
-            url=capture.url,
-            main_tasks=[] if capture.url.endswith("/1") else ["모델 운영"],
-            requirements=["Python"],
-        )
-
-    monkeypatch.setattr(service, "extract_job_from_capture", extract)
-
-    result = service.postprocess_collection_batch(batch)
-
-    assert [item.posting.url for item in result.collected_jobs] == [second.url]
-    assert result.rejected_items[0]["index"] == 0
+    assert result.collected_jobs == [collected]
+    assert result.rejected_items == batch.rejected_items

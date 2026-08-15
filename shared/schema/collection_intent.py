@@ -66,7 +66,7 @@ class CollectionIntent(BaseModel):
     )
     required_fields: list[JobField] = Field(
         default_factory=list,
-        description="사이트 정책과 답변 근거 요구를 합쳐 반드시 확인할 공고 필드",
+        description="공통 핵심 필드와 답변 근거 요구를 합쳐 반드시 확인할 공고 필드",
     )
 
     @field_validator("required_fields")

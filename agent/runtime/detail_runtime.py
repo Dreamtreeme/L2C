@@ -9,11 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import get_settings
-from agent.runtime.job_field_contract import (
-    detail_coverage_status,
-    field_contract_items,
-    required_fields_from_state,
-)
 from agent.runtime.site_context import is_job_detail_context, page_guidance_for_url
 from agent.runtime.worker_contracts import (
     JobDetailBuffer,
@@ -24,6 +19,7 @@ from agent.runtime.worker_contracts import (
     WorkerState,
 )
 from agent.utils.logger import logger
+from agent.utils.job_fields import field_contract_items, required_fields_from_intent
 from agent.vision.marker_geometry import marker_bbox
 from agent.vision.target_snapshot import is_icon_marker
 
@@ -498,16 +494,17 @@ def compact_job_detail_buffer_context(
     first_preview = [line for line in first_preview if line]
     preview = [str(item.get("text") or "").strip() for item in lines[-8:]]
     preview = [line for line in preview if line]
-    required_fields = required_fields_from_state(state)
-    coverage = detail_coverage_status(
-        dict(collection.get("job_detail_coverage") or {}),
-        required_fields,
+    required_fields = required_fields_from_intent(
+        state["request"]["collection_intent"]
     )
-    evidence_preview = {
-        field: str(value)[:120]
-        for field, value in coverage["field_evidence"].items()
-        if field in coverage["found_fields"]
-    }
+    last_review = collection.get("last_job_review")
+    review_matches = bool(
+        last_review
+        and (
+            (detail_key and last_review.detail_key == detail_key)
+            or last_review.url == current_url
+        )
+    )
     parts = [
         "상세 OCR 누적 상태:",
         f"- 누적 본문 줄 수: {len(lines)}",
@@ -520,25 +517,23 @@ def compact_job_detail_buffer_context(
             ensure_ascii=False,
             separators=(",", ":"),
         ),
-        "- 지금까지 확인한 필드 근거: "
-        + json.dumps(
-            evidence_preview,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ),
-        "- 아직 확인하지 못한 필드: "
-        + json.dumps(
-            coverage["missing_fields"],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ),
-        "- 더 읽어야 하면 scroll 또는 현재 사이트 안내에 선언된 상세 펼치기 버튼을 선택하고, "
-        "현재 화면에서 확인한 필드를 observed_fields에 함께 넣으십시오.",
-        "- 모든 필수 필드가 확인되었거나 페이지 끝에 도달하면 "
-        "finish_detail_reading을 호출하십시오. 페이지 끝에서는 page_exhausted=true로 "
-        "기록하고, 화면에서 부재를 확인한 필드만 unavailable_fields로 명시하십시오. "
-        "최종 구조화 단계가 누적 OCR의 필드 충족 여부를 판정합니다.",
+        "- 더 읽어야 하면 scroll 또는 현재 사이트 안내에 선언된 상세 펼치기 버튼을 선택하십시오.",
+        "- 현재 누적 근거가 충분하거나 더 읽을 본문이 없다고 판단하면 "
+        "review_job_detail을 호출하십시오. 검토 노드가 필드 충족 여부와 다음 행동을 판정합니다.",
     ]
+    if review_matches and last_review is not None:
+        parts.extend(
+            [
+                f"- 직전 검토 상태: {last_review.status.value}",
+                "- 직전 검토에서 부족한 필드: "
+                + json.dumps(
+                    [field.value for field in last_review.missing_fields],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                f"- 직전 검토 이유: {last_review.reason or '(없음)'}",
+            ]
+        )
     if first_preview:
         parts.append(
             "- 처음 누적 본문 미리보기: "

@@ -49,6 +49,19 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
 
     image_path = tmp_path / "marked.jpg"
     Image.new("RGB", (200, 100), "white").save(image_path)
+    state = _state(image_path)
+    state["request"]["collection_intent"] = CollectionIntent(
+        search_keyword="iOS 개발자",
+        target_count=1,
+    )
+    state["observation"]["current_markers"].append(
+        {
+            "id": 11,
+            "type": "text",
+            "text": "iOS 앱 개발자",
+            "bbox": [10, 35, 90, 48],
+        }
+    )
 
     class FakeModel:
         def invoke(self, inputs, config=None):
@@ -61,9 +74,14 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
                         company="회사 A",
                     ),
                     selector.VisibleJobCard(
+                        marker_id=11,
+                        title="iOS 앱 개발자",
+                        company="회사 B",
+                    ),
+                    selector.VisibleJobCard(
                         marker_id=999,
                         title="화면에 없는 공고",
-                        company="회사 B",
+                        company="회사 C",
                     ),
                 ],
             )
@@ -73,12 +91,12 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
         "_get_job_card_selector_model",
         lambda: FakeModel(),
     )
-    request, trace = selector.select_job_cards(_state(image_path))
+    request, trace = selector.select_job_cards(state)
 
     assert trace["reason"] == "cards_selected"
-    assert trace["marker_ids"] == [10]
+    assert trace["marker_ids"] == [10, 11]
     assert request.tool_calls[0].name == "set_job_card_queue"
-    assert len(request.tool_calls[0].args["cards"]) == 1
+    assert len(request.tool_calls[0].args["cards"]) == 2
 
 
 def test_selector_does_not_replace_an_unresolved_queue(tmp_path, monkeypatch):
@@ -281,7 +299,7 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     assert "set_job_card_queue" not in worker_reasoning._reasoning_tool_names(
         worker_state(observation={"current_page_role": "search"})
     )
-    assert "finish_detail_reading" in worker_reasoning._reasoning_tool_names(
+    assert "review_job_detail" in worker_reasoning._reasoning_tool_names(
         worker_state(observation={"current_page_role": "job_detail"})
     )
 
@@ -387,29 +405,15 @@ def test_reasoning_primary_retry_receives_lightweight_validation_error(monkeypat
     assert "대상 [18]은 아이콘 마커" in warnings[1][1]
 
 
-def test_detail_completion_is_confirmed_by_primary_model(monkeypatch):
+def test_detail_review_request_does_not_repeat_ui_reasoning(monkeypatch):
     tiers = []
 
     def invoke(_state, _runtime, loop_warning, *, tier):
         tiers.append((tier, loop_warning))
-        if tier == "lightweight":
-            return worker_reasoning.build_action_request(
-                "llm",
-                "상세 읽기를 마칩니다.",
-                [
-                    {
-                        "name": "finish_detail_reading",
-                        "args": {
-                            "observed_fields": {"benefits": "복지 및 근무환경"},
-                            "page_exhausted": False,
-                        },
-                    }
-                ],
-            )
         return worker_reasoning.build_action_request(
             "llm",
-            "복지 본문을 더 읽습니다.",
-            [{"name": "scroll", "args": {"direction": "down"}}],
+            "누적 본문 검토를 요청합니다.",
+            [{"name": "review_job_detail", "args": {"reason": "근거 검토"}}],
         )
 
     monkeypatch.setattr(worker_reasoning, "_invoke_reasoning_model", invoke)
@@ -425,12 +429,11 @@ def test_detail_completion_is_confirmed_by_primary_model(monkeypatch):
     )
 
     assert request is not None
-    assert request.tool_calls[0].name == "scroll"
-    assert call_count == 2
-    assert tier == "primary"
+    assert request.tool_calls[0].name == "review_job_detail"
+    assert call_count == 1
+    assert tier == "lightweight"
     assert stop_reason == ""
-    assert [item[0] for item in tiers] == ["lightweight", "primary"]
-    assert "상세 읽기 완료 재검토" in tiers[1][1]
+    assert [item[0] for item in tiers] == ["lightweight"]
 
 
 def test_reasoning_prompt_reuses_already_compacted_queue_action_args():

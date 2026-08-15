@@ -3,7 +3,7 @@ title: "작업자 상태 계약"
 type: reference
 area: architecture
 status: active
-updated: 2026-08-12
+updated: 2026-08-16
 tags:
   - l2c
   - docs/architecture
@@ -22,14 +22,14 @@ Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`�
 | `decision` | `pending_action`, 카드 선택 trace | 선택·Reflex·추론 노드 |
 | `transition` | 행동 이벤트, 오류 수, 전환 요청과 판정 결과 | 실행·전환 노드 |
 | `replay` | Reflex trace, 활성 경로, 차단 경로 | Reflex·전환 노드 |
-| `collection` | `job_captures`, 카드 큐, 목록 기억, 상세 OCR 버퍼와 판독 범위 | OCR·선택·실행 효과 |
+| `collection` | 검토 완료 공고·화면 근거, 카드 큐, 상세 OCR 버퍼, 검토 대기 초안과 최근 검토 결과 | OCR·실행·공고 검토 노드 |
 | `lifecycle` | `is_finished` | 실행 효과와 종료 정책 |
 
 `request`는 한 작업자 실행의 입력 계약이다. Reflex의 가변 검색어도 별도 상태로
 복사하지 않고 `collection_intent.search_keyword`에서 직접 가져온다. 나머지
 구역은 그래프가 현재 캡처를 처리하면서 갱신하는 실행 상태다.
 
-`collection.job_captures`는 `list[JobCapture]`이다. 작업자는 상세 URL, 누적 OCR 원문과 화면 근거만 보관한다. 구조화된 `CollectedJob`은 Investigation 그래프의 후처리 단계에서 생성되므로 비전 작업자 상태에 들어오지 않는다.
+상세 읽기가 끝났다고 판단한 실행 노드는 누적 OCR을 `JobDraft`로 만들고 `collection.pending_job_draft`에 둔다. `worker_review` 노드는 이 초안을 검토해 `needs_more`, `complete`, `source_incomplete`, `invalid_target` 중 하나를 반환한다. `complete`일 때만 `collection.job_captures`와 `collection.collected_jobs`에 각각 화면 근거와 구조화된 공고를 추가한다.
 
 `collection.job_card_queue`는 선택한 공고의 제목과 처리 상태를 보관한다. 상세 수집 뒤에는 결정된 복귀 행동을 수행하고, 현재 목록 OCR에서 다음 제목을 찾아 클릭한다. 최초 큐가 만들어진 뒤에는 카드 선택 모델을 다시 호출하지 않는다. 큐를 소진하고도 목표가 남으면 일반 화면 추론이 현재 목록을 스크롤하거나 필터를 조정하고 새 미방문 카드를 큐에 추가한다.
 
@@ -74,5 +74,6 @@ app.stream(
 8. `request`에는 직렬화 가능한 값만 저장하고 런타임 객체는 LangGraph 문맥으로 전달한다.
 9. 수집 완료 공고는 `CollectedJob`으로 생성한 뒤 필드 이름이나 타입을 다시 변환하지 않는다.
 10. 큐 카드 클릭은 도구 호출의 `queue_id`가 실제 대기 항목과 일치할 때만 해당 항목을 활성화한다.
+11. `JobReview.status=complete`인 공고만 수집 수에 포함한다. `needs_more`는 상세 OCR 버퍼와 활성 카드를 유지하고, `source_incomplete`와 `invalid_target`은 현재 카드를 제외한다.
 
 `current_observation_ready()`가 현재 관찰의 OCR 완료 여부를 검사한다. Reflex 전이 범위와 도착 상태는 `agent/recipe/replay_runtime.py`, 일반 화면 변화와 OCR 재사용은 `agent/runtime/transition_runtime.py`가 담당한다. `worker_transition.py`의 `TransitionDecision`은 이 판정 결과를 상태 패치와 실행 기록에 한 번 반영한다.

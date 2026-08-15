@@ -17,7 +17,7 @@ tags:
 
 Classic 경로는 Playwright DOM 기반 수집입니다. 빠르고 정확하지만 사이트별 셀렉터와 예외 처리가 필요합니다.
 
-Vision Agent 경로는 화면 캡처, YOLOv8, PaddleOCR, LLM, 물리 입력 도구를 조합합니다. DOM 구조를 직접 읽지 않으므로 사이트 구조 변경에는 상대적으로 덜 민감하지만, OCR과 LLM 추론 비용이 추가됩니다.
+Vision Agent 경로는 화면 캡처, YOLOv8, PaddleOCR, LLM, 물리 입력 도구를 조합합니다. DOM selector 대신 화면 픽셀을 입력으로 사용하고, 저장한 ROI와 현재 화면이 다르면 자율탐색으로 복귀합니다. 이 경로에는 OCR과 LLM 추론 비용이 추가됩니다.
 
 두 경로를 모두 유지하는 이유는 목적이 다르기 때문입니다. Classic은 안정된 사이트의 고속 수집에 적합하고, Vision Agent는 새 사이트 개척과 UI 탐색 가능성 검증에 적합합니다.
 
@@ -67,7 +67,7 @@ Perception, ActionTools, PaddleOCR subprocess, 컴파일된 작업자 그래프�
 
 `agent/bootstrap.py`의 `ApplicationRuntime`이 조사 체크포인터, 애플리케이션 서비스, 컴파일된 그래프, `VisionWorkerRuntime`과 Reflex 승격 작업자를 조립하고 종료합니다. FastAPI `lifespan`, CLI와 E2E 실행기는 이 런타임의 수명주기만 관리합니다.
 
-Investigation LangGraph는 대화 문맥 조회, 요청 해석, DB 근거 검사, 수집, 후처리, 저장, DB 재검사, 답변과 체크포인트 중단·재개를 담당합니다. `collect`는 `JobCapture` 원문을 만들고, `postprocess`는 `CollectedJob`을 만들며, `persist`는 DB 저장을 확정합니다. 단계별 실패는 서로 다른 오류 코드와 계측 구간으로 남습니다. 조사 노드는 `agent/bootstrap.py`에서 주입한 함수와 서비스만 호출합니다. Vision Worker LangGraph는 관찰·전환·선택·추론·실행 순서와 상태 병합을 담당합니다. 작업자 노드는 OCR과 물리 도구를 전역에서 찾지 않고 `Runtime[WorkerDependencies]`로 전달받습니다.
+Investigation LangGraph는 대화 문맥 조회, 요청 해석, DB 근거 검사, 수집, 검토 결과 전달, 저장, DB 재검사, 답변과 체크포인트 중단·재개를 담당합니다. Vision Worker LangGraph는 관찰·전환·선택·추론·실행에 이어 상세 공고 검토까지 수행합니다. 검토 노드가 `complete`로 확정한 `CollectedJob`만 조사 그래프로 전달되고 `persist`가 DB 저장을 확정합니다. 단계별 실패는 서로 다른 오류 코드와 계측 구간으로 남습니다. 조사 노드와 작업자 노드는 `agent/bootstrap.py`에서 주입한 서비스만 호출하며 OCR과 물리 도구를 전역에서 찾지 않습니다.
 
 전환 검증, 상세 OCR 버퍼, 결과 카드 큐, Reflex 재생은 `agent/runtime/`의 독립 모듈로 분리했습니다. 이 정책들은 DOM selector가 아니라 화면 서명, OCR 마커, 좌표비율만 입력으로 받습니다.
 
@@ -83,7 +83,7 @@ Vision Worker는 물리 화면 작업을 직렬 실행하고 `observation_id`로
 
 이 검증은 사이트명, 마커 번호, 화면 문구를 사용하지 않습니다. OCR 텍스트 여부, 내부 텍스트 포함 관계, bbox 형태처럼 화면에서 관찰한 물리적 affordance만 사용합니다. 따라서 사이트 의미를 코드로 복제하지 않으면서 닫기 버튼 같은 명백한 도구 계약 위반을 막습니다.
 
-상세 공고 구조화의 사실 입력은 상세 페이지 OCR과 현재 URL입니다. 화면에서 확인한 필드 근거는 작업자의 읽기 진행 상태로만 사용하며 DB 값 보정에 재사용하지 않습니다. 검색 목록에서 만든 카드 메타데이터도 구조화 모델의 사실 입력에 포함하지 않습니다. 작업자는 원문 수집까지만 담당하고 구조화 결과의 필수 필드와 사용자 날짜 조건은 후처리 단계에서 판정합니다.
+상세 공고 구조화의 사실 입력은 누적된 상세 페이지 OCR과 현재 URL입니다. 클릭·스크롤 같은 물리 도구는 읽은 필드나 페이지 완료를 직접 선언하지 않습니다. 작업자 그래프의 `JobReview`가 필수 필드와 사용자 날짜 조건을 판정하고 `complete`, `needs_more`, `source_incomplete`, `invalid_target` 중 하나로 분기합니다. 검색 목록에서 만든 카드 메타데이터는 구조화 모델의 사실 입력에 포함하지 않습니다.
 
 ## 10. 채용 사이트 공식 주소 선택
 

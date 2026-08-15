@@ -20,7 +20,7 @@ TARGET_REPLAY_ACTIONS = TARGET_ACTIONS
 
 STATE_UPDATE_ACTIONS = frozenset(
     {
-        "finish_detail_reading",
+        "review_job_detail",
         "set_job_card_queue",
     }
 )

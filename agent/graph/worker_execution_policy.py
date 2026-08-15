@@ -44,23 +44,10 @@ def _clip_text(value: Any, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[: max_chars - 3] + "..."
 
 
-def _compact_observed_fields(value: Any) -> list[str]:
-    """원본 사전과 이미 압축된 필드 목록을 같은 형태로 정규화한다."""
-
-    if isinstance(value, (dict, list, tuple, set)):
-        fields = value
-    else:
-        return []
-    return sorted({str(field).strip() for field in fields if str(field).strip()})
-
-
 def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any]:
-    if action_name == "finish_detail_reading":
+    if action_name == "review_job_detail":
         return {
             "page_role": args.get("page_role", "job_detail"),
-            "observed_fields": _compact_observed_fields(args.get("observed_fields")),
-            "unavailable_fields": list(args.get("unavailable_fields") or []),
-            "page_exhausted": bool(args.get("page_exhausted")),
             "reason": _clip_text(args.get("reason", ""), 120),
         }
     if action_name == "set_job_card_queue":
@@ -73,13 +60,6 @@ def compact_action_args(action_name: str, args: dict[str, Any]) -> dict[str, Any
     compact = {
         key: value for key, value in args.items() if not str(key).startswith("_")
     }
-    if isinstance(
-        compact.get("observed_fields"),
-        (dict, list, tuple, set),
-    ):
-        compact["observed_fields"] = _compact_observed_fields(
-            compact["observed_fields"]
-        )
     return compact
 
 

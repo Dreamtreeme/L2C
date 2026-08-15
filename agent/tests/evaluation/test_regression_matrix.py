@@ -397,7 +397,6 @@ def test_experience_reuse_effectiveness_counts_validated_reasoning_bypass() -> N
                     "estimated_cost": 0.014,
                     "reflex_reasoning_call_reduction": 2,
                     "reflex_source_reasoning_replaced_count": 3,
-                    "reflex_resolver_reasoning_call_count": 1,
                     "reflex_path_started_count": 1,
                     "reflex_path_completed_count": 1,
                     "reflex_path_failed_count": 0,
@@ -411,7 +410,6 @@ def test_experience_reuse_effectiveness_counts_validated_reasoning_bypass() -> N
     assert report[0]["validated_run_count"] == 1
     assert report[0]["validated_reasoning_call_reduction"] == 2
     assert report[0]["validated_source_reasoning_replaced_count"] == 3
-    assert report[0]["validated_resolver_reasoning_call_count"] == 1
     assert report[0]["reflex_path_completion_rate"] == 1.0
     assert "median_execution_time_saved_sec" not in report[0]
 

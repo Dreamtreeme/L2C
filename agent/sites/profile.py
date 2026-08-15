@@ -6,7 +6,6 @@ import re
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from shared.schema.jd_schema import JobField
 
 
 class SiteModel(BaseModel):
@@ -33,22 +32,6 @@ class PageGuidance(SiteModel):
         return patterns
 
 
-class CollectionPolicy(SiteModel):
-    required_fields: tuple[JobField, ...]
-
-    @field_validator("required_fields")
-    @classmethod
-    def validate_required_fields(
-        cls,
-        values: tuple[JobField, ...],
-    ) -> tuple[JobField, ...]:
-        if not values:
-            raise ValueError("필수 수집 필드가 하나 이상 필요합니다.")
-        if len(set(values)) != len(values):
-            raise ValueError("필수 수집 필드가 중복되었습니다.")
-        return values
-
-
 class SiteProfile(SiteModel):
     registration_order: int = Field(100, ge=0)
     slug: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
@@ -59,7 +42,6 @@ class SiteProfile(SiteModel):
     base_url: str
     enabled: bool = True
     page_guidance: dict[str, PageGuidance]
-    collection_policy: CollectionPolicy
     guidance: str = ""
     capabilities: dict[str, str] = Field(default_factory=dict)
 
@@ -103,7 +85,6 @@ class SiteProfile(SiteModel):
         return any(raw.endswith(domain) or host.endswith("." + domain) for domain in self.domains)
 
 __all__ = [
-    "CollectionPolicy",
     "PageGuidance",
     "SiteProfile",
 ]

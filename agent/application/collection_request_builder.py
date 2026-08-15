@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 
-from agent.runtime.job_field_contract import (
-    field_contract_items,
-)
 from agent.sites.profile import SiteProfile
+from agent.utils.job_fields import field_contract_items
 from shared.schema.collection_intent import (
     CollectionCountMode,
     CollectionIntent,
@@ -84,12 +82,10 @@ def build_site_goal(
         "[필수 공고 필드 계약]\n"
         f"required_fields={json.dumps(required_field_items, ensure_ascii=False)}\n"
         f"required_record_shape={json.dumps(required_record_shape, ensure_ascii=False)}\n"
-        "상세 화면의 scroll 또는 본문 펼치기 click_marker를 선택할 때마다 현재 화면에서 "
-        "확인한 필드를 observed_fields에 함께 기록하십시오. 모든 필수 필드의 근거가 모였거나 "
-        "페이지 끝에 도달하면 finish_detail_reading을 호출하십시오. 페이지 끝에서는 "
-        "page_exhausted=true로 기록하고, 화면에서 부재를 확인한 필드만 unavailable_fields에 "
-        "명시하십시오. 최종 구조화 단계가 누적 OCR에서 필드 충족 여부를 판정합니다. "
-        "값을 추측해서 빈 필드를 채우지 마십시오.\n\n"
+        "상세 본문을 누적해서 읽고 현재 근거가 충분하거나 더 읽을 본문이 없다고 판단하면 "
+        "review_job_detail을 호출하십시오. 검토 노드가 같은 필드 계약으로 구조화하고, "
+        "추가 수집·완료·공고 제외 중 하나를 결정합니다. 값을 추측해서 빈 필드를 채우지 "
+        "마십시오.\n\n"
         f"[선택된 사이트 스킬]\n{profile.guidance.strip()}"
     )
 

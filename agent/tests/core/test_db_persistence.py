@@ -59,21 +59,18 @@ def test_collected_job_rejects_unresolved_required_field():
         )
 
 
-def test_collected_job_accepts_confirmed_unavailable_field_at_page_end():
-    item = CollectedJob(
-        posting=JobPosting(
-            company_name="예시회사",
-            position="데이터 엔지니어",
-            url="https://example.com/jobs/no-benefits",
-        ),
-        evidence=JobCollectionEvidence(
-            required_fields=["company_name", "position", "url", "benefits"],
-            unavailable_fields=["benefits"],
-            page_exhausted=True,
-        ),
-    )
-
-    assert [field.value for field in item.evidence.unavailable_fields] == ["benefits"]
+def test_collected_job_rejects_required_field_absent_from_source():
+    with pytest.raises(ValidationError, match="benefits"):
+        CollectedJob(
+            posting=JobPosting(
+                company_name="예시회사",
+                position="데이터 엔지니어",
+                url="https://example.com/jobs/no-benefits",
+            ),
+            evidence=JobCollectionEvidence(
+                required_fields=["company_name", "position", "url", "benefits"],
+            ),
+        )
 
 
 def test_database_preserves_same_content_at_different_urls(tmp_path):

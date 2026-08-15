@@ -11,12 +11,14 @@ from shared.schema.jd_schema import CollectedJob, JobCapture
 
 
 class CollectionBatch(BaseModel):
-    """비전 작업자가 확보한 정제 전 상세 화면 묶음."""
+    """비전 작업자가 검토한 결과와 실행 근거 묶음."""
 
     model_config = ConfigDict(extra="forbid")
 
     submission: WorkerSubmission
     job_captures: list[JobCapture] = Field(default_factory=list)
+    collected_jobs: list[CollectedJob] = Field(default_factory=list)
+    rejected_items: list[dict[str, Any]] = Field(default_factory=list)
     site_name: str
 
 

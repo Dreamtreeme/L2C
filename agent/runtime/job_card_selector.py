@@ -126,10 +126,6 @@ def _selection_messages(
 ) -> list[Any]:
     markers = _compact_markers(list(state["observation"].get("current_markers") or []))
     search_query = state["request"]["collection_intent"].search_keyword.strip()
-    visible_all = (
-        count_mode_from_state(state) == "visible_all"
-        and target_count_from_state(state) == 0
-    )
     settings = get_settings().vision
     max_dim = settings.reasoning_image_max_dim
     quality = settings.reasoning_image_quality
@@ -139,30 +135,22 @@ def _selection_messages(
         quality=quality,
         fast=True,
     )
-    selection_scope = (
-        "현재 첫 안정 검색 결과 화면에 실제로 보이는 직접 관련 공고 전체"
-        if visible_all
-        else f"남은 목표 {remaining_count or 0}개"
-    )
     instruction = (
         "현재 화면이 채용공고 검색 결과 목록인지 판단하고, 실제로 보이는 공고 중 수집할 카드를 고르십시오. "
         "사용자 검색어가 직무를 나타내면 공고 제목의 직무 정체성이 직접 일치해야 합니다. 기술 스택이나 업무 일부의 "
         "일치는 직무가 일치한 공고 사이의 순위 판단에만 사용하고, 제목이 다른 직무를 나타내는 공고를 직접 일치로 "
         "간주하지 마십시오. 검색어가 기술 자체만을 요구한 경우에만 제목 또는 기술 표기의 직접 일치를 사용하십시오. "
         "직접 일치하는 공고가 충분하면 단지 관련 기술이라는 이유만으로 범위가 더 넓거나 다른 직무의 공고를 섞지 마십시오. "
-        f"수집 범위는 {selection_scope}입니다. "
+        "현재 화면에 실제로 보이는 직접 관련 공고는 목표 개수와 무관하게 모두 예비 후보로 고르십시오. "
+        "작업자는 성공한 공고가 남은 목표 개수에 도달하면 나머지 후보를 실행하지 않습니다. "
         "cards에는 공고 제목 자체에 붙은 마커 ID만 사용하고 회사명, 보상금, 배지, 버튼, 필터의 마커를 넣지 마십시오. "
         "각 card의 company에는 같은 카드에서 제목과 인접해 별도로 표시된 회사명만 넣으십시오. "
         "'Data Engineer(AI데이터플랫폼)'처럼 제목 괄호 안의 직무 분야나 조직명은 회사명으로 분리하지 마십시오. "
         "검색 결과 탭이나 결과 요약에 전체 공고 개수가 명시되어 있으면 available_job_count에 넣고, 그 판단에 사용한 "
         "화면 문구를 count_evidence에 그대로 적으십시오. 페이지 번호, 알림, 필터 선택 개수는 결과 개수로 해석하지 마십시오. "
         "의미가 명확하지 않으면 available_job_count를 비우십시오. "
-        + (
-            f"cards는 검색어 관련성이 높은 순서로 최대 {remaining_count}개만 반환하고, "
-            if remaining_count is not None
-            else "cards에는 현재 화면에 보이는 직접 관련 공고를 모두 반환하고, "
-        )
-        + "관련성이 같을 때만 화면 위에서 아래 순서를 따르십시오. "
+        "cards에는 현재 화면에 보이는 직접 관련 공고를 모두 반환하고, 검색어 관련성이 높은 순서로 정렬하십시오. "
+        "관련성이 같을 때만 화면 위에서 아래 순서를 따르십시오. "
         "숨겨진 카드나 화면에 없는 정보는 추측하지 마십시오. 검색 결과 목록이 아니거나 확실한 공고 제목을 찾지 못하면 "
         "is_job_results_page를 false로 하고 cards를 비우십시오."
     )
@@ -243,7 +231,6 @@ def _selected_card(
 def _validated_cards(
     selection: dict[str, Any],
     markers: list[ScreenMarker],
-    limit: int | None,
     known_cards: list[dict],
 ) -> list[dict[str, Any]]:
     marker_ids = _marker_index(markers)
@@ -257,8 +244,6 @@ def _validated_cards(
             continue
         cards.append(card)
         used_ids.add(card["marker_id"])
-        if limit is not None and len(cards) >= limit:
-            break
     return cards
 
 
@@ -407,7 +392,6 @@ def select_job_cards(
     cards = _validated_cards(
         selection,
         list(state["observation"].get("current_markers") or []),
-        remaining_count,
         [
             dict(item)
             for item in state["collection"].get("job_card_queue", []) or []

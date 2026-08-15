@@ -23,8 +23,5 @@
       "navigation_notes": ["같은 목록 URL의 측면 상세는 선택한 회사명과 직무명으로 구분한다."]
     }
   },
-  "collection_policy": {
-    "required_fields": ["company_name", "position", "main_tasks", "requirements", "preferred", "benefits", "url"]
-  },
   "guidance": "직무명과 회사명으로 공고를 식별한다. 상세가 측면 패널에 열리면 활성 상세 화면의 사실을 수집하고, 명확한 원본 상세 링크가 있을 때만 추가 이동한다."
 }

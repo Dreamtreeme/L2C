@@ -1,190 +1,200 @@
-"""상세 화면 원문 수집 계약을 검증한다."""
+"""상세 OCR 초안과 작업자 검토 상태 전이를 검증한다."""
 
 from agent.graph import worker_execution_dispatch
 from agent.graph.worker_execution_policy import compact_action_args
-from agent.runtime.job_field_contract import merge_job_detail_coverage
+from agent.graph.worker_review import review_node
 from agent.runtime.tool_schema import scroll
-from agent.tests.worker_test_support import worker_data_services, worker_state
+from agent.tests.worker_test_support import node_runtime, worker_data_services, worker_state
 from shared.schema.collection_intent import CollectionIntent
+from shared.schema.jd_schema import JobPosting, JobReview, JobReviewStatus
 
 
-def _detail_state(current_url: str, required_fields: list[str]):
+REQUIRED_FIELDS = [
+    "company_name",
+    "position",
+    "url",
+    "main_tasks",
+    "requirements",
+]
+
+
+def _detail_state(current_url: str):
     return worker_state(
         request={
-            "collection_intent": CollectionIntent(required_fields=required_fields)
+            "collection_intent": CollectionIntent(required_fields=REQUIRED_FIELDS)
         },
-        collection={
-            "job_detail_buffer": {
-                "url": current_url,
-                "lines": [
-                    {"text": "예시회사 백엔드 개발자"},
-                    {"text": "주요 업무 API 개발"},
-                    {"text": "자격 요건 Python"},
-                ],
-                "screens": ["detail.png"],
+        observation={"current_url": current_url, "current_page_role": "job_detail"},
+        transition={
+            "transition_result": {
+                "status": "unknown",
+                "action": "scroll",
+                "reason": "no_screen_change",
+                "needs_ocr": False,
             }
         },
-    )
-
-
-def test_detail_observation_treats_null_as_no_evidence():
-    action = scroll.model_validate({"direction": "down", "observed_fields": None})
-
-    assert action.observed_fields == {}
-
-
-def test_detail_finish_captures_raw_ocr_and_clears_buffer():
-    current_url = "https://www.wanted.co.kr/wd/1"
-    outcome = worker_execution_dispatch.dispatch_state_action(
-        "finish_detail_reading",
-        {
-            "observed_fields": {
-                "company_name": "예시회사",
-                "position": "백엔드 개발자",
-                "main_tasks": "API 개발",
-                "requirements": "Python",
-            }
-        },
-        [],
-        current_url=current_url,
-        state=_detail_state(
-            current_url,
-            ["company_name", "position", "url", "main_tasks", "requirements"],
-        ),
-        data_services=worker_data_services(),
-    )
-
-    assert outcome.result["status"] == "success"
-    collection_update = outcome.state_update["collection"]
-    assert collection_update["job_detail_buffer"] == {}
-    assert len(collection_update["job_captures"]) == 1
-    capture = collection_update["job_captures"][0]
-    assert capture.url == current_url
-    assert "자격 요건 Python" in capture.raw_ocr_text
-    assert capture.evidence.screenshot_path == "detail.png"
-
-
-def test_detail_finish_defers_required_field_validation_to_postprocessing():
-    current_url = "https://www.wanted.co.kr/wd/1"
-    outcome = worker_execution_dispatch.dispatch_state_action(
-        "finish_detail_reading",
-        {"observed_fields": {"company_name": "예시회사"}},
-        [],
-        current_url=current_url,
-        state=_detail_state(
-            current_url,
-            ["company_name", "position", "url", "requirements"],
-        ),
-        data_services=worker_data_services(),
-    )
-
-    assert outcome.result["status"] == "success"
-    capture = outcome.state_update["collection"]["job_captures"][0]
-    assert [field.value for field in capture.evidence.required_fields] == [
-        "company_name",
-        "position",
-        "url",
-        "requirements",
-    ]
-    assert capture.evidence.field_evidence["company_name"] == "예시회사"
-    assert "requirements" not in capture.evidence.field_evidence
-
-
-def test_detail_finish_preserves_primary_page_end_claim_as_metadata():
-    current_url = "https://www.wanted.co.kr/wd/1"
-    outcome = worker_execution_dispatch.dispatch_state_action(
-        "finish_detail_reading",
-        {
-            "observed_fields": {"company_name": "예시회사"},
-            "page_exhausted": True,
-        },
-        [],
-        current_url=current_url,
-        state=_detail_state(
-            current_url,
-            ["company_name", "position", "url", "requirements"],
-        ),
-        data_services=worker_data_services(),
-    )
-
-    assert outcome.result["status"] == "success"
-    capture = outcome.state_update["collection"]["job_captures"][0]
-    assert "자격 요건 Python" in capture.raw_ocr_text
-    assert capture.evidence.page_exhausted is True
-    assert capture.evidence.unavailable_fields == []
-    assert "requirements" not in capture.evidence.field_evidence
-
-
-def test_detail_finish_preserves_confirmed_unavailable_field():
-    current_url = "https://www.wanted.co.kr/wd/1"
-    outcome = worker_execution_dispatch.dispatch_state_action(
-        "finish_detail_reading",
-        {
-            "observed_fields": {
-                "company_name": "예시회사",
-                "position": "백엔드 개발자",
-                "benefits": "확인 필요",
-            },
-            "page_exhausted": True,
-            "unavailable_fields": ["benefits"],
-        },
-        [],
-        current_url=current_url,
-        state=_detail_state(
-            current_url,
-            ["company_name", "position", "url", "benefits"],
-        ),
-        data_services=worker_data_services(),
-    )
-
-    assert outcome.result["status"] == "success"
-    capture = outcome.state_update["collection"]["job_captures"][0]
-    assert [field.value for field in capture.evidence.unavailable_fields] == [
-        "benefits"
-    ]
-    assert "benefits" not in capture.evidence.field_evidence
-
-
-def test_card_queue_identity_does_not_overwrite_detail_ocr_evidence():
-    state = worker_state(
         collection={
             "job_card_queue": [
                 {
+                    "queue_id": "card-1",
                     "status": "active",
-                    "company": "잘못 연결된 회사",
-                    "title": "잘못 연결된 직무",
+                    "company": "예시회사",
+                    "title": "AI 엔지니어",
                 }
-            ]
-        }
-    )
-    current_url = "https://www.wanted.co.kr/wd/365869"
-    coverage = merge_job_detail_coverage(
-        {},
-        {
-            "observed_fields": {
-                "company_name": "백패커",
-                "position": "[텀블벅] iOS 개발자(1~3년)",
-            }
+            ],
+            "job_detail_buffer": {
+                "url": current_url,
+                "detail_key": "card-1",
+                "lines": [
+                    {"text": "예시회사 AI 엔지니어"},
+                    {"text": "주요 업무 모델 운영"},
+                    {"text": "자격 요건 Python"},
+                ],
+                "screens": ["detail.png"],
+                "stats": {"screen_count": 3},
+            },
         },
+    )
+
+
+def _request_review(state):
+    outcome = worker_execution_dispatch.dispatch_state_action(
+        "review_job_detail",
+        {"reason": "누적 근거를 검토합니다."},
+        current_url=state["observation"]["current_url"],
         state=state,
-        current_url=current_url,
+        data_services=worker_data_services(),
+    )
+    return outcome
+
+
+def test_physical_actions_do_not_accept_field_self_reports():
+    assert "observed_fields" not in scroll.model_fields
+
+
+def test_review_request_creates_draft_without_completing_job():
+    current_url = "https://www.wanted.co.kr/wd/1"
+    state = _detail_state(current_url)
+
+    outcome = _request_review(state)
+
+    assert outcome.result["status"] == "success"
+    update = outcome.state_update["collection"]
+    draft = update["pending_job_draft"]
+    assert draft.url == current_url
+    assert draft.detail_key == "card-1"
+    assert draft.screen_count == 3
+    assert "자격 요건 Python" in draft.raw_ocr_text
+    assert "job_captures" not in update
+    assert "job_detail_buffer" not in update
+
+
+def test_complete_review_is_the_only_path_that_counts_job():
+    state = _detail_state("https://www.wanted.co.kr/wd/1")
+    draft = _request_review(state).state_update["collection"]["pending_job_draft"]
+    state["collection"]["pending_job_draft"] = draft
+    review = JobReview(
+        detail_key=draft.detail_key,
+        url=draft.url,
+        status=JobReviewStatus.COMPLETE,
+        posting=JobPosting(
+            company_name="예시회사",
+            position="AI 엔지니어",
+            url=draft.url,
+            main_tasks=["모델 운영"],
+            requirements=["Python"],
+        ),
+        field_evidence={
+            "company_name": "예시회사",
+            "position": "AI 엔지니어",
+            "url": draft.url,
+            "main_tasks": "주요 업무 모델 운영",
+            "requirements": "자격 요건 Python",
+        },
     )
 
-    assert coverage["field_evidence"]["company_name"] == "백패커"
-    assert coverage["field_evidence"]["position"] == "[텀블벅] iOS 개발자(1~3년)"
-    assert coverage["field_evidence"]["url"] == current_url
+    update = review_node(
+        state,
+        node_runtime(
+            data=worker_data_services(review_job_draft=lambda _draft, _intent: review)
+        ),
+    )
+
+    collection = update["collection"]
+    assert len(collection["job_captures"]) == 1
+    assert len(collection["collected_jobs"]) == 1
+    assert collection["job_card_queue"][0]["status"] == "done"
+    assert collection["job_detail_buffer"] == {}
 
 
-def test_detail_action_args_compaction_is_idempotent():
-    args = {
-        "page_role": "job_detail",
-        "observed_fields": {
-            "requirements": "Python",
-            "main_tasks": "API 개발",
-        },
-        "page_exhausted": True,
-    }
+def test_needs_more_review_keeps_detail_buffer_and_card_active():
+    state = _detail_state("https://www.wanted.co.kr/wd/1")
+    draft = _request_review(state).state_update["collection"]["pending_job_draft"]
+    state["collection"]["pending_job_draft"] = draft
+    review = JobReview(
+        detail_key=draft.detail_key,
+        url=draft.url,
+        status=JobReviewStatus.NEEDS_MORE,
+        missing_fields=["requirements"],
+        draft_fingerprint=draft.fingerprint(),
+        reason="자격 요건 본문이 더 필요합니다.",
+    )
 
-    compacted = compact_action_args("finish_detail_reading", args)
+    update = review_node(
+        state,
+        node_runtime(
+            data=worker_data_services(review_job_draft=lambda _draft, _intent: review)
+        ),
+    )
 
-    assert compact_action_args("finish_detail_reading", compacted) == compacted
+    collection = update["collection"]
+    assert collection["pending_job_draft"] is None
+    assert "job_detail_buffer" not in collection
+    assert "job_captures" not in collection
+    assert state["collection"]["job_card_queue"][0]["status"] == "active"
+
+    state["collection"].update(collection)
+    repeated = _request_review(state)
+    assert repeated.result["status"] == "success"
+    assert repeated.state_update["collection"][
+        "pending_job_draft"
+    ].review_model_tier == "primary"
+
+    state["collection"]["last_job_review"] = review.model_copy(
+        update={"model_tier": "primary"}
+    )
+    repeated_primary = _request_review(state)
+    assert repeated_primary.result["status"] == "skipped"
+    assert repeated_primary.result["reason"] == "detail_evidence_unchanged"
+
+
+def test_source_incomplete_review_rejects_card_without_counting_job():
+    state = _detail_state("https://www.wanted.co.kr/wd/1")
+    draft = _request_review(state).state_update["collection"]["pending_job_draft"]
+    state["collection"]["pending_job_draft"] = draft
+    review = JobReview(
+        detail_key=draft.detail_key,
+        url=draft.url,
+        status=JobReviewStatus.SOURCE_INCOMPLETE,
+        missing_fields=["requirements"],
+        reason="공고 원문에 자격 요건이 없습니다.",
+    )
+
+    update = review_node(
+        state,
+        node_runtime(
+            data=worker_data_services(review_job_draft=lambda _draft, _intent: review)
+        ),
+    )
+
+    collection = update["collection"]
+    assert collection["job_card_queue"][0]["status"] == "rejected"
+    assert "job_captures" not in collection
+    assert collection["job_detail_buffer"] == {}
+
+
+def test_review_action_args_compaction_is_idempotent():
+    args = {"page_role": "job_detail", "reason": "근거 검토"}
+
+    compacted = compact_action_args("review_job_detail", args)
+
+    assert compact_action_args("review_job_detail", compacted) == compacted

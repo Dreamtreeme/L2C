@@ -12,6 +12,7 @@ from agent.graph import (
 from agent.runtime.worker_contracts import action_event_results, build_action_request
 from agent.graph.workflow import (
     route_after_execution,
+    route_after_review,
     route_after_start,
     route_after_reflex,
     route_after_selection,
@@ -24,7 +25,7 @@ from agent.tests.worker_test_support import (
     worker_state,
 )
 from shared.schema.collection_intent import CollectionIntent
-from shared.schema.jd_schema import JobCapture
+from shared.schema.jd_schema import JobCapture, JobDraft, JobReview, JobReviewStatus
 
 
 def _request(source: str, tool_calls: list[dict]):
@@ -171,7 +172,7 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
         route_after_reflex(worker_state(decision={"pending_action": reflex_request}))
         == "execution"
     )
-    assert route_after_reflex(worker_state()) == "reasoning"
+    assert route_after_reflex(observed) == "reasoning"
 
     from agent.graph import worker_selection
 
@@ -220,6 +221,34 @@ def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
         },
     )
     assert route_after_selection(raw_intermediate_state) == "reflex"
+
+    fresh_capture = worker_state(
+        observation={
+            "observation_id": "observation:0003",
+            "current_screenshot": "fresh.png",
+            "raw_screen_signature": {"size": [1920, 1080]},
+            "ocr_complete": False,
+        },
+        transition={
+            "transition_result": {
+                "status": "idle",
+                "needs_ocr": True,
+            }
+        },
+    )
+    assert route_after_selection(fresh_capture) == "reflex"
+    assert route_after_reflex(fresh_capture) == "ocr"
+
+    missed_before_ocr = worker_state(
+        observation=fresh_capture["observation"],
+        replay={
+            "reflex_trace": {
+                "hit": False,
+                "observation_id": "observation:0003",
+            }
+        },
+    )
+    assert route_after_reflex(missed_before_ocr) == "ocr"
 
 
 def test_duplicate_detail_that_completes_target_ends_after_selection():
@@ -341,7 +370,7 @@ def test_go_back_uses_one_cv_observation_barrier(
     assert result["observation"]["ocr_complete"] is False
 
 
-def test_worker_routes_screen_changes_to_recapture():
+def test_worker_routes_execution_and_review_boundaries():
     assert (
         route_after_execution(
             worker_state(transition={"transition_request": {"action": "click_marker"}})
@@ -349,10 +378,41 @@ def test_worker_routes_screen_changes_to_recapture():
         == "capture"
     )
     assert route_after_execution(worker_state()) == "reasoning"
+    pending_draft = JobDraft(
+        url="https://example.com/jobs/1",
+        raw_ocr_text="예시회사 AI 엔지니어 자격 요건 Python",
+    )
+    assert (
+        route_after_execution(
+            worker_state(collection={"pending_job_draft": pending_draft})
+        )
+        == "review"
+    )
+    needs_more = JobReview(
+        url=pending_draft.url,
+        status=JobReviewStatus.NEEDS_MORE,
+    )
+    assert (
+        route_after_review(worker_state(collection={"last_job_review": needs_more}))
+        == "reasoning"
+    )
+    rejected = JobReview(
+        url=pending_draft.url,
+        status=JobReviewStatus.INVALID_TARGET,
+    )
+    assert (
+        route_after_review(worker_state(collection={"last_job_review": rejected}))
+        == "selection"
+    )
 
 
 def test_capture_screen_assigns_run_scoped_incrementing_observation_id(monkeypatch):
     captures = iter(["screen-1.png", "screen-2.png", "screen-retry-1.png"])
+    monkeypatch.setattr(
+        worker_observation,
+        "compute_screen_size_signature",
+        lambda _path: {"size": [1920, 1080]},
+    )
 
     class FakePerception:
         last_capture_quality = {}
@@ -608,7 +668,7 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     assert stopped["decision"]["pending_action"].tool_calls[0].name == "finish_task"
 
 
-def test_execution_accumulates_detail_field_evidence(monkeypatch):
+def test_execution_does_not_mix_detail_extraction_into_scroll(monkeypatch):
     monkeypatch.setattr(
         worker_execution_dispatch,
         "dispatch_ui_action",
@@ -625,7 +685,6 @@ def test_execution_accumulates_detail_field_evidence(monkeypatch):
                 "args": {
                     "direction": "down",
                     "page_role": "job_detail",
-                    "observed_fields": {"requirements": "Python"},
                 },
                 "id": "scroll",
             }
@@ -639,9 +698,8 @@ def test_execution_accumulates_detail_field_evidence(monkeypatch):
         )
     )
 
-    coverage = result["collection"]["job_detail_coverage"]
-    assert coverage["field_evidence"]["requirements"] == "Python"
-    assert coverage["field_evidence"]["url"] == ("https://example.com/jobs/1")
+    assert "job_detail_coverage" not in result["collection"]
+    assert result["collection"]["job_captures"] == []
 
 
 def test_reflex_transition_executes_input_and_enter_without_recapture(

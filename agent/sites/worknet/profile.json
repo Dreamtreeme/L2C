@@ -26,8 +26,5 @@
       "navigation_notes": ["워크넷과 고용24의 공식 도메인 이동은 같은 흐름으로 취급한다."]
     }
   },
-  "collection_policy": {
-    "required_fields": ["company_name", "position", "main_tasks", "requirements", "location", "employment_type", "url"]
-  },
   "guidance": "결과 행 또는 카드를 직무명, 회사명, 지역으로 식별한다. 공식 워크넷·고용24 도메인 이동은 허용하되 행 선택과 필터 해석은 현재 화면을 기준으로 판단한다."
 }

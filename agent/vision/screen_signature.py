@@ -209,6 +209,15 @@ def compute_screen_phash_signature(
         }
 
 
+def compute_screen_size_signature(
+    image_path: str | Path,
+) -> dict[str, Any]:
+    """OCR와 전체 화면 해시 없이 비율 좌표 복원에 필요한 크기만 읽는다."""
+
+    with Image.open(image_path) as image:
+        return {"size": list(image.size)}
+
+
 def compute_screen_signature(
     image_path: str | Path, markers: list[dict[str, Any]]
 ) -> dict[str, Any]:

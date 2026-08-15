@@ -10,17 +10,11 @@ from agent.runtime.worker_contracts import (
     apply_worker_state_update,
 )
 from agent.graph.worker_execution_context import WorkerExecutionContext
-from agent.runtime.worker_state import (
-    job_capture_count,
-    count_mode_from_state,
-    target_count_from_state,
-)
+from agent.runtime.worker_state import count_mode_from_state, target_count_from_state
 from agent.runtime.job_card_queue import (
     activate_job_card,
-    complete_active_job_card,
     job_card_click_matches_queue,
     job_card_queue_scope_complete,
-    pending_job_cards,
     resolved_job_card_count,
 )
 from agent.runtime.worker_actions import (
@@ -138,67 +132,18 @@ def _apply_job_card_queue_completion(
         result["resolved_count"] = resolved_count
 
 
-def _apply_job_detail_completion(
-    context: WorkerExecutionContext,
-    result: dict[str, Any],
-) -> None:
-    state = context.state
-    collection = state["collection"]
-    job_card_queue = list(collection.get("job_card_queue", []) or [])
-    collected_count = job_capture_count(state)
-
-    job_card_queue = complete_active_job_card(job_card_queue)
-    collection["job_card_queue"] = job_card_queue
-    pending_cards = pending_job_cards(job_card_queue)
-    if (
-        count_mode_from_state(state) == "visible_all"
-        and job_card_queue
-        and not pending_cards
-    ):
-        state["lifecycle"]["is_finished"] = True
-        result["auto_finished"] = True
-        result["count_mode"] = "visible_all"
-        result["collected_count"] = collected_count
-
-
-def _apply_collection_target_completion(
-    context: WorkerExecutionContext,
-    result: dict[str, Any],
-) -> None:
-    state = context.state
-    collection = state["collection"]
-    job_card_queue = list(collection.get("job_card_queue", []) or [])
-    target_count = target_count_from_state(state)
-    collected_count = job_capture_count(state)
-    resolved_count = max(
-        collected_count,
-        resolved_job_card_count(job_card_queue),
-    )
-    if target_count <= 0 or resolved_count < target_count:
-        return
-
-    state["lifecycle"]["is_finished"] = True
-    result["auto_finished"] = True
-    result["target_count"] = target_count
-    result["collected_count"] = collected_count
-    result["resolved_count"] = resolved_count
-
-
 def execute_state_action(
     context: WorkerExecutionContext,
     action_name: str,
     args: dict[str, Any],
 ) -> dict[str, Any]:
-    """상태 행동을 실행하고 카드·상세 완료 후속 효과를 반영한다."""
+    """상태 행동을 실행하고 해당 상태 패치를 반영한다."""
 
     state = context.state
     observation = state["observation"]
-    collection = state["collection"]
-    current_captures = list(collection.get("job_captures", []))
     outcome = worker_execution_dispatch.dispatch_state_action(
         action_name,
         args,
-        current_captures,
         current_url=str(observation.get("current_url") or ""),
         state=state,
         data_services=context.data_services,
@@ -208,13 +153,6 @@ def execute_state_action(
     result = outcome.result
     if action_name == "set_job_card_queue":
         _apply_job_card_queue_completion(context, result)
-
-    is_successful_detail_update = (
-        action_name == "finish_detail_reading" and result.get("status") == "success"
-    )
-    if is_successful_detail_update:
-        _apply_job_detail_completion(context, result)
-        _apply_collection_target_completion(context, result)
     return result
 
 

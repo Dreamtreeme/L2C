@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 from enum import StrEnum
+from hashlib import sha256
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -29,6 +31,15 @@ class JobField(StrEnum):
     BENEFITS = "benefits"
     SALARY = "salary"
     RAW_OCR_TEXT = "raw_ocr_text"
+
+
+class JobReviewStatus(StrEnum):
+    """누적한 상세 근거를 검토한 결과."""
+
+    COMPLETE = "complete"
+    NEEDS_MORE = "needs_more"
+    SOURCE_INCOMPLETE = "source_incomplete"
+    INVALID_TARGET = "invalid_target"
 
 
 JOB_FIELDS: tuple[str, ...] = tuple(field.value for field in JobField)
@@ -99,19 +110,80 @@ class JobCollectionEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     required_fields: list[JobField] = Field(default_factory=list)
-    unavailable_fields: list[JobField] = Field(default_factory=list)
     field_evidence: dict[JobField, str] = Field(default_factory=dict)
-    page_exhausted: bool = False
     screenshot_path: str = ""
     ocr_text_path: str = ""
     source_card_key: str = ""
 
-    @field_validator(
-        "required_fields",
-        "unavailable_fields",
-    )
+    @field_validator("required_fields")
     @classmethod
     def unique_fields(cls, values: list[JobField]) -> list[JobField]:
+        return list(dict.fromkeys(values))
+
+
+class JobDraft(BaseModel):
+    """작업자 그래프가 공고 검토 노드에 전달하는 누적 화면 근거."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    detail_key: str = ""
+    raw_ocr_text: str
+    required_fields: list[JobField] = Field(default_factory=list)
+    screenshot_path: str = ""
+    source_card_key: str = ""
+    screen_count: int = Field(default=0, ge=0)
+    last_action: str = ""
+    transition_status: str = ""
+    transition_reason: str = ""
+    review_model_tier: Literal["lightweight", "primary"] = "lightweight"
+
+    @field_validator("url", "raw_ocr_text")
+    @classmethod
+    def require_draft_text(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("공고 초안의 URL과 OCR 원문은 비어 있을 수 없습니다.")
+        return normalized
+
+    @field_validator("required_fields")
+    @classmethod
+    def unique_required_fields(cls, values: list[JobField]) -> list[JobField]:
+        return list(dict.fromkeys(values))
+
+    def fingerprint(self) -> str:
+        """같은 상세 근거를 중복 검토하지 않도록 초안 내용을 식별한다."""
+
+        payload = "\x1f".join(
+            (
+                self.url,
+                self.detail_key,
+                self.raw_ocr_text,
+                ",".join(field.value for field in self.required_fields),
+            )
+        )
+        return sha256(payload.encode("utf-8")).hexdigest()
+
+
+class JobReview(BaseModel):
+    """공고 초안을 같은 수집 계약으로 검토한 단일 판정."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    detail_key: str = ""
+    url: str
+    status: JobReviewStatus
+    posting: JobPosting = Field(default_factory=JobPosting)
+    missing_fields: list[JobField] = Field(default_factory=list)
+    field_evidence: dict[JobField, str] = Field(default_factory=dict)
+    draft_fingerprint: str = ""
+    model_tier: Literal["lightweight", "primary"] = "lightweight"
+    reason: str = ""
+    issues: list[str] = Field(default_factory=list)
+
+    @field_validator("missing_fields")
+    @classmethod
+    def unique_missing_fields(cls, values: list[JobField]) -> list[JobField]:
         return list(dict.fromkeys(values))
 
 
@@ -148,16 +220,10 @@ class CollectedJob(BaseModel):
         required = dict.fromkeys(
             (*JOB_IDENTITY_FIELDS, *self.evidence.required_fields)
         )
-        unavailable = (
-            set(self.evidence.unavailable_fields) - set(JOB_IDENTITY_FIELDS)
-            if self.evidence.page_exhausted
-            else set()
-        )
         missing = [
             field.value
             for field in required
-            if field not in unavailable
-            and getattr(self.posting, field.value) in (None, "", [], {})
+            if getattr(self.posting, field.value) in (None, "", [], {})
         ]
         if missing:
             raise ValueError("수집 완료 필드 누락: " + ", ".join(missing))
@@ -177,7 +243,10 @@ __all__ = [
     "JOB_IDENTITY_FIELDS",
     "JobCollectionEvidence",
     "JobCapture",
+    "JobDraft",
     "JobField",
     "JobPosting",
+    "JobReview",
+    "JobReviewStatus",
     "StoredJob",
 ]

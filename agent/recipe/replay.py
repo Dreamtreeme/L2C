@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from agent.runtime.site_context import normalize_page_role
-from agent.runtime.target_matching import match_exact_target, roi_signature_match
+from agent.runtime.target_matching import roi_signature_match
 from agent.runtime.transition_runtime import used_idempotent_recipe_keys_on_url
 from agent.runtime.worker_contracts import ScreenMarker, WorkerState
 from agent.runtime.worker_data_services import ExperienceRuleLoader
 from agent.runtime.worker_state import current_frame_signature
 from agent.utils.text import recipe_url_scope_matches, url_template
-from agent.vision.marker_geometry import marker_bbox, marker_center
+from agent.vision.marker_geometry import (
+    marker_bbox,
+    marker_center,
+    ratio_rect_to_pixels,
+)
 from shared.schema.experience_rule_schema import (
     ExperienceRule,
     ExperienceRuleStep,
@@ -23,16 +26,14 @@ from shared.schema.experience_rule_schema import (
     ResolvedRuleAction,
     ResolvedRuleStep,
     RuleAction,
-    RuleApplication,
 )
+from shared.schema.execution_record_schema import ActionTarget
 from shared.schema.skill_schema import RecipeInputName
 
 
 _REJECT_REASON_PRIORITY = {
     "url_scope_mismatch": 100,
     "page_role_mismatch": 95,
-    "rule_resolver_declined": 90,
-    "rule_resolver_failed": 85,
     "target_unresolved": 80,
 }
 
@@ -133,54 +134,43 @@ class ReflexSelection:
 
 @dataclass
 class TargetBindings:
-    """현재 캡처에서 규칙 행동별로 찾은 물리 대상과 추적 정보."""
+    """저장된 ROI와 좌표로 복원한 규칙 행동별 물리 대상."""
 
     markers: list[ScreenMarker]
     by_action: dict[int, ScreenMarker] = field(default_factory=dict)
     traces: dict[int, dict[str, Any]] = field(default_factory=dict)
-    ambiguous: bool = False
+    blocked_reason: str = ""
+    verified_target_count: int = 0
 
 
-TargetDetector = Callable[[RuleAction], list[ScreenMarker]]
-TargetResolver = Callable[
-    [ExperienceRuleStep, list[ScreenMarker], str],
-    RuleApplication,
-]
-
-
-def _interaction_key(action: RuleAction) -> str:
-    target = action.target
-    if target is None:
-        return ""
-    return "|".join(
-        value.strip().casefold()
-        for value in (
-            target.component,
-            target.role,
-            target.description,
-        )
-        if value.strip()
-    )
-
-
-def _marker_from_handle(
-    handle: InteractionRegionHandle,
+def _marker_from_reference(
+    reference: ActionTarget,
+    roi_signature: dict[str, Any],
     screen_size: list[int],
     marker_id: int,
 ) -> ScreenMarker | None:
-    if len(handle.center_ratio) != 2 or len(screen_size) != 2:
+    """저장 당시 비율 좌표를 현재 캡처의 물리 좌표로 복원한다."""
+
+    if len(screen_size) != 2 or min(screen_size) <= 0:
         return None
-    width, height = screen_size
-    if min(width, height) <= 0:
-        return None
-    x = round(handle.center_ratio[0] * width)
-    y = round(handle.center_ratio[1] * height)
-    radius = max(4, round(min(width, height) * 0.01))
+    bbox = ratio_rect_to_pixels(reference.bbox_ratio, screen_size)
+    if bbox == [0, 0, 0, 0]:
+        center = list(reference.center_ratio or roi_signature.get("target_center_ratio") or [])
+        if len(center) != 2:
+            return None
+        width, height = screen_size
+        try:
+            x = round(float(center[0]) * width)
+            y = round(float(center[1]) * height)
+        except (TypeError, ValueError):
+            return None
+        radius = max(4, round(min(width, height) * 0.01))
+        bbox = [x - radius, y - radius, x + radius, y + radius]
     return {
         "id": marker_id,
-        "bbox": [x - radius, y - radius, x + radius, y + radius],
-        "text": "",
-        "type": "interaction_point",
+        "bbox": bbox,
+        "text": reference.text,
+        "type": reference.marker_type or "interaction_point",
     }
 
 
@@ -287,7 +277,11 @@ def _screen_precondition_reason(
     if not recipe_url_scope_matches(step.before.url_template, context.current_url):
         return "url_scope_mismatch"
     expected_role = normalize_page_role(step.before.page_role)
-    if expected_role and context.current_page_role != expected_role:
+    if (
+        expected_role
+        and context.current_page_role
+        and context.current_page_role != expected_role
+    ):
         return "page_role_mismatch"
     return ""
 
@@ -310,11 +304,11 @@ def _marker_handle(
     )
 
 
-def _fast_target(
+def _saved_target(
     state: WorkerState,
     context: ReflexReplayContext,
     action: RuleAction,
-    target_detector: TargetDetector,
+    marker_id: int,
 ) -> tuple[ScreenMarker | None, dict[str, Any]]:
     target = action.target
     if target is None or target.reference is None:
@@ -330,25 +324,13 @@ def _fast_target(
         trace["reason"] = str(phash.get("reason") or "roi_phash_mismatch")
         return None, trace
 
-    screen_size = list(current_frame_signature(state).get("size") or [])
-    target_payload = target.reference.model_dump(mode="json")
-    marker_id = match_exact_target(target_payload, context.markers, screen_size)
-    marker = next(
-        (item for item in context.markers if item.get("id") == marker_id),
-        None,
+    marker = _marker_from_reference(
+        target.reference,
+        signature,
+        context.screen_size,
+        marker_id,
     )
-    if marker is not None:
-        trace["match_mode"] = "current_marker"
-        return marker, trace
-
-    local_markers = target_detector(action)
-    marker_id = match_exact_target(target_payload, local_markers, screen_size)
-    marker = next(
-        (item for item in local_markers if item.get("id") == marker_id),
-        None,
-    )
-    trace["local_detection_count"] = len(local_markers)
-    trace["match_mode"] = "roi_local_detection" if marker else "none"
+    trace["match_mode"] = "saved_target_coordinate" if marker else "none"
     if marker is None:
         trace["reason"] = "target_unresolved"
     return marker, trace
@@ -480,11 +462,10 @@ def _selection(
     )
 
 
-def _fast_bind_targets(
+def _bind_saved_targets(
     state: WorkerState,
     context: ReflexReplayContext,
     candidate: ReflexCandidate,
-    target_detector: TargetDetector,
 ) -> TargetBindings:
     bindings = TargetBindings(markers=[marker.copy() for marker in context.markers])
     next_marker_id = max(
@@ -494,59 +475,29 @@ def _fast_bind_targets(
     for action in candidate.step.actions:
         if action.target is None:
             continue
-        interaction_key = _interaction_key(action)
-        saved_handle = (
-            context.replay_session.interaction_handles.get(interaction_key)
-            if context.replay_session and action.action == "scroll" and interaction_key
-            else None
+        marker, trace = _saved_target(
+            state,
+            context,
+            action,
+            next_marker_id,
         )
-        marker = (
-            _marker_from_handle(saved_handle, context.screen_size, next_marker_id)
-            if saved_handle is not None
-            else None
-        )
-        if marker is not None:
-            bindings.markers.append(marker)
-            bindings.by_action[action.source_seq] = marker
-            bindings.traces[action.source_seq] = {
-                "match_mode": "session_interaction_point"
-            }
-            next_marker_id += 1
-            continue
-
-        marker, trace = _fast_target(state, context, action, target_detector)
         bindings.traces[action.source_seq] = trace
         if marker is None:
-            bindings.ambiguous = True
+            bindings.blocked_reason = bindings.blocked_reason or str(
+                trace.get("reason") or "target_unresolved"
+            )
             continue
-        if marker not in context.markers:
-            marker = {**marker, "id": next_marker_id}
-            bindings.markers.append(marker)
-            next_marker_id += 1
+        bindings.markers.append(marker)
         bindings.by_action[action.source_seq] = marker
+        bindings.verified_target_count += 1
+        next_marker_id += 1
     return bindings
-
-
-def _apply_semantic_bindings(
-    context: ReflexReplayContext,
-    application: RuleApplication,
-    bindings: TargetBindings,
-) -> None:
-    by_id = {int(marker["id"]): marker for marker in context.markers}
-    for binding in application.target_bindings:
-        bindings.by_action[binding.source_action_seq] = by_id[binding.marker_id]
-        bindings.traces[binding.source_action_seq] = {
-            "match_mode": "semantic_resolver",
-            "resolver_reason": application.reason,
-        }
 
 
 def _bind_candidate(
     state: WorkerState,
     context: ReflexReplayContext,
     candidate: ReflexCandidate,
-    target_detector: TargetDetector,
-    target_resolver: TargetResolver,
     rejection_log: ReflexRejectionLog,
 ) -> ReflexSelection | None:
     precondition_reason = _screen_precondition_reason(context, candidate.step)
@@ -554,53 +505,34 @@ def _bind_candidate(
         rejection_log.reject(candidate.rule_key, precondition_reason)
         return None
 
-    bindings = _fast_bind_targets(state, context, candidate, target_detector)
-    if not bindings.ambiguous:
-        return _selection(
-            candidate,
-            context,
-            bindings.markers,
-            bindings.by_action,
-            bindings.traces,
-            resolution_mode="exact",
-        )
-
-    try:
-        application = target_resolver(
-            candidate.step,
-            context.markers,
-            context.current_image_path,
-        )
-    except Exception as exc:
+    bindings = _bind_saved_targets(state, context, candidate)
+    if bindings.blocked_reason:
         rejection_log.reject(
             candidate.rule_key,
-            "rule_resolver_failed",
-            error=str(exc)[:200],
+            bindings.blocked_reason,
+            target_traces=bindings.traces,
         )
         return None
-    if application.decision != "apply":
+    if not bindings.verified_target_count:
         rejection_log.reject(
             candidate.rule_key,
-            "rule_resolver_declined",
-            resolver_reason=application.reason,
+            "target_unresolved",
+            target_traces=bindings.traces,
         )
         return None
-    _apply_semantic_bindings(context, application, bindings)
     return _selection(
         candidate,
         context,
         bindings.markers,
         bindings.by_action,
         bindings.traces,
-        resolution_mode="semantic",
+        resolution_mode="saved_coordinate",
     )
 
 
 def select_reflex_replay(
     state: WorkerState,
     context: ReflexReplayContext,
-    target_detector: TargetDetector,
-    target_resolver: TargetResolver,
 ) -> tuple[ReflexSelection | None, ReflexRejectionLog]:
     """후보를 검증하고 첫 번째로 현재 화면에 적용 가능한 규칙을 반환한다."""
 
@@ -610,8 +542,6 @@ def select_reflex_replay(
             state,
             context,
             candidate,
-            target_detector,
-            target_resolver,
             rejection_log,
         )
         if selection is not None:

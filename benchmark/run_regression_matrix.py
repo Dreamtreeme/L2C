@@ -430,9 +430,6 @@ def _experience_reuse_effectiveness(
                 "source_reasoning_replaced_count": int(
                     metrics.get("reflex_source_reasoning_replaced_count") or 0
                 ),
-                "resolver_reasoning_call_count": int(
-                    metrics.get("reflex_resolver_reasoning_call_count") or 0
-                ),
                 "reflex_path_started_count": int(
                     metrics.get("reflex_path_started_count") or 0
                 ),
@@ -463,10 +460,6 @@ def _experience_reuse_effectiveness(
                 ),
                 "validated_source_reasoning_replaced_count": sum(
                     item["source_reasoning_replaced_count"]
-                    for item in validated_runs
-                ),
-                "validated_resolver_reasoning_call_count": sum(
-                    item["resolver_reasoning_call_count"]
                     for item in validated_runs
                 ),
                 "reflex_path_started_count": started,

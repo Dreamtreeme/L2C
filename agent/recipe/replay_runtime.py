@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from langgraph.runtime import Runtime
@@ -19,7 +18,6 @@ from agent.recipe.replay import (
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.runtime.worker_contracts import (
-    ScreenMarker,
     TransitionRequest,
     WorkerState,
     build_action_request,
@@ -33,10 +31,7 @@ from agent.vision.frame_compare import (
 )
 from shared.schema.experience_rule_schema import (
     ExpectedEffect,
-    ExperienceRuleStep,
     ReplaySession,
-    RuleApplication,
-    RuleAction,
 )
 
 
@@ -207,7 +202,12 @@ def _miss_result(
     reason: str,
     trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    reflex_trace = {**dict(trace or {}), "hit": False, "reason": reason}
+    reflex_trace = {
+        **dict(trace or {}),
+        "hit": False,
+        "reason": reason,
+        "observation_id": str(state["observation"].get("observation_id") or ""),
+    }
     session = replay_session_from_state(state)
     blocked = blocked_recipe_keys(state)
     if session and session.recipe_key:
@@ -230,10 +230,7 @@ def _miss_result(
     }
 
 
-def _build_request(
-    selection: ReflexSelection,
-    resolver_reasoning_call_count: int,
-):
+def _build_request(selection: ReflexSelection):
     return build_action_request(
         "reflex",
         "resolved experience rule step",
@@ -245,7 +242,6 @@ def _build_request(
             "source_reasoning_call_count": len(
                 selection.step.source_transition_seqs
             ),
-            "resolver_reasoning_call_count": resolver_reasoning_call_count,
             "before_rule_screen": selection.step.before.model_dump(mode="json"),
             "expected_effect": selection.step.expected_effect.model_dump(mode="json"),
             "resolved_step": selection.resolved_step.model_dump(mode="json"),
@@ -259,44 +255,18 @@ def _build_request(
 def _hit_result(
     context: ReflexReplayContext,
     selection: ReflexSelection,
-    resolver_reasoning_call_count: int,
 ) -> dict[str, Any]:
     step_count = len(selection.rule.steps)
-    handles = (
-        dict(context.replay_session.interaction_handles)
-        if context.replay_session
-        else {}
-    )
-    for rule_action, resolved_action in zip(
-        selection.step.actions,
-        selection.resolved_step.actions,
-    ):
-        if rule_action.action != "scroll" or resolved_action.target is None:
-            continue
-        target = rule_action.target
-        if target is None:
-            continue
-        key = "|".join(
-            value.strip().casefold()
-            for value in (target.component, target.role, target.description)
-            if value.strip()
-        )
-        if key:
-            handles[key] = resolved_action.target.model_copy(deep=True)
     session = ReplaySession(
         recipe_key=selection.rule_key,
         current_step_index=selection.step_index,
         pending_step_index=selection.step_index,
         step_count=step_count,
-        interaction_handles=handles,
     )
     return {
         "observation": {"current_markers": selection.markers},
         "decision": {
-            "pending_action": _build_request(
-                selection,
-                resolver_reasoning_call_count,
-            )
+            "pending_action": _build_request(selection)
         },
         "replay": {
             "reflex_trace": {
@@ -304,6 +274,7 @@ def _hit_result(
                 "recipe_key": selection.rule_key,
                 "candidate_count": context.candidate_count,
                 "task_category": context.task_category,
+                "observation_id": context.observation_id,
                 "actions": [call["name"] for call in selection.tool_calls],
                 "tool_calls": selection.tool_call_traces,
                 "resolution_mode": selection.resolution_mode,
@@ -312,48 +283,10 @@ def _hit_result(
                 "source_reasoning_call_count": len(
                     selection.step.source_transition_seqs
                 ),
-                "resolver_reasoning_call_count": resolver_reasoning_call_count,
             },
             "replay_session": session,
         },
     }
-
-
-def _detect_target_markers(
-    runtime: Runtime[WorkerDependencies],
-    context: ReflexReplayContext,
-    action: RuleAction,
-) -> list[ScreenMarker]:
-    target = action.target
-    if target is None or target.reference is None or not context.current_image_path:
-        return []
-    crop = list(target.reference_roi_signature.get("crop_rect_ratio") or [])
-    if not crop:
-        return []
-    marker_type = target.reference.marker_type
-    try:
-        perception = runtime.context.vision.get_perception()
-        markers = perception.detect_target_roi(
-            Path(context.current_image_path),
-            crop,
-            marker_type,
-        )
-        if markers or marker_type not in {"text", "icon"}:
-            return markers
-        fallback_type = "icon" if marker_type == "text" else "text"
-        return perception.detect_target_roi(
-            Path(context.current_image_path),
-            crop,
-            fallback_type,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Experience target ROI detection failed",
-            action=action.action,
-            marker_type=marker_type,
-            error=str(exc),
-        )
-        return []
 
 
 def attempt_reflex_replay(
@@ -384,26 +317,9 @@ def attempt_reflex_replay(
             },
         )
 
-    resolver_reasoning_call_count = 0
-
-    def resolve_rule_targets(
-        step: ExperienceRuleStep,
-        markers: list[ScreenMarker],
-        image_path: str,
-    ) -> RuleApplication:
-        nonlocal resolver_reasoning_call_count
-        resolver_reasoning_call_count += 1
-        return runtime.context.resolve_experience_rule(step, markers, image_path)
-
-    selection, rejection_log = select_reflex_replay(
-        state,
-        context,
-        lambda action: _detect_target_markers(runtime, context, action),
-        resolve_rule_targets,
-    )
+    selection, rejection_log = select_reflex_replay(state, context)
     if selection is None:
         trace = rejection_log.trace_payload(context.candidate_count)
-        trace["resolver_reasoning_call_count"] = resolver_reasoning_call_count
         logger.info(
             "Reflex miss: no rule applied",
             candidates=context.candidate_count,
@@ -422,7 +338,7 @@ def attempt_reflex_replay(
         goal=selection.rule.goal[:80],
         duration=f"{elapsed:.3f}s",
     )
-    return _hit_result(context, selection, resolver_reasoning_call_count)
+    return _hit_result(context, selection)
 
 
 __all__ = [

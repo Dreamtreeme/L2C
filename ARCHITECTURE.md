@@ -21,8 +21,9 @@ flowchart TD
     SERVICE --> LOCK[VisionWorkerRuntime 실행 세션]
     LOCK --> WG[Vision Worker LangGraph]
     WG --> WEB[브라우저 화면과 물리 입력]
-    WG --> BATCH[CollectionBatch: JobCapture 원문]
-    BATCH --> POSTPROCESS[postprocess 노드: CollectedJob 구조화]
+    WG --> REVIEW[JobReview: 계속 읽기·완료·자료 부족·잘못된 대상]
+    REVIEW --> BATCH[CollectionBatch: 검토 완료 CollectedJob과 화면 근거]
+    BATCH --> POSTPROCESS[postprocess 노드: 검토 결과 전달]
     POSTPROCESS --> STORE[persist 노드: 공고 UPSERT]
     STORE --> DB
     DB[(SQLite)] --> DBQ
@@ -67,14 +68,19 @@ flowchart TD
     EXECUTION -->|화면 변경| CAPTURE
     EXECUTION -->|같은 화면에서 재판단| REASON
     EXECUTION -->|후속 결정론적 행동| EXECUTION
-    EXECUTION -->|완료 또는 승인 필요| END[종료]
+    EXECUTION -->|공고 검토 요청| REVIEW[JobReview]
+    REVIEW -->|계속 읽기| REASON
+    REVIEW -->|완료| SELECT
+    REVIEW -->|자료 부족 또는 잘못된 대상| SELECT
+    EXECUTION -->|작업 종료| END[종료]
 ```
 
 - `Loading Wait`: 저해상도 OpenCV 프레임을 메모리에서 비교해 화면 변화 시작, 렌더링 안정화와 회색 저정보 화면 해소를 기다립니다. 변화 뒤 일정 시간 추가 움직임이 없는 화면만 준비 완료로 판정하고 최종 화면만 파일로 저장합니다.
 - `OCR`: `OcrEngine`이 `PaddleOcr` 문자 검출과 `OmniParser` 아이콘 검출 결과를 합쳐 마커를 만듭니다. Paddle 작업자는 작업 동안 재사용합니다.
 - `pHash`: 저장된 전체 화면·ROI 서명과 현재 화면을 비교해 카드 큐 복귀, Reflex 대상과 행동 직전 마커 동일성을 검증합니다.
 - `Job Card Queue`: 검색 결과에서 LLM이 한 번 고른 공고 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
-- `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 작업자는 URL, OCR 원문과 화면 근거만 `JobCapture`로 반환합니다. 조사 그래프의 후처리 노드가 수집 종료 후 한 번 구조화하며 검색 목록의 카드 메타데이터는 사실 근거로 사용하지 않습니다.
+- `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 물리 도구는 읽은 필드나 완료 여부를 보고하지 않습니다.
+- `JobReview`: 작업자 그래프가 누적 OCR, 현재 URL과 마지막 화면 전환을 `JobDraft`로 검토합니다. `needs_more`는 같은 상세를 계속 읽고, `complete`만 `JobCapture`와 `CollectedJob`을 만들며, `source_incomplete`와 `invalid_target`은 현재 카드를 제외합니다. 검색 목록의 카드 메타데이터는 사실 근거로 사용하지 않습니다.
 - `Reflex Runtime`: `site + task_category`로 활성 레시피 후보를 조회하고 URL 범위, ROI pHash와 현재 마커 좌표비율이 맞는 경로만 재생합니다. `page_role`은 실행 기록과 도착 화면 설명에 사용합니다.
 - `Reasoning`: 큐, 상세 정책, Reflex로 고정할 수 없는 현재 화면의 의미 판단만 수행합니다.
 - `Execution`: `click_marker`, `type_in_marker`, `scroll`, `press_key`, `go_back`을 물리 입력으로 실행합니다.
@@ -87,7 +93,8 @@ flowchart TD
 | 실행 계약 | `agent/observability/run_contracts.py`, `run_context.py`, `run_registry.py` | 실행 식별자, 진행 이벤트, 시간·토큰 계측 |
 | 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py`, `conversation_context_service.py` | 실행 계측·응답 변환과 그래프가 호출하는 DB·대화 어댑터 |
 | 수집 요청 | `agent/application/collection_request_builder.py` | 사이트 프로필 선택, 확정된 수집 의도로 작업자 목표 생성 |
-| 수집 후처리 | `agent/application/collection_postprocessing.py` | `JobCapture`를 `CollectedJob`으로 구조화하고 필수 필드·날짜 조건 판정 |
+| 공고 검토 | `agent/application/job_review_service.py`, `agent/graph/worker_review.py` | 누적 OCR을 구조화하고 필수 필드·날짜 조건을 판정해 작업자 그래프 분기 |
+| 수집 후처리 | `agent/application/collection_postprocessing.py` | 작업자가 검토한 `CollectedJob`과 제외 사유를 조사 그래프로 전달 |
 | 공고 저장 | `agent/application/collection_storage.py` | 후처리된 공고 UPSERT와 검색 사전 연결 결과 기록 |
 | 경험 기록 | `agent/application/collection_experience.py` | 작업자 제출물 저장과 레시피 후보 등록 |
 | 구성·수명주기 | `agent/bootstrap.py` | 체크포인터·서비스·그래프·비전 런타임·승격 작업자의 생성과 종료 |
@@ -129,7 +136,7 @@ flowchart TD
 - `ApplicationRuntime`이 구체 서비스와 장기 실행 자원을 생성합니다.
 - `build_investigation_workflow()`는 준비된 수집 함수, 모델 묶음, 검색 사전 서비스와 체크포인터 `saver`를 조사 노드에 주입합니다. DB 경로가 필요한 근거 조회와 문서 로드는 이 구성 루트에서 결합합니다.
 - 조사 노드는 구성 루트에서 주입한 함수와 서비스만 호출합니다. `agent/graph`는 `agent/application`을 import하지 않으며 DB 경로, 서비스 생성과 저장 구현을 알지 못합니다.
-- 상세 추출은 `JobPosting`을 한 번 생성하고 화면 근거는 `JobCollectionEvidence`에 분리합니다. 작업 상태와 저장 서비스는 `CollectedJob`을 그대로 전달하며, SQLite의 목록 JSON 직렬화와 역직렬화는 `shared/db/database.py`만 담당합니다.
+- 상세 추출은 작업자 그래프의 `JobReview`에서 `JobPosting`을 한 번 생성하고 화면 근거는 `JobCollectionEvidence`에 분리합니다. 이후 조사 상태와 저장 서비스는 `CollectedJob`을 그대로 전달하며, SQLite의 목록 JSON 직렬화와 역직렬화는 `shared/db/database.py`만 담당합니다.
 - `VisionWorkerRuntime`은 컴파일된 작업자 그래프를 캐시합니다. `WorkerExecutionService`가 실행할 때 LangGraph `context`에 `WorkerDependencies(vision=...)`를 전달합니다.
 - 캡처, OCR, 추론과 실행 노드는 `Runtime[WorkerDependencies]`에서 비전 의존성을 받습니다. 전역 변수나 `ContextVar`로 현재 작업자를 조회하지 않습니다.
 - 그래프 클래스는 노드 순서, 조건부 분기, 상태 병합과 중단·재개를 담당합니다. 서비스 생성, 프로세스 종료, DB 연결 종료와 백그라운드 작업자 수명주기는 애플리케이션 계층이 담당합니다.

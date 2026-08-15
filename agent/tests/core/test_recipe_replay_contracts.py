@@ -1,6 +1,5 @@
 from PIL import Image, ImageDraw
 
-from agent.application.experience_rule_resolver import resolve_rule_targets
 from agent.recipe.replay import ReflexReplayContext, ReplayInputs, select_reflex_replay
 from agent.recipe.replay_runtime import (
     replay_session_after_transition,
@@ -11,10 +10,8 @@ from shared.schema.experience_rule_schema import (
     ExpectedEffect,
     ExperienceRule,
     ExperienceRuleStep,
-    InteractionRegionHandle,
     ReplaySession,
     RuleAction,
-    RuleApplication,
     RuleScreen,
     RuleTarget,
 )
@@ -79,14 +76,19 @@ def _marker(marker_id=7, text="검색"):
     }
 
 
-def _context(marker, *, url="https://example.com/search"):
+def _context(
+    marker=None,
+    *,
+    url="https://example.com/search",
+    page_role="search",
+):
     return ReflexReplayContext(
-        markers=[marker],
+        markers=[marker] if marker is not None else [],
         inputs=ReplayInputs(),
         task_category="검색",
         site="wanted",
         current_image_path="screen.png",
-        current_page_role="search",
+        current_page_role=page_role,
         current_url=url,
         current_url_template="example.com/search",
         observation_id="observation:1",
@@ -110,104 +112,61 @@ def _state():
     )
 
 
-def test_exact_roi_and_marker_match_skips_semantic_resolver(monkeypatch):
+def test_roi_match_replays_saved_coordinate_without_ocr_markers(monkeypatch):
     monkeypatch.setattr(
         "agent.recipe.replay.roi_signature_match",
         lambda *_args, **_kwargs: {"matched": True, "mode": "roi_phash"},
     )
 
-    def resolver(*_args):
-        raise AssertionError("정확히 일치한 대상은 모델에 다시 물으면 안 됩니다.")
-
     selection, _log = select_reflex_replay(
         _state(),
-        _context(_marker()),
-        lambda _action: [],
-        resolver,
+        _context(page_role=""),
     )
 
     assert selection is not None
-    assert selection.resolution_mode == "exact"
-    assert selection.tool_calls[0]["args"]["marker_id"] == 7
+    assert selection.resolution_mode == "saved_coordinate"
+    assert selection.tool_calls[0]["args"]["marker_id"] == 0
+    assert selection.markers == [
+        {
+            "id": 0,
+            "bbox": [700, 80, 900, 160],
+            "text": "검색",
+            "type": "text",
+        }
+    ]
 
 
-def test_ocr_text_change_uses_semantic_resolver_once(monkeypatch):
+def test_roi_phash_mismatch_falls_back_to_full_perception(monkeypatch):
     monkeypatch.setattr(
         "agent.recipe.replay.roi_signature_match",
-        lambda *_args, **_kwargs: {"matched": False, "reason": "roi_phash_distance"},
+        lambda *_args, **_kwargs: {
+            "matched": False,
+            "reason": "roi_phash_distance",
+        },
     )
-    calls = []
 
-    def resolver(_step, _markers, _image_path):
-        calls.append(1)
-        return RuleApplication(
-            decision="apply",
-            reason="같은 검색 패널의 버튼",
-            target_bindings=[{"source_action_seq": 3, "marker_id": 9}],
-        )
-
-    selection, _log = select_reflex_replay(
+    selection, log = select_reflex_replay(
         _state(),
-        _context(_marker(9, "돋보기")),
-        lambda _action: [],
-        resolver,
+        _context(),
     )
 
-    assert selection is not None
-    assert selection.resolution_mode == "semantic"
-    assert len(calls) == 1
-    assert selection.tool_calls[0]["args"]["marker_id"] == 9
+    assert selection is None
+    assert log.last_reason == "roi_phash_distance"
 
 
-def test_wrong_url_rejects_rule_without_model_call(monkeypatch):
+def test_wrong_url_rejects_rule_before_roi_comparison(monkeypatch):
     monkeypatch.setattr(
         "agent.recipe.replay.roi_signature_match",
         lambda *_args, **_kwargs: {"matched": True},
     )
 
-    def resolver(*_args):
-        raise AssertionError("URL 범위가 다르면 의미 판단을 호출하면 안 됩니다.")
-
     selection, log = select_reflex_replay(
         _state(),
-        _context(_marker(), url="https://example.com/login"),
-        lambda _action: [],
-        resolver,
+        _context(url="https://example.com/login"),
     )
 
     assert selection is None
     assert log.last_reason == "url_scope_mismatch"
-
-
-def test_resolver_accepts_only_current_allowed_marker_ids():
-    step = _rule().steps[0]
-    application = resolve_rule_targets(
-        step,
-        [_marker(4)],
-        "missing.png",
-        resolver=lambda _payload: {
-            "decision": "apply",
-            "reason": "검색 버튼",
-            "target_bindings": [{"source_action_seq": 3, "marker_id": 4}],
-        },
-    )
-    assert application.target_bindings[0].marker_id == 4
-
-    try:
-        resolve_rule_targets(
-            step,
-            [_marker(4)],
-            "missing.png",
-            resolver=lambda _payload: {
-                "decision": "apply",
-                "reason": "허용되지 않은 ID",
-                "target_bindings": [{"source_action_seq": 3, "marker_id": 99}],
-            },
-        )
-    except ValueError as exc:
-        assert "allowed_markers" in str(exc)
-    else:
-        raise AssertionError("현재 화면에 없는 마커 ID를 허용했습니다.")
 
 
 def test_target_region_effect_ignores_changes_outside_region(tmp_path):
@@ -265,7 +224,11 @@ def test_successful_rule_step_advances_session():
     assert advanced.pending_step_index is None
 
 
-def test_scroll_step_reuses_session_interaction_point_without_ocr_target():
+def test_scroll_step_uses_its_saved_roi_and_coordinate(monkeypatch):
+    monkeypatch.setattr(
+        "agent.recipe.replay.roi_signature_match",
+        lambda *_args, **_kwargs: {"matched": True, "mode": "roi_phash"},
+    )
     base = _rule()
     scroll_target = RuleTarget(
         description="오른쪽 상세 패널",
@@ -306,20 +269,11 @@ def test_scroll_step_reuses_session_interaction_point_without_ocr_target():
         ),
     )
     rule = base.model_copy(update={"steps": [base.steps[0], step]})
-    key = "job_detail_panel|detail_panel|오른쪽 상세 패널"
     session = ReplaySession(
         recipe_key="experience-rule10#scroll",
         current_step_index=1,
         pending_step_index=None,
         step_count=2,
-        interaction_handles={
-            key: InteractionRegionHandle(
-                marker_id=8,
-                center_ratio=[0.8, 0.5],
-                bbox_ratio=[0.79, 0.49, 0.81, 0.51],
-                effect_region_ratio=[0.55, 0.05, 1.0, 0.95],
-            )
-        },
     )
     context = _context(_marker())
     context = ReflexReplayContext(
@@ -331,18 +285,10 @@ def test_scroll_step_reuses_session_interaction_point_without_ocr_target():
         }
     )
 
-    def unexpected(*_args):
-        raise AssertionError("저장된 물리 지점은 OCR이나 모델로 다시 찾으면 안 됩니다.")
-
-    selection, _log = select_reflex_replay(
-        _state(),
-        context,
-        unexpected,
-        unexpected,
-    )
+    selection, _log = select_reflex_replay(_state(), context)
 
     assert selection is not None
     assert selection.tool_calls[0]["name"] == "scroll"
     assert selection.tool_call_traces[next(iter(selection.tool_call_traces))][
         "match_mode"
-    ] == "session_interaction_point"
+    ] == "saved_target_coordinate"

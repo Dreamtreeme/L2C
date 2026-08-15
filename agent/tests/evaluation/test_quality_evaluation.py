@@ -198,6 +198,29 @@ def test_fixed_target_failure_reaches_e2e_observability():
     assert observability["terminal_failure_code"] == "quality_not_passed"
 
 
+def test_observability_counts_current_vision_reasoning_tiers():
+    observability = build_e2e_observability(
+        {
+            "status": "completed",
+            "quality": {"passed": True},
+            "result": {},
+            "metrics": {
+                "llm": {
+                    "calls": [
+                        {"component": "vision_reasoning_lightweight"},
+                        {"component": "vision_reasoning_primary"},
+                        {"component": "job_card_selection"},
+                        {"component": "detail_review"},
+                    ]
+                }
+            },
+        }
+    )
+
+    assert observability["llm_call_count"] == 4
+    assert observability["reasoning_call_count"] == 2
+
+
 @pytest.mark.parametrize(
     ("summary", "judged_jobs", "automatic", "manual", "outcome"),
     [

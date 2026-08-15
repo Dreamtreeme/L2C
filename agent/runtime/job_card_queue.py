@@ -49,22 +49,6 @@ def job_card_is_known(card: dict, known_cards: list[dict]) -> bool:
     return False
 
 
-def _queue_limit(
-    state: WorkerState,
-    queue: list[dict],
-    card_count: int,
-) -> int:
-    target_count = target_count_from_state(state)
-    if target_count <= 0:
-        return card_count
-    collection = state["collection"]
-    resolved_count = max(
-        len(collection.get("job_captures", [])),
-        resolved_job_card_count(queue),
-    )
-    return max(0, target_count - resolved_count)
-
-
 def _normalized_job_card(
     raw: dict[str, Any],
     markers: list[ScreenMarker],
@@ -107,7 +91,7 @@ def normalize_job_card_queue(
         if isinstance(item, dict) and str(item.get("status") or "") != "pending"
     ]
     observation_id = str(observation.get("observation_id") or "")
-    for raw in cards[: _queue_limit(state, queue, len(cards))]:
+    for raw in cards:
         card = _normalized_job_card(raw, markers, queue, observation_id)
         if card is None:
             continue
@@ -196,10 +180,17 @@ def needs_job_results_navigation(state: WorkerState) -> bool:
     outcome = str(transition.get("outcome") or transition.get("reason") or "")
     observation = state["observation"]
     current_url = str(observation.get("current_url") or "")
+    last_review = state["collection"].get("last_job_review")
+    rejected_detail = bool(
+        last_review
+        and last_review.status.value in {"source_incomplete", "invalid_target"}
+        and str(last_review.url).split("#", 1)[0]
+        == current_url.split("#", 1)[0]
+    )
     detail_completed = any(
         capture.url == current_url
         for capture in state["collection"].get("job_captures", [])
-    ) or outcome == "existing_job_detail"
+    ) or outcome == "existing_job_detail" or rejected_detail
     navigation_continuing = (
         source == "job_results_navigation"
         and action in {"go_back", "close_current_tab"}
@@ -313,6 +304,33 @@ def skip_active_job_card(
             item.update({"status": "skipped", "skip_reason": reason, "detail_url": url})
             if job_id is not None:
                 item["job_id"] = int(job_id)
+        updated.append(item)
+    return updated
+
+
+def reject_active_job_card(
+    queue: list[dict],
+    *,
+    reason: str,
+    url: str,
+) -> list[dict]:
+    """검토를 통과하지 못한 현재 카드만 제외하고 다음 후보를 남긴다."""
+
+    active_card = active_job_card(queue)
+    if not active_card:
+        return queue
+    active_id = str(active_card.get("queue_id") or "")
+    updated = []
+    for raw in queue or []:
+        item = dict(raw)
+        if active_id and str(item.get("queue_id") or "") == active_id:
+            item.update(
+                {
+                    "status": "rejected",
+                    "rejection_reason": reason,
+                    "detail_url": url,
+                }
+            )
         updated.append(item)
     return updated
 
@@ -447,6 +465,7 @@ __all__ = [
     "job_card_marker_for_item",
     "job_card_match_text",
     "next_job_card_request",
+    "reject_active_job_card",
     "job_card_click_matches_queue",
     "job_card_entries_from_args",
     "skip_active_job_card",

@@ -17,7 +17,7 @@ from agent.application.duplicate_job_service import (
     existing_job_url_trace,
     mark_existing_job_cards,
 )
-from agent.application.experience_rule_resolver import resolve_rule_targets
+from agent.application.job_review_service import review_job_draft
 from agent.application.collection_request_builder import build_site_goal
 from agent.config import get_settings
 from agent.observability.graph_events import forward_graph_event
@@ -71,6 +71,7 @@ def build_worker_data_services(db_path: str | Path) -> WorkerDataServices:
         find_existing_job_url=partial(existing_job_url_trace, db_path=db_path),
         load_experience_rules=rule_store.get_site_rules,
         record_recipe_replay=rule_store.record_replay_result,
+        review_job_draft=review_job_draft,
     )
 
 
@@ -90,10 +91,7 @@ def _resolve_collection_intent(
     )
     return resolved.model_copy(
         update={
-            "required_fields": required_job_fields(
-                resolved,
-                profile_fields=site_profile.collection_policy.required_fields,
-            )
+            "required_fields": required_job_fields(resolved)
         }
     )
 
@@ -140,6 +138,29 @@ def _build_collection_batch(
     hit_recursion_limit: bool,
 ) -> CollectionBatch:
     captures = list(state["collection"].get("job_captures", []))
+    collected_jobs = list(state["collection"].get("collected_jobs", []))
+    rejected_items = [
+        {
+            "index": index,
+            "url": review.url,
+            "issues": [
+                review.status.value,
+                *review.issues,
+                *(
+                    [
+                        "missing_fields:"
+                        + ",".join(field.value for field in review.missing_fields)
+                    ]
+                    if review.missing_fields
+                    else []
+                ),
+            ],
+        }
+        for index, review in enumerate(
+            state["collection"].get("job_reviews", [])
+        )
+        if review.status.value in {"source_incomplete", "invalid_target"}
+    ]
     is_finished = bool(state["lifecycle"].get("is_finished", False))
     run_status = "stopped"
     if hit_recursion_limit:
@@ -155,14 +176,14 @@ def _build_collection_batch(
         run_id=run_id,
         goal=state["request"].get("goal", "") or "",
         run_status=run_status,
-        collected_count=len(captures),
+        collected_count=len(collected_jobs),
         observed_job_ids=observed_job_ids,
         persisted_count=0,
         action_events=action_events,
         collection_intent=collection_intent,
         extracted_summary={
-            "has_data": bool(captures),
-            "job_count": len(captures),
+            "has_data": bool(collected_jobs),
+            "job_count": len(collected_jobs),
             "observed_job_count": len(observed_job_ids),
             "current_url": state["observation"].get("current_url", "") or "",
             "action_count": len(action_events),
@@ -174,6 +195,8 @@ def _build_collection_batch(
     return CollectionBatch(
         submission=submission,
         job_captures=captures,
+        collected_jobs=collected_jobs,
+        rejected_items=rejected_items,
         site_name=site_profile.display_name,
     )
 
@@ -315,7 +338,6 @@ def run_graph_with_last_state(
             context=WorkerDependencies(
                 vision=worker_runtime,
                 data=data_services,
-                resolve_experience_rule=resolve_rule_targets,
             ),
             stream_mode=["values", "custom"],
         ):

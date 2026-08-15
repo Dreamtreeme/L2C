@@ -10,13 +10,7 @@ def reflex_selection_observation(result: dict[str, Any]) -> dict[str, Any]:
 
     trace = dict((result.get("replay") or {}).get("reflex_trace") or {})
     recipe_key = str(trace.get("recipe_key") or "")
-    resolver_calls = _optional_int(trace.get("resolver_reasoning_call_count")) or 0
     if not recipe_key:
-        if not trace.get("hit") and resolver_calls:
-            return {
-                "reflex_resolver_reasoning_call_count": resolver_calls,
-                "reflex_reasoning_call_reduction": -resolver_calls,
-            }
         return {}
 
     step_index = _optional_int(trace.get("recipe_step_index"))
@@ -39,8 +33,6 @@ def reflex_selection_observation(result: dict[str, Any]) -> dict[str, Any]:
             reflex_path_event="failed",
             reflex_path_failure_reason=str(trace.get("reason") or "match_failed"),
             reflex_fallback_required=True,
-            reflex_resolver_reasoning_call_count=resolver_calls,
-            reflex_reasoning_call_reduction=-resolver_calls,
         )
         return observation
     return {}
@@ -60,9 +52,6 @@ def reflex_step_observation(result: dict[str, Any]) -> dict[str, Any]:
 
     status = str(transition.get("status") or "")
     source_calls = _optional_int(transition.get("source_reasoning_call_count")) or 0
-    resolver_calls = (
-        _optional_int(transition.get("resolver_reasoning_call_count")) or 0
-    )
     succeeded = status == "ready"
     terminal = status in {"ready", "unknown"}
     step_index = _optional_int(transition.get("recipe_step_index"))
@@ -78,10 +67,7 @@ def reflex_step_observation(result: dict[str, Any]) -> dict[str, Any]:
             reflex_source_reasoning_replaced_count=(
                 source_calls if succeeded else 0
             ),
-            reflex_resolver_reasoning_call_count=resolver_calls,
-            reflex_reasoning_call_reduction=(
-                source_calls - resolver_calls if succeeded else -resolver_calls
-            ),
+            reflex_reasoning_call_reduction=(source_calls if succeeded else 0),
         )
     if status == "unknown":
         observation.update(
@@ -136,10 +122,6 @@ def summarize_reflex_paths(steps: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "reflex_source_reasoning_replaced_count": sum(
             int(item.get("reflex_source_reasoning_replaced_count") or 0)
-            for item in steps
-        ),
-        "reflex_resolver_reasoning_call_count": sum(
-            int(item.get("reflex_resolver_reasoning_call_count") or 0)
             for item in steps
         ),
         "reflex_reasoning_call_reduction": sum(

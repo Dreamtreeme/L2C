@@ -1,4 +1,4 @@
-def test_site_registry_loads_supported_profiles_with_required_contracts():
+def test_site_registry_loads_supported_navigation_profiles():
     from agent.sites import list_supported_sites, load_site_profile
 
     profiles = list_supported_sites()
@@ -7,7 +7,6 @@ def test_site_registry_loads_supported_profiles_with_required_contracts():
     assert {"wanted", "jobkorea", "saramin", "worknet", "rocketpunch"}.issubset(slugs)
     for profile in profiles:
         loaded = load_site_profile(profile.slug)
-        assert loaded.collection_policy.required_fields, profile.slug
         for role in ("home", "search", "job_detail"):
             assert loaded.page_guidance[role].instructions, (profile.slug, role)
         assert loaded.page_guidance["job_detail"].reading_targets, profile.slug
@@ -304,8 +303,6 @@ def test_worker_receives_structured_collection_intent():
         "url",
         "main_tasks",
         "requirements",
-        "preferred",
-        "benefits",
         "posted_at",
     ]
     assert "required_record_shape" in state["request"]["goal"]

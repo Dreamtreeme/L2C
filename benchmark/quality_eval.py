@@ -156,38 +156,22 @@ def _required_fields_for_payload(
     return resolved or list(REQUIRED_FIELDS)
 
 
-def _unavailable_fields(raw_record: dict[str, Any]) -> set[str]:
-    if raw_record.get("_collection_page_exhausted") is not True:
-        return set()
-    return set(
-        normalize_job_collection_fields(
-            raw_record.get("_collection_unavailable_fields")
-        )
-    )
-
-
 def _record_coverage(
-    raw_records: list[dict[str, Any]],
     records: list[dict[str, Any]],
     required_fields: list[str],
 ) -> dict[str, Any]:
     valid_count = 0
     required_present = 0
-    unavailable_required = 0
     content_present = 0
     urls: list[str] = []
-    for raw_record, record in zip(raw_records, records, strict=True):
+    for record in records:
         try:
             JobPosting.model_validate(record)
             valid_count += 1
         except ValidationError:
             pass
-        unavailable = _unavailable_fields(raw_record)
         for field in required_fields:
-            present = _is_present(record.get(field))
-            declared_unavailable = field in unavailable
-            required_present += int(present or declared_unavailable)
-            unavailable_required += int(not present and declared_unavailable)
+            required_present += int(_is_present(record.get(field)))
         content_present += sum(
             _is_present(record.get(field)) for field in CONTENT_FIELDS
         )
@@ -201,7 +185,6 @@ def _record_coverage(
     return {
         "record_count": count,
         "required_fields": required_fields,
-        "unavailable_required_field_count": unavailable_required,
         "schema_valid_rate": round(valid_count / count, 6) if count else 0.0,
         "required_field_coverage": (
             round(required_present / required_slots, 6) if required_slots else 0.0
@@ -271,7 +254,6 @@ def evaluate_job_records(
     raw_actual_records = extract_job_records(actual)
     actual_records = [normalize_job_record(item) for item in raw_actual_records]
     result = _record_coverage(
-        raw_actual_records,
         actual_records,
         _required_fields_for_payload(actual, required_fields),
     )

@@ -183,7 +183,6 @@ screen_checkpoint + physical_action
 경험 재생의 추론 지표는 다음 의미로 고정한다.
 
 - `reflex_source_reasoning_replaced_count`: 성공한 재생 단계가 대체한 자율탐색 판단 수
-- `reflex_resolver_reasoning_call_count`: 경험 규칙을 현재 화면에 적용하기 위해 실제 호출한 의미 해석기 수
 - `reflex_reasoning_call_reduction`: 앞의 두 값의 차이. 음수는 재생이 추론 호출을 늘렸다는 뜻이다.
 
 ## 테스트 이름

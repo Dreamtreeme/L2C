@@ -454,31 +454,3 @@ class PerceptionEngine:
             "marked_image": str(marked_path),
             "content_top": crop_top,
         }
-
-    def detect_target_roi(
-        self,
-        image_path: Path,
-        crop_rect_ratio: list[float],
-        marker_type: str,
-    ) -> list[dict[str, Any]]:
-        """경험 행동의 작은 ROI를 원본 해상도로 다시 인식한다."""
-
-        elements = self.ocr_engine.detect_region(
-            image_path,
-            crop_rect_ratio,
-            marker_type,
-        )
-        return [
-            {
-                "id": marker_id,
-                "text": str(element.get("text") or ""),
-                "bbox": [int(round(value)) for value in element["bbox"]],
-                "type": str(element.get("type") or marker_type),
-                **(
-                    {"conf": float(element["conf"])}
-                    if element.get("conf") is not None
-                    else {}
-                ),
-            }
-            for marker_id, element in enumerate(elements)
-        ]

@@ -14,7 +14,7 @@ from agent.runtime.tool_schema import (
 from agent.runtime.worker_actions import is_supported_recipe_tool_group
 from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
 from shared.schema.collection_intent import CollectionIntent
-from shared.schema.jd_schema import JobCapture
+from shared.schema.jd_schema import CollectedJob, JobCapture, JobDraft, JobReview
 from shared.schema.feedback_schema import ExecutionEvent
 from shared.schema.execution_record_schema import (
     ObservedAction,
@@ -91,12 +91,6 @@ class ActionRequest(BaseModel):
                 )
             validated = schema.model_validate(call.args)
             normalized_args = validated.model_dump(exclude_none=True)
-            for empty_collection_field in (
-                "observed_fields",
-                "unavailable_fields",
-            ):
-                if not normalized_args.get(empty_collection_field):
-                    normalized_args.pop(empty_collection_field, None)
             call.args = normalized_args
         if len(self.tool_calls) > 1:
             action_names = [call.name for call in self.tool_calls]
@@ -453,7 +447,6 @@ class TransitionRequest(TypedDict):
     recipe_step_index: NotRequired[int]
     recipe_step_count: NotRequired[int]
     source_reasoning_call_count: NotRequired[int]
-    resolver_reasoning_call_count: NotRequired[int]
     after_state_match: NotRequired[dict[str, Any]]
     execution_failed: NotRequired[bool]
 
@@ -479,7 +472,6 @@ class TransitionResult(TypedDict, total=False):
     recipe_step_index: int
     recipe_step_count: int
     source_reasoning_call_count: int
-    resolver_reasoning_call_count: int
     after_state_match: dict[str, Any]
     execution_failed: bool
     status: str
@@ -549,10 +541,13 @@ class JobCollectionState(TypedDict):
     """공고 목록 선택, 상세 판독과 결과 누적 상태."""
 
     job_captures: list[JobCapture]
+    collected_jobs: list[CollectedJob]
     job_card_queue: list[dict[str, Any]]
     job_results_availability: dict[str, Any]
     job_detail_buffer: JobDetailBuffer
-    job_detail_coverage: dict[str, Any]
+    pending_job_draft: JobDraft | None
+    last_job_review: JobReview | None
+    job_reviews: list[JobReview]
 
 
 class WorkerLifecycleState(TypedDict):
@@ -608,10 +603,13 @@ class RecipeReplayPatch(TypedDict, total=False):
 
 class JobCollectionPatch(TypedDict, total=False):
     job_captures: list[JobCapture]
+    collected_jobs: list[CollectedJob]
     job_card_queue: list[dict[str, Any]]
     job_results_availability: dict[str, Any]
     job_detail_buffer: JobDetailBuffer
-    job_detail_coverage: dict[str, Any]
+    pending_job_draft: JobDraft | None
+    last_job_review: JobReview | None
+    job_reviews: list[JobReview]
 
 
 class WorkerLifecyclePatch(TypedDict, total=False):
@@ -752,10 +750,13 @@ def create_worker_state(
         },
         "collection": {
             "job_captures": [],
+            "collected_jobs": [],
             "job_card_queue": [],
             "job_results_availability": {},
             "job_detail_buffer": {},
-            "job_detail_coverage": {},
+            "pending_job_draft": None,
+            "last_job_review": None,
+            "job_reviews": [],
         },
         "lifecycle": {"is_finished": False},
     }

@@ -120,13 +120,6 @@ def set_transition_request(
         transition_request["source_reasoning_call_count"] = (
             source_reasoning_call_count
         )
-    resolver_reasoning_call_count = request_metadata.get(
-        "resolver_reasoning_call_count"
-    )
-    if isinstance(resolver_reasoning_call_count, int):
-        transition_request["resolver_reasoning_call_count"] = (
-            resolver_reasoning_call_count
-        )
     state["transition"]["transition_request"] = transition_request
 
 

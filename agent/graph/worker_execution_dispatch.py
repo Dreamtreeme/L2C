@@ -8,19 +8,13 @@ from typing import Any, Callable
 from agent.runtime.worker_contracts import WorkerState, WorkerStateUpdate
 from agent.runtime.worker_data_services import WorkerDataServices
 from agent.runtime.detail_runtime import detail_buffer_text, detail_evidence_screenshot
-from agent.runtime.job_capture import store_job_capture
-from agent.runtime.job_field_contract import (
-    detail_coverage_status,
-    merge_job_detail_coverage,
-    required_fields_from_state,
-)
 from agent.runtime.job_identity import source_card_key
 from agent.runtime.job_card_queue import (
     active_job_card,
     job_detail_key_from_state,
     normalize_job_card_queue,
 )
-from shared.schema.jd_schema import JobCapture, JobCollectionEvidence
+from shared.schema.jd_schema import JobDraft, JobReviewStatus
 
 
 def _empty_state_update() -> WorkerStateUpdate:
@@ -92,77 +86,82 @@ def _active_source_card_key(
     return source_card_key(current_url, company, title)
 
 
-def _empty_detail_outcome(
-    current_captures: list[JobCapture],
-) -> StateActionOutcome:
+def _empty_detail_outcome() -> StateActionOutcome:
     return StateActionOutcome(
         result={
-            "action": "finish_detail_reading",
+            "action": "review_job_detail",
             "status": "skipped",
-            "result": "No accumulated detail OCR text to extract.",
+            "result": "No accumulated detail OCR text to review.",
             "reason": "empty_job_detail_buffer",
         },
-        state_update={
-            "collection": {
-                "job_detail_buffer": {},
-                "job_detail_coverage": {},
-            }
-        },
+        state_update={},
     )
 
 
-def _prepare_job_capture(
+def _prepare_job_draft(
     state: WorkerState,
-    coverage_status: dict[str, Any],
-    required_fields: list[str],
     *,
     current_url: str,
     raw_ocr_text: str,
-) -> JobCapture:
+) -> JobDraft:
     buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
-    return JobCapture(
+    stats = dict(buffer.get("stats") or {})
+    transition = dict(state["transition"].get("transition_result") or {})
+    return JobDraft(
         url=current_url,
+        detail_key=job_detail_key_from_state(state),
         raw_ocr_text=raw_ocr_text,
-        evidence=JobCollectionEvidence(
-            required_fields=required_fields,
-            unavailable_fields=coverage_status["unavailable_fields"],
-            page_exhausted=bool(coverage_status["page_exhausted"]),
-            field_evidence=dict(coverage_status["field_evidence"]),
-            screenshot_path=detail_evidence_screenshot(buffer),
-            source_card_key=_active_source_card_key(state, current_url),
+        required_fields=state["request"]["collection_intent"].required_fields,
+        screenshot_path=detail_evidence_screenshot(buffer),
+        source_card_key=_active_source_card_key(state, current_url),
+        screen_count=int(str(stats.get("screen_count") or 0)),
+        last_action=str(transition.get("action") or ""),
+        transition_status=str(transition.get("status") or ""),
+        transition_reason=str(
+            transition.get("reason") or transition.get("outcome") or ""
         ),
     )
 
 
-def _merge_completed_detail(
-    current_captures: list[JobCapture],
-    capture: JobCapture,
-) -> StateActionOutcome:
-    merged_captures = store_job_capture(current_captures, capture)
+def _request_job_review(draft: JobDraft) -> StateActionOutcome:
     return StateActionOutcome(
         result={
-            "action": "finish_detail_reading",
+            "action": "review_job_detail",
             "status": "success",
-            "result": (
-                f"Detail OCR buffer captured (total_captures={len(merged_captures)})"
-            ),
-            "incoming_captures": 1,
-            "total_captures": len(merged_captures),
-            "ocr_chars": len(capture.raw_ocr_text),
+            "result": "Accumulated detail OCR queued for review.",
+            "ocr_chars": len(draft.raw_ocr_text),
+            "screen_count": draft.screen_count,
         },
         state_update={
             "collection": {
-                "job_captures": merged_captures,
-                "job_detail_buffer": {},
-                "job_detail_coverage": {},
+                "pending_job_draft": draft,
             }
         },
     )
 
 
-def _finish_detail_reading(
-    args: dict[str, Any],
-    current_captures: list[JobCapture],
+def _unchanged_review_outcome() -> StateActionOutcome:
+    return StateActionOutcome(
+        result={
+            "action": "review_job_detail",
+            "status": "skipped",
+            "reason": "detail_evidence_unchanged",
+            "result": (
+                "직전 검토 이후 상세 OCR 근거가 추가되지 않았습니다. "
+                "본문을 더 읽거나 다른 화면 행동을 수행해야 합니다."
+            ),
+        },
+        state_update={},
+    )
+
+
+def _request_primary_job_review(draft: JobDraft) -> StateActionOutcome:
+    return _request_job_review(
+        draft.model_copy(update={"review_model_tier": "primary"})
+    )
+
+
+def _review_job_detail(
     *,
     current_url: str,
     state: WorkerState,
@@ -171,32 +170,28 @@ def _finish_detail_reading(
         buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
         raw_ocr_text = detail_buffer_text(buffer)
         if not raw_ocr_text:
-            return _empty_detail_outcome(current_captures)
-        coverage = merge_job_detail_coverage(
-            dict(state["collection"].get("job_detail_coverage", {}) or {}),
-            args,
-            state=state,
-            current_url=current_url,
-            detail_key=job_detail_key_from_state(state),
-        )
-        required_fields = required_fields_from_state(state)
-        capture = _prepare_job_capture(
+            return _empty_detail_outcome()
+        draft = _prepare_job_draft(
             state,
-            detail_coverage_status(coverage, required_fields),
-            required_fields,
             current_url=current_url,
             raw_ocr_text=raw_ocr_text,
         )
-        return _merge_completed_detail(
-            current_captures,
-            capture,
-        )
+        last_review = state["collection"].get("last_job_review")
+        if (
+            last_review is not None
+            and last_review.status == JobReviewStatus.NEEDS_MORE
+            and last_review.draft_fingerprint == draft.fingerprint()
+        ):
+            if last_review.model_tier == "lightweight":
+                return _request_primary_job_review(draft)
+            return _unchanged_review_outcome()
+        return _request_job_review(draft)
     except Exception as exc:
         return StateActionOutcome(
             result={
-                "action": "finish_detail_reading",
+                "action": "review_job_detail",
                 "status": "error",
-                "result": f"Failed to extract detail OCR buffer: {exc}",
+                "result": f"Failed to prepare detail review: {exc}",
             },
             state_update={},
         )
@@ -204,7 +199,6 @@ def _finish_detail_reading(
 
 def _set_job_card_queue(
     args: dict[str, Any],
-    current_captures: list[JobCapture],
     *,
     current_url: str,
     state: WorkerState,
@@ -260,7 +254,6 @@ def _set_job_card_queue(
 def dispatch_state_action(
     action_name: str,
     args: dict[str, Any],
-    current_captures: list[JobCapture],
     *,
     current_url: str = "",
     state: WorkerState,
@@ -268,17 +261,14 @@ def dispatch_state_action(
 ) -> StateActionOutcome:
     """공고 추출과 카드 큐처럼 그래프 상태를 변경하는 행동을 실행한다."""
 
-    if action_name == "finish_detail_reading":
-        return _finish_detail_reading(
-            args,
-            current_captures,
+    if action_name == "review_job_detail":
+        return _review_job_detail(
             current_url=current_url,
             state=state,
         )
     if action_name == "set_job_card_queue":
         return _set_job_card_queue(
             args,
-            current_captures,
             current_url=current_url,
             state=state,
             data_services=data_services,

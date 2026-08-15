@@ -8,11 +8,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
 from agent.runtime.worker_data_services import WorkerDataServices
-from agent.runtime.worker_contracts import ScreenMarker
-from shared.schema.experience_rule_schema import (
-    ExperienceRuleStep,
-    RuleApplication,
-)
 
 from agent.utils.logger import logger
 
@@ -237,10 +232,6 @@ class WorkerDependencies:
 
     vision: VisionWorkerRuntime
     data: WorkerDataServices
-    resolve_experience_rule: Callable[
-        [ExperienceRuleStep, list[ScreenMarker], str],
-        RuleApplication,
-    ]
 
 
 __all__ = [

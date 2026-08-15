@@ -3,70 +3,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from shared.schema.jd_schema import JOB_FIELDS, JobField
+from pydantic import BaseModel, ConfigDict, Field
 from shared.schema.skill_schema import RecipeInputName
 
 
-class _DetailObservation(BaseModel):
-    """상세 화면 판단에 이미 사용한 필드 근거를 행동과 함께 보존한다."""
-
-    observed_fields: Dict[str, str] = Field(
-        default_factory=dict,
-        description=(
-            "현재 상세 화면에서 실제로 확인한 공고 필드와 실제 화면 내용. "
-            "섹션 제목이나 '확인됨' 같은 상태 표현은 근거가 아니다. "
-            "상세 화면에서만 채우며 추측한 값은 넣지 않는다. 허용 키: "
-            + ", ".join(JOB_FIELDS)
-        ),
-    )
-
-    @field_validator("observed_fields", mode="before")
-    @classmethod
-    def normalize_observed_field_values(
-        cls,
-        values: Any,
-    ) -> Any:
-        """복수 근거 목록을 도구 계약의 짧은 근거 문자열로 합친다."""
-
-        if values is None:
-            return {}
-        if not isinstance(values, dict):
-            return values
-        normalized: Dict[str, str] = {}
-        for field, value in values.items():
-            items = (
-                value
-                if isinstance(value, (list, tuple, set))
-                else [value]
-            )
-            evidence = "; ".join(
-                str(item).strip()
-                for item in items
-                if str(item).strip()
-            )
-            if evidence:
-                normalized[str(field)] = evidence
-        return normalized
-
-    @field_validator("observed_fields")
-    @classmethod
-    def validate_observed_fields(
-        cls,
-        values: Dict[str, str],
-    ) -> Dict[str, str]:
-        unknown = sorted(set(values) - set(JOB_FIELDS))
-        if unknown:
-            raise ValueError(
-                "지원하지 않는 공고 필드입니다: "
-                + ", ".join(unknown)
-            )
-        return values
-
-
-class click_marker(_DetailObservation):
+class click_marker(BaseModel):
     """화면의 특정 ID 마커를 클릭합니다."""
 
     marker_id: int = Field(..., description="클릭할 마커의 ID")
@@ -119,7 +62,7 @@ class type_in_marker(BaseModel):
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
 
 
-class scroll(_DetailObservation):
+class scroll(BaseModel):
     """화면을 스크롤합니다."""
 
     direction: Literal["down", "up", "left", "right"] = Field(
@@ -191,25 +134,11 @@ class switch_tab(BaseModel):
     risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
 
 
-class finish_detail_reading(_DetailObservation):
-    """누적한 상세 페이지 OCR을 한 번 정제하여 수집 상태에 병합합니다."""
+class review_job_detail(BaseModel):
+    """누적한 상세 OCR이 저장 가능한지 검토하도록 요청합니다."""
 
-    reason: Optional[str] = Field(None, description="상세 페이지 읽기를 종료하는 이유(reason)")
-    unavailable_fields: List[JobField] = Field(
-        default_factory=list,
-        description=(
-            "페이지 전체를 확인했지만 공고가 제공하지 않는 필수 필드. "
-            "page_exhausted=true일 때만 완료 필드로 인정한다."
-        ),
-    )
-    page_exhausted: bool = Field(
-        False,
-        description=(
-            "더 펼칠 본문이나 현재 화면 아래쪽에 남은 공고 내용이 없음을 "
-            "확인했는지 여부. 화면 하단에 섹션 제목만 보이면 false"
-        ),
-    )
-    expected_after: Optional[str] = Field(None, description="정제 후 정상이라면 다음에 기대되는 상태(expected_after)")
+    reason: Optional[str] = Field(None, description="현재 근거를 검토할 이유(reason)")
+    expected_after: Optional[str] = Field(None, description="검토 뒤 기대되는 상태(expected_after)")
     page_role: Optional[str] = Field("job_detail", description="Current page role.")
     risk_level: Optional[str] = Field("safe_read", description="safe_read, safe_navigation, or sensitive.")
 
@@ -274,7 +203,7 @@ ACTION_TOOL_SCHEMAS = {
         press_key,
         open_browser,
         close_current_tab,
-        finish_detail_reading,
+        review_job_detail,
         go_back,
         set_job_card_queue,
         switch_tab,
@@ -287,7 +216,7 @@ DETAIL_ACTION_TOOL_NAMES = (
     "focus_marker",
     "scroll",
     "press_key",
-    "finish_detail_reading",
+    "review_job_detail",
     "go_back",
     "close_current_tab",
     "switch_tab",
@@ -308,7 +237,7 @@ UNKNOWN_ACTION_TOOL_NAMES = (
     *NAVIGATION_ACTION_TOOL_NAMES[:5],
     "open_browser",
     *NAVIGATION_ACTION_TOOL_NAMES[5:],
-    "finish_detail_reading",
+    "review_job_detail",
 )
 
 
@@ -376,7 +305,7 @@ __all__ = [
     "click_marker",
     "close_current_tab",
     "focus_marker",
-    "finish_detail_reading",
+    "review_job_detail",
     "finish_task",
     "go_back",
     "open_browser",

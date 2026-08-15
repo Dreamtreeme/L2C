@@ -11,15 +11,10 @@ from agent.observability.run_context import raise_if_cancelled
 from agent.runtime.detail_runtime import (
     build_detail_lightweight_marked_image,
     build_detail_section_context,
-    detail_context_matches,
     marker_prompt_rank,
     update_job_detail_buffer,
 )
 from agent.runtime.job_card_queue import job_detail_key_from_state
-from agent.runtime.job_field_contract import (
-    detail_coverage_matches,
-    merge_job_detail_coverage,
-)
 from agent.runtime.site_context import is_job_detail_context
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.runtime.worker_contracts import (
@@ -36,6 +31,7 @@ from agent.utils.logger import logger
 from agent.vision.screen_signature import (
     build_capture_context,
     compute_screen_phash_signature,
+    compute_screen_size_signature,
     compute_screen_signature,
 )
 from agent.vision.target_snapshot import is_icon_marker
@@ -166,7 +162,9 @@ def capture_node(
             current_url_stale = True
 
     raw_signature: ScreenSignature = (
-        compute_screen_phash_signature(image_path) if transition_request else {}
+        compute_screen_phash_signature(image_path)
+        if transition_request
+        else compute_screen_size_signature(image_path)
     )
     low_information = bool(capture_quality.get("low_information"))
     low_information_capture_count = (
@@ -288,25 +286,9 @@ def _collect_job_detail_observation(
         page_role=str(observation.get("current_page_role") or ""),
         detail_key=detail_key,
     )
-    detail_coverage = dict(collection.get("job_detail_coverage", {}) or {})
-    if detail_context_matches(
-        detail_buffer, current_url, detail_key
-    ) and not detail_coverage_matches(
-        detail_coverage,
-        current_url,
-        detail_key,
-    ):
-        detail_coverage = merge_job_detail_coverage(
-            {},
-            {},
-            state=state,
-            current_url=current_url,
-            detail_key=detail_key,
-        )
     return {
         "collection": {
             "job_detail_buffer": detail_buffer,
-            "job_detail_coverage": detail_coverage,
         }
     }
 

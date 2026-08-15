@@ -24,8 +24,5 @@
       "navigation_notes": ["새 탭 상세에서 뒤로가기가 화면을 바꾸지 않으면 현재 탭 닫기를 고려한다."]
     }
   },
-  "collection_policy": {
-    "required_fields": ["company_name", "position", "main_tasks", "requirements", "preferred", "location", "employment_type", "url"]
-  },
   "guidance": "잡코리아 채용공고 수집. 현재 화면의 미방문 공고를 직무명과 회사명으로 식별한다. 상세 설명이 메타데이터와 분리되었으면 상세 탭이나 자격요건 영역을 확인하고, 카드 선택과 상세 구역 해석은 현재 화면을 기준으로 판단한다."
 }

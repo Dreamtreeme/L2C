@@ -24,7 +24,7 @@ def _append_recorded_step(steps, state, action_name, args, seq):
 def test_roi_record_and_replay_uses_target_crop(tmp_path):
     from PIL import Image, ImageDraw
 
-    from agent.runtime.target_matching import match_exact_target, roi_signature_match
+    from agent.runtime.target_matching import roi_signature_match
 
     saved = tmp_path / "saved.png"
     current = tmp_path / "current.png"
@@ -97,19 +97,6 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
         str(current),
         current_signature={"size": [200, 200]},
     )
-    marker_id = match_exact_target(
-        steps[0].target.model_dump(mode="json") if steps[0].target else None,
-        [
-            {
-                "id": 7,
-                "bbox": [150, 20, 170, 40],
-                "text": "검색",
-                "type": "text",
-            }
-        ],
-        [200, 200],
-    )
-
     assert (
         build_screen_checkpoint(
             worker_state(
@@ -125,7 +112,6 @@ def test_roi_record_and_replay_uses_target_crop(tmp_path):
     assert "replay_mode" not in steps[0].model_dump()
     assert "replay_mode" not in steps[1].model_dump()
     assert steps[1].slot_refs == ["search_keyword"]
-    assert marker_id == 7
     assert trace["matched"] is True
     assert trace["mode"] == "roi_phash"
 
@@ -149,47 +135,6 @@ def test_roi_replay_rejects_step_without_roi_signature():
     )
 
     assert trace["reason"] == "roi_signature_missing"
-
-
-def test_local_target_match_rejects_merged_neighbor_text():
-    from agent.runtime.target_matching import match_exact_target
-
-    target = {
-        "text": "JOB검색",
-        "marker_type": "text",
-        "bbox_ratio": [0.4, 0.1, 0.6, 0.2],
-        "center_ratio": [0.5, 0.15],
-    }
-    merged = {
-        "id": 1,
-        "bbox": [350, 100, 650, 200],
-        "text": "지역 전체 JOB검색",
-        "type": "text",
-    }
-    exact = {
-        "id": 2,
-        "bbox": [400, 100, 600, 200],
-        "text": "JOB 검색",
-        "type": "text",
-    }
-
-    assert match_exact_target(target, [merged], [1000, 1000]) is None
-    assert match_exact_target(target, [merged, exact], [1000, 1000]) == 2
-    assert (
-        match_exact_target(
-            target,
-            [
-                {
-                    "id": 3,
-                    "bbox": [400, 100, 600, 200],
-                    "text": "icon",
-                    "type": "icon",
-                }
-            ],
-            [1000, 1000],
-        )
-        == 3
-    )
 
 
 def test_trajectory_records_context_actions_without_promoting_them():

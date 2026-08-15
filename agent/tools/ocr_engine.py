@@ -11,7 +11,6 @@ from PIL import Image, ImageDraw, ImageFont
 from agent.tools.omni_parser import OmniParser
 from agent.tools.paddle_ocr import PaddleOcr
 from agent.utils.logger import logger
-from agent.vision.marker_geometry import ratio_rect_to_pixels
 
 
 def _area(box: list[float]) -> float:
@@ -166,52 +165,6 @@ class OcrEngine:
 
     def ensure_ready(self) -> None:
         self.paddle.ensure_ready()
-
-    def detect_region(
-        self,
-        image_path: Path,
-        crop_rect_ratio: list[float],
-        marker_type: str,
-    ) -> list[dict[str, Any]]:
-        """원본 화면의 작은 영역에서 목표 종류에 필요한 검출기만 실행한다."""
-
-        if not image_path.exists():
-            raise FileNotFoundError(f"Image not found at: {image_path}")
-        with Image.open(image_path) as source:
-            image = source.convert("RGB")
-        rect = ratio_rect_to_pixels(crop_rect_ratio, image.size)
-        if rect == [0, 0, 0, 0]:
-            return []
-
-        region = image.crop(tuple(rect))
-        started = time.perf_counter()
-        if marker_type == "text":
-            elements = self.paddle.detect(region)
-            detector = "paddle"
-        elif marker_type == "icon":
-            elements = _detect_local_icons(self.omni, region)
-            detector = "omni"
-        else:
-            return []
-
-        offset_x, offset_y = rect[0], rect[1]
-        for element in elements:
-            x1, y1, x2, y2 = element["bbox"]
-            element["bbox"] = [
-                x1 + offset_x,
-                y1 + offset_y,
-                x2 + offset_x,
-                y2 + offset_y,
-            ]
-        logger.info(
-            "Target ROI detection completed",
-            detector=detector,
-            marker_type=marker_type,
-            crop_rect=rect,
-            detections=len(elements),
-            duration_sec=round(time.perf_counter() - started, 6),
-        )
-        return elements
 
     def process_image(
         self,

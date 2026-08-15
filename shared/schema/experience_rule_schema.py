@@ -20,7 +20,6 @@ EffectKind = Literal[
     "target_region_change",
     "screen_change",
 ]
-RuleApplicationDecision = Literal["apply", "decline"]
 
 
 class RuleActionDraft(BaseModel):
@@ -65,25 +64,6 @@ class ExperienceRuleDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     steps: list[ExperienceRuleStepDraft] = Field(min_length=1)
-
-
-class RuleTargetBinding(BaseModel):
-    """규칙 적용 모델이 현재 화면 마커에 연결한 원본 행동."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    source_action_seq: int
-    marker_id: int
-
-
-class RuleApplication(BaseModel):
-    """현재 캡처에 경험 규칙을 적용하거나 거절한 구조화 판단."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    decision: RuleApplicationDecision
-    reason: str
-    target_bindings: list[RuleTargetBinding] = Field(default_factory=list)
 
 
 class RuleScreen(BaseModel):
@@ -215,9 +195,6 @@ class ReplaySession(BaseModel):
     current_step_index: int = Field(ge=0)
     pending_step_index: int | None = Field(default=None, ge=0)
     step_count: int = Field(gt=0)
-    interaction_handles: dict[str, InteractionRegionHandle] = Field(
-        default_factory=dict
-    )
 
     def pending_is_current(self) -> bool:
         return self.pending_step_index == self.current_step_index
@@ -249,8 +226,6 @@ __all__ = [
     "ResolvedRuleStep",
     "RuleAction",
     "RuleActionDraft",
-    "RuleApplication",
     "RuleScreen",
     "RuleTarget",
-    "RuleTargetBinding",
 ]
