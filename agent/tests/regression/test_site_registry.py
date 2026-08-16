@@ -4,7 +4,14 @@ def test_site_registry_loads_supported_navigation_profiles():
     profiles = list_supported_sites()
     slugs = {profile.slug for profile in profiles}
 
-    assert {"wanted", "jobkorea", "saramin", "worknet", "rocketpunch"}.issubset(slugs)
+    assert {
+        "wanted",
+        "jobkorea",
+        "saramin",
+        "worknet",
+        "rocketpunch",
+        "incruit",
+    }.issubset(slugs)
     for profile in profiles:
         loaded = load_site_profile(profile.slug)
         for role in ("home", "search", "job_detail"):
@@ -21,6 +28,7 @@ def test_official_site_urls_resolve_from_slug_name_and_domain():
         "https://www.saramin.co.kr": "https://www.saramin.co.kr",
         "고용24": "https://www.work24.go.kr",
         "rocketpunch.com": "https://www.rocketpunch.com",
+        "인크루트": "https://job.incruit.com",
     }
 
     for requested_site, official_url in expected.items():

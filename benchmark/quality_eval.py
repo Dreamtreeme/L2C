@@ -167,12 +167,11 @@ def _required_fields_for_payload(
     actual: Any,
     required_fields: list[str] | tuple[str, ...] | None,
 ) -> list[str]:
-    payload_intent = (
-        actual.get("collection_intent")
-        if isinstance(actual, dict)
-        and isinstance(actual.get("collection_intent"), dict)
-        else {}
-    )
+    payload_intent: dict[str, Any] = {}
+    if isinstance(actual, dict):
+        candidate = actual.get("collection_intent")
+        if isinstance(candidate, dict):
+            payload_intent = candidate
     resolved = normalize_job_collection_fields(
         required_fields
         if required_fields is not None
@@ -298,6 +297,7 @@ def evaluate_collection_summary(
 ) -> dict[str, Any]:
     from agent.runtime.site_context import (
         looks_like_job_detail_url,
+        page_guidance_for_url,
         site_profile_for_url,
     )
 
@@ -317,12 +317,22 @@ def evaluate_collection_summary(
     for item in detail_url_items:
         url = str(item.get("url") or "")
         parsed = urlsplit(url)
-        if site_profile_for_url(url):
-            valid_detail_urls += int(looks_like_job_detail_url(url))
-        else:
+        profile = site_profile_for_url(url)
+        valid_web_url = parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+        if profile:
+            detail_guidance = page_guidance_for_url(url, "job_detail")
+            declared_patterns = list(detail_guidance.get("url_patterns") or [])
+            has_visual_evidence = bool(str(item.get("screenshot_path") or "").strip())
             valid_detail_urls += int(
-                parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+                looks_like_job_detail_url(url)
+                or (
+                    not declared_patterns
+                    and valid_web_url
+                    and has_visual_evidence
+                )
             )
+        else:
+            valid_detail_urls += int(valid_web_url)
     source_url_integrity = (
         valid_detail_urls / len(detail_url_items) if detail_url_items else 1.0
     )

@@ -42,6 +42,7 @@ def test_storage_upserts_validated_job_and_preserves_evidence(monkeypatch, tmp_p
 
     assert first.persisted_items[0]["operation"] == "created"
     assert second.persisted_items[0]["operation"] == "updated"
+    assert first.persisted_items[0]["screenshot_path"] == "detail.png"
     assert saved["raw_ocr_text"] == "원문"
     assert saved["screenshot_path"] == "detail.png"
 

@@ -79,6 +79,27 @@ def test_job_quality_uses_canonical_fields_and_detects_duplicate_urls():
     assert result["unique_url_rate"] == 0.5
 
 
+def test_job_quality_preserves_query_identity_and_drops_tracking_values():
+    result = evaluate_job_records(
+        {
+            "jobs": [
+                {
+                    "company_name": "A",
+                    "position": "iOS",
+                    "url": "https://example.com/view?posting=1&src=search",
+                },
+                {
+                    "company_name": "B",
+                    "position": "서버",
+                    "url": "https://example.com/view?src=search&posting=2",
+                },
+            ]
+        }
+    )
+
+    assert result["unique_url_rate"] == 1.0
+
+
 def test_job_quality_uses_exact_reference_identity():
     result = evaluate_job_records(
         [
@@ -199,6 +220,64 @@ def test_fixed_target_failure_reaches_e2e_observability():
     assert observability["e2e_success"] == 0
     assert observability["outcome"] == "partial"
     assert observability["terminal_failure_code"] == "quality_not_passed"
+
+
+def test_registered_visual_site_uses_persisted_screen_evidence(monkeypatch):
+    from agent.runtime import site_context
+
+    monkeypatch.setattr(site_context, "site_profile_for_url", lambda _url: object())
+    monkeypatch.setattr(
+        site_context,
+        "page_guidance_for_url",
+        lambda _url, _role: {"url_patterns": []},
+    )
+    monkeypatch.setattr(site_context, "looks_like_job_detail_url", lambda _url: False)
+    summary = {
+        "target_count": 1,
+        "collected_count": 1,
+        "persisted_count": 1,
+        "resolved_count": 1,
+        "status": "completed",
+        "worker_finished": True,
+        "persisted_items": [
+            {
+                "job_id": 1,
+                "url": "https://example.com/jobs/1",
+                "screenshot_path": "detail.png",
+            }
+        ],
+    }
+
+    quality = evaluate_collection_summary(summary)
+
+    assert quality["source_url_integrity"] == 1.0
+    assert quality["passed"] is True
+
+
+def test_registered_visual_site_rejects_url_without_screen_evidence(monkeypatch):
+    from agent.runtime import site_context
+
+    monkeypatch.setattr(site_context, "site_profile_for_url", lambda _url: object())
+    monkeypatch.setattr(
+        site_context,
+        "page_guidance_for_url",
+        lambda _url, _role: {"url_patterns": []},
+    )
+    monkeypatch.setattr(site_context, "looks_like_job_detail_url", lambda _url: False)
+    summary = {
+        "target_count": 1,
+        "collected_count": 1,
+        "persisted_count": 1,
+        "resolved_count": 1,
+        "status": "completed",
+        "worker_finished": True,
+        "persisted_items": [{"job_id": 1, "url": "https://example.com/jobs/1"}],
+    }
+
+    quality = evaluate_collection_summary(summary)
+
+    assert quality["source_url_integrity"] == 0.0
+    assert quality["passed"] is False
 
 
 def test_observability_counts_current_vision_reasoning_tiers():

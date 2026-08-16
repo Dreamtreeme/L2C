@@ -61,6 +61,7 @@ def _store_job(
             "position": posting.position or "",
             "operation": "updated" if existed else "created",
             "required_fields": [field.value for field in evidence.required_fields],
+            "screenshot_path": evidence.screenshot_path,
         }
     )
 
