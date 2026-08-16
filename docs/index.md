@@ -3,7 +3,7 @@ title: "L2C 문서 인덱스"
 type: hub
 area: documentation
 status: active
-updated: 2026-08-15
+updated: 2026-08-16
 tags:
   - l2c
   - docs/documentation
@@ -18,7 +18,7 @@ tags:
 
 | 문서 | 역할 |
 |---|---|
-| [`README.md`](../README.md) | 프로젝트 목적, 차별점, 검증 결과, 실행 방법 |
+| [`README.md`](../README.md) | 프로젝트 개요, 핵심 흐름, 확인한 범위와 실행 방법 |
 | [`ARCHITECTURE.md`](../ARCHITECTURE.md) | 현재 구현된 시스템 구조 |
 | [제품 데모 및 검증](product_demo.md) | 실제 UI 실행, 재현 시나리오, 검증 수치 |
 | [개발 단계 기록](development_history.md) | Phase별 구현 범위와 축소 과정 |
@@ -38,7 +38,8 @@ tags:
 | 문서 | 상태 | 내용 |
 |---|---|---|
 | [Reflex Recipe 구현 기준](reflex_recipe_plan.md) | 현재 | 후보 저장, Critic 검토, ROI 재생 흐름 |
-| [`troubleshooting.md`](../troubleshooting.md) | 현재 | 실험 과정, 실패 원인과 해결 기록 |
+| [`troubleshooting.md`](../troubleshooting.md) | 현재 | 재발 가능한 장애의 원인, 현재 처리와 검증 경로 |
+| [초기 비전 자동화 실험 기록](history/legacy_vision_experiments.md) | 보관 | 폐기된 로컬 모델, 구버전 OCR과 초기 pHash 실험 |
 
 ## 검색과 사이트
 

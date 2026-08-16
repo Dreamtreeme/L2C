@@ -25,7 +25,7 @@ tags:
 ```text
 자율 탐색 ActionRequest
 -> 직전 ScreenCheckpoint와 실행할 PhysicalAction 묶음을 기록
--> 묶음 실행 뒤 한 번 캡처해 도착 화면과 증거를 붙인 ExperienceTransition 완성
+-> 묶음 실행 뒤 한 번 캡처해 도착 화면과 증거를 붙인 ObservedTransition 완성
 -> worker_submission 저장
 -> recipe_candidate를 recorded로 저장
 -> 사용자 답변 경로는 계속 진행
@@ -42,10 +42,11 @@ tags:
 
 ## Active Recipe 기준
 
-활성 레시피는 한 성공 실행의 `ExperienceTransition` 목록인
-`ExperiencePath` 하나로 저장한다. 각 전이는 `before + actions + after`를
-가지며, 시작 화면과 완료 화면은 첫 전이의 `before`와 마지막 전이의 `after`에서
-계산한다. 각 전이의 첫 행동은 ROI로 다시 찾을 수 있는 클릭/입력이다.
+활성 레시피는 한 성공 실행의 연속 전이를 `ExperienceRule` 하나로 저장한다.
+각 `ExperienceRuleStep`은 `before + actions + expected_effect`를
+가진다. 시작 화면은 첫 단계의 `before`, 완료 조건은 마지막 단계의
+`expected_effect`로 표현한다. 각 단계의 첫 행동은 ROI로 다시 찾을 수 있는
+클릭·입력·대상 스크롤이다.
 입력과 Enter 또는 입력과 화면에 이미 보이는 제출 클릭을 중간 관찰 없이 실행한
 경우에는 두 행동이 처음부터 같은 전이로 기록된다.
 입력 뒤 새 관찰이 필요했던 경우에는 입력 전이를 따로 유지한다. 입력 직후 화면이
@@ -54,11 +55,11 @@ tags:
 
 - `site`: 사이트 식별자.
 - `task_category`: 검색, 로그인, 결제, 사이트 탐색 같은 작업 분류.
-- `page_role`: home, search, job_detail, popup 등 행동 당시의 설명과 기록 완전성 확인에 쓰는 화면 역할. 현재 화면과의 재생 일치 판정에는 사용하지 않는다.
+- `page_role`: home, search, job_detail, popup 등 행동 당시의 화면 역할. URL보다 거친 재생 시작 조건과 기록 완전성 확인에 사용한다.
 - `roi_signature`: target 주변 crop pHash와 crop 비율.
-- `target.center_ratio` 또는 `target.bbox_ratio`: 현재 OCR marker 재탐색용 비율 좌표.
+- `target.center_ratio` 또는 `target.bbox_ratio`: ROI 검증 뒤 현재 화면의 물리 좌표를 복원하는 비율 좌표.
 - `replay_mode`: 실행된 도구와 입력 슬롯 계약에서 `fixed` 또는 `parameterized`로 계산된 행동.
-- `before` / `after`: `ScreenCheckpoint`로 표현한 행동 묶음 전후 화면.
+- `before` / `after`: 원본 `ObservedTransition`에서 `ScreenCheckpoint`로 기록한 행동 묶음 전후 화면. 승격 시 `before`와 `expected_effect`로 컴파일한다.
 - `actions`: 중간 화면 관찰 없이 실행한 행동 묶음. 현재는 단일 클릭·입력, `입력 + Enter`, `입력 + 제출 클릭`을 허용한다.
 - `evidence`: 실행 결과, 전환 상태, OpenCV 변화율과 OCR 문맥을 담은 자율탐색 근거. 활성 경로 저장 시에는 제거한다.
 
@@ -70,27 +71,27 @@ URL·화면 역할이 같고 화면 pHash까지 정확히 같을 때만 경로�
 화면 좌표와 행동 경로 표현은 레시피 키에 넣지 않는다. 같은 목적의 새 성공 경로가
 들어오면 기존 행을 최신 경로로 갱신한다. 경로가 바뀌면 이전 경로의 재생 성공·실패
 횟수와 후보 근거를 초기화해 서로 다른 경로의 성과가 섞이지 않게 한다. 동일한 경로를
-다른 후보가 다시 검증한 경우에만 `recipe_sources`에 근거를 추가한다.
+다른 후보가 다시 검증한 경우에만 `experience_rule_sources`에 근거를 추가한다.
 
 `state_key`, Jaccard anchor 유사도와 코드 기반 화면 역할 분류는 active replay의
 기본 조회 기준이 아니다.
 
-목적 기반 키는 `experience9#` 버전을 사용한다. 조회와 재생은 이 버전의 활성
+목적 기반 키는 `experience-rule10#` 버전을 사용한다. 조회와 재생은 이 버전의 활성
 경로만 대상으로 한다. 후보 테이블도 `contract_version=3`만 검토한다. 이전 경로
 내용 기반 키는 중복된 목적을 보존할 수 있으므로 저장소 초기화 시 삭제한다.
 
 ## Replay 순서
 
-1. `capture`가 안정된 현재 화면을 저장하고 `ocr`이 OCR/SoM marker와 화면 서명을 만든다.
-2. `RecipeStore.get_site_recipes(site, task_category)`로 전체 경로 후보를 가져온다.
+1. `capture`가 안정된 현재 화면을 저장하고 화면 서명을 만든다. 자율 판단에도 같은 관찰이 필요하면 `ocr`이 OCR/SoM marker를 붙인다.
+2. `ExperienceRuleStore.get_site_rules(site, task_category)`로 전체 경로 후보를 가져온다.
 3. 각 경로의 첫 전이 URL 범위와 ROI pHash를 현재 화면과 비교한다.
-4. 화면 역할 이름은 관측 로그에 남기되 재생 허용 여부에는 사용하지 않는다.
-5. ROI가 맞으면 저장된 target 비율에 가까운 현재 OCR marker를 찾는다.
+4. 화면 역할은 URL보다 거친 시작 조건으로 검사하고, 실제 대상 동일성은 ROI pHash로 판정한다.
+5. ROI가 맞으면 저장된 target 비율을 현재 캡처 크기에 맞춰 물리 좌표로 복원한다.
 6. 첫 전이가 통과한 경로 하나를 선택하고 `ReplaySession`에 경로 키, 현재 전이 번호와 검증 대기 번호를 저장한다. 이 시점에는 번호를 증가시키지 않는다.
 7. 현재 캡처에서 검증한 단일 클릭·입력 또는 `입력 + Enter` 행동 묶음을 `ActionRequest`로 실행한다.
 8. OpenCV 연속 프레임 비교로 화면 변화 시작과 렌더링 안정화를 기다린다. 변화 뒤에는 설정된 정숙 시간 동안 추가 변화가 없어야 준비 완료로 판정하고 OCR을 실행한다.
 9. 저장된 `after`의 ROI 앵커 또는 화면 문맥이 현재 화면과 일치할 때만 다음 전이 번호로 이동한다.
-10. 다음 전이의 ROI 대상도 현재 marker로 다시 찾는다.
+10. 다음 전이도 현재 ROI를 검증한 뒤 저장 비율 좌표를 복원한다.
 11. 마지막 전이의 도착 상태가 검증되면 `ReplaySession`을 끝낸다. 검증이 실패하면 세션을 종료하고 reasoning으로 폴백하며 같은 run 안에서 해당 `recipe_key`를 차단한다.
 
 ## 승격 정책
@@ -115,7 +116,7 @@ LLM은 화면에 입력칸과 제출 수단이 함께 명확히 보일 때 `type
 ## 실패 처리
 
 - ROI pHash가 맞지 않으면 즉시 reasoning fallback.
-- target marker 비율 매칭이 실패하면 즉시 reasoning fallback.
+- 저장된 target 비율로 현재 좌표를 복원할 수 없으면 즉시 reasoning fallback.
 - OpenCV 프레임 비교에서 화면 변화가 없거나 저장된 도착 체크포인트가 맞지 않으면 해당 `recipe_key`는 같은 run 안에서 재시도하지 않는다.
 
 이 기준은 Reflex가 자율 탐색 전체를 대체하지 않고, 고정 가능한 부모 경로만 빠르게 재생하도록 제한한다.

@@ -62,7 +62,7 @@ flowchart TD
     SELECT -->|카드 큐 또는 상세 정책| EXECUTION[행동 또는 입력·제출 묶음 실행]
     SELECT -->|재생 후보| REFLEX[Reflex ROI 검증]
     SELECT -->|의미 판단 필요| REASON[Reasoning]
-    REFLEX -->|ROI pHash와 마커 비율 일치| EXECUTION
+    REFLEX -->|ROI pHash 일치와 저장 좌표 복원| EXECUTION
     REFLEX -->|불일치| REASON
     REASON --> EXECUTION
     EXECUTION -->|화면 변경| CAPTURE
@@ -77,11 +77,11 @@ flowchart TD
 
 - `Loading Wait`: 저해상도 OpenCV 프레임을 메모리에서 비교해 화면 변화 시작, 렌더링 안정화와 회색 저정보 화면 해소를 기다립니다. 변화 뒤 일정 시간 추가 움직임이 없는 화면만 준비 완료로 판정하고 최종 화면만 파일로 저장합니다.
 - `OCR`: `OcrEngine`이 `PaddleOcr` 문자 검출과 `OmniParser` 아이콘 검출 결과를 합쳐 마커를 만듭니다. Paddle 작업자는 작업 동안 재사용합니다.
-- `pHash`: 저장된 전체 화면·ROI 서명과 현재 화면을 비교해 카드 큐 복귀, Reflex 대상과 행동 직전 마커 동일성을 검증합니다.
+- `pHash`: 저장된 화면 문맥·ROI 서명과 현재 화면을 비교해 카드 큐 복귀와 Reflex 대상 영역의 동일성을 검증합니다.
 - `Job Card Queue`: 검색 결과에서 LLM이 한 번 고른 공고 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
 - `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 물리 도구는 읽은 필드나 완료 여부를 보고하지 않습니다.
 - `JobReview`: 작업자 그래프가 누적 OCR, 현재 URL과 마지막 화면 전환을 `JobDraft`로 검토합니다. `needs_more`는 같은 상세를 계속 읽고, `complete`만 `JobCapture`와 `CollectedJob`을 만들며, `source_incomplete`와 `invalid_target`은 현재 카드를 제외합니다. 검색 목록의 카드 메타데이터는 사실 근거로 사용하지 않습니다.
-- `Reflex Runtime`: `site + task_category`로 활성 레시피 후보를 조회하고 URL 범위, ROI pHash와 현재 마커 좌표비율이 맞는 경로만 재생합니다. `page_role`은 실행 기록과 도착 화면 설명에 사용합니다.
+- `Reflex Runtime`: `site + task_category`로 활성 레시피 후보를 조회하고 URL 범위와 화면 역할을 먼저 거른 뒤 ROI pHash가 맞으면 저장된 비율 좌표를 현재 화면에 복원해 경로를 재생합니다.
 - `Reasoning`: 큐, 상세 정책, Reflex로 고정할 수 없는 현재 화면의 의미 판단만 수행합니다.
 - `Execution`: `click_marker`, `type_in_marker`, `scroll`, `press_key`, `go_back`을 물리 입력으로 실행합니다.
 

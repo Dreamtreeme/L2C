@@ -204,7 +204,7 @@ def test_candidate_promotion_skips_non_target_action():
 1. [완료] `target_snapshot` 생성 로직을 `agent/vision/target_snapshot.py`로 공통화한다.
 2. [완료] `nodes.py`를 책임별 `worker_*` 모듈로 분리하고 원본 파일을 삭제한다.
 3. [완료] `application/recipe_candidate_review_service.py`에서 결정론적 promotion 로직을 `recipe/candidate_promotion.py`로 분리한다.
-4. [완료] `RecipeStore` 조회를 목적 기반 `recipe_key + site + task_category`로 좁히고, 실행 시 URL 범위와 단계별 화면 서명을 검증한다.
+4. [완료] `ExperienceRuleStore` 조회를 목적 기반 `recipe_key + site + task_category`로 좁히고, 실행 시 URL 범위와 단계별 화면 서명을 검증한다.
 5. [완료] `investigation_workflow.py`를 조립부와 요청·근거·수집·답변 노드로 분리한다.
 6. [완료] 모델 변환과 좌표 계산을 `utils/model_conversion.py`, `vision/marker_geometry.py`, `vision/target_snapshot.py`로 통합한다.
 7. [완료] 수집 요청, 작업자 실행과 제출물 처리를 애플리케이션 서비스로 분리한다.
