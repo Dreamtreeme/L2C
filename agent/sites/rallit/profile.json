@@ -1,0 +1,81 @@
+{
+  "registration_order": 711,
+  "slug": "rallit",
+  "display_name": "랠릿",
+  "source_platform": "rallit",
+  "aliases": [
+    "랠릿"
+  ],
+  "domains": [
+    "www.rallit.com",
+    "rallit.com"
+  ],
+  "base_url": "https://www.rallit.com/",
+  "enabled": true,
+  "page_guidance": {
+    "home": {
+      "visible_cues": [
+        "랠릿",
+        "채용"
+      ],
+      "minimum_visible_cues": 1,
+      "instructions": [
+        "채용공고를 검색할 수 있는 입력창이나 검색 화면 진입 요소를 화면에서 찾는다.",
+        "검색어를 입력한 뒤 화면에 보이는 제출 동작으로 결과 화면에 진입한다."
+      ],
+      "navigation_notes": [
+        "검색 URL을 직접 만들지 말고 홈페이지의 화면 요소를 사용한다."
+      ]
+    },
+    "search": {
+      "visible_cues": [
+        "채용공고",
+        "검색"
+      ],
+      "minimum_visible_cues": 1,
+      "instructions": [
+        "검색어와 관련된 공고 목록이 보이는지 확인하고 서로 다른 공고를 순서대로 연다.",
+        "목록으로 돌아오면 이미 수집한 공고를 제목과 회사명으로 구분해 제외한다."
+      ],
+      "reading_targets": [
+        "회사명",
+        "공고 제목"
+      ],
+      "navigation_notes": [
+        "화면에 표시된 검색 입력과 결과 카드를 이용하고 카드 순번에 의존하지 않는다."
+      ]
+    },
+    "job_detail": {
+      "url_patterns": [
+        "/positions/"
+      ],
+      "visible_cues": [
+        "주요업무",
+        "자격요건"
+      ],
+      "minimum_visible_cues": 2,
+      "instructions": [
+        "상세 본문을 위에서 아래로 읽으며 필수 항목의 근거를 누적한다.",
+        "접힌 내용이나 탭이 보이면 화면의 라벨을 확인해 필요한 본문을 펼친다."
+      ],
+      "reveal_controls": [
+        "더보기",
+        "펼쳐보기"
+      ],
+      "reading_targets": [
+        "회사명",
+        "공고 제목",
+        "주요업무",
+        "자격요건"
+      ],
+      "navigation_notes": [
+        "필수 항목을 검토한 뒤 브라우저 뒤로가기로 검색 결과에 복귀한다."
+      ]
+    }
+  },
+  "guidance": "홈페이지에서 화면에 보이는 채용공고 검색 기능을 찾아 검색어를 제출한다. 결과 화면에서는 관련 공고의 회사명과 제목을 확인하고, 상세 화면에서 주요업무와 자격요건의 실제 본문을 읽은 뒤 검토한다. 고정 URL, 공고 ID, 카드 순번 또는 절대좌표를 사용하지 않는다.",
+  "capabilities": {
+    "job_search": "홈페이지의 화면 검색 기능을 통한 채용공고 탐색",
+    "job_detail": "상세 화면의 회사명, 제목, 주요업무, 자격요건 수집"
+  }
+}

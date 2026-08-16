@@ -667,6 +667,121 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     assert stopped["decision"]["pending_action"].source == "transition_policy"
     assert stopped["decision"]["pending_action"].tool_calls[0].name == "finish_task"
 
+    detail_url = "https://example.com/jobs/current"
+    detail_text = "1. 주요업무"
+    source_end = worker_state(
+        observation={
+            "current_page_role": "job_detail",
+            "current_url": detail_url,
+        },
+        collection={
+            "job_detail_buffer": {
+                "url": detail_url,
+                "lines": [{"text": "주요업무"}],
+            },
+        },
+        transition={
+            "no_effect_count": 3,
+            "transition_result": {
+                "action": "scroll",
+                "status": "unknown",
+                "reason": "no_screen_change",
+            },
+        },
+    )
+    reviewed_draft = JobDraft(
+        url=detail_url,
+        raw_ocr_text=detail_text,
+        required_fields=source_end["request"]["collection_intent"].required_fields,
+    )
+    source_end["collection"]["last_job_review"] = JobReview(
+        url=detail_url,
+        status=JobReviewStatus.NEEDS_MORE,
+        draft_fingerprint=reviewed_draft.fingerprint(),
+        model_tier="lightweight",
+    )
+    primary_review = worker_selection.selection_node(source_end, node_runtime())
+    assert primary_review["decision"]["pending_action"].source == "state_contract"
+    assert (
+        primary_review["decision"]["pending_action"].tool_calls[0].name
+        == "review_job_detail"
+    )
+    source_end["collection"]["last_job_review"] = source_end["collection"][
+        "last_job_review"
+    ].model_copy(update={"model_tier": "primary"})
+    primary_stopped = worker_selection.selection_node(source_end, node_runtime())
+    assert primary_stopped["decision"]["pending_action"].source == (
+        "transition_policy"
+    )
+
+
+def test_selection_preserves_guards_before_detail_review(monkeypatch):
+    detail_url = "https://example.com/jobs/stale"
+    collection = {
+        "job_detail_buffer": {
+            "url": detail_url,
+            "lines": [{"text": "주요업무"}],
+        }
+    }
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            worker_selection,
+            "_select_detail_review",
+            lambda _state: (_ for _ in ()).throw(
+                AssertionError("기존 selection 우선 정책 뒤에 상세 검토가 와야 합니다.")
+            ),
+        )
+        low_information = worker_selection.selection_node(
+            worker_state(
+                observation={
+                    "current_page_role": "job_detail",
+                    "current_url": detail_url,
+                    "low_information_screen": True,
+                    "low_information_capture_count": 99,
+                },
+                collection=collection,
+                transition={"no_effect_count": 3},
+            ),
+            node_runtime(),
+        )
+        assert low_information["decision"]["pending_action"].source == (
+            "screen_policy"
+        )
+
+        replay = worker_selection.selection_node(
+            worker_state(
+                observation={
+                    "current_page_role": "job_detail",
+                    "current_url": detail_url,
+                },
+                collection=collection,
+                replay={"replay_session": {"active": True}},
+                transition={"no_effect_count": 3},
+            ),
+            node_runtime(),
+        )
+        assert replay == {}
+
+        duplicate_update = {"collection": {"job_card_queue": []}}
+        patch.setattr(
+            worker_selection,
+            "_select_duplicate_detail",
+            lambda *_args, **_kwargs: duplicate_update,
+        )
+        duplicate = worker_selection.selection_node(
+            worker_state(
+                observation={
+                    "current_page_role": "job_detail",
+                    "current_url": detail_url,
+                },
+                collection=collection,
+                transition={"no_effect_count": 3},
+            ),
+            node_runtime(),
+        )
+        assert duplicate == duplicate_update
+
 
 def test_execution_does_not_mix_detail_extraction_into_scroll(monkeypatch):
     monkeypatch.setattr(

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.graph import worker_reasoning
+from agent.graph import worker_reasoning, worker_selection
 from agent.graph.worker_reasoning_prompt import build_reasoning_messages
 from agent.runtime.worker_contracts import build_action_event
 from agent.tests.worker_test_support import node_runtime, worker_state
@@ -299,8 +299,100 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     assert "set_job_card_queue" not in worker_reasoning._reasoning_tool_names(
         worker_state(observation={"current_page_role": "search"})
     )
-    assert "review_job_detail" in worker_reasoning._reasoning_tool_names(
+    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(
         worker_state(observation={"current_page_role": "job_detail"})
+    )
+    incomplete_detail = worker_state(
+        request={
+            "collection_intent": CollectionIntent(
+                target_count=2,
+                count_mode="explicit",
+            )
+        },
+        observation={"current_page_role": "job_detail"},
+    )
+    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(
+        incomplete_detail
+    )
+    assert "finish_task" not in worker_reasoning._reasoning_tool_names(
+        incomplete_detail
+    )
+    exhausted_detail = worker_state(
+        request={
+            "collection_intent": CollectionIntent(
+                target_count=2,
+                count_mode="explicit",
+            )
+        },
+        observation={"current_page_role": "job_detail"},
+        collection={
+            "job_results_availability": {
+                "available_job_count": 0,
+                "count_evidence": "검색 결과 0건",
+            }
+        },
+    )
+    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(
+        exhausted_detail
+    )
+    assert "finish_task" in worker_reasoning._reasoning_tool_names(
+        exhausted_detail
+    )
+    review_due_detail = worker_state(
+        request={
+            "collection_intent": CollectionIntent(
+                target_count=2,
+                count_mode="explicit",
+            )
+        },
+        observation={"current_page_role": "job_detail"},
+        collection={
+            "job_detail_buffer": {
+                "url": "https://example.com/jobs/current",
+                "lines": [{"text": "주요업무"}],
+                "stats": {"screen_count": 1},
+            }
+        },
+    )
+    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(
+        review_due_detail
+    )
+    assert "finish_task" not in worker_reasoning._reasoning_tool_names(
+        review_due_detail
+    )
+    direct_review = worker_selection._select_detail_review(review_due_detail)
+    assert direct_review is not None
+    assert direct_review["decision"]["pending_action"].source == "state_contract"
+    assert (
+        direct_review["decision"]["pending_action"].tool_calls[0].name
+        == "review_job_detail"
+    )
+    from shared.schema.jd_schema import JobDraft
+
+    reviewed_fingerprint = JobDraft(
+        url="https://example.com/jobs/current",
+        raw_ocr_text="1. 주요업무",
+        required_fields=(
+            review_due_detail["request"]["collection_intent"].required_fields
+        ),
+    ).fingerprint()
+    review_due_detail["collection"]["last_job_review"] = SimpleNamespace(
+        draft_fingerprint=reviewed_fingerprint,
+    )
+    assert worker_selection._select_detail_review(review_due_detail) is None
+    assert "scroll" in worker_reasoning._reasoning_tool_names(review_due_detail)
+    assert "finish_task" not in worker_reasoning._reasoning_tool_names(
+        review_due_detail
+    )
+    review_due_detail["collection"]["job_detail_buffer"]["lines"].append(
+        {"text": "자격요건"}
+    )
+    changed_review = worker_selection._select_detail_review(review_due_detail)
+    assert changed_review is not None
+    assert changed_review["decision"]["pending_action"].source == "state_contract"
+    assert (
+        changed_review["decision"]["pending_action"].tool_calls[0].name
+        == "review_job_detail"
     )
 
     recovery = worker_reasoning.reasoning_node(

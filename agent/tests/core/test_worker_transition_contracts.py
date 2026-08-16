@@ -11,6 +11,7 @@ from agent.tests.worker_test_support import (
     worker_data_services,
     worker_state,
 )
+from shared.schema.collection_intent import CollectionIntent
 from shared.schema.jd_schema import JobCapture
 from shared.schema.experience_rule_schema import ExpectedEffect
 
@@ -72,6 +73,39 @@ def test_completed_detail_uses_deterministic_results_navigation():
     close_request = close["decision"]["pending_action"]
     assert close_request.source == "job_results_navigation"
     assert close_request.tool_calls[0].name == "close_current_tab"
+
+
+def test_completed_detail_without_queue_returns_for_more_results():
+    state = worker_state(
+        request={"collection_intent": CollectionIntent(target_count=2)},
+        observation={
+            "current_url": "https://www.rallit.com/positions/example-posting",
+            "current_page_role": "job_detail",
+            "ocr_complete": True,
+        },
+        transition={
+            "transition_result": {
+                "status": "ready",
+                "action": "scroll",
+                "source": "llm",
+            },
+        },
+        collection={
+            "job_captures": [
+                JobCapture(
+                    url="https://www.rallit.com/positions/example-posting",
+                    raw_ocr_text="첫 번째 공고 상세 원문",
+                )
+            ],
+            "job_card_queue": [],
+        },
+    )
+
+    assert route_after_execution(state) == "selection"
+    selected = worker_selection.selection_node(state, node_runtime())
+    request = selected["decision"]["pending_action"]
+    assert request.source == "job_results_navigation"
+    assert request.tool_calls[0].name == "go_back"
 
 
 def test_detail_click_does_not_return_before_detail_reading_finishes():

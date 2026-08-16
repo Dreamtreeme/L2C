@@ -203,7 +203,7 @@ def needs_job_results_navigation(state: WorkerState) -> bool:
         for item in state["collection"].get("job_card_queue", []) or []
         if isinstance(item, dict)
     ]
-    if not queue or active_job_card(queue):
+    if queue and active_job_card(queue):
         return False
     target_count = target_count_from_state(state)
     resolved_count = max(

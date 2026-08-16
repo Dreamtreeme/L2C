@@ -32,10 +32,12 @@ from agent.runtime.tool_schema import (
 )
 from agent.graph.worker_reasoning_prompt import build_reasoning_messages
 from agent.runtime.job_card_selector import select_job_cards
+from agent.runtime.job_card_queue import resolved_job_card_count
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.transition_runtime import (
     detect_two_screen_transition_cycle,
 )
+from agent.runtime.worker_state import job_capture_count, target_count_from_state
 from agent.utils.logger import logger
 from agent.vision.target_snapshot import is_icon_marker, marker_by_id
 from agent.runtime.vision_worker_runtime import WorkerDependencies
@@ -48,6 +50,33 @@ _REASONING_COMPONENTS = {
 }
 
 
+def _resolved_job_count(state: WorkerState) -> int:
+    queue = [
+        dict(item)
+        for item in state["collection"].get("job_card_queue", []) or []
+        if isinstance(item, dict)
+    ]
+    return max(job_capture_count(state), resolved_job_card_count(queue))
+
+
+def _collection_scope_exhausted(
+    state: WorkerState,
+    *,
+    resolved_count: int,
+) -> bool:
+    availability = dict(
+        state["collection"].get("job_results_availability", {}) or {}
+    )
+    available_count = availability.get("available_job_count")
+    evidence = str(availability.get("count_evidence") or "").strip()
+    return bool(
+        isinstance(available_count, int)
+        and available_count >= 0
+        and evidence
+        and resolved_count >= available_count
+    )
+
+
 def _reasoning_tool_names(state: WorkerState) -> tuple[str, ...]:
     """현재 화면 역할에 필요한 원자 도구만 모델에 노출한다."""
 
@@ -55,10 +84,24 @@ def _reasoning_tool_names(state: WorkerState) -> tuple[str, ...]:
         state["observation"].get("current_page_role")
     )
     if role == "job_detail":
-        return DETAIL_ACTION_TOOL_NAMES
-    if role in {"home", "search", "form", "popup", "error"}:
-        return NAVIGATION_ACTION_TOOL_NAMES
-    return UNKNOWN_ACTION_TOOL_NAMES
+        tool_names = tuple(
+            name
+            for name in DETAIL_ACTION_TOOL_NAMES
+            if name != "review_job_detail"
+        )
+    elif role in {"home", "search", "form", "popup", "error"}:
+        tool_names = NAVIGATION_ACTION_TOOL_NAMES
+    else:
+        tool_names = UNKNOWN_ACTION_TOOL_NAMES
+    target_count = target_count_from_state(state)
+    resolved_count = _resolved_job_count(state)
+    if (
+        target_count > 0
+        and resolved_count < target_count
+        and not _collection_scope_exhausted(state, resolved_count=resolved_count)
+    ):
+        return tuple(name for name in tool_names if name != "finish_task")
+    return tool_names
 
 
 def _get_ui_llm_with_tools(
