@@ -38,7 +38,7 @@ def _select_detail_review(state: WorkerState) -> dict[str, Any] | None:
         state["observation"].get("current_page_role")
     ) != "job_detail":
         return None
-    buffer = dict(state["collection"].get("job_detail_buffer", {}) or {})
+    buffer = state["collection"].get("job_detail_buffer") or {}
     raw_ocr_text = detail_buffer_text(buffer)
     current_url = str(buffer.get("url") or "").strip()
     if not raw_ocr_text or not current_url:
