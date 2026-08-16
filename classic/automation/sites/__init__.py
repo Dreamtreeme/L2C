@@ -10,6 +10,7 @@ from .incruit import IncruitAdapter
 from .wanted import WantedAdapter
 from .jobkorea import JobKoreaAdapter
 from .rocketpunch import RocketpunchAdapter
+from .rallit import RallitAdapter
 
 # 디스패처가 순서대로 matches()를 호출하므로,
 # 더 구체적인 어댑터를 위에 두는 게 안전합니다.
@@ -18,6 +19,7 @@ ADAPTERS: list[SiteAdapter] = [
     WantedAdapter(),
     JobKoreaAdapter(),
     RocketpunchAdapter(),
+    RallitAdapter(),
 ]
 
 
@@ -48,6 +50,7 @@ __all__ = [
     "WantedAdapter",
     "JobKoreaAdapter",
     "RocketpunchAdapter",
+    "RallitAdapter",
     "ADAPTERS",
     "resolve_adapter",
     "resolve_collection_adapter",
