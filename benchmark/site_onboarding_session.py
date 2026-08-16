@@ -54,6 +54,8 @@ def _acceptance(args: argparse.Namespace) -> SiteAdaptationRecord:
     record = _read(args.session)
     run = AcceptanceRun(
         query=args.query,
+        contract_query=args.contract_query,
+        substitution_reason=args.substitution_reason,
         summary_path=args.summary_path,
         review_path=args.review_path,
         passed=args.passed,
@@ -117,6 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
     acceptance = sub.add_parser("acceptance")
     acceptance.add_argument("session", type=Path)
     acceptance.add_argument("--query", required=True)
+    acceptance.add_argument("--contract-query", default="")
+    acceptance.add_argument("--substitution-reason", default="")
     acceptance.add_argument("--summary-path", required=True)
     acceptance.add_argument("--review-path", default="")
     acceptance.add_argument("--runtime-sec", type=float, required=True)

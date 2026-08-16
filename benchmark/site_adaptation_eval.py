@@ -40,7 +40,9 @@ def _contract_passed(
     manifest: SiteAdaptationManifest,
 ) -> bool:
     expected_queries = manifest.task_contract.acceptance_queries
-    actual_queries = [run.query for run in record.acceptance_runs]
+    actual_queries = [
+        run.contract_query or run.query for run in record.acceptance_runs
+    ]
     return bool(
         record.status == "completed"
         and record.baseline_sha == manifest.baseline_sha

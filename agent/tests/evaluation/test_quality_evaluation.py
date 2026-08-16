@@ -345,6 +345,46 @@ def test_site_adaptation_reports_common_runtime_work_and_validity():
     assert incomplete_result["comparison_valid"] is False
 
 
+def test_site_adaptation_maps_a_substitute_to_its_contract_query():
+    manifest = SiteAdaptationManifest.model_validate(
+        {
+            "baseline_sha": "abc123",
+            "prompt_sha256": "prompt-hash",
+            "task_contract": {
+                "target_count": 2,
+                "acceptance_queries": ["프론트엔드 개발자"],
+            },
+            "foundation": {
+                "started_at": "2026-08-15T23:55:00Z",
+                "finished_at": "2026-08-16T00:00:00Z",
+                "changed_loc": 100,
+                "modified_files": ["classic/automation/collection.py"],
+                "acceptance_path": "synthetic.json",
+            },
+            "records": [
+                _adaptation_record(
+                    approach,
+                    acceptance_runs=[
+                        {
+                            "query": "QA 엔지니어",
+                            "contract_query": "프론트엔드 개발자",
+                            "substitution_reason": "원 검색어에서 목표 수 미달",
+                            "summary_path": "summary.json",
+                            "passed": True,
+                            "runtime_sec": 10,
+                        }
+                    ],
+                )
+                for approach in ("classic", "vision")
+            ],
+        }
+    )
+
+    result = evaluate_site_adaptation(manifest)
+
+    assert result["sites"][0]["comparison_valid"] is True
+
+
 def test_site_onboarding_acceptance_checks_schema_domain_and_hardcoding():
     summary = _collection(
         items=[{"job_id": 1, "url": "https://jobs.example.com/jobs/1"}]

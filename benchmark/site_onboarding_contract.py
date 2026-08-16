@@ -45,6 +45,8 @@ class AcceptanceRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str
+    contract_query: str = ""
+    substitution_reason: str = ""
     summary_path: str
     review_path: str = ""
     passed: bool

@@ -2,7 +2,7 @@
 title: "Codex 보조 신규 사이트 적용 공수 검증 계획"
 type: plan
 area: evaluation
-status: planned
+status: in_progress
 updated: 2026-08-16
 tags:
   - l2c
@@ -46,12 +46,12 @@ Classic과 Vision은 다음 정보만 입력받는다.
   "homepage": "사이트 공식 홈페이지",
   "development_query": "백엔드 개발자",
   "target_count": 2,
-    "required_fields": [
-      "company_name",
-      "position",
-      "main_tasks",
-      "requirements",
-      "url"
+  "required_fields": [
+    "company_name",
+    "position",
+    "main_tasks",
+    "requirements",
+    "url"
   ],
   "time_limit_minutes": 90
 }
@@ -160,7 +160,8 @@ worktree에서 다시 시작한다.
 
 각 실행은 서로 다른 공고 2건을 저장해야 한다. 실행 전에 해당 사이트에 관련 결과가
 2건 이상 보이는지만 확인한다. 결과 부족 시 실패로 계산하지 않고 미리 정한 예비 검색어
-`QA 엔지니어`, `DevOps 엔지니어` 순서로 대체하고 변경 이유를 manifest에 기록한다.
+`QA 엔지니어`, `DevOps 엔지니어` 순서로 대체한다. 실제 검색어, 원래 검증 슬롯과
+대체 이유를 manifest에 함께 기록한다.
 
 ## 품질 판정
 
@@ -239,7 +240,7 @@ docs/evidence/site_onboarding/
 
 - [x] Classic 공통 기반 준비 및 비용 기록
 - [x] 공통 계약·프롬프트·품질 검사기 고정
-- [ ] `T0` 커밋과 네 개 worktree 생성
+- [x] `T0` 커밋과 네 개 worktree 생성
 - [ ] 인크루트 Classic 실행
 - [ ] 인크루트 Vision 실행
 - [ ] 랠릿 Vision 실행
@@ -260,3 +261,6 @@ docs/evidence/site_onboarding/
   요구한다. 합성 프로필·인증서 예외를 제품 기준선에 추가하면 비교 대상과 무관한
   변경이 생긴다. 따라서 합성 Vision E2E는 공통 결과·DB 입력 계약 테스트로 바꾸고,
   실제 Vision 실행은 인크루트와 랠릿에서 검증한다.
+- 2026-08-16: Vision 실행은 화면과 물리 입력 장치를 공유하므로 두 사이트를 동시에
+  실행하지 않는다. 인크루트 Vision을 종료한 뒤 랠릿 Vision을 실행하며, Classic은
+  같은 사이트의 Vision 결과가 확정된 뒤 실행한다.
