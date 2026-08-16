@@ -1,0 +1,58 @@
+{
+  "passed": true,
+  "automatic_passed": true,
+  "manual_required": false,
+  "manual_passed": null,
+  "collection_quality": {
+    "target_count": 2,
+    "collected_count": 2,
+    "persisted_count": 2,
+    "observed_existing_count": 0,
+    "resolved_count": 2,
+    "target_fulfillment": 1.0,
+    "persistence_rate": 1.0,
+    "detail_url_checked_count": 2,
+    "detail_url_valid_count": 2,
+    "source_url_integrity": 1.0,
+    "accepted": true,
+    "finished": true,
+    "target_contract": {
+      "required": false,
+      "passed": true,
+      "expected_count": 0,
+      "actual_count": 2,
+      "matched_count": 0,
+      "missing_urls": [],
+      "unexpected_urls": []
+    },
+    "passed": true
+  },
+  "job_quality": {
+    "record_count": 2,
+    "required_fields": [
+      "company_name",
+      "position",
+      "url",
+      "main_tasks",
+      "requirements"
+    ],
+    "schema_valid_rate": 1.0,
+    "required_field_coverage": 1.0,
+    "content_field_coverage": 0.6,
+    "valid_url_count": 2,
+    "unique_url_rate": 1.0
+  },
+  "domain_quality": {
+    "allowed_domains": [
+      "rallit.com"
+    ],
+    "invalid_urls": [],
+    "passed": true
+  },
+  "hardcoding_quality": {
+    "checked": true,
+    "matched_literals": [],
+    "passed": true
+  },
+  "manual_quality": null
+}

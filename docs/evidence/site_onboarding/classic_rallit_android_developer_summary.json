@@ -1,0 +1,236 @@
+{
+  "site": "rallit",
+  "homepage": "https://www.rallit.com/",
+  "query": "안드로이드 개발자",
+  "collection_intent": {
+    "original_query": "안드로이드 개발자 공고 2건",
+    "site": "rallit",
+    "search_keyword": "안드로이드 개발자",
+    "count_mode": "explicit",
+    "target_count": 2,
+    "filters": {
+      "posted_from": "",
+      "posted_to": "",
+      "experience": "",
+      "location": "",
+      "employment_type": ""
+    },
+    "freshness_required": false,
+    "purpose": "collect",
+    "task_category": "검색",
+    "required_fields": [
+      "company_name",
+      "position",
+      "url",
+      "main_tasks",
+      "requirements"
+    ]
+  },
+  "result": {
+    "status": "completed",
+    "message": "Classic 수집 2/2건 완료",
+    "error_code": "",
+    "site": "rallit",
+    "site_name": "rallit",
+    "search_keyword": "안드로이드 개발자",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 2,
+    "resolved_count": 2,
+    "persisted_count": 2,
+    "created_count": 2,
+    "updated_count": 0,
+    "rejected_count": 0,
+    "persisted_items": [
+      {
+        "job_id": 1,
+        "url": "https://www.rallit.com/positions/1747/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+        "company_name": "(주)오메타",
+        "position": "안드로이드 개발자",
+        "operation": "created"
+      },
+      {
+        "job_id": 2,
+        "url": "https://www.rallit.com/positions/1977/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90-%EA%B2%BD%EB%A0%A5",
+        "company_name": "휴레이포지티브",
+        "position": "안드로이드 개발자(경력)",
+        "operation": "created"
+      }
+    ],
+    "observed_job_ids": [],
+    "document_ids": [
+      1,
+      2
+    ],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "classic-c03b5bd3-69a8-44fc-adbe-a4741f1b3a3d"
+  },
+  "jobs": [
+    {
+      "company_name": "(주)오메타",
+      "position": "안드로이드 개발자",
+      "url": "https://www.rallit.com/positions/1747/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Android",
+        "Java",
+        "Kotlin"
+      ],
+      "main_tasks": [
+        "안드로이드 앱 개발, 유지보수",
+        "Java 또는 Kotlin 개발 언어에 능숙한 분"
+      ],
+      "requirements": [
+        "안드로이드 앱 개발 실무 경험 1년 이상인 분",
+        "MVP, MVVM, MVC 등 디자인 패턴 이해도가 높은 분"
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "rallit",
+      "raw_ocr_text": "회사명\n(주)오메타\n\n직무명\n안드로이드 개발자\n\n주요업무\n안드로이드 앱 개발, 유지보수\nJava 또는 Kotlin 개발 언어에 능숙한 분\n\n자격요건\n안드로이드 앱 개발 실무 경험 1년 이상인 분\nMVP, MVVM, MVC 등 디자인 패턴 이해도가 높은 분",
+      "content_hash": "14f97195f2b31b2331333e5e5ec37084d5349aed9b8ca14c6fa34c89f11db86f",
+      "evidence_hash": "7cf2dabd60fd8947382e0a267c8a53052d707bb302881554fd7a9336ae7c6710",
+      "experience_min": 1,
+      "experience_max": null,
+      "experience_text": "1년 이상",
+      "id": 1
+    },
+    {
+      "company_name": "휴레이포지티브",
+      "position": "안드로이드 개발자(경력)",
+      "url": "https://www.rallit.com/positions/1977/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90-%EA%B2%BD%EB%A0%A5",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Kotlin",
+        "Java",
+        "Compose UI",
+        "MVVM",
+        "Coroutine",
+        "BLE"
+      ],
+      "main_tasks": [
+        "디지털 헬스케어 플랫폼 및 서비스 개발",
+        "디지털 헬스케어 관련 디바이스 검토, 서비스 연동"
+      ],
+      "requirements": [
+        "실무 개발 4년 이상이신 분",
+        "Kotlin, Java 코드에 대해 깊이 이해하시는 분",
+        "RESTFul API에 대한 이해 및 실무 경험 있으신 분",
+        "요구 사항 구현에 필요한 최적의 기술을 선택할 수 있으신 분"
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "rallit",
+      "raw_ocr_text": "회사명\n휴레이포지티브\n\n직무명\n안드로이드 개발자(경력)\n\n주요업무\n디지털 헬스케어 플랫폼 및 서비스 개발\n디지털 헬스케어 관련 디바이스 검토, 서비스 연동\n\n자격요건\n실무 개발 4년 이상이신 분\nKotlin, Java 코드에 대해 깊이 이해하시는 분\nRESTFul API에 대한 이해 및 실무 경험 있으신 분\n요구 사항 구현에 필요한 최적의 기술을 선택할 수 있으신 분\n\n사용 기술\n\nCompose UI, MVVM, Coroutine, BLE 통신\n\n제출서류\n\n필수 서류 : 이력서, 경력기술서\n경력 및 경험 위주의 자유로운 양식으로 지원 서류 제출\n개발 이력 포트폴리오, 소스 등 (GitHub, Notion 등 웹페이지 가능)",
+      "content_hash": "761d3e864819e92040d14ae8d7c4e8731aa39088306641e48ddaddde9b738fca",
+      "evidence_hash": "7ddaa455063fb3debd5fc187ce5152d0cb9d439a8c20524ece2c19d98d4971ae",
+      "experience_min": 4,
+      "experience_max": null,
+      "experience_text": "실무 개발 4년 이상",
+      "id": 2
+    }
+  ],
+  "metrics": {
+    "run_id": "classic-rallit-20260816085347-302ba694",
+    "duration_sec": 6.776292,
+    "deadline_remaining_sec": 893.223691,
+    "steps": [],
+    "llm": {
+      "totals": {
+        "input_tokens": 1821,
+        "output_tokens": 491,
+        "total_tokens": 2312,
+        "input_token_details": {
+          "cache_read": 0
+        },
+        "output_token_details": {}
+      },
+      "by_model": {
+        "gemini-3.5-flash-lite": {
+          "input_tokens": 1821,
+          "output_tokens": 491,
+          "total_tokens": 2312,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        }
+      },
+      "cost": {
+        "currency": "USD",
+        "estimated_total": 0.0017738,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\data\\worktrees\\rallit-classic-f711\\config\\model_pricing.json",
+        "priced_model_count": 1,
+        "unpriced_models": [],
+        "items": [
+          {
+            "model": "gemini-3.5-flash-lite",
+            "input_tokens": 1821,
+            "cached_input_tokens": 0,
+            "output_tokens": 491,
+            "estimated_cost_usd": 0.0017738
+          }
+        ]
+      },
+      "calls": [
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 856,
+          "output_tokens": 239,
+          "total_tokens": 1095,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.192915,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 965,
+          "output_tokens": 252,
+          "total_tokens": 1217,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.242054,
+          "success": true,
+          "error": ""
+        }
+      ]
+    },
+    "outcome": {
+      "status": "completed",
+      "last_phase": "received",
+      "failure_stage": "",
+      "failure_code": ""
+    },
+    "langsmith": {
+      "enabled": false,
+      "project": "l2c-local",
+      "trace_id": ""
+    }
+  }
+}

@@ -1,0 +1,246 @@
+{
+  "site": "rallit",
+  "homepage": "https://www.rallit.com/",
+  "query": "데이터 엔지니어",
+  "collection_intent": {
+    "original_query": "데이터 엔지니어 공고 2건",
+    "site": "rallit",
+    "search_keyword": "데이터 엔지니어",
+    "count_mode": "explicit",
+    "target_count": 2,
+    "filters": {
+      "posted_from": "",
+      "posted_to": "",
+      "experience": "",
+      "location": "",
+      "employment_type": ""
+    },
+    "freshness_required": false,
+    "purpose": "collect",
+    "task_category": "검색",
+    "required_fields": [
+      "company_name",
+      "position",
+      "url",
+      "main_tasks",
+      "requirements"
+    ]
+  },
+  "result": {
+    "status": "completed",
+    "message": "Classic 수집 2/2건 완료",
+    "error_code": "",
+    "site": "rallit",
+    "site_name": "rallit",
+    "search_keyword": "데이터 엔지니어",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 2,
+    "resolved_count": 2,
+    "persisted_count": 2,
+    "created_count": 2,
+    "updated_count": 0,
+    "rejected_count": 0,
+    "persisted_items": [
+      {
+        "job_id": 1,
+        "url": "https://www.rallit.com/positions/206/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4",
+        "company_name": "오드컨셉주식회사",
+        "position": "데이터 엔지니어",
+        "operation": "created"
+      },
+      {
+        "job_id": 2,
+        "url": "https://www.rallit.com/positions/4131/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4-ai",
+        "company_name": "페어랩스",
+        "position": "데이터 엔지니어 (AI)",
+        "operation": "created"
+      }
+    ],
+    "observed_job_ids": [],
+    "document_ids": [
+      1,
+      2
+    ],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "classic-60a17318-00b2-4e87-8684-4e8b854f60fd"
+  },
+  "jobs": [
+    {
+      "company_name": "오드컨셉주식회사",
+      "position": "데이터 엔지니어",
+      "url": "https://www.rallit.com/positions/206/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Python",
+        "RabbitMQ",
+        "Linux"
+      ],
+      "main_tasks": [
+        "데이터 수집, 가공, 분석을 위한 파이프라인 개발",
+        "사내 데이터 분서 도구 개발 및 유지보수"
+      ],
+      "requirements": [
+        "프로그래밍 언어: python",
+        "RDBMS 개념을 이용하고 서비스에 적용한 경험이 있으신 분",
+        "언어: 한국어, 영어(영어의 경우 간단하게 자신의 의사 전달이 가능하면 충분합니다.)",
+        "새로운 것들을 배우면서 시도할 의지가 있는 분",
+        "Linux에 거부감 없는 분",
+        "RabbitMQ 등의 Message Queuing 대한 경험이 있으신 분",
+        "Data pipeline 개발 경험이 있으신 분"
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "rallit",
+      "raw_ocr_text": "회사명\n오드컨셉주식회사\n\n직무명\n데이터 엔지니어\n\n주요업무\n데이터 수집, 가공, 분석을 위한 파이프라인 개발\n사내 데이터 분서 도구 개발 및 유지보수\n\n자격요건\n프로그래밍 언어: python\nRDBMS 개념을 이용하고 서비스에 적용한 경험이 있으신 분\n언어: 한국어, 영어(영어의 경우 간단하게 자신의 의사 전달이 가능하면 충분합니다.)\n새로운 것들을 배우면서 시도할 의지가 있는 분\nLinux에 거부감 없는 분\nRabbitMQ 등의 Message Queuing 대한 경험이 있으신 분\nData pipeline 개발 경험이 있으신 분",
+      "content_hash": "22c709d28d885b84dcd600ff94021a919abe9fb0f340823393fd1a933f8e98b3",
+      "evidence_hash": "e7d805b335932b9730099ad2d4badf0aeb04d06c61661bb47b7564a1824c8823",
+      "experience_min": null,
+      "experience_max": null,
+      "experience_text": null,
+      "id": 1
+    },
+    {
+      "company_name": "페어랩스",
+      "position": "데이터 엔지니어 (AI)",
+      "url": "https://www.rallit.com/positions/4131/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4-ai",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Airflow",
+        "Docker",
+        "Kubernetes",
+        "Kafka",
+        "Neo4j"
+      ],
+      "main_tasks": [
+        "데이터 관점에서 비즈니스 문제를 정의하고, 이를 해결하기 위한 데이터 아키텍처 설계부터 구축·운영까지 전 과정을 주도합니다.",
+        "다양한 형태의 비정형 데이터를 실시간으로 수집하고, 분석에 최적화된 구조로 가공하는 데이터 파이프라인을 설계·구현·운영합니다.",
+        "데이터 정합성을 보장하기 위한 품질 검증 체계 및 모니터링 시스템을 설계하고 운영합니다.",
+        "AI 서비스의 기반이 되는 데이터 파이프라인을 구축하고 고도화합니다."
+      ],
+      "requirements": [
+        "4년 이상의 데이터 엔지니어링 실무 경험이 있으신 분",
+        "비즈니스 요구사항을 이해하고 최적의 데이터 아키텍처를 설계할 수 있는 분",
+        "대용량 분산 처리 및 데이터 플랫폼에 대한 깊은 이해와 엔지니어링 경험을 보유한 분",
+        "Airflow, Docker, Kubernetes 기반 데이터 파이프라인 구축 및 운영 경험이 있는 분",
+        "Kafka 기반 스트림 프로세싱 및 대용량 분산 데이터 처리 경험이 있는 분",
+        "데이터 거버넌스(정합성·품질 관리) 및 모니터링 시스템 설계·운영 경험이 있는 분",
+        "Neo4j 등 GraphDB를 활용한 서비스 개발 경험이 있는 분",
+        "벡터 DB 및 검색 엔진 개발 경험이 있는 분"
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "rallit",
+      "raw_ocr_text": "회사명\n페어랩스\n\n직무명\n데이터 엔지니어 (AI)\n\n주요업무\n\n합류 후 담당하시게 될 업무입니다.\n\n데이터 관점에서 비즈니스 문제를 정의하고, 이를 해결하기 위한 데이터 아키텍처 설계부터 구축·운영까지 전 과정을 주도합니다.\n\n다양한 형태의 비정형 데이터를 실시간으로 수집하고, 분석에 최적화된 구조로 가공하는 데이터 파이프라인을 설계·구현·운영합니다.\n\n데이터 정합성을 보장하기 위한 품질 검증 체계 및 모니터링 시스템을 설계하고 운영합니다.\n\nAI 서비스의 기반이 되는 데이터 파이프라인을 구축하고 고도화합니다.\n\n자격요건\n\n이런 분과 함께하고 싶습니다.\n\n4년 이상의 데이터 엔지니어링 실무 경험이 있으신 분\n\n비즈니스 요구사항을 이해하고 최적의 데이터 아키텍처를 설계할 수 있는 분\n\n대용량 분산 처리 및 데이터 플랫폼에 대한 깊은 이해와 엔지니어링 경험을 보유한 분\n\nAirflow, Docker, Kubernetes 기반 데이터 파이프라인 구축 및 운영 경험이 있는 분\n\nKafka 기반 스트림 프로세싱 및 대용량 분산 데이터 처리 경험이 있는 분\n\n데이터 거버넌스(정합성·품질 관리) 및 모니터링 시스템 설계·운영 경험이 있는 분\n\nNeo4j 등 GraphDB를 활용한 서비스 개발 경험이 있는 분\n\n벡터 DB 및 검색 엔진 개발 경험이 있는 분",
+      "content_hash": "e7f3748c13889ffe8fb4f465542a6a2ce8e505f61106ceed7cc9d3471433066c",
+      "evidence_hash": "70e640bc7aac2354dd4fddd351fc1756785a51e4142236e8bd4b98c03264eef9",
+      "experience_min": 4,
+      "experience_max": null,
+      "experience_text": "4년 이상",
+      "id": 2
+    }
+  ],
+  "metrics": {
+    "run_id": "classic-rallit-20260816085326-7a007b7c",
+    "duration_sec": 7.094095,
+    "deadline_remaining_sec": 892.905893,
+    "steps": [],
+    "llm": {
+      "totals": {
+        "input_tokens": 2032,
+        "output_tokens": 751,
+        "total_tokens": 2783,
+        "input_token_details": {
+          "cache_read": 0
+        },
+        "output_token_details": {}
+      },
+      "by_model": {
+        "gemini-3.5-flash-lite": {
+          "input_tokens": 2032,
+          "output_tokens": 751,
+          "total_tokens": 2783,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        }
+      },
+      "cost": {
+        "currency": "USD",
+        "estimated_total": 0.0024871,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\data\\worktrees\\rallit-classic-f711\\config\\model_pricing.json",
+        "priced_model_count": 1,
+        "unpriced_models": [],
+        "items": [
+          {
+            "model": "gemini-3.5-flash-lite",
+            "input_tokens": 2032,
+            "cached_input_tokens": 0,
+            "output_tokens": 751,
+            "estimated_cost_usd": 0.0024871
+          }
+        ]
+      },
+      "calls": [
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 925,
+          "output_tokens": 296,
+          "total_tokens": 1221,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.279909,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 1107,
+          "output_tokens": 455,
+          "total_tokens": 1562,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.730657,
+          "success": true,
+          "error": ""
+        }
+      ]
+    },
+    "outcome": {
+      "status": "completed",
+      "last_phase": "received",
+      "failure_stage": "",
+      "failure_code": ""
+    },
+    "langsmith": {
+      "enabled": false,
+      "project": "l2c-local",
+      "trace_id": ""
+    }
+  }
+}

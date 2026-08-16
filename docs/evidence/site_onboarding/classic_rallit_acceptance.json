@@ -1,0 +1,55 @@
+{
+    "site":  "rallit",
+    "approach":  "classic",
+    "passed":  true,
+    "runs":  [
+                 {
+                     "kind":  "development",
+                     "query":  "백엔드 개발자",
+                     "summary_path":  "docs/evidence/site_onboarding/classic_rallit_backend_summary.json",
+                     "review_path":  "docs/evidence/site_onboarding/classic_rallit_backend_acceptance.json",
+                     "persisted_count":  2,
+                     "automatic_passed":  true,
+                     "runtime_sec":  7.707198,
+                     "total_tokens":  2983,
+                     "estimated_cost_usd":  0.0025823
+                 },
+                 {
+                     "kind":  "acceptance",
+                     "query":  "프론트엔드 개발자",
+                     "summary_path":  "docs/evidence/site_onboarding/classic_rallit_frontend_developer_summary.json",
+                     "review_path":  "docs/evidence/site_onboarding/classic_rallit_frontend_developer_acceptance.json",
+                     "persisted_count":  2,
+                     "automatic_passed":  true,
+                     "runtime_sec":  8.585265,
+                     "total_tokens":  3372,
+                     "estimated_cost_usd":  0.0034316
+                 },
+                 {
+                     "kind":  "acceptance",
+                     "query":  "데이터 엔지니어",
+                     "summary_path":  "docs/evidence/site_onboarding/classic_rallit_data_engineer_summary.json",
+                     "review_path":  "docs/evidence/site_onboarding/classic_rallit_data_engineer_acceptance.json",
+                     "persisted_count":  2,
+                     "automatic_passed":  true,
+                     "runtime_sec":  7.094095,
+                     "total_tokens":  2783,
+                     "estimated_cost_usd":  0.0024871
+                 },
+                 {
+                     "kind":  "acceptance",
+                     "query":  "안드로이드 개발자",
+                     "summary_path":  "docs/evidence/site_onboarding/classic_rallit_android_developer_summary.json",
+                     "review_path":  "docs/evidence/site_onboarding/classic_rallit_android_developer_acceptance.json",
+                     "persisted_count":  2,
+                     "automatic_passed":  true,
+                     "runtime_sec":  6.776292,
+                     "total_tokens":  2312,
+                     "estimated_cost_usd":  0.0017738
+                 }
+             ],
+    "reserve_queries_used":  [
+
+                             ],
+    "reserve_query_reason":  "세 미사용 검색어가 모두 2건을 충족해 예비 검색어로 교체하지 않음"
+}

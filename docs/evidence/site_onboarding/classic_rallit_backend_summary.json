@@ -1,0 +1,247 @@
+{
+  "site": "rallit",
+  "homepage": "https://www.rallit.com/",
+  "query": "백엔드 개발자",
+  "collection_intent": {
+    "original_query": "백엔드 개발자 공고 2건",
+    "site": "rallit",
+    "search_keyword": "백엔드 개발자",
+    "count_mode": "explicit",
+    "target_count": 2,
+    "filters": {
+      "posted_from": "",
+      "posted_to": "",
+      "experience": "",
+      "location": "",
+      "employment_type": ""
+    },
+    "freshness_required": false,
+    "purpose": "collect",
+    "task_category": "검색",
+    "required_fields": [
+      "company_name",
+      "position",
+      "url",
+      "main_tasks",
+      "requirements"
+    ]
+  },
+  "result": {
+    "status": "completed",
+    "message": "Classic 수집 2/2건 완료",
+    "error_code": "",
+    "site": "rallit",
+    "site_name": "rallit",
+    "search_keyword": "백엔드 개발자",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 2,
+    "resolved_count": 2,
+    "persisted_count": 2,
+    "created_count": 2,
+    "updated_count": 0,
+    "rejected_count": 0,
+    "persisted_items": [
+      {
+        "job_id": 1,
+        "url": "https://www.rallit.com/positions/4233/%EB%AF%B8%EB%A6%AC%EC%BA%94%EB%B2%84%EC%8A%A4-%EC%8B%9C%EB%8B%88%EC%96%B4-%EB%B0%B1%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+        "company_name": "미리디",
+        "position": "[미리캔버스] 시니어 백엔드 개발자",
+        "operation": "created"
+      },
+      {
+        "job_id": 2,
+        "url": "https://www.rallit.com/positions/677/%EB%B0%B1%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+        "company_name": "21세기전파상",
+        "position": "백엔드 개발자",
+        "operation": "created"
+      }
+    ],
+    "observed_job_ids": [],
+    "document_ids": [
+      1,
+      2
+    ],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "classic-bc8e64ed-1d8c-4836-8677-71604e8ac661"
+  },
+  "jobs": [
+    {
+      "company_name": "미리디",
+      "position": "[미리캔버스] 시니어 백엔드 개발자",
+      "url": "https://www.rallit.com/positions/4233/%EB%AF%B8%EB%A6%AC%EC%BA%94%EB%B2%84%EC%8A%A4-%EC%8B%9C%EB%8B%88%EC%96%B4-%EB%B0%B1%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+      "job_category": "백엔드 개발자",
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Java",
+        "Spring",
+        "AWS"
+      ],
+      "main_tasks": [
+        "미리캔버스의 백엔드 설계 및 고도화",
+        "글로벌 트래픽 처리를 위한 MSA 아키텍처 환경에서 실시간 동시 편집, AI 검색/추천 등 핵심 시스템 설계 및 고도화",
+        "결제, 회원, 검색 등 핵심 도메인의 비즈니스 로직 설계 및 운영",
+        "아이디어 제안과 기술 결정 참여 및 주도적 서비스 설계 및 개선"
+      ],
+      "requirements": [
+        "Java, Spring, AWS 기반 웹 백엔드 서비스 개발 경험",
+        "RESTful API 설계 및 개발 경험",
+        "데이터베이스 성능 최적화와 효율적인 쿼리 작성에 대한 관심",
+        "대규모 트래픽 환경에서의 서비스 최적화 경험",
+        "컴퓨터 과학의 기본 원리와 자료구조, 알고리즘에 대한 깊은 이해",
+        "복잡한 기술적 이슈에 대한 최적의 해결책 제시 및 팀의 기술 로드맵 주도적 설계 경험",
+        "AI 도구를 개발 워크플로우에 도입하고, 결과물을 비판적으로 검증하며 활용해 본 경험"
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "rallit",
+      "raw_ocr_text": "회사명\n미리디\n\n직무명\n[미리캔버스] 시니어 백엔드 개발자\n\n주요업무\n\n| ​팀 ​소개\n\n전 ​세계 수백만 ​사용자가 이용하는 글로벌 디자인 ​플랫폼, ​미리캔버스의 백엔드를 ​책임집니다.\n\n글로벌 트래픽 처리를 ​위한 MSA ​아키텍처 ​위에서 실시간 ​동시 ​편집, ​AI 검색/추천 등 ​기술적 ​난이도가 높은 핵심 ​시스템을 ​설계하고 ​고도화합니다.\n\n결제, 회원, 검색 ​등 서비스의 ​근간이 ​되는 핵심 ​도메인의 비즈니스 ​로직을 ​설계하고 운영합니다.\n\n아이디어 제안과 ​기술 결정에 ​적극적으로 참여하고, 주도적으로 서비스 설계와 개선을 이끌어갑니다.\n\n완벽한 답보다 함께 질문하며, 더 나은 해답을 찾아가는 과정을 중시합니다.\n\n세미나, 회고, 스터디, 컨퍼런스 등을 통해 함께 배우고 성장하는 문화를 만듭니다.\n\n아래 게시글을 통해 미리디 백엔드 팀의 일하는 방식을 미리 만나보세요!\n\n👉 \"함께 도전하고, 함께 성장하는 미리캔버스 백엔드 팀\" 소개 페이지 바로 가기\n\n자격요건\n\nJava, Spring, AWS 기반 웹 백엔드 서비스 개발 경험이 있으신 분\n\nRESTful API 설계 및 개발에 익숙하신 분\n\n데이터베이스 성능 최적화와 효율적인 쿼리 작성에 관심이 많으신 분\n\n대규모 트래픽 환경에서의 서비스 최적화 경험이 있으신 분\n\n컴퓨터 과학의 기본 원리와 자료구조, 알고리즘에 대한 깊은 이해가 있으신 분\n\n복잡한 기술적 이슈에 대해 최적의 해결책을 제시하고, 팀의 기술 로드맵을 주도적으로 설계해 본 경험이 있으신 분\n\nAI 도구를 개발 워크플로우에 도입하고, 그 결과물을 비판적으로 검증하며 활용해 본 경험이 있으신 분",
+      "content_hash": "7270c95818de2d96af779a9bfc329e9b78e301d8ad1192fac4382076f25249a7",
+      "evidence_hash": "a946a3b758815182a9abaf73e4af6f0c3082d6b11b4d681adcdba9946637f16d",
+      "experience_min": null,
+      "experience_max": null,
+      "experience_text": null,
+      "id": 1
+    },
+    {
+      "company_name": "21세기전파상",
+      "position": "백엔드 개발자",
+      "url": "https://www.rallit.com/positions/677/%EB%B0%B1%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "Git",
+        "Node.js",
+        "Express",
+        "Nest.js",
+        "AWS",
+        "NCP"
+      ],
+      "main_tasks": [
+        "21세기전파상 웹/앱 어플리케이션 개발",
+        "API관리 및 운영시스템 개발",
+        "21세기전파상 서비스 전반의 시스템을 개발합니다.",
+        "시스템 모니터링을 통해 이슈를 추적하고 성능을 개선합니다.",
+        "전체적인 비지니스의 요구사항을 함께 파악하고, 서비스의 흐름을 고민하며 문제를 해결하기 위해서 필요한 기술들을 빠르게 습득하고 적용 합니다."
+      ],
+      "requirements": [
+        "Git 사용 및 전반적인 소스 CI/CD 경험자",
+        "Node.js express Nest.js Framework 개발 경험이 있으신 분",
+        "RESTful API구축 및 설계 경험이 있으신 분",
+        "외부 rest api 연동 및 Oauth2 기본 개념을 가지고 있으신 분",
+        "CentOS 및 클라우드 컴퓨팅 서버(AWS, NCP)관련한 지식이 있으신 분"
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "rallit",
+      "raw_ocr_text": "회사명\n21세기전파상\n\n직무명\n백엔드 개발자\n\n주요업무\n21세기전파상 웹/앱 어플리케이션 개발\nAPI관리 및 운영시스템 개발\n21세기전파상 서비스 전반의 시스템을 개발합니다.\n시스템 모니터링을 통해 이슈를 추적하고 성능을 개선합니다.\n전체적인 비지니스의 요구사항을 함께 파악하고, 서비스의 흐름을 고민하며 문제를 해결하기 위해서 필요한 기술들을 빠르게 습득하고 적용 합니다.\n\n자격요건\nGit 사용 및 전반적인 소스 CI/CD 경험자\nNode.js express Nest.js Framework 개발 경험이 있으신 분\nRESTful API구축 및 설계 경험이 있으신 분\n외부 rest api 연동 및 Oauth2 기본 개념을 가지고 있으신 분\nCentOS 및 클라우드 컴퓨팅 서버(AWS, NCP)관련한 지식이 있으신 분",
+      "content_hash": "a138dd2f1999a9631ad8b0951d60dc42f80a4b0427f689990666b288b6f9a480",
+      "evidence_hash": "7faba3f8427e44675828683aea467386ce154c90e39f461f635818d85d8a68d3",
+      "experience_min": null,
+      "experience_max": null,
+      "experience_text": null,
+      "id": 2
+    }
+  ],
+  "metrics": {
+    "run_id": "classic-rallit-20260816085242-7f1fa8f1",
+    "duration_sec": 7.707198,
+    "deadline_remaining_sec": 892.292791,
+    "steps": [],
+    "llm": {
+      "totals": {
+        "input_tokens": 2216,
+        "output_tokens": 767,
+        "total_tokens": 2983,
+        "input_token_details": {
+          "cache_read": 0
+        },
+        "output_token_details": {}
+      },
+      "by_model": {
+        "gemini-3.5-flash-lite": {
+          "input_tokens": 2216,
+          "output_tokens": 767,
+          "total_tokens": 2983,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        }
+      },
+      "cost": {
+        "currency": "USD",
+        "estimated_total": 0.0025823,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\data\\worktrees\\rallit-classic-f711\\config\\model_pricing.json",
+        "priced_model_count": 1,
+        "unpriced_models": [],
+        "items": [
+          {
+            "model": "gemini-3.5-flash-lite",
+            "input_tokens": 2216,
+            "cached_input_tokens": 0,
+            "output_tokens": 767,
+            "estimated_cost_usd": 0.0025823
+          }
+        ]
+      },
+      "calls": [
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 1235,
+          "output_tokens": 396,
+          "total_tokens": 1631,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.842394,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 981,
+          "output_tokens": 371,
+          "total_tokens": 1352,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.535143,
+          "success": true,
+          "error": ""
+        }
+      ]
+    },
+    "outcome": {
+      "status": "completed",
+      "last_phase": "received",
+      "failure_stage": "",
+      "failure_code": ""
+    },
+    "langsmith": {
+      "enabled": false,
+      "project": "l2c-local",
+      "trace_id": ""
+    }
+  }
+}

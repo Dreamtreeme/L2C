@@ -1,0 +1,272 @@
+{
+  "site": "rallit",
+  "homepage": "https://www.rallit.com/",
+  "query": "프론트엔드 개발자",
+  "collection_intent": {
+    "original_query": "프론트엔드 개발자 공고 2건",
+    "site": "rallit",
+    "search_keyword": "프론트엔드 개발자",
+    "count_mode": "explicit",
+    "target_count": 2,
+    "filters": {
+      "posted_from": "",
+      "posted_to": "",
+      "experience": "",
+      "location": "",
+      "employment_type": ""
+    },
+    "freshness_required": false,
+    "purpose": "collect",
+    "task_category": "검색",
+    "required_fields": [
+      "company_name",
+      "position",
+      "url",
+      "main_tasks",
+      "requirements"
+    ]
+  },
+  "result": {
+    "status": "completed",
+    "message": "Classic 수집 2/2건 완료",
+    "error_code": "",
+    "site": "rallit",
+    "site_name": "rallit",
+    "search_keyword": "프론트엔드 개발자",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 2,
+    "resolved_count": 2,
+    "persisted_count": 2,
+    "created_count": 2,
+    "updated_count": 0,
+    "rejected_count": 0,
+    "persisted_items": [
+      {
+        "job_id": 1,
+        "url": "https://www.rallit.com/positions/4125/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+        "company_name": "인프랩 (인프런)",
+        "position": "프론트엔드 개발자",
+        "operation": "created"
+      },
+      {
+        "job_id": 2,
+        "url": "https://www.rallit.com/positions/308/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+        "company_name": "플루토스디에스 주식회사",
+        "position": "프론트엔드 개발자",
+        "operation": "created"
+      }
+    ],
+    "observed_job_ids": [],
+    "document_ids": [
+      1,
+      2
+    ],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "classic-9890095f-c0dc-4bc9-aedc-2cf90bca2cf8"
+  },
+  "jobs": [
+    {
+      "company_name": "인프랩 (인프런)",
+      "position": "프론트엔드 개발자",
+      "url": "https://www.rallit.com/positions/4125/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "TypeScript",
+        "React",
+        "Next.js",
+        "React Native",
+        "pnpm",
+        "Turborepo",
+        "Module Federation",
+        "TanStack Query",
+        "Mantine",
+        "Mixpanel",
+        "GTM",
+        "Hackle",
+        "i18next",
+        "locize",
+        "Datadog",
+        "HTML",
+        "CSS",
+        "Git",
+        "Github"
+      ],
+      "main_tasks": [
+        "TypeScript, React, Next.js(Pages Router) 기반으로 인프런 서비스의 웹 프론트엔드를 개발하고 배포합니다.",
+        "React Native 기반으로 인프런 Android/iOS 모바일 앱을 개발하고 배포합니다.",
+        "pnpm + Turborepo 모노레포 환경에서 웹과 모바일이 함께 사용하는 공용 패키지와 서비스 코드를 관리합니다.",
+        "Module Federation(Micro Frontend)을 활용해 독립적으로 개발·배포 가능한 프론트엔드 아키텍처를 운영합니다.",
+        "TanStack Query를 활용한 서버 상태 관리와 SSR/CSR을 상황에 맞게 적절히 선택하여 최적의 사용자 경험을 제공합니다.",
+        "상황에 맞게 네이티브 구현과 WebView 구현을 적절히 나눠 진행합니다.",
+        "Mantine 기반 자체 디자인 시스템을 활용해 일관된 UI를 구현하고, 재사용 가능한 컴포넌트를 개발합니다.",
+        "Mixpanel, GTM 등을 활용한 사용자 행동 분석과 Hackle을 통한 A/B 테스트로 데이터 기반의 제품 개선에 참여합니다.",
+        "i18next, locize를 활용해 한국어, 영어, 일본어, 베트남어 등 다국어 서비스를 지원합니다.",
+        "Datadog을 통해 웹/모바일 에러 추적, 페이지 로드 시간, API 응답 속도 등을 실시간으로 모니터링하며 성능 병목 지점을 발견하고 개선합니다.",
+        "코드리뷰(온라인 PR, 오프라인 페어프로그래밍)를 통해 함께 성장하는 문화를 만들어 갑니다."
+      ],
+      "requirements": [
+        "개발팀의 미션과 가치에 동의하시는 분",
+        "TypeScript에 대한 이해가 있으며, 정적 타입 기반의 안정적인 개발을 지향하시는 분",
+        "React 기반 프론트엔드 개발 경험이 있으신 분",
+        "HTML, CSS 등 마크업에 대한 충분한 이해도가 있으신 분",
+        "SSR, CSR에 대한 기본적인 이해가 있으신 분",
+        "HTTP 통신에 대한 기본적인 이해, RESTful API에 대한 설계나 개발 경험이 있으신 분",
+        "반응형 웹 개발에 대한 이해가 있으신 분",
+        "Git과 Github에 대한 기본적인 사용법을 알고 있고, Git Flow를 이해하고 계신 분"
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "rallit",
+      "raw_ocr_text": "회사명\n인프랩 (인프런)\n\n직무명\n프론트엔드 개발자\n\n주요업무\n\nTypeScript, React, Next.js(Pages Router) 기반으로 인프런 서비스의 웹 프론트엔드를 개발하고 배포합니다.\n\nReact Native 기반으로 인프런 Android/iOS 모바일 앱을 개발하고 배포합니다.\n\npnpm + Turborepo 모노레포 환경에서 웹과 모바일이 함께 사용하는 공용 패키지와 서비스 코드를 관리합니다.\n\nModule Federation(Micro Frontend)을 활용해 독립적으로 개발·배포 가능한 프론트엔드 아키텍처를 운영합니다.\n\nTanStack Query를 활용한 서버 상태 관리와 SSR/CSR을 상황에 맞게 적절히 선택하여 최적의 사용자 경험을 제공합니다.\n\n상황에 맞게 네이티브 구현과 WebView 구현을 적절히 나눠 진행합니다.\n\nMantine 기반 자체 디자인 시스템을 활용해 일관된 UI를 구현하고, 재사용 가능한 컴포넌트를 개발합니다.\n\nMixpanel, GTM 등을 활용한 사용자 행동 분석과 Hackle을 통한 A/B 테스트로 데이터 기반의 제품 개선에 참여합니다.\n\ni18next, locize를 활용해 한국어, 영어, 일본어, 베트남어 등 다국어 서비스를 지원합니다.\n\nDatadog을 통해 웹/모바일 에러 추적, 페이지 로드 시간, API 응답 속도 등을 실시간으로 모니터링하며 성능 병목 지점을 발견하고 개선합니다.\n\n코드리뷰(온라인 PR, 오프라인 페어프로그래밍)를 통해 함께 성장하는 문화를 만들어 갑니다.\n\n자격요건\n\n아래 개발팀의 미션과 가치에 동의하시는 분이어야 합니다.\nhttps://tech.inflab.com/20231117-devteam-value/\n\nTypeScript에 대한 이해가 있으며, 정적 타입 기반의 안정적인 개발을 지향하시는 분\n\nReact 기반 프론트엔드 개발 경험이 있으신 분\n\nHTML, CSS 등 마크업에 대한 충분한 이해도가 있으신 분\n\nSSR, CSR에 대한 기본적인 이해가 있으신 분\n\nHTTP 통신에 대한 기본적인 이해, RESTful API에 대한 설계나 개발 경험이 있으신 분\n\n반응형 웹 개발에 대한 이해가 있으신 분\n\nGit과 Github에 대한 기본적인 사용법을 알고 있고, Git Flow를 이해하고 계신 분",
+      "content_hash": "99443c7affd8706e6bd8da5096fae69a6f24adb99304039e2b2fce5f3715e85a",
+      "evidence_hash": "da31eed9c3ec65004a80ff6d2954f06b6f56ed603a7eec76cef7277df23ad928",
+      "experience_min": null,
+      "experience_max": null,
+      "experience_text": null,
+      "id": 1
+    },
+    {
+      "company_name": "플루토스디에스 주식회사",
+      "position": "프론트엔드 개발자",
+      "url": "https://www.rallit.com/positions/308/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+      "job_category": null,
+      "education": null,
+      "employment_type": null,
+      "location": null,
+      "posted_at": null,
+      "posted_at_text": null,
+      "deadline": null,
+      "tech_stack": [
+        "React",
+        "Angular",
+        "Vue",
+        "HTML",
+        "Javascript",
+        "CSS",
+        "Redux",
+        "MobX",
+        "Git"
+      ],
+      "main_tasks": [
+        "한빗코 가상자산 거래소 웹페이지 및 웹앱 UI/UX 개선 및 사이트 개발",
+        "한빗코를 사용하는 고객들의 만족스러운 사용자 경험을 위한 프론트엔드 개발"
+      ],
+      "requirements": [
+        "React, Angular, Vue 이용한 웹프론트엔드 개발 경력 3년 이상이신 분 혹은 이에 준하는 경험이 있으신 분",
+        "HTML, Javascript(ES6+), CSS에 대한 이해가 깊은 분",
+        "Redux, MobX 등을 활용한 상태관리에 능숙하신 분",
+        "원활한 커뮤니케이션 능력을 소유하신 분",
+        "블록체인 및 가상자산 업계 혹은 주식투자에 관심이 있으신 분",
+        "Git 기반의 협업과 버전관리에 능하신 분"
+      ],
+      "preferred": [],
+      "benefits": [],
+      "salary": null,
+      "source_platform": "rallit",
+      "raw_ocr_text": "회사명\n플루토스디에스 주식회사\n\n직무명\n프론트엔드 개발자\n\n주요업무\n한빗코 가상자산 거래소 웹페이지 및 웹앱 UI/UX 개선 및 사이트 개발\n한빗코를 사용하는 고객들의 만족스러운 사용자 경험을 위한 프론트엔드 개발\n\n자격요건\nReact, Angular, Vue 이용한 웹프론트엔드 개발 경력 3년 이상이신 분 혹은 이에 준하는 경험이 있으신 분\nHTML, Javascript(ES6+), CSS에 대한 이해가 깊은 분\nRedux, MobX 등을 활용한 상태관리에 능숙하신 분\n원활한 커뮤니케이션 능력을 소유하신 분\n블록체인 및 가상자산 업계 혹은 주식투자에 관심이 있으신 분\nGit 기반의 협업과 버전관리에 능하신 분",
+      "content_hash": "2df6da10887b3db19cbf842ca6ef4791d805a1b0dddac9ea5854c6401b7ee65f",
+      "evidence_hash": "d973187cfdf745be8268f5c93b4d3e13588ef2d802736576940bcb323bf5fa3d",
+      "experience_min": 3,
+      "experience_max": null,
+      "experience_text": "3년 이상",
+      "id": 2
+    }
+  ],
+  "metrics": {
+    "run_id": "classic-rallit-20260816085304-c39d2f33",
+    "duration_sec": 8.585265,
+    "deadline_remaining_sec": 891.414722,
+    "steps": [],
+    "llm": {
+      "totals": {
+        "input_tokens": 2272,
+        "output_tokens": 1100,
+        "total_tokens": 3372,
+        "input_token_details": {
+          "cache_read": 0
+        },
+        "output_token_details": {}
+      },
+      "by_model": {
+        "gemini-3.5-flash-lite": {
+          "input_tokens": 2272,
+          "output_tokens": 1100,
+          "total_tokens": 3372,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        }
+      },
+      "cost": {
+        "currency": "USD",
+        "estimated_total": 0.0034316,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\data\\worktrees\\rallit-classic-f711\\config\\model_pricing.json",
+        "priced_model_count": 1,
+        "unpriced_models": [],
+        "items": [
+          {
+            "model": "gemini-3.5-flash-lite",
+            "input_tokens": 2272,
+            "cached_input_tokens": 0,
+            "output_tokens": 1100,
+            "estimated_cost_usd": 0.0034316
+          }
+        ]
+      },
+      "calls": [
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 1303,
+          "output_tokens": 756,
+          "total_tokens": 2059,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 2.532729,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "classic_extraction",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 969,
+          "output_tokens": 344,
+          "total_tokens": 1313,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.594935,
+          "success": true,
+          "error": ""
+        }
+      ]
+    },
+    "outcome": {
+      "status": "completed",
+      "last_phase": "received",
+      "failure_stage": "",
+      "failure_code": ""
+    },
+    "langsmith": {
+      "enabled": false,
+      "project": "l2c-local",
+      "trace_id": ""
+    }
+  }
+}

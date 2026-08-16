@@ -1,0 +1,434 @@
+diff --git a/agent/tests/core/test_classic_normalization.py b/agent/tests/core/test_classic_normalization.py
+new file mode 100644
+index 0000000..72334b7
+--- /dev/null
++++ b/agent/tests/core/test_classic_normalization.py
+@@ -0,0 +1,44 @@
++from classic.extractor.normalization import normalize_dom_posting
++
++
++class _Engine:
++    def extract_from_text(self, _text):
++        return {
++            "company_name": "LLM 회사",
++            "position": "LLM 정규화 제목",
++            "main_tasks": ["API 개발"],
++            "requirements": ["Python 경험"],
++        }
++
++
++def test_dom_identity_fields_override_llm_normalization():
++    posting = normalize_dom_posting(
++        {
++            "company_name": "DOM 회사",
++            "position": "[제품] DOM 원문 제목",
++            "full_text": "주요업무 API 개발 자격요건 Python 경험",
++            "identity_authoritative": True,
++        },
++        url="https://example.com/positions/dynamic",
++        source_platform="example",
++        engine=_Engine(),
++    )
++
++    assert posting.company_name == "DOM 회사"
++    assert posting.position == "[제품] DOM 원문 제목"
++
++
++def test_llm_identity_fields_remain_default():
++    posting = normalize_dom_posting(
++        {
++            "company_name": "DOM 회사",
++            "position": "DOM 원문 제목",
++            "full_text": "주요업무 API 개발 자격요건 Python 경험",
++        },
++        url="https://example.com/positions/dynamic",
++        source_platform="example",
++        engine=_Engine(),
++    )
++
++    assert posting.company_name == "LLM 회사"
++    assert posting.position == "LLM 정규화 제목"
+diff --git a/agent/tests/core/test_rallit_adapter.py b/agent/tests/core/test_rallit_adapter.py
+new file mode 100644
+index 0000000..ae76601
+--- /dev/null
++++ b/agent/tests/core/test_rallit_adapter.py
+@@ -0,0 +1,96 @@
++from urllib.parse import parse_qs, urlsplit
++
++from playwright.sync_api import sync_playwright
++
++from classic.automation.sites.rallit import RallitAdapter
++
++
++SEARCH_PAGE = """
++<!doctype html>
++<html lang="ko">
++  <body>
++    <main>
++      <input aria-label="채용 공고 탐색 메인 검색창" />
++      <button
++        type="button"
++        onclick="location.href='/?keyword=' + encodeURIComponent(document.querySelector('input').value)"
++      >검색</button>
++      <a href="/positions/dynamic-a/first">동적 공고 A</a>
++      <a href="/positions/dynamic-b/second">동적 공고 B</a>
++      <a href="/positions/dynamic-a/first">중복 공고</a>
++      <a href="https://example.com/positions/external">외부 공고</a>
++      <a href="/companies/example">회사</a>
++      <a href="/positions/hidden" style="display:none">숨김 공고</a>
++    </main>
++  </body>
++</html>
++"""
++
++DETAIL_PAGE = """
++<!doctype html>
++<html lang="ko">
++  <body>
++    <main>
++      <header>
++        <h2>테스트 회사</h2>
++        <h1>서버 개발자</h1>
++      </header>
++      <section>
++        <div><h3>주요업무</h3></div>
++        <div>API를 설계하고 운영합니다.</div>
++      </section>
++      <section>
++        <div><h3>자격요건</h3></div>
++        <div>Python 개발 경험이 필요합니다.</div>
++      </section>
++      <section>
++        <h2>비슷한 채용 공고</h2>
++        <p>현재 공고와 무관한 텍스트</p>
++      </section>
++    </main>
++  </body>
++</html>
++"""
++
++
++def test_rallit_adapter_searches_lists_dynamic_urls_and_extracts_detail():
++    adapter = RallitAdapter()
++
++    with sync_playwright() as playwright:
++        browser = playwright.chromium.launch(headless=True)
++        page = browser.new_page()
++        page.route(
++            "https://www.rallit.com/**",
++            lambda route: route.fulfill(
++                status=200,
++                content_type="text/html; charset=utf-8",
++                body=SEARCH_PAGE,
++            ),
++        )
++        page.goto("https://www.rallit.com/")
++
++        adapter.submit_search(page, "동적 검색어")
++        assert parse_qs(urlsplit(page.url).query)["keyword"] == ["동적 검색어"]
++        assert adapter.list_detail_urls(page, 2) == [
++            "https://www.rallit.com/positions/dynamic-a/first",
++            "https://www.rallit.com/positions/dynamic-b/second",
++        ]
++
++        page.set_content(DETAIL_PAGE)
++        extraction = adapter.extract(page)
++        browser.close()
++
++    assert extraction["company_name"] == "테스트 회사"
++    assert extraction["position"] == "서버 개발자"
++    assert "API를 설계하고 운영합니다." in str(extraction["full_text"])
++    assert "Python 개발 경험이 필요합니다." in str(extraction["full_text"])
++    assert "현재 공고와 무관한 텍스트" not in str(extraction["full_text"])
++
++
++def test_rallit_adapter_matches_only_official_job_site_hosts():
++    adapter = RallitAdapter()
++
++    assert adapter.matches("https://www.rallit.com/")
++    assert adapter.matches("https://rallit.com/positions/example")
++    assert not adapter.matches("https://business.rallit.com/")
++    assert not adapter.matches("https://example.com/rallit.com")
+diff --git a/benchmark/run_rallit_classic.py b/benchmark/run_rallit_classic.py
+new file mode 100644
+index 0000000..d574290
+--- /dev/null
++++ b/benchmark/run_rallit_classic.py
+@@ -0,0 +1,84 @@
++"""랠릿 Classic 수집을 격리 SQLite DB와 JSON summary로 실행한다."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++from typing import Any
++
++from agent.observability.run_context import run_context
++from classic.automation.collection import ClassicCollectionRunner
++from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
++from shared.schema.collection_intent import CollectionIntent
++
++
++RALLIT_HOMEPAGE = "https://www.rallit.com/"
++
++
++def run_rallit_classic(
++    query: str,
++    *,
++    db_path: Path,
++    target_count: int = 2,
++) -> dict[str, Any]:
++    """공식 홈페이지에서 검색을 시작해 공통 수집 결과와 메트릭을 반환한다."""
++
++    required_fields = list(DEFAULT_JOB_COLLECTION_FIELDS)
++    intent = CollectionIntent(
++        original_query=f"{query} 공고 {target_count}건",
++        site="rallit",
++        search_keyword=query,
++        target_count=target_count,
++        required_fields=required_fields,
++    )
++    runner = ClassicCollectionRunner(db_path=db_path)
++    with run_context(query=query, prefix="classic-rallit") as (context, _created):
++        result = runner.run(RALLIT_HOMEPAGE, intent)
++        context.set_outcome(result.status)
++        jobs = [
++            job.model_dump(mode="json")
++            for job in runner.db.load_jobs(result.document_ids)
++        ]
++        metrics = context.snapshot()
++
++    return {
++        "site": "rallit",
++        "homepage": RALLIT_HOMEPAGE,
++        "query": query,
++        "collection_intent": intent.model_dump(mode="json"),
++        "result": result.model_dump(mode="json"),
++        "jobs": jobs,
++        "metrics": metrics,
++    }
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(
++        description="랠릿에서 Classic DOM 방식으로 채용공고를 수집합니다."
++    )
++    parser.add_argument("--query", required=True)
++    parser.add_argument("--db-path", type=Path, required=True)
++    parser.add_argument("--output", type=Path, required=True)
++    parser.add_argument("--target-count", type=int, default=2)
++    args = parser.parse_args()
++
++    payload = run_rallit_classic(
++        args.query,
++        db_path=args.db_path,
++        target_count=args.target_count,
++    )
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(
++        json.dumps(payload, ensure_ascii=False, indent=2),
++        encoding="utf-8",
++    )
++    print(json.dumps(payload, ensure_ascii=False, indent=2))
++    return 0 if payload["result"]["status"] == "completed" else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
++
++
++__all__ = ["RALLIT_HOMEPAGE", "run_rallit_classic"]
+diff --git a/classic/automation/sites/__init__.py b/classic/automation/sites/__init__.py
+index f12f2e2..b446193 100644
+--- a/classic/automation/sites/__init__.py
++++ b/classic/automation/sites/__init__.py
+@@ -9,6 +9,7 @@ from .base import CollectionSiteAdapter, SiteAdapter
+ from .wanted import WantedAdapter
+ from .jobkorea import JobKoreaAdapter
+ from .rocketpunch import RocketpunchAdapter
++from .rallit import RallitAdapter
+ 
+ # 디스패처가 순서대로 matches()를 호출하므로,
+ # 더 구체적인 어댑터를 위에 두는 게 안전합니다.
+@@ -16,6 +17,7 @@ ADAPTERS: list[SiteAdapter] = [
+     WantedAdapter(),
+     JobKoreaAdapter(),
+     RocketpunchAdapter(),
++    RallitAdapter(),
+ ]
+ 
+ 
+@@ -45,6 +47,7 @@ __all__ = [
+     "WantedAdapter",
+     "JobKoreaAdapter",
+     "RocketpunchAdapter",
++    "RallitAdapter",
+     "ADAPTERS",
+     "resolve_adapter",
+     "resolve_collection_adapter",
+diff --git a/classic/automation/sites/base.py b/classic/automation/sites/base.py
+index 7423f77..3b14b19 100644
+--- a/classic/automation/sites/base.py
++++ b/classic/automation/sites/base.py
+@@ -10,7 +10,7 @@
+ from __future__ import annotations
+ 
+ from abc import ABC, abstractmethod
+-from typing import Any, TypedDict
++from typing import Any, NotRequired, TypedDict
+ 
+ 
+ class DomExtraction(TypedDict):
+@@ -19,6 +19,7 @@ class DomExtraction(TypedDict):
+     company_name: str | None
+     position: str | None
+     full_text: str | None
++    identity_authoritative: NotRequired[bool]
+ 
+ 
+ class SiteAdapter(ABC):
+diff --git a/classic/automation/sites/rallit.py b/classic/automation/sites/rallit.py
+new file mode 100644
+index 0000000..1a7b9d9
+--- /dev/null
++++ b/classic/automation/sites/rallit.py
+@@ -0,0 +1,111 @@
++"""랠릿(Rallit) 홈페이지 검색과 상세 공고 DOM 추출 어댑터."""
++
++from __future__ import annotations
++
++from typing import Any
++from urllib.parse import parse_qs, urljoin, urlsplit
++
++from .base import CollectionSiteAdapter, DomExtraction, get_inner_text_safe
++
++
++SEARCH_LABEL = "채용 공고 탐색 메인 검색창"
++SEARCH_BUTTON = "검색"
++MAIN_TASKS_HEADING = "주요업무"
++REQUIREMENTS_HEADING = "자격요건"
++
++
++def _query_keyword(url: str) -> str:
++    values = parse_qs(urlsplit(url).query).get("keyword") or []
++    return str(values[0]).strip() if values else ""
++
++
++def _nearest_section_text(heading: Any) -> str:
++    if not heading.is_visible():
++        return ""
++    text = heading.evaluate("(node) => node.closest('section')?.innerText || ''")
++    return str(text or "").strip()
++
++
++class RallitAdapter(CollectionSiteAdapter):
++    """랠릿 검색 결과를 따라가 필수 채용공고 본문을 추출한다."""
++
++    name = "rallit"
++
++    def matches(self, url: str) -> bool:
++        host = (urlsplit(url).hostname or "").casefold()
++        return host in {"rallit.com", "www.rallit.com"}
++
++    def submit_search(self, page: Any, keyword: str) -> None:
++        normalized = str(keyword or "").strip()
++        if not normalized:
++            raise ValueError("랠릿 검색어는 비어 있을 수 없습니다.")
++
++        page.get_by_label(SEARCH_LABEL, exact=True).fill(normalized)
++        page.get_by_role("button", name=SEARCH_BUTTON, exact=True).click()
++        page.wait_for_url(lambda url: _query_keyword(url) == normalized)
++        page.wait_for_load_state("domcontentloaded")
++
++    def list_detail_urls(self, page: Any, limit: int | None) -> list[str]:
++        urls: list[str] = []
++        seen: set[str] = set()
++        for link in page.get_by_role("link").all():
++            if not link.is_visible():
++                continue
++            href = str(link.get_attribute("href") or "").strip()
++            candidate = urljoin(page.url, href)
++            parts = urlsplit(candidate)
++            segments = [segment for segment in parts.path.split("/") if segment]
++            if (
++                not self.matches(candidate)
++                or len(segments) < 2
++                or segments[0] != "positions"
++                or candidate in seen
++            ):
++                continue
++            seen.add(candidate)
++            urls.append(candidate)
++            if limit is not None and len(urls) >= limit:
++                break
++        return urls
++
++    def extract(self, page: Any) -> DomExtraction:
++        position_heading = page.get_by_role("heading", level=1).first
++        position_heading.wait_for(state="visible")
++        header = position_heading.locator("..")
++        company_heading = header.get_by_role("heading", level=2).first
++
++        company_name = get_inner_text_safe(company_heading)
++        position = get_inner_text_safe(position_heading)
++        main_tasks = _nearest_section_text(
++            page.get_by_role(
++                "heading",
++                name=MAIN_TASKS_HEADING,
++                exact=True,
++            ).first
++        )
++        requirements = _nearest_section_text(
++            page.get_by_role(
++                "heading",
++                name=REQUIREMENTS_HEADING,
++                exact=True,
++            ).first
++        )
++        full_text = "\n\n".join(
++            part
++            for part in (
++                f"회사명\n{company_name}" if company_name else "",
++                f"직무명\n{position}" if position else "",
++                main_tasks,
++                requirements,
++            )
++            if part
++        )
++        return {
++            "company_name": company_name,
++            "position": position,
++            "full_text": full_text,
++            "identity_authoritative": True,
++        }
++
++
++__all__ = ["RallitAdapter"]
+diff --git a/classic/extractor/normalization.py b/classic/extractor/normalization.py
+index 62410bb..680ce8a 100644
+--- a/classic/extractor/normalization.py
++++ b/classic/extractor/normalization.py
+@@ -42,10 +42,19 @@ def normalize_dom_posting(
+     if not full_text:
+         raise ValueError("상세 페이지의 DOM 본문이 비어 있습니다.")
+     posting = JobPosting.model_validate(engine.extract_from_text(full_text))
++    identity_authoritative = bool(extraction.get("identity_authoritative"))
+     posting = posting.model_copy(
+         update={
+-            "company_name": posting.company_name or extraction.get("company_name"),
+-            "position": posting.position or extraction.get("position"),
++            "company_name": (
++                extraction.get("company_name") or posting.company_name
++                if identity_authoritative
++                else posting.company_name or extraction.get("company_name")
++            ),
++            "position": (
++                extraction.get("position") or posting.position
++                if identity_authoritative
++                else posting.position or extraction.get("position")
++            ),
+         }
+     )
+     posting = complete_extracted_job(

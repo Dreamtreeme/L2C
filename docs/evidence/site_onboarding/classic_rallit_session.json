@@ -1,0 +1,71 @@
+{
+  "site": "rallit",
+  "homepage": "https://www.rallit.com/",
+  "approach": "classic",
+  "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+  "result_sha": "5053d228d4c12028947790413f547e4aa7a636b3",
+  "task_id": "",
+  "codex_model": "GPT-5 Codex",
+  "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+  "started_at": "2026-08-15T23:32:11.337556Z",
+  "first_success_at": "2026-08-15T23:43:22.190319Z",
+  "finished_at": "2026-08-15T23:55:14Z",
+  "status": "completed",
+  "human_interventions": [],
+  "fix_iterations": [
+    "Ruff format --check가 rallit.py의 다중행 표현식 포맷 불일치를 감지해 자동 포맷 적용",
+    "LLM 정제가 상세 H1 제목의 괄호 표기를 제거해 exact identity 판정 위험이 있어 identity_authoritative 명시적 opt-in 계약으로 좁혀 기존 어댑터 기본값 보존"
+  ],
+  "site_specific_changed_loc": 114,
+  "common_runtime_changed_loc": 16,
+  "modified_product_files": [
+    "classic/automation/sites/__init__.py",
+    "classic/automation/sites/base.py",
+    "classic/automation/sites/rallit.py",
+    "classic/extractor/normalization.py"
+  ],
+  "locator_count": 8,
+  "profile_line_count": 0,
+  "acceptance_runs": [
+    {
+      "query": "프론트엔드 개발자",
+      "summary_path": "docs/evidence/site_onboarding/classic_rallit_frontend_developer_summary.json",
+      "review_path": "docs/evidence/site_onboarding/classic_rallit_frontend_developer_acceptance.json",
+      "passed": true,
+      "runtime_sec": 8.585265,
+      "total_tokens": 3372,
+      "estimated_cost_usd": 0.0034316
+    },
+    {
+      "query": "데이터 엔지니어",
+      "summary_path": "docs/evidence/site_onboarding/classic_rallit_data_engineer_summary.json",
+      "review_path": "docs/evidence/site_onboarding/classic_rallit_data_engineer_acceptance.json",
+      "passed": true,
+      "runtime_sec": 7.094095,
+      "total_tokens": 2783,
+      "estimated_cost_usd": 0.0024871
+    },
+    {
+      "query": "안드로이드 개발자",
+      "summary_path": "docs/evidence/site_onboarding/classic_rallit_android_developer_summary.json",
+      "review_path": "docs/evidence/site_onboarding/classic_rallit_android_developer_acceptance.json",
+      "passed": true,
+      "runtime_sec": 6.776292,
+      "total_tokens": 2312,
+      "estimated_cost_usd": 0.0017738
+    }
+  ],
+  "evidence_paths": [
+    "docs/evidence/site_onboarding/classic_rallit.patch",
+    "docs/evidence/site_onboarding/classic_rallit_acceptance.json",
+    "docs/evidence/site_onboarding/classic_rallit_backend_summary.json",
+    "docs/evidence/site_onboarding/classic_rallit_backend_acceptance.json",
+    "docs/evidence/site_onboarding/classic_rallit_frontend_developer_summary.json",
+    "docs/evidence/site_onboarding/classic_rallit_frontend_developer_acceptance.json",
+    "docs/evidence/site_onboarding/classic_rallit_data_engineer_summary.json",
+    "docs/evidence/site_onboarding/classic_rallit_data_engineer_acceptance.json",
+    "docs/evidence/site_onboarding/classic_rallit_android_developer_summary.json",
+    "docs/evidence/site_onboarding/classic_rallit_android_developer_acceptance.json"
+  ],
+  "notes": "finished_at은 통합 acceptance 파일 생성 시각으로 고정해 이후 Vision 격리 실행을 기다린 시간을 제외함. 세 미사용 검색어가 모두 2건을 충족해 예비 검색어를 사용하지 않음."
+}
