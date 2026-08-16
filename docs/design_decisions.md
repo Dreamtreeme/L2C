@@ -3,7 +3,7 @@ title: "기술 및 설계 결정"
 type: decision
 area: architecture
 status: active
-updated: 2026-08-08
+updated: 2026-08-16
 tags:
   - l2c
   - docs/architecture
@@ -19,7 +19,9 @@ Classic 경로는 Playwright DOM 기반 수집입니다. 빠르고 정확하지�
 
 Vision Agent 경로는 화면 캡처, YOLOv8, PaddleOCR, LLM, 물리 입력 도구를 조합합니다. DOM selector 대신 화면 픽셀을 입력으로 사용하고, 저장한 ROI와 현재 화면이 다르면 자율탐색으로 복귀합니다. 이 경로에는 OCR과 LLM 추론 비용이 추가됩니다.
 
-두 경로를 모두 유지하는 이유는 목적이 다르기 때문입니다. Classic은 안정된 사이트의 고속 수집에 적합하고, Vision Agent는 새 사이트 개척과 UI 탐색 가능성 검증에 적합합니다.
+두 경로를 모두 유지하는 이유는 목적이 다르기 때문입니다. Classic은 안정된 사이트의 고속 수집에 적합하고, Vision Agent는 사이트별 결합 코드를 선언형 프로필로 줄이면서 공통 물리 도구로 UI를 탐색합니다.
+
+2026-08-16 인크루트와 랠릿 신규 적용 실험에서 두 방식 모두 품질 계약을 통과했습니다. Vision의 사이트 전용 코드는 각각 30줄과 81줄로 Classic의 158줄과 114줄보다 적었습니다. 적용시간은 Vision이 52분 16초와 58분 6초, Classic이 22분 31초와 23분 3초였습니다. Vision은 두 사이트에서 공통 런타임도 153줄과 134줄 수정했습니다. 따라서 현재 선택 근거는 사이트별 코드 축소이며, 전체 개발시간과 반복 실행 비용은 Classic이 우세합니다. 수치는 [신규 사이트 적용 공수 검증 계획](site_onboarding_benchmark_plan.md)과 구조화 증거에서 확인할 수 있습니다.
 
 ## 2. Set-of-Marks 방식 채택
 

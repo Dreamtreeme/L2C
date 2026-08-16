@@ -1,0 +1,66 @@
+{
+    "schema_version":  1,
+    "disclosed_after_review":  true,
+    "runs":  [
+                 {
+                     "run_id":  "B01",
+                     "approach":  "vision",
+                     "summary_path":  "docs\\evidence\\site_onboarding\\rallit_data_engineer.summary.json"
+                 },
+                 {
+                     "run_id":  "B02",
+                     "approach":  "classic",
+                     "summary_path":  "docs\\evidence\\site_onboarding\\classic_incruit_android_summary.json"
+                 },
+                 {
+                     "run_id":  "B03",
+                     "approach":  "classic",
+                     "summary_path":  "docs/evidence/site_onboarding/classic_rallit_frontend_developer_summary.json"
+                 },
+                 {
+                     "run_id":  "B04",
+                     "approach":  "vision",
+                     "summary_path":  "docs/evidence/site_onboarding/incruit/qa.summary.json"
+                 },
+                 {
+                     "run_id":  "B05",
+                     "approach":  "vision",
+                     "summary_path":  "docs\\evidence\\site_onboarding\\rallit_android.summary.json"
+                 },
+                 {
+                     "run_id":  "B06",
+                     "approach":  "classic",
+                     "summary_path":  "docs\\evidence\\site_onboarding\\classic_incruit_data_engineer_summary.json"
+                 },
+                 {
+                     "run_id":  "B07",
+                     "approach":  "classic",
+                     "summary_path":  "docs/evidence/site_onboarding/classic_rallit_android_developer_summary.json"
+                 },
+                 {
+                     "run_id":  "B08",
+                     "approach":  "vision",
+                     "summary_path":  "docs\\evidence\\site_onboarding\\incruit\\devops-r4.summary.json"
+                 },
+                 {
+                     "run_id":  "B09",
+                     "approach":  "vision",
+                     "summary_path":  "docs\\evidence\\site_onboarding\\rallit_frontend.summary.json"
+                 },
+                 {
+                     "run_id":  "B10",
+                     "approach":  "classic",
+                     "summary_path":  "docs\\evidence\\site_onboarding\\classic_incruit_frontend_summary.json"
+                 },
+                 {
+                     "run_id":  "B11",
+                     "approach":  "classic",
+                     "summary_path":  "docs/evidence/site_onboarding/classic_rallit_data_engineer_summary.json"
+                 },
+                 {
+                     "run_id":  "B12",
+                     "approach":  "vision",
+                     "summary_path":  "docs\\evidence\\site_onboarding\\incruit\\android-r4.summary.json"
+                 }
+             ]
+}

@@ -1,0 +1,401 @@
+{
+    "schema_version":  1,
+    "commit_sha":  "86bc9d32a9b70a4d41a1b5c7199153d2624ee285",
+    "model_contract":  {
+                           "classic_extraction":  "gemini-3.5-flash-lite",
+                           "vision_reasoning":  "gemini-3.5-flash-lite",
+                           "detail_review":  "gemini-3.5-flash-lite"
+                       },
+    "environment_contract":  {
+                                 "os":  "Windows",
+                                 "baseline_sha":  "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+                                 "review_method":  "single_reviewer_label_hidden",
+                                 "limitation":  "독립 사용자 검토가 아니며 검토시간은 계측하지 않음"
+                             },
+    "runs":  [
+                 {
+                     "run_id":  "B01",
+                     "summary_path":  "rallit_data_engineer.summary.json",
+                     "site":  "rallit",
+                     "query":  "데이터 엔지니어",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/206/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/4131/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4-ai",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B02",
+                     "summary_path":  "classic_incruit_android_summary.json",
+                     "site":  "인크루트",
+                     "query":  "안드로이드 개발자",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608150000039\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607080004521\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B03",
+                     "summary_path":  "classic_rallit_frontend_developer_summary.json",
+                     "site":  "rallit",
+                     "query":  "프론트엔드 개발자",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/4125/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/308/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B04",
+                     "summary_path":  "incruit/qa.summary.json",
+                     "site":  "인크루트",
+                     "query":  "QA 엔지니어",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608040000080",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608160000040",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B05",
+                     "summary_path":  "rallit_android.summary.json",
+                     "site":  "rallit",
+                     "query":  "안드로이드 개발자",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/1747/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/1977/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90-%EA%B2%BD%EB%A0%A5",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B06",
+                     "summary_path":  "classic_incruit_data_engineer_summary.json",
+                     "site":  "인크루트",
+                     "query":  "데이터 엔지니어",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608070003343\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608050000044\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B07",
+                     "summary_path":  "classic_rallit_android_developer_summary.json",
+                     "site":  "rallit",
+                     "query":  "안드로이드 개발자",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/1747/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/1977/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90-%EA%B2%BD%EB%A0%A5",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B08",
+                     "summary_path":  "incruit\\devops-r4.summary.json",
+                     "site":  "인크루트",
+                     "query":  "DevOps 엔지니어",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607030001166\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607070003914\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B09",
+                     "summary_path":  "rallit_frontend.summary.json",
+                     "site":  "rallit",
+                     "query":  "프론트엔드 개발자",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/4125/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/308/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B10",
+                     "summary_path":  "classic_incruit_frontend_summary.json",
+                     "site":  "인크루트",
+                     "query":  "프론트엔드 개발자",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607230002325\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607220004392\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B11",
+                     "summary_path":  "classic_rallit_data_engineer_summary.json",
+                     "site":  "rallit",
+                     "query":  "데이터 엔지니어",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/206/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/4131/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4-ai",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 },
+                 {
+                     "run_id":  "B12",
+                     "summary_path":  "incruit\\android-r4.summary.json",
+                     "site":  "인크루트",
+                     "query":  "안드로이드 개발자",
+                     "search_conditions_correct":  true,
+                     "count_handling_correct":  true,
+                     "no_out_of_scope_actions":  true,
+                     "wrong_target_count":  0,
+                     "no_effect_action_count":  0,
+                     "recovery_succeeded":  null,
+                     "human_review_sec":  0,
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608150000039\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607080004521\u0026src=gsw*www",
+                                      "semantic_match":  true,
+                                      "company_name":  "pass",
+                                      "job_title":  "pass",
+                                      "responsibilities":  "pass",
+                                      "requirements":  "pass"
+                                  }
+                              ],
+                     "notes":  "결과 레코드의 제목·회사·URL과 구조화 본문 근거를 검토함"
+                 }
+             ]
+}

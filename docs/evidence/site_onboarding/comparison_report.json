@@ -1,0 +1,450 @@
+{
+  "schema_version": 2,
+  "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+  "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+  "task_contract": {
+    "development_query": "백엔드 개발자",
+    "target_count": 2,
+    "required_fields": [
+      "company_name",
+      "position",
+      "url",
+      "main_tasks",
+      "requirements"
+    ],
+    "acceptance_queries": [
+      "프론트엔드 개발자",
+      "데이터 엔지니어",
+      "안드로이드 개발자"
+    ],
+    "reserve_queries": [
+      "QA 엔지니어",
+      "DevOps 엔지니어"
+    ],
+    "time_limit_minutes": 90
+  },
+  "foundation": {
+    "started_at": "2026-08-15T23:02:37.130428Z",
+    "finished_at": "2026-08-15T23:22:16.305979Z",
+    "changed_loc": 456,
+    "modified_files": [
+      "classic/automation/browser.py",
+      "classic/automation/capture.py",
+      "classic/automation/collection.py",
+      "classic/automation/sites/__init__.py",
+      "classic/automation/sites/base.py",
+      "classic/extractor/normalization.py",
+      "classic/main.py"
+    ],
+    "acceptance_path": "docs/evidence/site_onboarding/synthetic_classic_acceptance.json",
+    "notes": "첫 제품 파일 생성부터 최종 합성 품질 통과까지 1179.176초를 측정한 하한값이다. 코드 작성 전 설계 시간은 포함하지 않았다. changed_loc는 Classic 제품 코드의 추가·삭제 합계이며 테스트·벤치마크·문서 변경은 제외했다.",
+    "duration_sec": 1179.175551
+  },
+  "site_count": 2,
+  "decision": "혼합",
+  "sites": [
+    {
+      "site": "rallit",
+      "classic": {
+        "site": "rallit",
+        "homepage": "https://www.rallit.com/",
+        "approach": "classic",
+        "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+        "result_sha": "5053d228d4c12028947790413f547e4aa7a636b3",
+        "task_id": "",
+        "codex_model": "GPT-5 Codex",
+        "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+        "started_at": "2026-08-15T23:32:11.337556Z",
+        "first_success_at": "2026-08-15T23:43:22.190319Z",
+        "finished_at": "2026-08-15T23:55:14Z",
+        "status": "completed",
+        "human_interventions": [],
+        "fix_iterations": [
+          "Ruff format --check가 rallit.py의 다중행 표현식 포맷 불일치를 감지해 자동 포맷 적용",
+          "LLM 정제가 상세 H1 제목의 괄호 표기를 제거해 exact identity 판정 위험이 있어 identity_authoritative 명시적 opt-in 계약으로 좁혀 기존 어댑터 기본값 보존"
+        ],
+        "site_specific_changed_loc": 114,
+        "common_runtime_changed_loc": 16,
+        "modified_product_files": [
+          "classic/automation/sites/__init__.py",
+          "classic/automation/sites/base.py",
+          "classic/automation/sites/rallit.py",
+          "classic/extractor/normalization.py"
+        ],
+        "locator_count": 8,
+        "profile_line_count": 0,
+        "acceptance_runs": [
+          {
+            "query": "프론트엔드 개발자",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs/evidence/site_onboarding/classic_rallit_frontend_developer_summary.json",
+            "review_path": "docs/evidence/site_onboarding/classic_rallit_frontend_developer_acceptance.json",
+            "passed": true,
+            "runtime_sec": 8.585265,
+            "total_tokens": 3372,
+            "estimated_cost_usd": 0.0034316
+          },
+          {
+            "query": "데이터 엔지니어",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs/evidence/site_onboarding/classic_rallit_data_engineer_summary.json",
+            "review_path": "docs/evidence/site_onboarding/classic_rallit_data_engineer_acceptance.json",
+            "passed": true,
+            "runtime_sec": 7.094095,
+            "total_tokens": 2783,
+            "estimated_cost_usd": 0.0024871
+          },
+          {
+            "query": "안드로이드 개발자",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs/evidence/site_onboarding/classic_rallit_android_developer_summary.json",
+            "review_path": "docs/evidence/site_onboarding/classic_rallit_android_developer_acceptance.json",
+            "passed": true,
+            "runtime_sec": 6.776292,
+            "total_tokens": 2312,
+            "estimated_cost_usd": 0.0017738
+          }
+        ],
+        "evidence_paths": [
+          "docs/evidence/site_onboarding/classic_rallit.patch",
+          "docs/evidence/site_onboarding/classic_rallit_acceptance.json",
+          "docs/evidence/site_onboarding/classic_rallit_backend_summary.json",
+          "docs/evidence/site_onboarding/classic_rallit_backend_acceptance.json",
+          "docs/evidence/site_onboarding/classic_rallit_frontend_developer_summary.json",
+          "docs/evidence/site_onboarding/classic_rallit_frontend_developer_acceptance.json",
+          "docs/evidence/site_onboarding/classic_rallit_data_engineer_summary.json",
+          "docs/evidence/site_onboarding/classic_rallit_data_engineer_acceptance.json",
+          "docs/evidence/site_onboarding/classic_rallit_android_developer_summary.json",
+          "docs/evidence/site_onboarding/classic_rallit_android_developer_acceptance.json"
+        ],
+        "notes": "finished_at은 통합 acceptance 파일 생성 시각으로 고정해 이후 Vision 격리 실행을 기다린 시간을 제외함. 세 미사용 검색어가 모두 2건을 충족해 예비 검색어를 사용하지 않음.",
+        "human_intervention_count": 0,
+        "fix_iteration_count": 2,
+        "modified_file_count": 4,
+        "acceptance_success_count": 3,
+        "acceptance_attempt_count": 3,
+        "prompt_to_first_success_sec": 670.852763,
+        "prompt_to_acceptance_sec": 1382.662444,
+        "runtime_median_sec": 7.094,
+        "llm_tokens": 8467,
+        "llm_cost_usd": 0.0076925
+      },
+      "vision": {
+        "site": "rallit",
+        "homepage": "https://www.rallit.com/",
+        "approach": "vision",
+        "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+        "result_sha": "52aa2ce7940700dcde8494baa0ed780a0b3c7bc8",
+        "task_id": "rallit-vision-f711-rerun",
+        "codex_model": "gpt-5",
+        "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+        "started_at": "2026-08-16T00:54:47.820035Z",
+        "first_success_at": "2026-08-16T01:41:36.406187Z",
+        "finished_at": "2026-08-16T01:52:53.684281Z",
+        "status": "completed",
+        "human_interventions": [
+          "부모 검토: 목표 미달·범위 미소진 상태에서는 reasoning에 finish_task를 노출하지 않고 review_job_detail을 유지하는 상태 기반 도구 노출을 우선 검토하라는 의견",
+          "부모 검토: reasoning 호출 한도 상향 계획을 폐기하고, 최초 새 상세 근거와 NEEDS_MORE 이후 변경된 OCR 초안을 draft fingerprint로 판별해 review_job_detail 전이를 앞당길 것",
+          "부모 검토: draft fingerprint 변화는 결정론적 계약이므로 LLM 도구 노출이 아니라 reasoning_node에서 build_action_request로 review_job_detail을 직접 반환해 호출 예산과 토큰을 소모하지 않을 것",
+          "부모 검토: selection_node에서 no-effect stop보다 먼저 lightweight NEEDS_MORE·동일 fingerprint·no_screen_change를 한 번 primary review_job_detail로 직접 승격하고, primary 동일 근거 재검토 후에도 부족하면 기존 부분 종료를 허용할 것",
+          "부모 검토: selection의 기존 low-information·replay·DB duplicate 우선순위를 유지하고 detail review는 duplicate 다음·no-effect stop 직전에 배치해 소스 끝 재검토만 종료보다 우선할 것",
+          "부모 검토: Rallit 상세 URL의 안정적인 /positions/ 경로를 사이트 프로필 job_detail.url_patterns에 선언해 스크롤 위치와 무관하게 상세 역할을 유지할 것",
+          "retry11 COMPLETE 직후 빈 selection과 동일 상세 재스크롤을 근거로, 큐 없는 직접 카드 진입에서 목록 복귀 계약이 차단되는지 확인하고 최소 수정하라는 부모 검토",
+          "증거 보존 계약에 따라 retry 및 개별 실행 원시 log는 로컬에만 두고, 세션·최종 4개 summary/acceptance·통합 patch/acceptance만 증거 커밋으로 분리하라는 부모 검토",
+          "SiteAdaptationRecord.acceptance_runs를 held-out acceptance_queries 3개와 정확히 맞추고 backend retry12는 evidence_paths와 notes에만 보존하라는 계약 확인"
+        ],
+        "fix_iterations": [
+          "초기 E2E가 worktree 상대 OCR Python 경로로 실행되어 작업자 준비 전에 실패함; 지정된 절대 PADDLE_OCR_PYTHON 경로를 실행 환경에 주입함",
+          "백엔드 retry1에서 상세 본문을 읽고도 review_job_detail 없이 2건 완료를 선언해 0건 저장됨; 명시적 목표 미달 상태의 LLM finish_task를 거부하는 공통 가드와 회귀 테스트를 추가함",
+          "백엔드 retry2에서 조기 종료는 차단됐지만 거부 이유가 추론 문맥에 없고 finish_task가 계속 노출되어 16회 한도를 소진함; 목표 미달 시 완료 도구를 숨기고 실행 오류를 최근 행동 문맥에 포함함",
+          "부모 검토 반영: finish 변환이나 프롬프트 보강 대신 목표 미달·범위 미소진 상태의 reasoning 도구 목록에서 finish_task만 제외하고 review_job_detail은 유지하도록 최소화함",
+          "백엔드 retry4에서 finish_task 비노출은 확인됐지만 review_job_detail 대신 스크롤만 선택해 판단 한도를 소진함; 상세 OCR 화면 누적과 기존 검토 횟수에 따라 주기적으로 review_job_detail만 노출하는 상태 기반 정책으로 확장함",
+          "retry5: 상태 기반 review_job_detail 노출은 동작했으나 첫 공고 상세 검토 중 전역 16회 reasoning 한도가 finish_task를 주입해 0건 종료; 목표 건수별 호출 예산으로 최소 보정",
+          "retry5 후 제안했던 목표 건수별 reasoning 예산 보정 계획을 취소함(코드 미적용); 고정 2화면 주기를 제거하고 last_job_review.draft_fingerprint와 현재 상세 버퍼 fingerprint의 불일치에만 즉시 review_job_detail을 노출하도록 수정",
+          "변경 전 시작된 backend retry6를 중단함; _detail_review_due 상태에서는 모델 호출 없이 reasoning_node가 review_job_detail을 직접 선택하고 모델 도구 필터에는 목표 미달 finish_task 제거만 유지하도록 최소화",
+          "backend retry7: fingerprint 변경 시 직접 검토로 1건 저장했으나 동일 fingerprint에서 모델이 review_job_detail을 반복 호출해 16회 한도 소진; review 도구 소유권을 상태 전이로 완전히 옮기고 모델 상세 도구에서는 제외",
+          "backend retry8: 모델 중복 review는 제거됐으나 본문 끝 no_screen_change에서 selection의 transition_policy가 검토 전에 finish_task를 주입해 0건 종료; 새 OCR 직접 검토를 selection으로 이동하고 경량 NEEDS_MORE 상태의 소스 끝에서는 primary 재검토를 종료보다 우선",
+          "selection primary 승격 회귀 테스트 2건 실패: 불완전한 테스트 검토 대역의 status 안전 조회와 실제 required_fields를 포함한 draft fingerprint 정합성이 필요해 계약대로 보정",
+          "selection 상세 직접 검토가 low-information·replay·DB duplicate보다 먼저 실행될 수 있는 회귀 위험을 수정; 기존 우선 정책 뒤와 no-effect stop 직전으로 이동하고 순서 회귀 테스트 추가",
+          "backend retry10을 프로필 보정 전 실행으로 중단함; 상세 하단 헤더 검색창 때문에 home으로 오분류되는 문제를 공통 런타임이 아닌 Rallit url_patterns 사이트 지식으로 수정",
+          "retry11 확인: COMPLETE capture 1/2와 job_detail 상태였지만 job_card_queue가 비어 needs_job_results_navigation이 false였다. 빈 큐를 차단하지 않고 활성 큐 카드가 있을 때만 복귀를 보류하도록 한 줄 수정하고 회귀 테스트 추가"
+        ],
+        "site_specific_changed_loc": 81,
+        "common_runtime_changed_loc": 134,
+        "modified_product_files": [
+          "agent/sites/rallit/profile.json",
+          "agent/graph/worker_reasoning.py",
+          "agent/graph/worker_selection.py",
+          "agent/runtime/job_card_queue.py"
+        ],
+        "locator_count": 0,
+        "profile_line_count": 81,
+        "acceptance_runs": [
+          {
+            "query": "프론트엔드 개발자",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs\\evidence\\site_onboarding\\rallit_frontend.summary.json",
+            "review_path": "docs\\evidence\\site_onboarding\\rallit_frontend.acceptance.json",
+            "passed": true,
+            "runtime_sec": 65.561742,
+            "total_tokens": 66111,
+            "estimated_cost_usd": 0.0298895
+          },
+          {
+            "query": "데이터 엔지니어",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs\\evidence\\site_onboarding\\rallit_data_engineer.summary.json",
+            "review_path": "docs\\evidence\\site_onboarding\\rallit_data_engineer.acceptance.json",
+            "passed": true,
+            "runtime_sec": 45.099162,
+            "total_tokens": 33987,
+            "estimated_cost_usd": 0.0194427
+          },
+          {
+            "query": "안드로이드 개발자",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs\\evidence\\site_onboarding\\rallit_android.summary.json",
+            "review_path": "docs\\evidence\\site_onboarding\\rallit_android.acceptance.json",
+            "passed": true,
+            "runtime_sec": 35.777066,
+            "total_tokens": 22353,
+            "estimated_cost_usd": 0.0126811
+          }
+        ],
+        "evidence_paths": [
+          "docs\\evidence\\site_onboarding\\rallit_backend_retry12.summary.json",
+          "docs\\evidence\\site_onboarding\\rallit_backend_retry12.acceptance.json"
+        ],
+        "notes": "백엔드 개발자 retry12는 최초 개발 성공 2/2 증거이며 acceptance_queries 계약에서는 제외했다. held-out 3개가 모두 2/2를 충족해 대체 검색어는 실행하지 않았다.",
+        "human_intervention_count": 9,
+        "fix_iteration_count": 14,
+        "modified_file_count": 4,
+        "acceptance_success_count": 3,
+        "acceptance_attempt_count": 3,
+        "prompt_to_first_success_sec": 2808.586152,
+        "prompt_to_acceptance_sec": 3485.864246,
+        "runtime_median_sec": 45.099,
+        "llm_tokens": 122451,
+        "llm_cost_usd": 0.0620133
+      },
+      "classic_contract_passed": true,
+      "vision_contract_passed": true,
+      "comparison_valid": true,
+      "prompt_to_acceptance_sec_saved": -2103.202,
+      "site_specific_changed_loc_saved": 33
+    },
+    {
+      "site": "인크루트",
+      "classic": {
+        "site": "인크루트",
+        "homepage": "https://job.incruit.com/",
+        "approach": "classic",
+        "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+        "result_sha": "f23d959568e5fe071a3abec26d79336208816464",
+        "task_id": "",
+        "codex_model": "gpt-5-codex",
+        "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+        "started_at": "2026-08-15T23:30:20.972066Z",
+        "first_success_at": "2026-08-15T23:39:15.114368Z",
+        "finished_at": "2026-08-15T23:52:51.733965Z",
+        "status": "completed",
+        "human_interventions": [],
+        "fix_iterations": [
+          "지정된 .venv-app 실행기가 삭제된 Python 3.13 경로를 참조해 시작 명령이 실패함; 저장소의 portable Python에 .venv-app site-packages를 연결해 동일 의존성 환경으로 실행하도록 수정",
+          "Playwright DOM 조사용 일회성 명령의 PowerShell/JavaScript 중첩 인용이 깨져 Python 구문 오류 발생; JavaScript 평가를 제거하고 단순 접근성 속성 조회 명령으로 수정",
+          "PowerShell이 python -c 인수의 문자열 따옴표를 제거해 두 번째 DOM 조사 명령도 구문 오류 발생; 셸 인용 의존성을 없애기 위해 tmp의 독립 Playwright 조사 스크립트로 전환",
+          "최초 수집 결과에서 LLM이 상세 H1/JSON-LD 제목보다 설명 문장의 확장 명칭을 우선해 정확한 공고 제목과 불일치함; DOM에서 확정한 회사명·제목이 LLM 추출값보다 우선하도록 공통 결합 순서를 수정",
+          "tmp 사전 검색 스크립트 실행 시 sys.path가 tmp로 고정되어 classic 패키지를 찾지 못함; PYTHONPATH에 저장소 루트와 기존 site-packages를 함께 지정하도록 실행 설정 수정",
+          "프론트엔드 자동 판정이 인크루트의 쿼리형 공고 식별자(job)를 모든 쿼리와 함께 제거해 서로 다른 URL을 중복으로 계산함; 공통 URL 정규화가 추적 파라미터만 제거하고 식별 쿼리는 보존하도록 수정",
+          "최종 evidence 집계용 PowerShell에서 foreach 출력을 직접 파이프해 빈 파이프 구문 오류 발생; 결과를 배열에 수집한 뒤 Format-Table로 전달하도록 검증 명령 수정",
+          "최종 git diff --cached --check에서 생성된 classic_incruit.patch의 빈 추가 줄에 후행 공백이 발견됨; 증거 패치의 줄 끝 공백만 정규화",
+          "초기 acceptance 이후 코드 검토에서 DOM 메타데이터 전역 우선이 기존 어댑터를 회귀시킬 수 있음을 확인함; identity_authoritative를 명시한 인크루트에만 DOM 신원을 우선하고 미사용 검색어 3건을 다시 통과시킴"
+        ],
+        "site_specific_changed_loc": 158,
+        "common_runtime_changed_loc": 16,
+        "modified_product_files": [
+          "classic/automation/sites/base.py",
+          "classic/automation/sites/incruit.py",
+          "classic/automation/sites/__init__.py",
+          "classic/extractor/normalization.py",
+          "classic/main.py"
+        ],
+        "locator_count": 5,
+        "profile_line_count": 0,
+        "acceptance_runs": [
+          {
+            "query": "프론트엔드 개발자",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_frontend_summary.json",
+            "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_frontend_acceptance.json",
+            "passed": true,
+            "runtime_sec": 18.62988,
+            "total_tokens": 5274,
+            "estimated_cost_usd": 0.005001
+          },
+          {
+            "query": "데이터 엔지니어",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_data_engineer_summary.json",
+            "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_data_engineer_acceptance.json",
+            "passed": true,
+            "runtime_sec": 14.871869,
+            "total_tokens": 4074,
+            "estimated_cost_usd": 0.0039172
+          },
+          {
+            "query": "안드로이드 개발자",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_android_summary.json",
+            "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_android_acceptance.json",
+            "passed": true,
+            "runtime_sec": 12.805377,
+            "total_tokens": 3259,
+            "estimated_cost_usd": 0.0029005
+          }
+        ],
+        "evidence_paths": [
+          "docs/evidence/site_onboarding/classic_incruit.db",
+          "docs/evidence/site_onboarding/classic_incruit.patch",
+          "docs/evidence/site_onboarding/classic_incruit_acceptance.json",
+          "docs/evidence/site_onboarding/classic_incruit_backend_summary.json",
+          "docs/evidence/site_onboarding/classic_incruit_backend_acceptance.json",
+          "docs/evidence/site_onboarding/classic_incruit_frontend_summary.json",
+          "docs/evidence/site_onboarding/classic_incruit_frontend_acceptance.json",
+          "docs/evidence/site_onboarding/classic_incruit_data_engineer_summary.json",
+          "docs/evidence/site_onboarding/classic_incruit_data_engineer_acceptance.json",
+          "docs/evidence/site_onboarding/classic_incruit_android_summary.json",
+          "docs/evidence/site_onboarding/classic_incruit_android_acceptance.json"
+        ],
+        "notes": "세 미사용 검색어의 사전 상세 결과는 각각 5건이어서 예비 검색어를 사용하지 않았다. prompt_to_acceptance는 최초 계약 통과 시각을 사용한다. 2026-08-16T01:59:33Z에 수행한 사후 안전성 재검증은 다른 방식의 순차 실행을 기다린 뒤 진행했으므로 적용 공수 시간에는 포함하지 않고 최종 실행 지표만 갱신했다.",
+        "human_intervention_count": 0,
+        "fix_iteration_count": 9,
+        "modified_file_count": 5,
+        "acceptance_success_count": 3,
+        "acceptance_attempt_count": 3,
+        "prompt_to_first_success_sec": 534.142302,
+        "prompt_to_acceptance_sec": 1350.761899,
+        "runtime_median_sec": 14.872,
+        "llm_tokens": 12607,
+        "llm_cost_usd": 0.0118187
+      },
+      "vision": {
+        "site": "인크루트",
+        "homepage": "https://job.incruit.com/",
+        "approach": "vision",
+        "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+        "result_sha": "80aa1ef49bc4fc4bea1e1c7902cc4b11c7de30b0",
+        "task_id": "vision_incruit_session",
+        "codex_model": "GPT-5 Codex",
+        "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+        "started_at": "2026-08-15T23:59:44.048917Z",
+        "first_success_at": "2026-08-16T00:11:15.638078Z",
+        "finished_at": "2026-08-16T00:51:59.647292Z",
+        "status": "completed",
+        "human_interventions": [
+          "성공 실행 4개가 확보됐으므로 추가 E2E를 중단하고 현재 결과로 테스트·세션 finish·커밋·최종 보고만 수행하라는 사용자 절차 지시"
+        ],
+        "fix_iterations": [
+          "첫 백엔드 E2E에서 검색 입력 요청의 안전등급 누락과 검색 결과 오판으로 무관한 추천 공고를 열었고 상세 버퍼가 비어 0건 종료됨",
+          "두 번째 백엔드 E2E에서 첫 공고는 정상 저장됐지만 완료된 같은 상세 화면의 빈 버퍼를 반복 검토해 1/2로 종료됨",
+          "백엔드 2건 저장은 완료됐지만 URL 패턴을 선언하지 않은 비전 사이트의 공식 상세 URL을 공통 품질 평가가 0건으로 판정해 자동 승인에 실패함",
+          "백엔드 E2E 자체 품질은 통과했지만 자동 승인기가 모든 쿼리 문자열을 제거해 서로 다른 공고 URL 2건의 고유성을 0.5로 판정함",
+          "프론트엔드 개발자 검증에서 상세 공고 2건을 방문했으나 필수 필드가 충족된 저장 결과가 1건이어서 목표 미달로 판정하고 첫 대체 검색어 QA 엔지니어를 사용함",
+          "데이터 엔지니어 검증에서 관련 상세 공고를 탐색했으나 자동 검토 후 유효 저장 결과가 0건이어서 목표 미달로 판정하고 두 번째 대체 검색어 DevOps 엔지니어를 사용함",
+          "두 번째 대체 검색어 DevOps 엔지니어도 관련 상세 2건 중 유효 저장이 1건에 그쳐 목표 미달이며 요청된 대체 검색어 두 개를 모두 소진함",
+          "안드로이드 개발자 검증에서 첫 공고 저장 후 두 번째 상세 화면에 도달했지만 목표 수량 미달 상태에서 finish_task를 수락해 1/2로 조기 종료됨",
+          "DevOps 재실행에서 상세 OCR 버퍼가 있는 첫 공고는 검토했지만 두 번째 공고 상단은 상세 구획 신호가 생기기 전에 finish_task가 수락돼 다시 1/2로 종료됨",
+          "DevOps 세 번째 실행에서 목표 미달 종료는 차단됐지만 상세 화면에 상세내용 문구만 인식되고 두 번째 가시 단서가 없어 본문 버퍼를 만들지 못한 채 재귀 한도에 도달함",
+          "안드로이드 재검증 2차 실행이 수집 그래프 진입 전 OCR 작업자 준비 실패로 중단되어 실패 acceptance를 보존하고 새 격리 DB와 브라우저 프로필로 재시도함",
+          "안드로이드 재검증 3차에서도 OCR 준비 실패가 재현되어 실행 명령에 지정된 OCR Python 환경 변수가 누락된 원인을 확인했고 후속 실행에 PADDLE_OCR_PYTHON을 명시함",
+          "최종 정적 검사에서 품질 평가기의 선택적 collection_intent 접근에 None 가능성 타입 오류 1건이 발견되어 명시적 dict 타입 좁히기로 수정하고 Mypy 재검사를 통과함"
+        ],
+        "site_specific_changed_loc": 30,
+        "common_runtime_changed_loc": 153,
+        "modified_product_files": [
+          "agent/sites/incruit/profile.json",
+          "agent/application/collection_storage.py",
+          "agent/graph/worker_execution.py",
+          "agent/runtime/job_card_queue.py",
+          "benchmark/quality_eval.py"
+        ],
+        "locator_count": 0,
+        "profile_line_count": 30,
+        "acceptance_runs": [
+          {
+            "query": "QA 엔지니어",
+            "contract_query": "프론트엔드 개발자",
+            "substitution_reason": "원 검색어 수집 결과가 1/2건이어서 첫 번째 예비 검색어를 사용함",
+            "summary_path": "docs/evidence/site_onboarding/incruit/qa.summary.json",
+            "review_path": "docs/evidence/site_onboarding/incruit/qa.acceptance.json",
+            "passed": true,
+            "runtime_sec": 67.460134,
+            "total_tokens": 66461,
+            "estimated_cost_usd": 0.0498541
+          },
+          {
+            "query": "DevOps 엔지니어",
+            "contract_query": "데이터 엔지니어",
+            "substitution_reason": "원 검색어 수집 결과가 0/2건이어서 두 번째 예비 검색어를 사용함",
+            "summary_path": "docs\\evidence\\site_onboarding\\incruit\\devops-r4.summary.json",
+            "review_path": "docs\\evidence\\site_onboarding\\incruit\\devops-r4.acceptance.json",
+            "passed": true,
+            "runtime_sec": 59.743178,
+            "total_tokens": 61215,
+            "estimated_cost_usd": 0.0322339
+          },
+          {
+            "query": "안드로이드 개발자",
+            "contract_query": "",
+            "substitution_reason": "",
+            "summary_path": "docs\\evidence\\site_onboarding\\incruit\\android-r4.summary.json",
+            "review_path": "docs\\evidence\\site_onboarding\\incruit\\android-r4.acceptance.json",
+            "passed": true,
+            "runtime_sec": 41.807231,
+            "total_tokens": 36458,
+            "estimated_cost_usd": 0.0158434
+          }
+        ],
+        "evidence_paths": [
+          "docs/evidence/site_onboarding/incruit/backend-r4.summary.json",
+          "docs/evidence/site_onboarding/incruit/backend-r4.acceptance.json",
+          "docs/evidence/site_onboarding/incruit/frontend.summary.json",
+          "docs/evidence/site_onboarding/incruit/frontend.acceptance.json",
+          "docs/evidence/site_onboarding/incruit/qa.summary.json",
+          "docs/evidence/site_onboarding/incruit/qa.acceptance.json",
+          "docs/evidence/site_onboarding/incruit/data-engineer.summary.json",
+          "docs/evidence/site_onboarding/incruit/data-engineer.acceptance.json",
+          "docs/evidence/site_onboarding/incruit/devops-r4.summary.json",
+          "docs/evidence/site_onboarding/incruit/devops-r4.acceptance.json",
+          "docs/evidence/site_onboarding/incruit/android-r4.summary.json",
+          "docs/evidence/site_onboarding/incruit/android-r4.acceptance.json"
+        ],
+        "notes": "프론트엔드 개발자는 1/2로 QA 엔지니어로 대체했고, 데이터 엔지니어는 0/2로 DevOps 엔지니어로 대체했다. 두 대체 검색어는 요청된 순서로만 사용했다.",
+        "human_intervention_count": 1,
+        "fix_iteration_count": 13,
+        "modified_file_count": 5,
+        "acceptance_success_count": 3,
+        "acceptance_attempt_count": 3,
+        "prompt_to_first_success_sec": 691.589161,
+        "prompt_to_acceptance_sec": 3135.598375,
+        "runtime_median_sec": 59.743,
+        "llm_tokens": 164134,
+        "llm_cost_usd": 0.0979314
+      },
+      "classic_contract_passed": true,
+      "vision_contract_passed": true,
+      "comparison_valid": true,
+      "prompt_to_acceptance_sec_saved": -1784.836,
+      "site_specific_changed_loc_saved": 128
+    }
+  ]
+}

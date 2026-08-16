@@ -1,0 +1,210 @@
+{
+    "schema_version":  1,
+    "method":  "방식 라벨을 제거하고 순서를 섞은 결과 검토표",
+    "runs":  [
+                 {
+                     "run_id":  "B01",
+                     "site":  "rallit",
+                     "query":  "데이터 엔지니어",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/206/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4",
+                                      "company_name":  "오드컨셉주식회사",
+                                      "position":  "데이터 엔지니어"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/4131/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4-ai",
+                                      "company_name":  "페어랩스",
+                                      "position":  "데이터 엔지니어 (AI)"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B02",
+                     "site":  "인크루트",
+                     "query":  "안드로이드 개발자",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608150000039\u0026src=gsw*www",
+                                      "company_name":  "아이엠뱅크",
+                                      "position":  "[iM뱅크] 안드로이드 개발자 채용"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607080004521\u0026src=gsw*www",
+                                      "company_name":  "힐링페이퍼",
+                                      "position":  "[플랫폼 사업] Android 개발자"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B03",
+                     "site":  "rallit",
+                     "query":  "프론트엔드 개발자",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/4125/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "company_name":  "인프랩 (인프런)",
+                                      "position":  "프론트엔드 개발자"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/308/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "company_name":  "플루토스디에스 주식회사",
+                                      "position":  "프론트엔드 개발자"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B04",
+                     "site":  "인크루트",
+                     "query":  "QA 엔지니어",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608040000080",
+                                      "company_name":  "NHN KCP",
+                                      "position":  "결제 서비스 QA 담당"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608160000040",
+                                      "company_name":  "현대자동차(주)",
+                                      "position":  "[ICT]Quality Assurance Manager - 고객채널서비스"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B05",
+                     "site":  "rallit",
+                     "query":  "안드로이드 개발자",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/1747/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "company_name":  "(주)오메타",
+                                      "position":  "안드로이드 개발자"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/1977/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90-%EA%B2%BD%EB%A0%A5",
+                                      "company_name":  "휴레이포지티브",
+                                      "position":  "안드로이드 개발자(경력)"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B06",
+                     "site":  "인크루트",
+                     "query":  "데이터 엔지니어",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608070003343\u0026src=gsw*www",
+                                      "company_name":  "써치스퀘어",
+                                      "position":  "데이터 거버넌스 개발(데이터 엔지니어)"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608050000044\u0026src=gsw*www",
+                                      "company_name":  "카카오뱅크",
+                                      "position":  "데이터 엔지니어 - Data Product"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B07",
+                     "site":  "rallit",
+                     "query":  "안드로이드 개발자",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/1747/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "company_name":  "(주)오메타",
+                                      "position":  "안드로이드 개발자"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/1977/%EC%95%88%EB%93%9C%EB%A1%9C%EC%9D%B4%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90-%EA%B2%BD%EB%A0%A5",
+                                      "company_name":  "휴레이포지티브",
+                                      "position":  "안드로이드 개발자(경력)"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B08",
+                     "site":  "인크루트",
+                     "query":  "DevOps 엔지니어",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607030001166\u0026src=gsw*www",
+                                      "company_name":  "비상교육",
+                                      "position":  "DevOps 엔지니어"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607070003914\u0026src=gsw*www",
+                                      "company_name":  "넥스트증권주식회사",
+                                      "position":  "DevOps Engineer"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B09",
+                     "site":  "rallit",
+                     "query":  "프론트엔드 개발자",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/4125/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "company_name":  "인프랩(인프런)",
+                                      "position":  "프론트엔드 개발자"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/308/%ED%94%84%EB%A1%A0%ED%8A%B8%EC%97%94%EB%93%9C-%EA%B0%9C%EB%B0%9C%EC%9E%90",
+                                      "company_name":  "플루토스디에스주식회사",
+                                      "position":  "프론트엔드 개발자"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B10",
+                     "site":  "인크루트",
+                     "query":  "프론트엔드 개발자",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607230002325\u0026src=gsw*www",
+                                      "company_name":  "인프랩",
+                                      "position":  "[인프런] 프론트엔드 개발자"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607220004392\u0026src=gsw*www",
+                                      "company_name":  "힐링페이퍼",
+                                      "position":  "[병원 운영 솔루션] 웹 프론트엔드 개발자 (B2B SaaS)"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B11",
+                     "site":  "rallit",
+                     "query":  "데이터 엔지니어",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://www.rallit.com/positions/206/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4",
+                                      "company_name":  "오드컨셉주식회사",
+                                      "position":  "데이터 엔지니어"
+                                  },
+                                  {
+                                      "url":  "https://www.rallit.com/positions/4131/%EB%8D%B0%EC%9D%B4%ED%84%B0-%EC%97%94%EC%A7%80%EB%8B%88%EC%96%B4-ai",
+                                      "company_name":  "페어랩스",
+                                      "position":  "데이터 엔지니어 (AI)"
+                                  }
+                              ]
+                 },
+                 {
+                     "run_id":  "B12",
+                     "site":  "인크루트",
+                     "query":  "안드로이드 개발자",
+                     "jobs":  [
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608150000039\u0026src=gsw*www",
+                                      "company_name":  "아이엠뱅크",
+                                      "position":  "안드로이드 개발자"
+                                  },
+                                  {
+                                      "url":  "https://job.incruit.com/jobdb_info/jobpost.asp?job=2607080004521\u0026src=gsw*www",
+                                      "company_name":  "(주)힐링페이퍼",
+                                      "position":  "플랫폼사업부문 Android 개발자"
+                                  }
+                              ]
+                 }
+             ]
+}
