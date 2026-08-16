@@ -3,7 +3,7 @@
   "homepage": "https://job.incruit.com/",
   "approach": "classic",
   "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
-  "result_sha": "1d48ddbbfd72d79741b194f9e099976c96f072cd",
+  "result_sha": "f23d959568e5fe071a3abec26d79336208816464",
   "task_id": "",
   "codex_model": "gpt-5-codex",
   "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
@@ -20,11 +20,13 @@
     "tmp 사전 검색 스크립트 실행 시 sys.path가 tmp로 고정되어 classic 패키지를 찾지 못함; PYTHONPATH에 저장소 루트와 기존 site-packages를 함께 지정하도록 실행 설정 수정",
     "프론트엔드 자동 판정이 인크루트의 쿼리형 공고 식별자(job)를 모든 쿼리와 함께 제거해 서로 다른 URL을 중복으로 계산함; 공통 URL 정규화가 추적 파라미터만 제거하고 식별 쿼리는 보존하도록 수정",
     "최종 evidence 집계용 PowerShell에서 foreach 출력을 직접 파이프해 빈 파이프 구문 오류 발생; 결과를 배열에 수집한 뒤 Format-Table로 전달하도록 검증 명령 수정",
-    "최종 git diff --cached --check에서 생성된 classic_incruit.patch의 빈 추가 줄에 후행 공백이 발견됨; 증거 패치의 줄 끝 공백만 정규화"
+    "최종 git diff --cached --check에서 생성된 classic_incruit.patch의 빈 추가 줄에 후행 공백이 발견됨; 증거 패치의 줄 끝 공백만 정규화",
+    "초기 acceptance 이후 코드 검토에서 DOM 메타데이터 전역 우선이 기존 어댑터를 회귀시킬 수 있음을 확인함; identity_authoritative를 명시한 인크루트에만 DOM 신원을 우선하고 미사용 검색어 3건을 다시 통과시킴"
   ],
-  "site_specific_changed_loc": 157,
-  "common_runtime_changed_loc": 4,
+  "site_specific_changed_loc": 158,
+  "common_runtime_changed_loc": 16,
   "modified_product_files": [
+    "classic/automation/sites/base.py",
     "classic/automation/sites/incruit.py",
     "classic/automation/sites/__init__.py",
     "classic/extractor/normalization.py",
@@ -38,27 +40,27 @@
       "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_frontend_summary.json",
       "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_frontend_acceptance.json",
       "passed": true,
-      "runtime_sec": 16.366697,
-      "total_tokens": 5344,
-      "estimated_cost_usd": 0.0048196
+      "runtime_sec": 18.62988,
+      "total_tokens": 5274,
+      "estimated_cost_usd": 0.005001
     },
     {
       "query": "데이터 엔지니어",
       "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_data_engineer_summary.json",
       "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_data_engineer_acceptance.json",
       "passed": true,
-      "runtime_sec": 17.413971,
-      "total_tokens": 4266,
-      "estimated_cost_usd": 0.0040408
+      "runtime_sec": 14.871869,
+      "total_tokens": 4074,
+      "estimated_cost_usd": 0.0039172
     },
     {
       "query": "안드로이드 개발자",
       "summary_path": "docs\\evidence\\site_onboarding\\classic_incruit_android_summary.json",
       "review_path": "docs\\evidence\\site_onboarding\\classic_incruit_android_acceptance.json",
       "passed": true,
-      "runtime_sec": 19.483428,
-      "total_tokens": 3390,
-      "estimated_cost_usd": 0.0028716
+      "runtime_sec": 12.805377,
+      "total_tokens": 3259,
+      "estimated_cost_usd": 0.0029005
     }
   ],
   "evidence_paths": [
@@ -74,5 +76,5 @@
     "docs/evidence/site_onboarding/classic_incruit_android_summary.json",
     "docs/evidence/site_onboarding/classic_incruit_android_acceptance.json"
   ],
-  "notes": "세 미사용 검색어의 사전 상세 결과는 각각 5건이어서 예비 검색어를 사용하지 않았다. result_sha는 커밋 전 classic_incruit.patch의 Git blob SHA이며 실제 커밋 SHA는 최종 보고에 기록한다."
+  "notes": "세 미사용 검색어의 사전 상세 결과는 각각 5건이어서 예비 검색어를 사용하지 않았다. prompt_to_acceptance는 최초 계약 통과 시각을 사용한다. 2026-08-16T01:59:33Z에 수행한 사후 안전성 재검증은 다른 방식의 순차 실행을 기다린 뒤 진행했으므로 적용 공수 시간에는 포함하지 않고 최종 실행 지표만 갱신했다."
 }

@@ -2,21 +2,21 @@
   "site": "incruit",
   "homepage": "https://job.incruit.com/",
   "query": "데이터 엔지니어",
-  "started_at": "2026-08-15T23:42:52.808864+00:00",
-  "finished_at": "2026-08-15T23:43:10.226554+00:00",
-  "runtime_sec": 17.413971,
-  "total_tokens": 4266,
-  "estimated_cost_usd": 0.0040408,
+  "started_at": "2026-08-16T01:58:54.516264+00:00",
+  "finished_at": "2026-08-16T01:59:09.390699+00:00",
+  "runtime_sec": 14.871869,
+  "total_tokens": 4074,
+  "estimated_cost_usd": 0.0039172,
   "metrics": {
-    "run_id": "classic-incruit-20260816084252-2902dcd5",
-    "duration_sec": 17.413084,
-    "deadline_remaining_sec": 5382.586904,
+    "run_id": "classic-incruit-20260816105854-a28149d0",
+    "duration_sec": 14.870866,
+    "deadline_remaining_sec": 5385.129123,
     "steps": [],
     "llm": {
       "totals": {
-        "input_tokens": 3011,
-        "output_tokens": 1255,
-        "total_tokens": 4266,
+        "input_tokens": 2849,
+        "output_tokens": 1225,
+        "total_tokens": 4074,
         "input_token_details": {
           "cache_read": 0
         },
@@ -24,9 +24,9 @@
       },
       "by_model": {
         "gemini-3.5-flash-lite": {
-          "input_tokens": 3011,
-          "output_tokens": 1255,
-          "total_tokens": 4266,
+          "input_tokens": 2849,
+          "output_tokens": 1225,
+          "total_tokens": 4074,
           "input_token_details": {
             "cache_read": 0
           },
@@ -35,17 +35,17 @@
       },
       "cost": {
         "currency": "USD",
-        "estimated_total": 0.0040408,
-        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\config\\model_pricing.json",
+        "estimated_total": 0.0039172,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C-worktrees\\classic-incruit\\config\\model_pricing.json",
         "priced_model_count": 1,
         "unpriced_models": [],
         "items": [
           {
             "model": "gemini-3.5-flash-lite",
-            "input_tokens": 3011,
+            "input_tokens": 2849,
             "cached_input_tokens": 0,
-            "output_tokens": 1255,
-            "estimated_cost_usd": 0.0040408
+            "output_tokens": 1225,
+            "estimated_cost_usd": 0.0039172
           }
         ]
       },
@@ -54,14 +54,14 @@
           "component": "classic_extraction",
           "provider": "langchain",
           "model": "gemini-3.5-flash-lite",
-          "input_tokens": 1678,
-          "output_tokens": 811,
-          "total_tokens": 2489,
+          "input_tokens": 1597,
+          "output_tokens": 806,
+          "total_tokens": 2403,
           "input_token_details": {
             "cache_read": 0
           },
           "output_token_details": {},
-          "duration_sec": 3.102646,
+          "duration_sec": 2.98258,
           "success": true,
           "error": ""
         },
@@ -69,14 +69,14 @@
           "component": "classic_extraction",
           "provider": "langchain",
           "model": "gemini-3.5-flash-lite",
-          "input_tokens": 1333,
-          "output_tokens": 444,
-          "total_tokens": 1777,
+          "input_tokens": 1252,
+          "output_tokens": 419,
+          "total_tokens": 1671,
           "input_token_details": {
             "cache_read": 0
           },
           "output_token_details": {},
-          "duration_sec": 1.689012,
+          "duration_sec": 1.8862,
           "success": true,
           "error": ""
         }
@@ -111,14 +111,14 @@
     "rejected_count": 0,
     "persisted_items": [
       {
-        "job_id": 5,
+        "job_id": 1,
         "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608070003343&src=gsw*www",
         "company_name": "써치스퀘어",
         "position": "데이터 거버넌스 개발(데이터 엔지니어)",
         "operation": "created"
       },
       {
-        "job_id": 6,
+        "job_id": 2,
         "url": "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608050000044&src=gsw*www",
         "company_name": "카카오뱅크",
         "position": "데이터 엔지니어 - Data Product",
@@ -127,13 +127,13 @@
     ],
     "observed_job_ids": [],
     "document_ids": [
-      5,
-      6
+      1,
+      2
     ],
     "scope_exhausted": false,
     "worker_finished": true,
     "hit_recursion_limit": false,
-    "worker_run_id": "classic-cece6e4d-9f95-4445-a3d8-31746aed3a90"
+    "worker_run_id": "classic-c0db3707-abf0-4fcd-be28-0797325cd951"
   },
   "jobs": [
     {
@@ -173,7 +173,7 @@
         "IT·데이터사이언스·보안·현업 부서 간 아키텍처 의사결정 및 기술 협업 리딩"
       ],
       "requirements": [
-        "데이터 사이언스, 컴퓨터과학, 통계학, 산업공학 등 관련 전공자",
+        "학사 이상·데이터 사이언스, 컴퓨터과학, 통계학, 산업공학 등 관련 전공자",
         "데이터 엔지니어링 경력 5년 이상(대규모 데이터 플랫폼 설계·구축 리딩 경험 필수)",
         "Databricks, Spark, Delta Lake 등 Lakehouse 아키텍처 설계·운영 경험",
         "온프레미스-클라우드(AWS/Azure/GCP) 하이브리드 환경 데이터 연동·이관 경험",
@@ -193,14 +193,14 @@
       ],
       "benefits": [],
       "salary": "회사내규",
-      "source_platform": "Incruit",
+      "source_platform": "incruit",
       "raw_ocr_text": "회사명: 써치스퀘어\n공고 제목: 데이터 거버넌스 개발(데이터 엔지니어)\n\n데이터 거버넌스 개발(데이터 엔지니어)\n모집부문 및 자격요건\n모집부문\t담당업무\t자격요건\t인원\n데이터 엔지니어\n[담당업무]\n- 데이터 파이프라인 및 거버넌스 체계 구축·리딩\n- 대규모 데이터 플랫폼(Lakehouse) 아키텍처 설계 및 기술 리딩\n- Databricks, Snowflake 등 Spark 기반 데이터 파이프라인 설계·구축·최적화 (온프레미스-클라우드 하이브리드 연동 및 마이그레이션 전략 포함)\n- AI/ML 프로젝트 피처 엔지니어링, 학습 데이터셋 구축 및 모델 서빙 파이프라인(MLOps) 설계(생성형 AI·컴퓨터 비전 데이터 소싱·전처리·품질관리 포함)\n- 데이터 거버넌스 기술적 구현(카탈로그, 메타데이터, 접근권한, 라인리지)\n- IT·데이터사이언스·보안·현업 부서 간 아키텍처 의사결정 및 기술 협업 리딩\n[근무부서 및 직급/직책]\n직급/직책: 과장, 차장\n[자격요건]\n경력: 경력 7~14년\n- 학사 이상·데이터 사이언스, 컴퓨터과학, 통계학, 산업공학 등 관련 전공자\n- 데이터 엔지니어링 경력 5년 이상(대규모 데이터 플랫폼 설계·구축 리딩 경험 필수\n- Databricks, Spark, Delta Lake 등 Lakehouse 아키텍처 설계·운영 경험\n- 온프레미스-클라우드(AWS/Azure/GCP) 하이브리드 환경 데이터 연동·이관 경험\n- Python·SQL 기반 정형(DB/문서) 및 비정형(영상/이미지/로그) 데이터 처리파이프라인 설계 경험\n- 대용량 분산 처리 시스템(Spark, Kafka 등) 성능 튜닝 및 트러블슈팅 경험\n- Unity Catalog 등 데이터 거버넌스·카탈로그 도구 활용 경험\n- ML 파이프라인(피처스토어, 모델 학습·서빙용 데이터 흐름) 구축 또는 협업 경험\n- 생성형 AI(LLM)·컴퓨터 비전 프로젝트 데이터 엔지니어 참여 경험\n- MLOps(MLflow, Kubeflow 등)·컨테이너(Docker, Kubernetes)·CI/CD 파이프라인 구축 경험\n- 물리보안·건물관리·SI 등 산업 도메인 정형/비정형 데이터(CCTV, 로그 등) 처리 경험\n- SAP 등 기간계 시스템과의 데이터 연동 경험\n- 데이터 엔지니어링·클라우드·AI 관련 자격증(AWS/Azure/GCP Professional 등) 보유\n- 기술 리드 또는 팀 리딩 경험\n- PWC, KPMG, EY, 딜로이트 등 기업 데이터 관련 컨설팅펌 경력 우대\n근무조건\n고용형태: 정규직\n급여조건: 회사내규\n전형단계 및 제출서류\n전형단계: 서류전형 > 면접진행 > 최종심사 > 최종합격\n추가 제출서류\n이력서, 자기소개서\n접수방법\n접수방법: 인크루트 접수, 이메일\n접수양식: 인크루트 이력서\n기타 유의사항\n입사지원서 및 제출서류에 허위사실이 있을 경우 채용이 취소될 수 있습니다.\n00",
-      "content_hash": "fbcf5978829e7e321fa72c676cd664b4c3513cf2c7c9ddb0e9de9f8d81ffd92b",
-      "evidence_hash": "cd2fca4fd642a0453efd4f57b2286998a5c1ff1b70278008e285065f7db636f4",
+      "content_hash": "9641ef8f8c2e1016ac32bfa7d9eb05fc5747a2c4c10db4b3062d147f80a1667d",
+      "evidence_hash": "8b79e3f8c831e565d141f2ab4c62634b4bb2403a79ba1eb5594841c3f4b895ca",
       "experience_min": 7,
       "experience_max": 14,
       "experience_text": "경력 7~14년",
-      "id": 5
+      "id": 1
     },
     {
       "company_name": "카카오뱅크",
@@ -224,36 +224,36 @@
         "Spark"
       ],
       "main_tasks": [
-        "Kafka와 Flink를 기반으로 실시간 데이터 파이프라인 개발 및 운영",
-        "Java, Kotlin, SQL을 활용한 스트리밍 데이터 처리 로직 설계 및 최적화",
-        "앱 로그 및 주요 이벤트 데이터의 수집, 가공 파이프라인 개발 및 품질 관리",
-        "Airflow 기반의 배치 처리 파이프라인 설계 및 개발",
+        "Kafka와 Flink 기반 실시간 데이터 파이프라인 개발 및 운영",
+        "Java·Kotlin·SQL을 활용한 스트리밍 데이터 처리 로직 설계 및 최적화",
+        "앱 로그 및 주요 이벤트 데이터 수집·가공 파이프라인 개발 및 품질 관리",
+        "Airflow 기반 배치 파이프라인 설계 및 개발",
         "Python과 SQL을 활용한 데이터 적재 및 변환 로직 구현",
         "분석 및 서비스 목적에 맞는 데이터 마트 설계 및 구축"
       ],
       "requirements": [
         "데이터 엔지니어링 또는 관련 분야 경력 3년 이상",
-        "SQL 및 Java, Kotlin, Python 중 하나 이상의 프로그래밍 언어 숙련",
-        "대용량 데이터 처리 및 ETL/ELT 파이프라인 설계 및 운영 경험",
+        "SQL 및 Java·Kotlin·Python 중 하나 이상의 프로그래밍 언어 숙련",
+        "대용량 데이터 처리 및 ETL/ELT 파이프라인 설계·운영 경험",
         "대규모 분산 데이터 플랫폼 기반의 데이터 처리 경험",
-        "Kafka, Airflow, Flink, Spark 등 주요 데이터 플랫폼 기술에 대한 이해 및 활용 경험"
+        "Kafka·Airflow·Flink·Spark 등 주요 데이터 플랫폼 기술에 대한 이해 및 활용 경험"
       ],
       "preferred": [
         "데이터 프로덕트의 백엔드 API 개발 경험",
-        "금융 업무(여신, 수신, 카드, 외환, 회계 등)에 대한 이해도",
+        "금융 업무(여신·수신·카드·외환·회계 등)에 대한 이해도",
         "AI 기술 및 도구에 대한 적응력과 이해도",
         "국가유공자 및 장애인 등 취업보호대상자 관계법령에 따른 우대"
       ],
       "benefits": [],
       "salary": null,
-      "source_platform": "Incruit",
+      "source_platform": "incruit",
       "raw_ocr_text": "회사명: 카카오뱅크\n공고 제목: 데이터 엔지니어 - Data Product\n\n카카오뱅크, 데이터 엔지니어 채용\n카카오뱅크가 AI데이터프로덕트개발팀 소속 데이터 엔지니어 채용을 진행한다. 이번 채용은 실시간 스트리밍과 배치 처리를 아우르는 데이터 파이프라인 전반을 다루는 직무로, 데이터 엔지니어링 경력자를 대상으로 한다.\n이번에 합류하게 될 데이터 엔지니어는 Kafka와 Flink를 기반으로 실시간 데이터 파이프라인을 개발하고 운영하는 업무를 담당하게 되며, Java·Kotlin·SQL을 활용해 스트리밍 데이터 처리 로직을 설계하고 최적화하는 역할도 맡게 된다. 앱 로그 및 주요 이벤트 데이터의 수집·가공 파이프라인 개발과 품질 관리도 주요 업무 중 하나다. 배치 처리 영역에서는 Airflow 기반의 파이프라인을 설계·개발하고, Python과 SQL을 활용해 데이터 적재 및 변환 로직을 구현하며, 분석 및 서비스 목적에 맞는 데이터 마트를 설계하고 구축하는 일도 경험하게 된다.\n지원을 위해서는 데이터 엔지니어링 또는 관련 분야에서 3년 이상의 경력이 필요하며, SQL 및 Java·Kotlin·Python 중 하나 이상의 프로그래밍 언어에 숙련된 분을 찾고 있다. 대용량 데이터 처리 및 ETL/ELT 파이프라인 설계·운영 경험과 대규모 분산 데이터 플랫폼 기반의 데이터 처리 경험도 필수 요건에 포함된다. Kafka·Airflow·Flink·Spark 등 주요 데이터 플랫폼 기술에 대한 이해 및 활용 경험도 갖춰야 한다. 우대사항으로는 데이터 프로덕트의 백엔드 API 개발 경험, 금융 업무(여신·수신·카드·외환·회계 등)에 대한 이해도, AI 기술 및 도구에 대한 적응력과 이해도가 있으며, 국가유공자 및 장애인 등 취업보호대상자는 관계법령에 따라 우대한다.\n근무지는 경기도 성남시 분당구에 위치한 카카오뱅크 판교오피스다. 자세한 내용은 '카카오뱅크'의 홈페이지에서 확인할 수 있다.",
-      "content_hash": "ac9159f1e19c83e157faafe416688ca9fe4b580ebe8b03295b11f8190018b1be",
-      "evidence_hash": "f1ad2ef02e0f6db2a569c597729b9f1e26a37cf593e6096c36f303237ed78c2a",
+      "content_hash": "5152fc2d4012fcaae162d4f9fa4286280acaff01d77c2f63f4383ea6efe4d0d2",
+      "evidence_hash": "cc44e737ebadcd272d41ef588487b5bbca96887fef5e35dce4ec24c487d63d92",
       "experience_min": 3,
       "experience_max": null,
       "experience_text": "3년 이상",
-      "id": 6
+      "id": 2
     }
   ]
 }

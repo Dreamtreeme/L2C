@@ -44,7 +44,7 @@
   },
   "domain_quality": {
     "allowed_domains": [
-      "incruit.com"
+      "job.incruit.com"
     ],
     "invalid_urls": [],
     "passed": true

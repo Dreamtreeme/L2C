@@ -1,3 +1,155 @@
+diff --git a/agent/tests/core/test_classic_normalization.py b/agent/tests/core/test_classic_normalization.py
+new file mode 100644
+index 0000000..c6c82ff
+--- /dev/null
++++ b/agent/tests/core/test_classic_normalization.py
+@@ -0,0 +1,44 @@
++from classic.extractor.normalization import normalize_dom_posting
++
++
++class _Engine:
++    def extract_from_text(self, _text):
++        return {
++            "company_name": "LLM 추론 회사",
++            "position": "설명에서 확장한 직무명",
++            "main_tasks": ["서비스 개발"],
++            "requirements": ["개발 경험"],
++        }
++
++
++def test_llm_identity_fields_remain_default():
++    posting = normalize_dom_posting(
++        {
++            "company_name": "DOM 확인 회사",
++            "position": "DOM 확인 제목",
++            "full_text": "상세 공고 본문",
++        },
++        url="https://example.test/jobs/dynamic",
++        source_platform="example",
++        engine=_Engine(),
++    )
++
++    assert posting.company_name == "LLM 추론 회사"
++    assert posting.position == "설명에서 확장한 직무명"
++
++
++def test_authoritative_dom_identity_fields_override_llm_inference():
++    posting = normalize_dom_posting(
++        {
++            "company_name": "DOM 확인 회사",
++            "position": "DOM 확인 제목",
++            "full_text": "상세 공고 본문",
++            "identity_authoritative": True,
++        },
++        url="https://example.test/jobs/dynamic",
++        source_platform="example",
++        engine=_Engine(),
++    )
++
++    assert posting.company_name == "DOM 확인 회사"
++    assert posting.position == "DOM 확인 제목"
+diff --git a/agent/tests/core/test_incruit_adapter.py b/agent/tests/core/test_incruit_adapter.py
+new file mode 100644
+index 0000000..b144676
+--- /dev/null
++++ b/agent/tests/core/test_incruit_adapter.py
+@@ -0,0 +1,68 @@
++import json
++
++from classic.automation.sites import resolve_collection_adapter
++from classic.automation.sites.incruit import (
++    IncruitAdapter,
++    is_incruit_detail_url,
++    parse_job_posting_metadata,
++)
++
++
++def test_incruit_adapter_matches_official_subdomains_only():
++    adapter = IncruitAdapter()
++
++    assert adapter.matches("https://job.incruit.com/") is True
++    assert adapter.matches("https://search.incruit.com/list/search.asp") is True
++    assert adapter.matches("https://incruit.com.example.test/") is False
++
++
++def test_incruit_detail_url_uses_domain_and_path_not_posting_id():
++    assert (
++        is_incruit_detail_url(
++            "https://job.incruit.com/jobdb_info/jobpost.asp?job=example"
++        )
++        is True
++    )
++    assert (
++        is_incruit_detail_url(
++            "https://job.incruit.com/jobdb_info/another.asp?job=example"
++        )
++        is False
++    )
++    assert (
++        is_incruit_detail_url(
++            "https://incruit.com.example.test/jobdb_info/jobpost.asp?job=example"
++        )
++        is False
++    )
++
++
++def test_incruit_json_ld_metadata_uses_job_posting_schema():
++    document = json.dumps(
++        {
++            "@context": "https://schema.org",
++            "@graph": [
++                {"@type": "Organization", "name": "무관한 조직"},
++                {
++                    "@type": "JobPosting",
++                    "title": "동적 테스트 직무",
++                    "hiringOrganization": {
++                        "@type": "Organization",
++                        "name": "동적 테스트 회사",
++                    },
++                },
++            ],
++        },
++        ensure_ascii=False,
++    )
++
++    assert parse_job_posting_metadata(["invalid", document]) == (
++        "동적 테스트 회사",
++        "동적 테스트 직무",
++    )
++
++
++def test_incruit_adapter_is_registered_for_official_homepage():
++    adapter = resolve_collection_adapter("https://job.incruit.com/")
++
++    assert isinstance(adapter, IncruitAdapter)
+diff --git a/agent/tests/evaluation/test_query_url_identity.py b/agent/tests/evaluation/test_query_url_identity.py
+new file mode 100644
+index 0000000..d1863ab
+--- /dev/null
++++ b/agent/tests/evaluation/test_query_url_identity.py
+@@ -0,0 +1,22 @@
++from benchmark.quality_eval import evaluate_job_records
++
++
++def test_job_quality_preserves_query_based_record_identity():
++    result = evaluate_job_records(
++        {
++            "jobs": [
++                {
++                    "company_name": "A",
++                    "position": "서버",
++                    "url": "https://example.com/job?posting=first&src=search",
++                },
++                {
++                    "company_name": "B",
++                    "position": "데이터",
++                    "url": "https://example.com/job?src=search&posting=second",
++                },
++            ]
++        }
++    )
++
++    assert result["unique_url_rate"] == 1.0
 diff --git a/benchmark/quality_eval.py b/benchmark/quality_eval.py
 index d3bcc6c..efdd882 100644
 --- a/benchmark/quality_eval.py
@@ -8,11 +160,11 @@ index d3bcc6c..efdd882 100644
  from typing import Any
 -from urllib.parse import parse_qsl, urlsplit, urlunsplit
 +from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-
+ 
  from pydantic import ValidationError
-
+ 
 @@ -21,6 +21,18 @@ from shared.schema.jd_schema import (
-
+ 
  REQUIRED_FIELDS = tuple(field.value for field in JOB_IDENTITY_FIELDS)
  CONTENT_FIELDS = tuple(field.value for field in JOB_DETAIL_FIELDS)
 +TRACKING_QUERY_KEYS = {
@@ -27,8 +179,8 @@ index d3bcc6c..efdd882 100644
 +    "source",
 +    "src",
 +}
-
-
+ 
+ 
  def _normalized_text(value: Any) -> str:
 @@ -34,8 +46,21 @@ def _normalized_url(value: Any) -> str:
      parts = urlsplit(raw)
@@ -51,15 +203,135 @@ index d3bcc6c..efdd882 100644
 +            "",
 +        )
      )
-
-
+ 
+ 
+diff --git a/benchmark/run_incruit_classic.py b/benchmark/run_incruit_classic.py
+new file mode 100644
+index 0000000..8f064fa
+--- /dev/null
++++ b/benchmark/run_incruit_classic.py
+@@ -0,0 +1,114 @@
++"""인크루트 Classic 온보딩 실행과 summary 증거를 생성한다."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import time
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any
++
++from agent.observability.run_context import run_context
++from classic.automation.collection import ClassicCollectionRunner
++from classic.automation.sites.incruit import INCRUIT_HOMEPAGE
++from classic.extractor.normalization import LLMDomJobNormalizer
++from shared.db.database import Database
++from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
++from shared.schema.collection_intent import CollectionIntent
++
++
++def run_incruit_classic(
++    *,
++    homepage: str,
++    query: str,
++    target_count: int,
++    db_path: Path,
++    model_name: str | None = None,
++) -> dict[str, Any]:
++    """격리 DB에 공고를 저장하고 실행 결과와 계측값을 반환한다."""
++
++    intent = CollectionIntent(
++        original_query=f"{query} 채용공고 {target_count}건",
++        site="incruit",
++        search_keyword=query,
++        target_count=target_count,
++        required_fields=list(DEFAULT_JOB_COLLECTION_FIELDS),
++    )
++    started_at = datetime.now(timezone.utc)
++    started = time.perf_counter()
++    with run_context(
++        query=query,
++        prefix="classic-incruit",
++        metadata={
++            "site": "incruit",
++            "target_count": target_count,
++            "approach": "classic",
++        },
++        tags=["site-onboarding", "classic", "incruit"],
++        deadline_sec=90 * 60,
++    ) as (context, _created):
++        result = ClassicCollectionRunner(
++            db_path=db_path,
++            normalizer=LLMDomJobNormalizer(model_name),
++        ).run(homepage, intent)
++        context.set_outcome(result.status)
++        metrics = context.snapshot()
++    runtime_sec = time.perf_counter() - started
++
++    jobs = [
++        job.model_dump(mode="json")
++        for job in Database(db_path).load_jobs(result.document_ids)
++    ]
++    llm_metrics = dict(metrics.get("llm") or {})
++    totals = dict(llm_metrics.get("totals") or {})
++    cost = dict(llm_metrics.get("cost") or {}).get("estimated_total")
++    return {
++        "site": "incruit",
++        "homepage": homepage,
++        "query": query,
++        "started_at": started_at.isoformat(),
++        "finished_at": datetime.now(timezone.utc).isoformat(),
++        "runtime_sec": round(runtime_sec, 6),
++        "total_tokens": int(totals.get("total_tokens") or 0),
++        "estimated_cost_usd": float(cost or 0.0),
++        "metrics": metrics,
++        "result": result.model_dump(mode="json"),
++        "jobs": jobs,
++    }
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(
++        description="인크루트 Classic 수집 summary를 생성합니다."
++    )
++    parser.add_argument("--homepage", default=INCRUIT_HOMEPAGE)
++    parser.add_argument("--query", required=True)
++    parser.add_argument("--count", type=int, default=2)
++    parser.add_argument("--db-path", type=Path, required=True)
++    parser.add_argument("--model")
++    parser.add_argument("--output", type=Path, required=True)
++    args = parser.parse_args()
++
++    summary = run_incruit_classic(
++        homepage=args.homepage,
++        query=args.query,
++        target_count=args.count,
++        db_path=args.db_path,
++        model_name=args.model,
++    )
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(
++        json.dumps(summary, ensure_ascii=False, indent=2),
++        encoding="utf-8",
++    )
++    print(json.dumps(summary["result"], ensure_ascii=False, indent=2))
++    print(f"SUMMARY_TARGET={args.output}")
++    return 0 if summary["result"]["status"] == "completed" else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
++
++
++__all__ = ["run_incruit_classic"]
 diff --git a/classic/automation/sites/__init__.py b/classic/automation/sites/__init__.py
 index f12f2e2..51d053a 100644
 --- a/classic/automation/sites/__init__.py
 +++ b/classic/automation/sites/__init__.py
 @@ -6,6 +6,7 @@ URL 매칭과 페이지에서 본문을 추출하는 책임만 가집니다.
  """
-
+ 
  from .base import CollectionSiteAdapter, SiteAdapter
 +from .incruit import IncruitAdapter
  from .wanted import WantedAdapter
@@ -81,40 +353,33 @@ index f12f2e2..51d053a 100644
      "WantedAdapter",
      "JobKoreaAdapter",
      "RocketpunchAdapter",
-diff --git a/classic/extractor/normalization.py b/classic/extractor/normalization.py
-index 62410bb..0f06b3e 100644
---- a/classic/extractor/normalization.py
-+++ b/classic/extractor/normalization.py
-@@ -44,8 +44,8 @@ def normalize_dom_posting(
-     posting = JobPosting.model_validate(engine.extract_from_text(full_text))
-     posting = posting.model_copy(
-         update={
--            "company_name": posting.company_name or extraction.get("company_name"),
--            "position": posting.position or extraction.get("position"),
-+            "company_name": extraction.get("company_name") or posting.company_name,
-+            "position": extraction.get("position") or posting.position,
-         }
-     )
-     posting = complete_extracted_job(
-diff --git a/classic/main.py b/classic/main.py
-index b81c574..1e54c80 100644
---- a/classic/main.py
-+++ b/classic/main.py
-@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
-     p_ext = sub.add_parser("extract", help="URL에서 공고 추출", parents=[common])
-     p_ext.add_argument(
-         "url",
--        help=("채용공고 URL (지원: 원티드 · 잡코리아 · 로켓펀치)"),
-+        help=("채용공고 URL (지원: 인크루트 · 원티드 · 잡코리아 · 로켓펀치)"),
-     )
-     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")
-     p_ext.add_argument("--model", help="이번 실행에만 사용할 Gemini 모델명")
+diff --git a/classic/automation/sites/base.py b/classic/automation/sites/base.py
+index 7423f77..3b14b19 100644
+--- a/classic/automation/sites/base.py
++++ b/classic/automation/sites/base.py
+@@ -10,7 +10,7 @@
+ from __future__ import annotations
+ 
+ from abc import ABC, abstractmethod
+-from typing import Any, TypedDict
++from typing import Any, NotRequired, TypedDict
+ 
+ 
+ class DomExtraction(TypedDict):
+@@ -19,6 +19,7 @@ class DomExtraction(TypedDict):
+     company_name: str | None
+     position: str | None
+     full_text: str | None
++    identity_authoritative: NotRequired[bool]
+ 
+ 
+ class SiteAdapter(ABC):
 diff --git a/classic/automation/sites/incruit.py b/classic/automation/sites/incruit.py
 new file mode 100644
-index 0000000..11c2af9
+index 0000000..a3620a7
 --- /dev/null
 +++ b/classic/automation/sites/incruit.py
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,153 @@
 +"""인크루트 Classic 검색·상세 DOM 어댑터."""
 +
 +from __future__ import annotations
@@ -258,6 +523,7 @@ index 0000000..11c2af9
 +            "company_name": company_name,
 +            "position": position,
 +            "full_text": full_text,
++            "identity_authoritative": True,
 +        }
 +
 +
@@ -267,258 +533,42 @@ index 0000000..11c2af9
 +    "is_incruit_detail_url",
 +    "parse_job_posting_metadata",
 +]
-diff --git a/benchmark/run_incruit_classic.py b/benchmark/run_incruit_classic.py
-new file mode 100644
-index 0000000..8f064fa
---- /dev/null
-+++ b/benchmark/run_incruit_classic.py
-@@ -0,0 +1,114 @@
-+"""인크루트 Classic 온보딩 실행과 summary 증거를 생성한다."""
-+
-+from __future__ import annotations
-+
-+import argparse
-+import json
-+import time
-+from datetime import datetime, timezone
-+from pathlib import Path
-+from typing import Any
-+
-+from agent.observability.run_context import run_context
-+from classic.automation.collection import ClassicCollectionRunner
-+from classic.automation.sites.incruit import INCRUIT_HOMEPAGE
-+from classic.extractor.normalization import LLMDomJobNormalizer
-+from shared.db.database import Database
-+from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
-+from shared.schema.collection_intent import CollectionIntent
-+
-+
-+def run_incruit_classic(
-+    *,
-+    homepage: str,
-+    query: str,
-+    target_count: int,
-+    db_path: Path,
-+    model_name: str | None = None,
-+) -> dict[str, Any]:
-+    """격리 DB에 공고를 저장하고 실행 결과와 계측값을 반환한다."""
-+
-+    intent = CollectionIntent(
-+        original_query=f"{query} 채용공고 {target_count}건",
-+        site="incruit",
-+        search_keyword=query,
-+        target_count=target_count,
-+        required_fields=list(DEFAULT_JOB_COLLECTION_FIELDS),
-+    )
-+    started_at = datetime.now(timezone.utc)
-+    started = time.perf_counter()
-+    with run_context(
-+        query=query,
-+        prefix="classic-incruit",
-+        metadata={
-+            "site": "incruit",
-+            "target_count": target_count,
-+            "approach": "classic",
-+        },
-+        tags=["site-onboarding", "classic", "incruit"],
-+        deadline_sec=90 * 60,
-+    ) as (context, _created):
-+        result = ClassicCollectionRunner(
-+            db_path=db_path,
-+            normalizer=LLMDomJobNormalizer(model_name),
-+        ).run(homepage, intent)
-+        context.set_outcome(result.status)
-+        metrics = context.snapshot()
-+    runtime_sec = time.perf_counter() - started
-+
-+    jobs = [
-+        job.model_dump(mode="json")
-+        for job in Database(db_path).load_jobs(result.document_ids)
-+    ]
-+    llm_metrics = dict(metrics.get("llm") or {})
-+    totals = dict(llm_metrics.get("totals") or {})
-+    cost = dict(llm_metrics.get("cost") or {}).get("estimated_total")
-+    return {
-+        "site": "incruit",
-+        "homepage": homepage,
-+        "query": query,
-+        "started_at": started_at.isoformat(),
-+        "finished_at": datetime.now(timezone.utc).isoformat(),
-+        "runtime_sec": round(runtime_sec, 6),
-+        "total_tokens": int(totals.get("total_tokens") or 0),
-+        "estimated_cost_usd": float(cost or 0.0),
-+        "metrics": metrics,
-+        "result": result.model_dump(mode="json"),
-+        "jobs": jobs,
-+    }
-+
-+
-+def main() -> int:
-+    parser = argparse.ArgumentParser(
-+        description="인크루트 Classic 수집 summary를 생성합니다."
-+    )
-+    parser.add_argument("--homepage", default=INCRUIT_HOMEPAGE)
-+    parser.add_argument("--query", required=True)
-+    parser.add_argument("--count", type=int, default=2)
-+    parser.add_argument("--db-path", type=Path, required=True)
-+    parser.add_argument("--model")
-+    parser.add_argument("--output", type=Path, required=True)
-+    args = parser.parse_args()
-+
-+    summary = run_incruit_classic(
-+        homepage=args.homepage,
-+        query=args.query,
-+        target_count=args.count,
-+        db_path=args.db_path,
-+        model_name=args.model,
-+    )
-+    args.output.parent.mkdir(parents=True, exist_ok=True)
-+    args.output.write_text(
-+        json.dumps(summary, ensure_ascii=False, indent=2),
-+        encoding="utf-8",
-+    )
-+    print(json.dumps(summary["result"], ensure_ascii=False, indent=2))
-+    print(f"SUMMARY_TARGET={args.output}")
-+    return 0 if summary["result"]["status"] == "completed" else 1
-+
-+
-+if __name__ == "__main__":
-+    raise SystemExit(main())
-+
-+
-+__all__ = ["run_incruit_classic"]
-diff --git a/agent/tests/core/test_incruit_adapter.py b/agent/tests/core/test_incruit_adapter.py
-new file mode 100644
-index 0000000..b144676
---- /dev/null
-+++ b/agent/tests/core/test_incruit_adapter.py
-@@ -0,0 +1,68 @@
-+import json
-+
-+from classic.automation.sites import resolve_collection_adapter
-+from classic.automation.sites.incruit import (
-+    IncruitAdapter,
-+    is_incruit_detail_url,
-+    parse_job_posting_metadata,
-+)
-+
-+
-+def test_incruit_adapter_matches_official_subdomains_only():
-+    adapter = IncruitAdapter()
-+
-+    assert adapter.matches("https://job.incruit.com/") is True
-+    assert adapter.matches("https://search.incruit.com/list/search.asp") is True
-+    assert adapter.matches("https://incruit.com.example.test/") is False
-+
-+
-+def test_incruit_detail_url_uses_domain_and_path_not_posting_id():
-+    assert (
-+        is_incruit_detail_url(
-+            "https://job.incruit.com/jobdb_info/jobpost.asp?job=example"
-+        )
-+        is True
-+    )
-+    assert (
-+        is_incruit_detail_url(
-+            "https://job.incruit.com/jobdb_info/another.asp?job=example"
-+        )
-+        is False
-+    )
-+    assert (
-+        is_incruit_detail_url(
-+            "https://incruit.com.example.test/jobdb_info/jobpost.asp?job=example"
-+        )
-+        is False
-+    )
-+
-+
-+def test_incruit_json_ld_metadata_uses_job_posting_schema():
-+    document = json.dumps(
-+        {
-+            "@context": "https://schema.org",
-+            "@graph": [
-+                {"@type": "Organization", "name": "무관한 조직"},
-+                {
-+                    "@type": "JobPosting",
-+                    "title": "동적 테스트 직무",
-+                    "hiringOrganization": {
-+                        "@type": "Organization",
-+                        "name": "동적 테스트 회사",
-+                    },
-+                },
-+            ],
-+        },
-+        ensure_ascii=False,
-+    )
-+
-+    assert parse_job_posting_metadata(["invalid", document]) == (
-+        "동적 테스트 회사",
-+        "동적 테스트 직무",
-+    )
-+
-+
-+def test_incruit_adapter_is_registered_for_official_homepage():
-+    adapter = resolve_collection_adapter("https://job.incruit.com/")
-+
-+    assert isinstance(adapter, IncruitAdapter)
-diff --git a/agent/tests/core/test_classic_normalization.py b/agent/tests/core/test_classic_normalization.py
-new file mode 100644
-index 0000000..6822307
---- /dev/null
-+++ b/agent/tests/core/test_classic_normalization.py
-@@ -0,0 +1,27 @@
-+from classic.extractor.normalization import normalize_dom_posting
-+
-+
-+class _Engine:
-+    def extract_from_text(self, _text):
-+        return {
-+            "company_name": "LLM 추론 회사",
-+            "position": "설명에서 확장한 직무명",
-+            "main_tasks": ["서비스 개발"],
-+            "requirements": ["개발 경험"],
-+        }
-+
-+
-+def test_dom_identity_fields_override_llm_inference():
-+    posting = normalize_dom_posting(
-+        {
-+            "company_name": "DOM 확인 회사",
-+            "position": "DOM 확인 제목",
-+            "full_text": "상세 공고 본문",
-+        },
-+        url="https://example.test/jobs/dynamic",
-+        source_platform="example",
-+        engine=_Engine(),
-+    )
-+
-+    assert posting.company_name == "DOM 확인 회사"
-+    assert posting.position == "DOM 확인 제목"
-diff --git a/agent/tests/evaluation/test_query_url_identity.py b/agent/tests/evaluation/test_query_url_identity.py
-new file mode 100644
-index 0000000..d1863ab
---- /dev/null
-+++ b/agent/tests/evaluation/test_query_url_identity.py
-@@ -0,0 +1,22 @@
-+from benchmark.quality_eval import evaluate_job_records
-+
-+
-+def test_job_quality_preserves_query_based_record_identity():
-+    result = evaluate_job_records(
-+        {
-+            "jobs": [
-+                {
-+                    "company_name": "A",
-+                    "position": "서버",
-+                    "url": "https://example.com/job?posting=first&src=search",
-+                },
-+                {
-+                    "company_name": "B",
-+                    "position": "데이터",
-+                    "url": "https://example.com/job?src=search&posting=second",
-+                },
-+            ]
-+        }
-+    )
-+
-+    assert result["unique_url_rate"] == 1.0
+diff --git a/classic/extractor/normalization.py b/classic/extractor/normalization.py
+index 62410bb..d0b9497 100644
+--- a/classic/extractor/normalization.py
++++ b/classic/extractor/normalization.py
+@@ -42,10 +42,19 @@ def normalize_dom_posting(
+     if not full_text:
+         raise ValueError("상세 페이지의 DOM 본문이 비어 있습니다.")
+     posting = JobPosting.model_validate(engine.extract_from_text(full_text))
++    identity_authoritative = extraction.get("identity_authoritative") is True
+     posting = posting.model_copy(
+         update={
+-            "company_name": posting.company_name or extraction.get("company_name"),
+-            "position": posting.position or extraction.get("position"),
++            "company_name": (
++                extraction.get("company_name") or posting.company_name
++                if identity_authoritative
++                else posting.company_name or extraction.get("company_name")
++            ),
++            "position": (
++                extraction.get("position") or posting.position
++                if identity_authoritative
++                else posting.position or extraction.get("position")
++            ),
+         }
+     )
+     posting = complete_extracted_job(
+diff --git a/classic/main.py b/classic/main.py
+index b81c574..1e54c80 100644
+--- a/classic/main.py
++++ b/classic/main.py
+@@ -222,7 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
+     p_ext = sub.add_parser("extract", help="URL에서 공고 추출", parents=[common])
+     p_ext.add_argument(
+         "url",
+-        help=("채용공고 URL (지원: 원티드 · 잡코리아 · 로켓펀치)"),
++        help=("채용공고 URL (지원: 인크루트 · 원티드 · 잡코리아 · 로켓펀치)"),
+     )
+     p_ext.add_argument("--force", action="store_true", help="DB에 있어도 재추출")
+     p_ext.add_argument("--model", help="이번 실행에만 사용할 Gemini 모델명")
