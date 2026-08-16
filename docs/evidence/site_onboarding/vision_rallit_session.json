@@ -1,0 +1,85 @@
+{
+  "site": "rallit",
+  "homepage": "https://www.rallit.com/",
+  "approach": "vision",
+  "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+  "result_sha": "52aa2ce7940700dcde8494baa0ed780a0b3c7bc8",
+  "task_id": "rallit-vision-f711-rerun",
+  "codex_model": "gpt-5",
+  "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+  "started_at": "2026-08-16T00:54:47.820035Z",
+  "first_success_at": "2026-08-16T01:41:36.406187Z",
+  "finished_at": "2026-08-16T01:52:53.684281Z",
+  "status": "completed",
+  "human_interventions": [
+    "부모 검토: 목표 미달·범위 미소진 상태에서는 reasoning에 finish_task를 노출하지 않고 review_job_detail을 유지하는 상태 기반 도구 노출을 우선 검토하라는 의견",
+    "부모 검토: reasoning 호출 한도 상향 계획을 폐기하고, 최초 새 상세 근거와 NEEDS_MORE 이후 변경된 OCR 초안을 draft fingerprint로 판별해 review_job_detail 전이를 앞당길 것",
+    "부모 검토: draft fingerprint 변화는 결정론적 계약이므로 LLM 도구 노출이 아니라 reasoning_node에서 build_action_request로 review_job_detail을 직접 반환해 호출 예산과 토큰을 소모하지 않을 것",
+    "부모 검토: selection_node에서 no-effect stop보다 먼저 lightweight NEEDS_MORE·동일 fingerprint·no_screen_change를 한 번 primary review_job_detail로 직접 승격하고, primary 동일 근거 재검토 후에도 부족하면 기존 부분 종료를 허용할 것",
+    "부모 검토: selection의 기존 low-information·replay·DB duplicate 우선순위를 유지하고 detail review는 duplicate 다음·no-effect stop 직전에 배치해 소스 끝 재검토만 종료보다 우선할 것",
+    "부모 검토: Rallit 상세 URL의 안정적인 /positions/ 경로를 사이트 프로필 job_detail.url_patterns에 선언해 스크롤 위치와 무관하게 상세 역할을 유지할 것",
+    "retry11 COMPLETE 직후 빈 selection과 동일 상세 재스크롤을 근거로, 큐 없는 직접 카드 진입에서 목록 복귀 계약이 차단되는지 확인하고 최소 수정하라는 부모 검토",
+    "증거 보존 계약에 따라 retry 및 개별 실행 원시 log는 로컬에만 두고, 세션·최종 4개 summary/acceptance·통합 patch/acceptance만 증거 커밋으로 분리하라는 부모 검토",
+    "SiteAdaptationRecord.acceptance_runs를 held-out acceptance_queries 3개와 정확히 맞추고 backend retry12는 evidence_paths와 notes에만 보존하라는 계약 확인"
+  ],
+  "fix_iterations": [
+    "초기 E2E가 worktree 상대 OCR Python 경로로 실행되어 작업자 준비 전에 실패함; 지정된 절대 PADDLE_OCR_PYTHON 경로를 실행 환경에 주입함",
+    "백엔드 retry1에서 상세 본문을 읽고도 review_job_detail 없이 2건 완료를 선언해 0건 저장됨; 명시적 목표 미달 상태의 LLM finish_task를 거부하는 공통 가드와 회귀 테스트를 추가함",
+    "백엔드 retry2에서 조기 종료는 차단됐지만 거부 이유가 추론 문맥에 없고 finish_task가 계속 노출되어 16회 한도를 소진함; 목표 미달 시 완료 도구를 숨기고 실행 오류를 최근 행동 문맥에 포함함",
+    "부모 검토 반영: finish 변환이나 프롬프트 보강 대신 목표 미달·범위 미소진 상태의 reasoning 도구 목록에서 finish_task만 제외하고 review_job_detail은 유지하도록 최소화함",
+    "백엔드 retry4에서 finish_task 비노출은 확인됐지만 review_job_detail 대신 스크롤만 선택해 판단 한도를 소진함; 상세 OCR 화면 누적과 기존 검토 횟수에 따라 주기적으로 review_job_detail만 노출하는 상태 기반 정책으로 확장함",
+    "retry5: 상태 기반 review_job_detail 노출은 동작했으나 첫 공고 상세 검토 중 전역 16회 reasoning 한도가 finish_task를 주입해 0건 종료; 목표 건수별 호출 예산으로 최소 보정",
+    "retry5 후 제안했던 목표 건수별 reasoning 예산 보정 계획을 취소함(코드 미적용); 고정 2화면 주기를 제거하고 last_job_review.draft_fingerprint와 현재 상세 버퍼 fingerprint의 불일치에만 즉시 review_job_detail을 노출하도록 수정",
+    "변경 전 시작된 backend retry6를 중단함; _detail_review_due 상태에서는 모델 호출 없이 reasoning_node가 review_job_detail을 직접 선택하고 모델 도구 필터에는 목표 미달 finish_task 제거만 유지하도록 최소화",
+    "backend retry7: fingerprint 변경 시 직접 검토로 1건 저장했으나 동일 fingerprint에서 모델이 review_job_detail을 반복 호출해 16회 한도 소진; review 도구 소유권을 상태 전이로 완전히 옮기고 모델 상세 도구에서는 제외",
+    "backend retry8: 모델 중복 review는 제거됐으나 본문 끝 no_screen_change에서 selection의 transition_policy가 검토 전에 finish_task를 주입해 0건 종료; 새 OCR 직접 검토를 selection으로 이동하고 경량 NEEDS_MORE 상태의 소스 끝에서는 primary 재검토를 종료보다 우선",
+    "selection primary 승격 회귀 테스트 2건 실패: 불완전한 테스트 검토 대역의 status 안전 조회와 실제 required_fields를 포함한 draft fingerprint 정합성이 필요해 계약대로 보정",
+    "selection 상세 직접 검토가 low-information·replay·DB duplicate보다 먼저 실행될 수 있는 회귀 위험을 수정; 기존 우선 정책 뒤와 no-effect stop 직전으로 이동하고 순서 회귀 테스트 추가",
+    "backend retry10을 프로필 보정 전 실행으로 중단함; 상세 하단 헤더 검색창 때문에 home으로 오분류되는 문제를 공통 런타임이 아닌 Rallit url_patterns 사이트 지식으로 수정",
+    "retry11 확인: COMPLETE capture 1/2와 job_detail 상태였지만 job_card_queue가 비어 needs_job_results_navigation이 false였다. 빈 큐를 차단하지 않고 활성 큐 카드가 있을 때만 복귀를 보류하도록 한 줄 수정하고 회귀 테스트 추가"
+  ],
+  "site_specific_changed_loc": 81,
+  "common_runtime_changed_loc": 134,
+  "modified_product_files": [
+    "agent/sites/rallit/profile.json",
+    "agent/graph/worker_reasoning.py",
+    "agent/graph/worker_selection.py",
+    "agent/runtime/job_card_queue.py"
+  ],
+  "locator_count": 0,
+  "profile_line_count": 81,
+  "acceptance_runs": [
+    {
+      "query": "프론트엔드 개발자",
+      "summary_path": "docs\\evidence\\site_onboarding\\rallit_frontend.summary.json",
+      "review_path": "docs\\evidence\\site_onboarding\\rallit_frontend.acceptance.json",
+      "passed": true,
+      "runtime_sec": 65.561742,
+      "total_tokens": 66111,
+      "estimated_cost_usd": 0.0298895
+    },
+    {
+      "query": "데이터 엔지니어",
+      "summary_path": "docs\\evidence\\site_onboarding\\rallit_data_engineer.summary.json",
+      "review_path": "docs\\evidence\\site_onboarding\\rallit_data_engineer.acceptance.json",
+      "passed": true,
+      "runtime_sec": 45.099162,
+      "total_tokens": 33987,
+      "estimated_cost_usd": 0.0194427
+    },
+    {
+      "query": "안드로이드 개발자",
+      "summary_path": "docs\\evidence\\site_onboarding\\rallit_android.summary.json",
+      "review_path": "docs\\evidence\\site_onboarding\\rallit_android.acceptance.json",
+      "passed": true,
+      "runtime_sec": 35.777066,
+      "total_tokens": 22353,
+      "estimated_cost_usd": 0.0126811
+    }
+  ],
+  "evidence_paths": [
+    "docs\\evidence\\site_onboarding\\rallit_backend_retry12.summary.json",
+    "docs\\evidence\\site_onboarding\\rallit_backend_retry12.acceptance.json"
+  ],
+  "notes": "백엔드 개발자 retry12는 최초 개발 성공 2/2 증거이며 acceptance_queries 계약에서는 제외했다. held-out 3개가 모두 2/2를 충족해 대체 검색어는 실행하지 않았다."
+}

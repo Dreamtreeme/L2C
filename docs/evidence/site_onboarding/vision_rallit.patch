@@ -1,0 +1,630 @@
+diff --git a/agent/graph/worker_reasoning.py b/agent/graph/worker_reasoning.py
+index 6cafa1b..0d074b9 100644
+--- a/agent/graph/worker_reasoning.py
++++ b/agent/graph/worker_reasoning.py
+@@ -32,10 +32,12 @@ from agent.runtime.tool_schema import (
+ )
+ from agent.graph.worker_reasoning_prompt import build_reasoning_messages
+ from agent.runtime.job_card_selector import select_job_cards
++from agent.runtime.job_card_queue import resolved_job_card_count
+ from agent.runtime.site_context import normalize_page_role
+ from agent.runtime.transition_runtime import (
+     detect_two_screen_transition_cycle,
+ )
++from agent.runtime.worker_state import job_capture_count, target_count_from_state
+ from agent.utils.logger import logger
+ from agent.vision.target_snapshot import is_icon_marker, marker_by_id
+ from agent.runtime.vision_worker_runtime import WorkerDependencies
+@@ -48,6 +50,33 @@ _REASONING_COMPONENTS = {
+ }
+ 
+ 
++def _resolved_job_count(state: WorkerState) -> int:
++    queue = [
++        dict(item)
++        for item in state["collection"].get("job_card_queue", []) or []
++        if isinstance(item, dict)
++    ]
++    return max(job_capture_count(state), resolved_job_card_count(queue))
++
++
++def _collection_scope_exhausted(
++    state: WorkerState,
++    *,
++    resolved_count: int,
++) -> bool:
++    availability = dict(
++        state["collection"].get("job_results_availability", {}) or {}
++    )
++    available_count = availability.get("available_job_count")
++    evidence = str(availability.get("count_evidence") or "").strip()
++    return bool(
++        isinstance(available_count, int)
++        and available_count >= 0
++        and evidence
++        and resolved_count >= available_count
++    )
++
++
+ def _reasoning_tool_names(state: WorkerState) -> tuple[str, ...]:
+     """현재 화면 역할에 필요한 원자 도구만 모델에 노출한다."""
+ 
+@@ -55,10 +84,24 @@ def _reasoning_tool_names(state: WorkerState) -> tuple[str, ...]:
+         state["observation"].get("current_page_role")
+     )
+     if role == "job_detail":
+-        return DETAIL_ACTION_TOOL_NAMES
+-    if role in {"home", "search", "form", "popup", "error"}:
+-        return NAVIGATION_ACTION_TOOL_NAMES
+-    return UNKNOWN_ACTION_TOOL_NAMES
++        tool_names = tuple(
++            name
++            for name in DETAIL_ACTION_TOOL_NAMES
++            if name != "review_job_detail"
++        )
++    elif role in {"home", "search", "form", "popup", "error"}:
++        tool_names = NAVIGATION_ACTION_TOOL_NAMES
++    else:
++        tool_names = UNKNOWN_ACTION_TOOL_NAMES
++    target_count = target_count_from_state(state)
++    resolved_count = _resolved_job_count(state)
++    if (
++        target_count > 0
++        and resolved_count < target_count
++        and not _collection_scope_exhausted(state, resolved_count=resolved_count)
++    ):
++        return tuple(name for name in tool_names if name != "finish_task")
++    return tool_names
+ 
+ 
+ def _get_ui_llm_with_tools(
+diff --git a/agent/graph/worker_selection.py b/agent/graph/worker_selection.py
+index 425e4d5..3983653 100644
+--- a/agent/graph/worker_selection.py
++++ b/agent/graph/worker_selection.py
+@@ -17,15 +17,82 @@ from agent.runtime.worker_state import (
+     count_mode_from_state,
+     target_count_from_state,
+ )
++from agent.runtime.detail_runtime import detail_buffer_text
+ from agent.runtime.job_card_queue import (
+     active_job_card,
++    job_detail_key_from_state,
+     job_card_queue_scope_complete,
+     needs_job_results_navigation,
+     next_job_card_request,
+     skip_active_job_card,
+ )
+-from agent.runtime.site_context import looks_like_job_detail_url
++from agent.runtime.site_context import looks_like_job_detail_url, normalize_page_role
+ from agent.utils.logger import logger
++from shared.schema.jd_schema import JobDraft, JobReviewStatus
++
++
++def _select_detail_review(state: WorkerState) -> dict[str, Any] | None:
++    """새 상세 근거나 소스 끝의 경량 판정을 구조화 검토로 보낸다."""
++
++    if normalize_page_role(
++        state["observation"].get("current_page_role")
++    ) != "job_detail":
++        return None
++    buffer = dict(state["collection"].get("job_detail_buffer", {}) or {})
++    raw_ocr_text = detail_buffer_text(buffer)
++    current_url = str(buffer.get("url") or "").strip()
++    if not raw_ocr_text or not current_url:
++        return None
++    fingerprint = JobDraft(
++        url=current_url,
++        detail_key=job_detail_key_from_state(state),
++        raw_ocr_text=raw_ocr_text,
++        required_fields=state["request"]["collection_intent"].required_fields,
++    ).fingerprint()
++    last_review = state["collection"].get("last_job_review")
++    fingerprint_changed = bool(
++        last_review is None
++        or str(getattr(last_review, "draft_fingerprint", "") or "")
++        != fingerprint
++    )
++    transition_result = dict(
++        state["transition"].get("transition_result", {}) or {}
++    )
++    primary_retry = bool(
++        not fingerprint_changed
++        and last_review is not None
++        and getattr(last_review, "status", None) == JobReviewStatus.NEEDS_MORE
++        and getattr(last_review, "model_tier", "") == "lightweight"
++        and transition_result.get("status") == "unknown"
++        and transition_result.get("reason")
++        in {"no_screen_change", "reflex_no_screen_change"}
++    )
++    if not fingerprint_changed and not primary_retry:
++        return None
++    reason_code = (
++        "detail_source_exhausted" if primary_retry else "detail_draft_changed"
++    )
++    reason = (
++        "상세 화면 끝에서 동일 근거의 primary 재검토가 필요합니다."
++        if primary_retry
++        else "상세 OCR 초안의 근거 fingerprint가 변경됐습니다."
++    )
++    request = build_action_request(
++        "state_contract",
++        reason,
++        [
++            {
++                "name": "review_job_detail",
++                "args": {
++                    "page_role": "job_detail",
++                    "reason": reason,
++                },
++                "id": reason_code,
++            }
++        ],
++        metadata={"reason": reason_code},
++    )
++    return {"decision": {"pending_action": request}}
+ 
+ 
+ def _low_information_stop() -> dict[str, Any]:
+@@ -227,11 +294,6 @@ def selection_node(
+     if decision.get("pending_action") is not None:
+         return {}
+ 
+-    current_url = str(observation.get("current_url") or "")
+-    no_effect_count = int(transition.get("no_effect_count") or 0)
+-    if no_effect_count >= get_settings().vision.no_effect_action_limit:
+-        return _no_effect_stop(no_effect_count)
+-
+     capture_count = int(observation.get("low_information_capture_count") or 0)
+     if observation.get("low_information_screen"):
+         if capture_count >= get_settings().vision.low_information_max_capture_cycles:
+@@ -241,6 +303,7 @@ def selection_node(
+     if replay.get("replay_session"):
+         return {}
+ 
++    current_url = str(observation.get("current_url") or "")
+     transition_result = transition.get("transition_result", {}) or {}
+     duplicate_update = _select_duplicate_detail(
+         state,
+@@ -250,6 +313,12 @@ def selection_node(
+     )
+     if duplicate_update is not None:
+         return duplicate_update
++    detail_review = _select_detail_review(state)
++    if detail_review is not None:
++        return detail_review
++    no_effect_count = int(transition.get("no_effect_count") or 0)
++    if no_effect_count >= get_settings().vision.no_effect_action_limit:
++        return _no_effect_stop(no_effect_count)
+     navigation_update = _select_job_results_navigation(state, transition_result)
+     if navigation_update is not None:
+         return navigation_update
+diff --git a/agent/runtime/job_card_queue.py b/agent/runtime/job_card_queue.py
+index 4d47537..9a5da23 100644
+--- a/agent/runtime/job_card_queue.py
++++ b/agent/runtime/job_card_queue.py
+@@ -203,7 +203,7 @@ def needs_job_results_navigation(state: WorkerState) -> bool:
+         for item in state["collection"].get("job_card_queue", []) or []
+         if isinstance(item, dict)
+     ]
+-    if not queue or active_job_card(queue):
++    if queue and active_job_card(queue):
+         return False
+     target_count = target_count_from_state(state)
+     resolved_count = max(
+diff --git a/agent/sites/rallit/profile.json b/agent/sites/rallit/profile.json
+new file mode 100644
+index 0000000..d9b27ed
+--- /dev/null
++++ b/agent/sites/rallit/profile.json
+@@ -0,0 +1,81 @@
++{
++  "registration_order": 711,
++  "slug": "rallit",
++  "display_name": "랠릿",
++  "source_platform": "rallit",
++  "aliases": [
++    "랠릿"
++  ],
++  "domains": [
++    "www.rallit.com",
++    "rallit.com"
++  ],
++  "base_url": "https://www.rallit.com/",
++  "enabled": true,
++  "page_guidance": {
++    "home": {
++      "visible_cues": [
++        "랠릿",
++        "채용"
++      ],
++      "minimum_visible_cues": 1,
++      "instructions": [
++        "채용공고를 검색할 수 있는 입력창이나 검색 화면 진입 요소를 화면에서 찾는다.",
++        "검색어를 입력한 뒤 화면에 보이는 제출 동작으로 결과 화면에 진입한다."
++      ],
++      "navigation_notes": [
++        "검색 URL을 직접 만들지 말고 홈페이지의 화면 요소를 사용한다."
++      ]
++    },
++    "search": {
++      "visible_cues": [
++        "채용공고",
++        "검색"
++      ],
++      "minimum_visible_cues": 1,
++      "instructions": [
++        "검색어와 관련된 공고 목록이 보이는지 확인하고 서로 다른 공고를 순서대로 연다.",
++        "목록으로 돌아오면 이미 수집한 공고를 제목과 회사명으로 구분해 제외한다."
++      ],
++      "reading_targets": [
++        "회사명",
++        "공고 제목"
++      ],
++      "navigation_notes": [
++        "화면에 표시된 검색 입력과 결과 카드를 이용하고 카드 순번에 의존하지 않는다."
++      ]
++    },
++    "job_detail": {
++      "url_patterns": [
++        "/positions/"
++      ],
++      "visible_cues": [
++        "주요업무",
++        "자격요건"
++      ],
++      "minimum_visible_cues": 2,
++      "instructions": [
++        "상세 본문을 위에서 아래로 읽으며 필수 항목의 근거를 누적한다.",
++        "접힌 내용이나 탭이 보이면 화면의 라벨을 확인해 필요한 본문을 펼친다."
++      ],
++      "reveal_controls": [
++        "더보기",
++        "펼쳐보기"
++      ],
++      "reading_targets": [
++        "회사명",
++        "공고 제목",
++        "주요업무",
++        "자격요건"
++      ],
++      "navigation_notes": [
++        "필수 항목을 검토한 뒤 브라우저 뒤로가기로 검색 결과에 복귀한다."
++      ]
++    }
++  },
++  "guidance": "홈페이지에서 화면에 보이는 채용공고 검색 기능을 찾아 검색어를 제출한다. 결과 화면에서는 관련 공고의 회사명과 제목을 확인하고, 상세 화면에서 주요업무와 자격요건의 실제 본문을 읽은 뒤 검토한다. 고정 URL, 공고 ID, 카드 순번 또는 절대좌표를 사용하지 않는다.",
++  "capabilities": {
++    "job_search": "홈페이지의 화면 검색 기능을 통한 채용공고 탐색",
++    "job_detail": "상세 화면의 회사명, 제목, 주요업무, 자격요건 수집"
++  }
++}
+diff --git a/agent/tests/core/test_job_card_contracts.py b/agent/tests/core/test_job_card_contracts.py
+index 807bd8b..36918e3 100644
+--- a/agent/tests/core/test_job_card_contracts.py
++++ b/agent/tests/core/test_job_card_contracts.py
+@@ -5,7 +5,7 @@ from types import SimpleNamespace
+ 
+ import pytest
+ 
+-from agent.graph import worker_reasoning
++from agent.graph import worker_reasoning, worker_selection
+ from agent.graph.worker_reasoning_prompt import build_reasoning_messages
+ from agent.runtime.worker_contracts import build_action_event
+ from agent.tests.worker_test_support import node_runtime, worker_state
+@@ -299,9 +299,101 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
+     assert "set_job_card_queue" not in worker_reasoning._reasoning_tool_names(
+         worker_state(observation={"current_page_role": "search"})
+     )
+-    assert "review_job_detail" in worker_reasoning._reasoning_tool_names(
++    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(
+         worker_state(observation={"current_page_role": "job_detail"})
+     )
++    incomplete_detail = worker_state(
++        request={
++            "collection_intent": CollectionIntent(
++                target_count=2,
++                count_mode="explicit",
++            )
++        },
++        observation={"current_page_role": "job_detail"},
++    )
++    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(
++        incomplete_detail
++    )
++    assert "finish_task" not in worker_reasoning._reasoning_tool_names(
++        incomplete_detail
++    )
++    exhausted_detail = worker_state(
++        request={
++            "collection_intent": CollectionIntent(
++                target_count=2,
++                count_mode="explicit",
++            )
++        },
++        observation={"current_page_role": "job_detail"},
++        collection={
++            "job_results_availability": {
++                "available_job_count": 0,
++                "count_evidence": "검색 결과 0건",
++            }
++        },
++    )
++    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(
++        exhausted_detail
++    )
++    assert "finish_task" in worker_reasoning._reasoning_tool_names(
++        exhausted_detail
++    )
++    review_due_detail = worker_state(
++        request={
++            "collection_intent": CollectionIntent(
++                target_count=2,
++                count_mode="explicit",
++            )
++        },
++        observation={"current_page_role": "job_detail"},
++        collection={
++            "job_detail_buffer": {
++                "url": "https://example.com/jobs/current",
++                "lines": [{"text": "주요업무"}],
++                "stats": {"screen_count": 1},
++            }
++        },
++    )
++    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(
++        review_due_detail
++    )
++    assert "finish_task" not in worker_reasoning._reasoning_tool_names(
++        review_due_detail
++    )
++    direct_review = worker_selection._select_detail_review(review_due_detail)
++    assert direct_review is not None
++    assert direct_review["decision"]["pending_action"].source == "state_contract"
++    assert (
++        direct_review["decision"]["pending_action"].tool_calls[0].name
++        == "review_job_detail"
++    )
++    from shared.schema.jd_schema import JobDraft
++
++    reviewed_fingerprint = JobDraft(
++        url="https://example.com/jobs/current",
++        raw_ocr_text="1. 주요업무",
++        required_fields=(
++            review_due_detail["request"]["collection_intent"].required_fields
++        ),
++    ).fingerprint()
++    review_due_detail["collection"]["last_job_review"] = SimpleNamespace(
++        draft_fingerprint=reviewed_fingerprint,
++    )
++    assert worker_selection._select_detail_review(review_due_detail) is None
++    assert "scroll" in worker_reasoning._reasoning_tool_names(review_due_detail)
++    assert "finish_task" not in worker_reasoning._reasoning_tool_names(
++        review_due_detail
++    )
++    review_due_detail["collection"]["job_detail_buffer"]["lines"].append(
++        {"text": "자격요건"}
++    )
++    changed_review = worker_selection._select_detail_review(review_due_detail)
++    assert changed_review is not None
++    assert changed_review["decision"]["pending_action"].source == "state_contract"
++    assert (
++        changed_review["decision"]["pending_action"].tool_calls[0].name
++        == "review_job_detail"
++    )
+ 
+     recovery = worker_reasoning.reasoning_node(
+         worker_state(
+diff --git a/agent/tests/core/test_worker_graph_boundaries.py b/agent/tests/core/test_worker_graph_boundaries.py
+index ad01979..2aa3e72 100644
+--- a/agent/tests/core/test_worker_graph_boundaries.py
++++ b/agent/tests/core/test_worker_graph_boundaries.py
+@@ -667,6 +667,121 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
+     assert stopped["decision"]["pending_action"].source == "transition_policy"
+     assert stopped["decision"]["pending_action"].tool_calls[0].name == "finish_task"
+ 
++    detail_url = "https://example.com/jobs/current"
++    detail_text = "1. 주요업무"
++    source_end = worker_state(
++        observation={
++            "current_page_role": "job_detail",
++            "current_url": detail_url,
++        },
++        collection={
++            "job_detail_buffer": {
++                "url": detail_url,
++                "lines": [{"text": "주요업무"}],
++            },
++        },
++        transition={
++            "no_effect_count": 3,
++            "transition_result": {
++                "action": "scroll",
++                "status": "unknown",
++                "reason": "no_screen_change",
++            },
++        },
++    )
++    reviewed_draft = JobDraft(
++        url=detail_url,
++        raw_ocr_text=detail_text,
++        required_fields=source_end["request"]["collection_intent"].required_fields,
++    )
++    source_end["collection"]["last_job_review"] = JobReview(
++        url=detail_url,
++        status=JobReviewStatus.NEEDS_MORE,
++        draft_fingerprint=reviewed_draft.fingerprint(),
++        model_tier="lightweight",
++    )
++    primary_review = worker_selection.selection_node(source_end, node_runtime())
++    assert primary_review["decision"]["pending_action"].source == "state_contract"
++    assert (
++        primary_review["decision"]["pending_action"].tool_calls[0].name
++        == "review_job_detail"
++    )
++    source_end["collection"]["last_job_review"] = source_end["collection"][
++        "last_job_review"
++    ].model_copy(update={"model_tier": "primary"})
++    primary_stopped = worker_selection.selection_node(source_end, node_runtime())
++    assert primary_stopped["decision"]["pending_action"].source == (
++        "transition_policy"
++    )
++
++
++def test_selection_preserves_guards_before_detail_review(monkeypatch):
++    detail_url = "https://example.com/jobs/stale"
++    collection = {
++        "job_detail_buffer": {
++            "url": detail_url,
++            "lines": [{"text": "주요업무"}],
++        }
++    }
++
++    with monkeypatch.context() as patch:
++        patch.setattr(
++            worker_selection,
++            "_select_detail_review",
++            lambda _state: (_ for _ in ()).throw(
++                AssertionError("기존 selection 우선 정책 뒤에 상세 검토가 와야 합니다.")
++            ),
++        )
++        low_information = worker_selection.selection_node(
++            worker_state(
++                observation={
++                    "current_page_role": "job_detail",
++                    "current_url": detail_url,
++                    "low_information_screen": True,
++                    "low_information_capture_count": 99,
++                },
++                collection=collection,
++                transition={"no_effect_count": 3},
++            ),
++            node_runtime(),
++        )
++        assert low_information["decision"]["pending_action"].source == (
++            "screen_policy"
++        )
++
++        replay = worker_selection.selection_node(
++            worker_state(
++                observation={
++                    "current_page_role": "job_detail",
++                    "current_url": detail_url,
++                },
++                collection=collection,
++                replay={"replay_session": {"active": True}},
++                transition={"no_effect_count": 3},
++            ),
++            node_runtime(),
++        )
++        assert replay == {}
++
++        duplicate_update = {"collection": {"job_card_queue": []}}
++        patch.setattr(
++            worker_selection,
++            "_select_duplicate_detail",
++            lambda *_args, **_kwargs: duplicate_update,
++        )
++        duplicate = worker_selection.selection_node(
++            worker_state(
++                observation={
++                    "current_page_role": "job_detail",
++                    "current_url": detail_url,
++                },
++                collection=collection,
++                transition={"no_effect_count": 3},
++            ),
++            node_runtime(),
++        )
++        assert duplicate == duplicate_update
++
+ 
+ def test_execution_does_not_mix_detail_extraction_into_scroll(monkeypatch):
+     monkeypatch.setattr(
+diff --git a/agent/tests/core/test_worker_transition_contracts.py b/agent/tests/core/test_worker_transition_contracts.py
+index 78326d6..c4ce330 100644
+--- a/agent/tests/core/test_worker_transition_contracts.py
++++ b/agent/tests/core/test_worker_transition_contracts.py
+@@ -11,6 +11,7 @@ from agent.tests.worker_test_support import (
+     worker_data_services,
+     worker_state,
+ )
++from shared.schema.collection_intent import CollectionIntent
+ from shared.schema.jd_schema import JobCapture
+ from shared.schema.experience_rule_schema import ExpectedEffect
+ 
+@@ -74,6 +75,39 @@ def test_completed_detail_uses_deterministic_results_navigation():
+     assert close_request.tool_calls[0].name == "close_current_tab"
+ 
+ 
++def test_completed_detail_without_queue_returns_for_more_results():
++    state = worker_state(
++        request={"collection_intent": CollectionIntent(target_count=2)},
++        observation={
++            "current_url": "https://www.rallit.com/positions/example-posting",
++            "current_page_role": "job_detail",
++            "ocr_complete": True,
++        },
++        transition={
++            "transition_result": {
++                "status": "ready",
++                "action": "scroll",
++                "source": "llm",
++            },
++        },
++        collection={
++            "job_captures": [
++                JobCapture(
++                    url="https://www.rallit.com/positions/example-posting",
++                    raw_ocr_text="첫 번째 공고 상세 원문",
++                )
++            ],
++            "job_card_queue": [],
++        },
++    )
++
++    assert route_after_execution(state) == "selection"
++    selected = worker_selection.selection_node(state, node_runtime())
++    request = selected["decision"]["pending_action"]
++    assert request.source == "job_results_navigation"
++    assert request.tool_calls[0].name == "go_back"
++
++
+ def test_detail_click_does_not_return_before_detail_reading_finishes():
+     state = worker_state(
+         observation={
+diff --git a/agent/tests/regression/test_rallit_site_profile.py b/agent/tests/regression/test_rallit_site_profile.py
+new file mode 100644
+index 0000000..1486e8b
+--- /dev/null
++++ b/agent/tests/regression/test_rallit_site_profile.py
+@@ -0,0 +1,29 @@
++from agent.runtime.site_context import infer_site_page_role
++from agent.sites import get_official_site_url, load_site_profile
++
++
++def test_rallit_profile_registers_official_homepage() -> None:
++    profile = load_site_profile("rallit")
++
++    assert profile.display_name == "랠릿"
++    assert profile.base_url == "https://www.rallit.com/"
++    assert profile.domains == ("www.rallit.com", "rallit.com")
++    assert get_official_site_url("랠릿") == "https://www.rallit.com"
++
++
++def test_rallit_profile_uses_visible_detail_cues() -> None:
++    role = infer_site_page_role(
++        "https://www.rallit.com/",
++        ["주요업무", "자격요건"],
++    )
++
++    assert role == "job_detail"
++
++
++def test_rallit_profile_keeps_detail_role_below_body_sections() -> None:
++    role = infer_site_page_role(
++        "https://www.rallit.com/positions/example-posting",
++        ["랠릿", "회사/채용 공고로 검색"],
++    )
++
++    assert role == "job_detail"
