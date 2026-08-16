@@ -39,7 +39,9 @@ def _normalized_text(value: Any) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
-def _normalized_url(value: Any) -> str:
+def normalize_job_url(value: Any) -> str:
+    """공고 식별 쿼리는 보존하고 추적 쿼리만 제거한다."""
+
     raw = str(value or "").strip()
     if not raw:
         return ""
@@ -160,7 +162,7 @@ def _is_present(value: Any) -> bool:
 def _strict_value(value: Any, *, url: bool = False) -> Any:
     if isinstance(value, list):
         return [_normalized_text(item) for item in value if _normalized_text(item)]
-    return _normalized_url(value) if url else _normalized_text(value)
+    return normalize_job_url(value) if url else _normalized_text(value)
 
 
 def _required_fields_for_payload(
@@ -199,7 +201,7 @@ def _record_coverage(
         content_present += sum(
             _is_present(record.get(field)) for field in CONTENT_FIELDS
         )
-        normalized_url = _normalized_url(record.get("url"))
+        normalized_url = normalize_job_url(record.get("url"))
         if normalized_url:
             urls.append(normalized_url)
 
@@ -226,16 +228,16 @@ def _reference_quality(
     reference_records: list[dict[str, Any]],
 ) -> dict[str, Any]:
     actual_by_url = {
-        _normalized_url(item.get("url")): item
+        normalize_job_url(item.get("url")): item
         for item in actual_records
-        if _normalized_url(item.get("url"))
+        if normalize_job_url(item.get("url"))
     }
     matched = 0
     exact_identity_fields = 0
     exact_content_fields = 0
     compared_content_fields = 0
     for expected in reference_records:
-        observed = actual_by_url.get(_normalized_url(expected.get("url")))
+        observed = actual_by_url.get(normalize_job_url(expected.get("url")))
         if observed is None:
             continue
         matched += 1

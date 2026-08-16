@@ -90,6 +90,10 @@ def test_site_page_roles_use_declared_url_signals():
             "?wantedAuthNo=51078967&infoTypeCd=CJK",
             "job_detail",
         ),
+        (
+            "https://job.incruit.com/jobdb_info/jobpost.asp?job=2608040000080",
+            "job_detail",
+        ),
         ("https://www.work24.go.kr/cm/main.do", "home"),
         ("https://www.saramin.co.kr/zf_user/", "home"),
     ]

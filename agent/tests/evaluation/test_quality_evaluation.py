@@ -100,6 +100,29 @@ def test_job_quality_preserves_query_identity_and_drops_tracking_values():
     assert result["unique_url_rate"] == 1.0
 
 
+def test_manual_quality_preserves_query_based_job_identity():
+    summary = _collection(
+        target=2,
+        resolved=2,
+        items=[
+            {"job_id": 1, "url": "https://example.com/view?job=1&src=search"},
+            {"job_id": 2, "url": "https://example.com/view?src=search&job=2"},
+        ],
+    )
+    result = evaluate_manual_run(
+        summary,
+        _manual(
+            [
+                _job_judgement("https://example.com/view?job=1&src=search"),
+                _job_judgement("https://example.com/view?src=search&job=2"),
+            ]
+        ),
+    )
+
+    assert result["manual_contract_passed"] is True
+    assert result["outcome"] == "success"
+
+
 def test_job_quality_uses_exact_reference_identity():
     result = evaluate_job_records(
         [

@@ -8,11 +8,9 @@ from collections import Counter
 from pathlib import Path
 from statistics import median
 from typing import Any, Literal
-from urllib.parse import urlsplit, urlunsplit
-
 from pydantic import BaseModel, Field
 
-from benchmark.quality_eval import evaluate_collection_summary
+from benchmark.quality_eval import evaluate_collection_summary, normalize_job_url
 
 
 ManualResult = Literal["pass", "fail", "unavailable"]
@@ -70,24 +68,6 @@ def _manual_contract_passed(judgement: RunManualJudgement) -> bool:
     )
 
 
-def _normalized_url(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    parts = urlsplit(raw)
-    if parts.scheme.casefold() not in {"http", "https"} or not parts.netloc:
-        return ""
-    return urlunsplit(
-        (
-            parts.scheme.casefold(),
-            parts.netloc.casefold(),
-            parts.path.rstrip("/"),
-            "",
-            "",
-        )
-    )
-
-
 def _manual_coverage_passed(
     result: dict[str, Any],
     judgement: RunManualJudgement,
@@ -95,7 +75,7 @@ def _manual_coverage_passed(
 ) -> bool:
     """자동 실행이 해결한 모든 공고를 사람 판정표가 한 번씩 포함하는지 확인한다."""
 
-    judged_urls = [_normalized_url(job.url) for job in judgement.jobs]
+    judged_urls = [normalize_job_url(job.url) for job in judgement.jobs]
     if (
         resolved_count <= 0
         or len(judged_urls) != resolved_count
@@ -104,9 +84,9 @@ def _manual_coverage_passed(
     ):
         return False
     persisted_urls = {
-        _normalized_url(item.get("url"))
+        normalize_job_url(item.get("url"))
         for item in result.get("persisted_items", []) or []
-        if isinstance(item, dict) and _normalized_url(item.get("url"))
+        if isinstance(item, dict) and normalize_job_url(item.get("url"))
     }
     return persisted_urls.issubset(set(judged_urls))
 
