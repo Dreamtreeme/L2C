@@ -42,10 +42,19 @@ def normalize_dom_posting(
     if not full_text:
         raise ValueError("상세 페이지의 DOM 본문이 비어 있습니다.")
     posting = JobPosting.model_validate(engine.extract_from_text(full_text))
+    identity_authoritative = extraction.get("identity_authoritative") is True
     posting = posting.model_copy(
         update={
-            "company_name": extraction.get("company_name") or posting.company_name,
-            "position": extraction.get("position") or posting.position,
+            "company_name": (
+                extraction.get("company_name") or posting.company_name
+                if identity_authoritative
+                else posting.company_name or extraction.get("company_name")
+            ),
+            "position": (
+                extraction.get("position") or posting.position
+                if identity_authoritative
+                else posting.position or extraction.get("position")
+            ),
         }
     )
     posting = complete_extracted_job(

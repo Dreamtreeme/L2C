@@ -11,12 +11,29 @@ class _Engine:
         }
 
 
-def test_dom_identity_fields_override_llm_inference():
+def test_llm_identity_fields_remain_default():
     posting = normalize_dom_posting(
         {
             "company_name": "DOM 확인 회사",
             "position": "DOM 확인 제목",
             "full_text": "상세 공고 본문",
+        },
+        url="https://example.test/jobs/dynamic",
+        source_platform="example",
+        engine=_Engine(),
+    )
+
+    assert posting.company_name == "LLM 추론 회사"
+    assert posting.position == "설명에서 확장한 직무명"
+
+
+def test_authoritative_dom_identity_fields_override_llm_inference():
+    posting = normalize_dom_posting(
+        {
+            "company_name": "DOM 확인 회사",
+            "position": "DOM 확인 제목",
+            "full_text": "상세 공고 본문",
+            "identity_authoritative": True,
         },
         url="https://example.test/jobs/dynamic",
         source_platform="example",

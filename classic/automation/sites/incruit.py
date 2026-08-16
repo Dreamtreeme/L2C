@@ -141,6 +141,7 @@ class IncruitAdapter(CollectionSiteAdapter):
             "company_name": company_name,
             "position": position,
             "full_text": full_text,
+            "identity_authoritative": True,
         }
 
 

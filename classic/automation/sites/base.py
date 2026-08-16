@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class DomExtraction(TypedDict):
@@ -19,6 +19,7 @@ class DomExtraction(TypedDict):
     company_name: str | None
     position: str | None
     full_text: str | None
+    identity_authoritative: NotRequired[bool]
 
 
 class SiteAdapter(ABC):
