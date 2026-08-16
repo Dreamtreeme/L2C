@@ -3,6 +3,7 @@
 from agent.graph import worker_execution_dispatch
 from agent.graph.worker_execution_policy import compact_action_args
 from agent.graph.worker_review import review_node
+from agent.runtime.detail_runtime import update_job_detail_buffer
 from agent.runtime.tool_schema import scroll
 from agent.tests.worker_test_support import node_runtime, worker_data_services, worker_state
 from shared.schema.collection_intent import CollectionIntent
@@ -19,6 +20,20 @@ REQUIRED_FIELDS = [
 
 
 def _detail_state(current_url: str):
+    detail_buffer = update_job_detail_buffer(
+        None,
+        [
+            {"id": 3, "text": "예시회사", "bbox": [50, 100, 150, 130], "type": "text"},
+            {"id": 5, "text": "AI 엔지니어", "bbox": [170, 100, 400, 130], "type": "text"},
+            {"id": 20, "text": "주요 업무 모델 운영", "bbox": [50, 400, 500, 430], "type": "text"},
+            {"id": 30, "text": "자격 요건 Python", "bbox": [50, 600, 500, 630], "type": "text"},
+        ],
+        current_url,
+        "detail.png",
+        page_role="job_detail",
+        detail_key="card-1",
+        screen_size=[1000, 1000],
+    )
     return worker_state(
         request={
             "collection_intent": CollectionIntent(required_fields=REQUIRED_FIELDS)
@@ -41,17 +56,7 @@ def _detail_state(current_url: str):
                     "title": "AI 엔지니어",
                 }
             ],
-            "job_detail_buffer": {
-                "url": current_url,
-                "detail_key": "card-1",
-                "lines": [
-                    {"text": "예시회사 AI 엔지니어"},
-                    {"text": "주요 업무 모델 운영"},
-                    {"text": "자격 요건 Python"},
-                ],
-                "screens": ["detail.png"],
-                "stats": {"screen_count": 3},
-            },
+            "job_detail_buffer": detail_buffer,
         },
     )
 
@@ -82,8 +87,12 @@ def test_review_request_creates_draft_without_completing_job():
     draft = update["pending_job_draft"]
     assert draft.url == current_url
     assert draft.detail_key == "card-1"
-    assert draft.screen_count == 3
+    assert draft.screen_count == 1
     assert "자격 요건 Python" in draft.raw_ocr_text
+    assert draft.target_company_name == "예시회사"
+    assert draft.target_position == "AI 엔지니어"
+    assert draft.ocr_items[0].id == 1
+    assert draft.ocr_items[0].bbox_ratio == [0.05, 0.1, 0.4, 0.13]
     assert "job_captures" not in update
     assert "job_detail_buffer" not in update
 

@@ -7,7 +7,11 @@ from typing import Any, Callable
 
 from agent.runtime.worker_contracts import WorkerState, WorkerStateUpdate
 from agent.runtime.worker_data_services import WorkerDataServices
-from agent.runtime.detail_runtime import detail_buffer_text, detail_evidence_screenshot
+from agent.runtime.detail_runtime import (
+    detail_buffer_ocr_items,
+    detail_buffer_text,
+    detail_evidence_screenshot,
+)
 from agent.runtime.job_identity import source_card_key
 from agent.runtime.job_card_queue import (
     active_job_card,
@@ -107,10 +111,16 @@ def _prepare_job_draft(
     buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
     stats = dict(buffer.get("stats") or {})
     transition = dict(state["transition"].get("transition_result") or {})
+    active_card = active_job_card(
+        list(state["collection"].get("job_card_queue", []) or [])
+    )
     return JobDraft(
         url=current_url,
         detail_key=job_detail_key_from_state(state),
         raw_ocr_text=raw_ocr_text,
+        ocr_items=detail_buffer_ocr_items(buffer),
+        target_company_name=str(active_card.get("company") or "").strip(),
+        target_position=str(active_card.get("title") or "").strip(),
         required_fields=state["request"]["collection_intent"].required_fields,
         screenshot_path=detail_evidence_screenshot(buffer),
         source_card_key=_active_source_card_key(state, current_url),

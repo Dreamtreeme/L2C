@@ -20,8 +20,9 @@ from agent.runtime.worker_contracts import (
 )
 from agent.utils.logger import logger
 from agent.utils.job_fields import field_contract_items, required_fields_from_intent
-from agent.vision.marker_geometry import marker_bbox
+from agent.vision.marker_geometry import bbox_to_ratio, marker_bbox
 from agent.vision.target_snapshot import is_icon_marker
+from shared.schema.jd_schema import JobOcrLine
 
 
 def marker_prompt_rank(marker: ScreenMarker) -> tuple[int, int, int]:
@@ -336,12 +337,21 @@ def _append_detail_buffer_lines(
     markers: list[ScreenMarker],
     *,
     screen_name: str,
+    screen_size: list[int],
     max_lines: int,
     max_line_chars: int,
 ) -> tuple[list[JobDetailLine], list[str], int, int]:
     lines = list(buffer.get("lines") or [])
     seen_keys = [str(item) for item in (buffer.get("seen_keys") or []) if str(item)]
     seen = set(seen_keys)
+    next_line_id = max(
+        (
+            int(item.get("line_id") or 0)
+            for item in lines
+            if isinstance(item, dict)
+        ),
+        default=0,
+    ) + 1
     added = 0
     duplicate = 0
     for line in group_text_markers_into_lines(markers):
@@ -358,12 +368,21 @@ def _append_detail_buffer_lines(
             continue
         seen.add(key)
         seen_keys.append(key)
+        bbox = line.get("bbox") or [0, 0, 0, 0]
         detail_line: JobDetailLine = {
+            "line_id": next_line_id,
             "text": text,
-            "bbox": line.get("bbox") or [0, 0, 0, 0],
+            "bbox": bbox,
+            "bbox_ratio": bbox_to_ratio(bbox, screen_size),
+            "marker_ids": [
+                int(marker_id)
+                for marker_id in (line.get("ids") or [])
+                if str(marker_id).lstrip("-").isdigit()
+            ],
             "first_screen": screen_name,
         }
         lines.append(detail_line)
+        next_line_id += 1
         added += 1
         if len(lines) >= max_lines:
             break
@@ -401,6 +420,7 @@ def update_job_detail_buffer(
     *,
     page_role: str = "",
     detail_key: str = "",
+    screen_size: list[int] | None = None,
 ) -> JobDetailBuffer:
     """상세 페이지 OCR 본문 줄을 공고 단위 버퍼에 누적한다."""
 
@@ -427,6 +447,7 @@ def update_job_detail_buffer(
         buffer,
         markers,
         screen_name=screen_name,
+        screen_size=list(screen_size or []),
         max_lines=max_lines,
         max_line_chars=max_line_chars,
     )
@@ -547,23 +568,40 @@ def compact_job_detail_buffer_context(
     return "\n".join(parts) + "\n\n"
 
 
-def detail_buffer_text(buffer: JobDetailBuffer) -> str:
-    """누적 OCR 줄을 최종 추출 모델의 입력 크기에 맞춰 렌더링한다."""
+def detail_buffer_ocr_items(buffer: JobDetailBuffer) -> list[JobOcrLine]:
+    """누적 OCR을 안정 ID와 화면 비율 좌표가 있는 모델 입력으로 만든다."""
 
     max_chars = get_settings().vision.detail_final_ocr_max_chars
     lines = [item for item in (buffer.get("lines") or []) if isinstance(item, dict)]
-    rendered: list[str] = []
+    items: list[JobOcrLine] = []
     total = 0
     for index, line in enumerate(lines, start=1):
         text = str(line.get("text") or "").strip()
         if not text:
             continue
-        row = f"{index}. {text}"
+        line_id = int(line.get("line_id") or index)
+        row = f"{line_id}. {text}"
         if total + len(row) + 1 > max_chars:
             break
-        rendered.append(row)
+        items.append(
+            JobOcrLine(
+                id=line_id,
+                text=text,
+                bbox_ratio=list(line.get("bbox_ratio") or []),
+                marker_ids=list(line.get("marker_ids") or []),
+                screen=str(line.get("first_screen") or ""),
+            )
+        )
         total += len(row) + 1
-    return "\n".join(rendered)
+    return items
+
+
+def detail_buffer_text(buffer: JobDetailBuffer) -> str:
+    """누적 OCR 줄을 저장용 원문 형식으로 렌더링한다."""
+
+    return "\n".join(
+        f"{item.id}. {item.text}" for item in detail_buffer_ocr_items(buffer)
+    )
 
 
 def detail_evidence_screenshot(buffer: JobDetailBuffer) -> str:
@@ -589,6 +627,7 @@ __all__ = [
     "build_detail_lightweight_marked_image",
     "build_detail_section_context",
     "compact_job_detail_buffer_context",
+    "detail_buffer_ocr_items",
     "detail_buffer_text",
     "detail_evidence_screenshot",
     "detail_context_matches",

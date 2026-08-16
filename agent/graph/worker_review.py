@@ -71,6 +71,7 @@ def _complete_review(
     evidence = JobCollectionEvidence(
         required_fields=draft.required_fields,
         field_evidence=review.field_evidence,
+        field_evidence_line_ids=review.field_evidence_line_ids,
         screenshot_path=draft.screenshot_path,
         source_card_key=draft.source_card_key,
     )

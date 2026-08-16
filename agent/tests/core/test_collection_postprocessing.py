@@ -12,6 +12,7 @@ from shared.schema.jd_schema import (
     JobCollectionEvidence,
     JobDraft,
     JobField,
+    JobOcrLine,
     JobPosting,
     JobReviewStatus,
 )
@@ -33,6 +34,31 @@ def _draft() -> JobDraft:
         raw_ocr_text=(
             "예시회사 AI 엔지니어 주요 업무 모델 운영 자격 요건 Python"
         ),
+        ocr_items=[
+            JobOcrLine(
+                id=1,
+                text="예시회사 AI 엔지니어",
+                bbox_ratio=[0.05, 0.1, 0.4, 0.15],
+                marker_ids=[3, 5],
+                screen="detail.png",
+            ),
+            JobOcrLine(
+                id=2,
+                text="주요 업무 모델 운영",
+                bbox_ratio=[0.05, 0.4, 0.5, 0.45],
+                marker_ids=[20],
+                screen="detail.png",
+            ),
+            JobOcrLine(
+                id=3,
+                text="자격 요건 Python",
+                bbox_ratio=[0.05, 0.6, 0.5, 0.65],
+                marker_ids=[30],
+                screen="detail.png",
+            ),
+        ],
+        target_company_name="예시회사",
+        target_position="AI 엔지니어",
         required_fields=REQUIRED_FIELDS,
         screenshot_path="detail.png",
         screen_count=2,
@@ -58,6 +84,13 @@ def _extraction(*, source_exhausted: bool, complete: bool = True):
             **({"main_tasks": "주요 업무 모델 운영"} if complete else {}),
             "requirements": "자격 요건 Python",
         },
+        field_evidence_line_ids={
+            "company_name": [1],
+            "position": [1],
+            **({"main_tasks": [2]} if complete else {}),
+            "requirements": [3],
+        },
+        identity_conflict=False,
         reason="누적 OCR 검토 결과",
     )
 
@@ -98,11 +131,34 @@ def test_review_structures_ocr_and_preserves_source(monkeypatch):
     assert invocation["component"] == "detail_review"
     assert invocation["stream"] is True
     assert payload["required_fields"] == REQUIRED_FIELDS
+    assert payload["target_context"] == {
+        "company_name": "예시회사",
+        "position": "AI 엔지니어",
+    }
+    assert payload["ocr_items"][0]["bbox_ratio"] == [0.05, 0.1, 0.4, 0.15]
+    assert "ocr_text" not in payload
     assert payload["transition_reason"] == "no_screen_change"
     assert review.status == JobReviewStatus.COMPLETE
     assert review.posting.url == _draft().url
     assert review.posting.source_platform == "Wanted"
     assert review.posting.raw_ocr_text == _draft().raw_ocr_text
+    assert review.field_evidence_line_ids[JobField.COMPANY_NAME] == [1]
+
+
+def test_review_keeps_identity_conflict_out_of_completed_jobs(monkeypatch):
+    extraction = _extraction(source_exhausted=False)
+    extraction.identity_conflict = True
+    extraction.identity_candidates = ["예시회사", "추천회사"]
+    _stub_model(monkeypatch, extraction)
+
+    review = service.review_job_draft(_draft(), CollectionIntent(site="wanted"))
+
+    assert review.status == JobReviewStatus.NEEDS_MORE
+    assert review.identity_conflict is True
+    assert review.identity_candidates == ["예시회사", "추천회사"]
+    assert "identity_conflict" in review.issues
+    assert JobField.COMPANY_NAME in review.missing_fields
+    assert JobField.POSITION in review.missing_fields
 
 
 def test_review_requests_more_when_required_field_is_missing(monkeypatch):

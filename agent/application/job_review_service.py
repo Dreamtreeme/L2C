@@ -37,6 +37,9 @@ class JobReviewExtraction(BaseModel):
     is_job_posting: bool
     source_exhausted: bool
     field_evidence: dict[str, str] = Field(default_factory=dict)
+    field_evidence_line_ids: dict[str, list[int]]
+    identity_conflict: bool
+    identity_candidates: list[str] = Field(default_factory=list)
     reason: str = ""
 
 
@@ -60,6 +63,25 @@ def get_job_review_llm(tier: str = "lightweight") -> Any:
 
 
 def _review_messages(draft: JobDraft) -> list[SystemMessage | HumanMessage]:
+    payload: dict[str, Any] = {
+        "current_url": draft.url,
+        "detail_key": draft.detail_key,
+        "target_context": {
+            "company_name": draft.target_company_name,
+            "position": draft.target_position,
+        },
+        "required_fields": [field.value for field in draft.required_fields],
+        "screen_count": draft.screen_count,
+        "last_action": draft.last_action,
+        "transition_status": draft.transition_status,
+        "transition_reason": draft.transition_reason,
+    }
+    if draft.ocr_items:
+        payload["ocr_items"] = [
+            item.model_dump(mode="json") for item in draft.ocr_items
+        ]
+    else:
+        payload["ocr_text"] = draft.raw_ocr_text
     return [
         SystemMessage(
             content=build_detail_extraction_system_prompt(
@@ -69,23 +91,13 @@ def _review_messages(draft: JobDraft) -> list[SystemMessage | HumanMessage]:
                 "각 필드 판단을 뒷받침하는 실제 OCR 문구를 넣으십시오. 섹션 제목, 빈 양식, "
                 "placeholder는 사실 근거가 아닙니다. source_exhausted는 누적 화면과 직전 화면 "
                 "전환 근거상 더 읽을 공고 본문이 없을 때만 true로 설정하십시오. 단순히 필드가 "
-                "보이지 않는다는 이유만으로 true로 설정하지 마십시오. 현재 상세 URL은 보존하십시오."
+                "보이지 않는다는 이유만으로 true로 설정하지 마십시오. 현재 상세 URL은 보존하십시오.",
+                layout_evidence=bool(draft.ocr_items),
             )
         ),
         HumanMessage(
             content=json.dumps(
-                {
-                    "current_url": draft.url,
-                    "detail_key": draft.detail_key,
-                    "required_fields": [
-                        field.value for field in draft.required_fields
-                    ],
-                    "screen_count": draft.screen_count,
-                    "last_action": draft.last_action,
-                    "transition_status": draft.transition_status,
-                    "transition_reason": draft.transition_reason,
-                    "ocr_text": draft.raw_ocr_text,
-                },
+                payload,
                 ensure_ascii=False,
                 indent=2,
             )
@@ -127,15 +139,64 @@ def _normalized_field_evidence(
     return evidence
 
 
+def _normalized_field_evidence_line_ids(
+    extraction: JobReviewExtraction,
+    draft: JobDraft,
+) -> dict[JobField, list[int]]:
+    valid_line_ids = {item.id for item in draft.ocr_items}
+    if not valid_line_ids:
+        return {}
+    allowed = normalize_job_collection_fields(
+        list(extraction.field_evidence_line_ids)
+    )
+    evidence_line_ids: dict[JobField, list[int]] = {}
+    for field in allowed:
+        values = extraction.field_evidence_line_ids.get(field) or []
+        line_ids = list(
+            dict.fromkeys(
+                int(value)
+                for value in values
+                if str(value).isdigit() and int(value) in valid_line_ids
+            )
+        )
+        if line_ids:
+            evidence_line_ids[JobField(field)] = line_ids
+    return evidence_line_ids
+
+
+def _identity_evidence_issues(
+    extraction: JobReviewExtraction,
+    posting: JobPosting,
+    draft: JobDraft,
+    evidence_line_ids: dict[JobField, list[int]],
+) -> list[str]:
+    issues: list[str] = []
+    if extraction.identity_conflict:
+        issues.append("identity_conflict")
+    if not draft.ocr_items:
+        return issues
+    for field in (JobField.COMPANY_NAME, JobField.POSITION):
+        if getattr(posting, field.value) and not evidence_line_ids.get(field):
+            issues.append(f"identity_evidence_missing:{field.value}")
+    return issues
+
+
 def _review_status(
     extraction: JobReviewExtraction,
     missing_fields: list[JobField],
     filter_issues: list[str],
+    identity_issues: list[str],
     *,
     source_exhausted: bool,
 ) -> JobReviewStatus:
     if not extraction.is_job_posting or filter_issues:
         return JobReviewStatus.INVALID_TARGET
+    if identity_issues:
+        return (
+            JobReviewStatus.SOURCE_INCOMPLETE
+            if source_exhausted
+            else JobReviewStatus.NEEDS_MORE
+        )
     if not missing_fields:
         return JobReviewStatus.COMPLETE
     if source_exhausted:
@@ -185,6 +246,7 @@ def review_job_draft(
         posting = posting.model_copy(update={"url": url})
 
     field_evidence = _normalized_field_evidence(extraction, draft)
+    field_evidence_line_ids = _normalized_field_evidence_line_ids(extraction, draft)
     required_names = [field.value for field in draft.required_fields]
     missing_names = missing_job_fields(posting, required_names)
     missing_names.extend(
@@ -194,11 +256,28 @@ def review_job_draft(
     )
     missing_fields = [JobField(field) for field in dict.fromkeys(missing_names)]
     filter_issues = _request_filter_issues(posting, collection_intent)
+    identity_issues = _identity_evidence_issues(
+        extraction,
+        posting,
+        draft,
+        field_evidence_line_ids,
+    )
+    if identity_issues:
+        missing_fields = list(
+            dict.fromkeys(
+                [
+                    *missing_fields,
+                    JobField.COMPANY_NAME,
+                    JobField.POSITION,
+                ]
+            )
+        )
     source_exhausted = _source_exhaustion_confirmed(extraction, draft)
     status = _review_status(
         extraction,
         missing_fields,
         filter_issues,
+        identity_issues,
         source_exhausted=source_exhausted,
     )
     logger.info(
@@ -210,6 +289,7 @@ def review_job_draft(
         model_tier=draft.review_model_tier,
         ocr_chars=len(draft.raw_ocr_text),
         source_exhausted=source_exhausted,
+        identity_conflict=extraction.identity_conflict,
     )
     return JobReview(
         detail_key=draft.detail_key,
@@ -218,10 +298,17 @@ def review_job_draft(
         posting=posting,
         missing_fields=missing_fields,
         field_evidence=field_evidence,
+        field_evidence_line_ids=field_evidence_line_ids,
+        identity_conflict=extraction.identity_conflict,
+        identity_candidates=[
+            str(candidate).strip()[:160]
+            for candidate in extraction.identity_candidates[:10]
+            if str(candidate).strip()
+        ],
         draft_fingerprint=draft.fingerprint(),
         model_tier=draft.review_model_tier,
         reason=extraction.reason,
-        issues=filter_issues,
+        issues=[*filter_issues, *identity_issues],
     )
 
 

@@ -392,8 +392,11 @@ class ReflexTrace(TypedDict, total=False):
 class JobDetailLine(TypedDict):
     """상세 화면에서 중복 제거한 OCR 본문 한 줄."""
 
+    line_id: int
     text: str
     bbox: list[int]
+    bbox_ratio: list[float]
+    marker_ids: list[int]
     first_screen: str
 
 

@@ -285,6 +285,9 @@ def _collect_job_detail_observation(
         str(observation.get("current_screenshot") or ""),
         page_role=str(observation.get("current_page_role") or ""),
         detail_key=detail_key,
+        screen_size=list(
+            (observation.get("screen_signature") or {}).get("size") or []
+        ),
     )
     return {
         "collection": {

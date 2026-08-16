@@ -5,7 +5,25 @@ from __future__ import annotations
 from agent.prompts.trust_boundary import external_content_contract_ko
 
 
-def build_detail_extraction_system_prompt(base_instruction: str) -> str:
+def _layout_evidence_contract() -> str:
+    return (
+        "ocr_items의 bbox_ratio는 [left, top, right, bottom] 순서의 화면 비율 좌표이며, screen은 해당 줄이 처음 관찰된 화면입니다. "
+        "먼저 target_context의 공고 제목과 OCR 배치를 함께 보고 현재 채용공고의 시각적 본문 영역을 식별하십시오. "
+        "target_context는 탐색 중 선택한 카드의 기억이므로 화면 근거와 일치할 때만 사용하십시오. "
+        "회사명과 직무명은 같은 채용공고 헤더 영역에 속한 줄에서 추출하십시오. 추천 공고, 광고, 이어보는 채용정보, "
+        "내비게이션과 로그인 안내처럼 다른 시각 영역에 있는 회사명과 직무명은 현재 공고 정보로 사용하지 마십시오. "
+        "같은 문자열의 등장 횟수로 회사명을 결정하지 마십시오. 서로 다른 회사명 후보가 있고 현재 공고 영역을 확정할 수 없으면 "
+        "identity_conflict를 true로 설정하고 identity_candidates에 충돌 후보를 넣으십시오. 임의로 하나를 선택하지 마십시오. "
+        "field_evidence_line_ids에는 각 field_evidence를 뒷받침하는 ocr_items의 id를 넣으십시오. "
+        "company_name과 position의 근거 ID는 반드시 반환하십시오. "
+    )
+
+
+def build_detail_extraction_system_prompt(
+    base_instruction: str,
+    *,
+    layout_evidence: bool = False,
+) -> str:
     """실행 경로와 벤치마크가 공유하는 상세 OCR 정제 지침을 만든다."""
     return (
         f"{base_instruction.strip()}\n"
@@ -14,6 +32,7 @@ def build_detail_extraction_system_prompt(base_instruction: str) -> str:
         "채용 도메인에서 명확한 OCR 혼동은 문맥으로 보정하십시오. 예를 들어 Swift, Xcode, 앱 개발, 모바일 문맥에서 "
         "'ios', 'i0S', 'j0s', '10s'처럼 보이는 토큰은 직무명과 기술스택에서 'iOS'로 정규화하십시오. "
         "회사명과 직무명은 상세 페이지 상단에서 서로 인접한 페이지 텍스트를 가장 우선하는 근거로 사용하십시오. "
+        f"{_layout_evidence_contract() if layout_evidence else ''}"
         "직무명 괄호 안의 세부 분야나 조직명은 명시적인 회사명 근거가 아니며, 회사명이 본문에 없으면 이를 회사명으로 만들지 마십시오. "
         "이미지 내부 로고 OCR은 글자가 잘리거나 일부만 검출될 수 있으므로 보조 근거로만 사용하고, "
         "페이지 텍스트와 충돌하면 페이지 텍스트를 선택하십시오. "

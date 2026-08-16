@@ -111,6 +111,7 @@ class JobCollectionEvidence(BaseModel):
 
     required_fields: list[JobField] = Field(default_factory=list)
     field_evidence: dict[JobField, str] = Field(default_factory=dict)
+    field_evidence_line_ids: dict[JobField, list[int]] = Field(default_factory=dict)
     screenshot_path: str = ""
     ocr_text_path: str = ""
     source_card_key: str = ""
@@ -121,6 +122,27 @@ class JobCollectionEvidence(BaseModel):
         return list(dict.fromkeys(values))
 
 
+class JobOcrLine(BaseModel):
+    """상세 정제 모델이 화면 배치를 함께 판단할 수 있는 OCR 한 줄."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(..., ge=1)
+    text: str = Field(..., min_length=1)
+    bbox_ratio: list[float] = Field(default_factory=list)
+    marker_ids: list[int] = Field(default_factory=list)
+    screen: str = ""
+
+    @field_validator("bbox_ratio")
+    @classmethod
+    def validate_bbox_ratio(cls, values: list[float]) -> list[float]:
+        if not values:
+            return []
+        if len(values) != 4 or any(value < 0.0 or value > 1.0 for value in values):
+            raise ValueError("bbox_ratio는 0~1 범위의 [left, top, right, bottom]이어야 합니다.")
+        return values
+
+
 class JobDraft(BaseModel):
     """작업자 그래프가 공고 검토 노드에 전달하는 누적 화면 근거."""
 
@@ -129,6 +151,9 @@ class JobDraft(BaseModel):
     url: str
     detail_key: str = ""
     raw_ocr_text: str
+    ocr_items: list[JobOcrLine] = Field(default_factory=list)
+    target_company_name: str = ""
+    target_position: str = ""
     required_fields: list[JobField] = Field(default_factory=list)
     screenshot_path: str = ""
     source_card_key: str = ""
@@ -176,6 +201,9 @@ class JobReview(BaseModel):
     posting: JobPosting = Field(default_factory=JobPosting)
     missing_fields: list[JobField] = Field(default_factory=list)
     field_evidence: dict[JobField, str] = Field(default_factory=dict)
+    field_evidence_line_ids: dict[JobField, list[int]] = Field(default_factory=dict)
+    identity_conflict: bool = False
+    identity_candidates: list[str] = Field(default_factory=list)
     draft_fingerprint: str = ""
     model_tier: Literal["lightweight", "primary"] = "lightweight"
     reason: str = ""
@@ -245,6 +273,7 @@ __all__ = [
     "JobCapture",
     "JobDraft",
     "JobField",
+    "JobOcrLine",
     "JobPosting",
     "JobReview",
     "JobReviewStatus",
