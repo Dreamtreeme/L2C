@@ -293,6 +293,36 @@ def test_model_timeout_is_normalized_to_application_contract():
         )
 
 
+def test_empty_model_stream_falls_back_to_single_invoke():
+    from agent.observability.run_context import invoke_with_metrics
+
+    class EmptyStreamModel:
+        def __init__(self):
+            self.stream_calls = 0
+            self.invoke_calls = 0
+
+        def stream(self, _inputs, config=None):
+            self.stream_calls += 1
+            return iter(())
+
+        def invoke(self, _inputs, config=None):
+            self.invoke_calls += 1
+            return {"status": "complete"}
+
+    model = EmptyStreamModel()
+
+    result = invoke_with_metrics(
+        model,
+        "input",
+        "empty_stream_model",
+        stream=True,
+    )
+
+    assert result == {"status": "complete"}
+    assert model.stream_calls == 1
+    assert model.invoke_calls == 1
+
+
 def test_model_role_policy_reads_validated_timeout_settings(monkeypatch):
     from agent.llm.policy import model_execution_policy
     from agent.config import get_settings

@@ -45,6 +45,10 @@ class ModelRequestTimeout(TimeoutError):
     """단일 외부 모델 요청의 제한시간을 초과했습니다."""
 
 
+class _EmptyModelStream(RuntimeError):
+    """모델 스트림 연결은 성공했지만 응답 청크가 도착하지 않았습니다."""
+
+
 def _failure_code(exc: BaseException) -> str:
     if isinstance(exc, RunCancelled):
         return "run_cancelled"
@@ -549,8 +553,34 @@ def _stream_result(
             # 구조화 출력 파서는 완성도가 높아진 객체를 내보내므로 마지막 값을 사용합니다.
             result = chunk
     if result is None:
-        raise RuntimeError("LLM stream returned no chunks")
+        raise _EmptyModelStream("LLM stream returned no chunks")
     return result, float(first_chunk_sec or 0.0)
+
+
+def _invoke_result(runnable: Any, inputs: Any, config: dict[str, Any]) -> Any:
+    return (
+        runnable.invoke(inputs, config=config)
+        if _supports_invoke_config(runnable)
+        else runnable.invoke(inputs)
+    )
+
+
+def _stream_result_with_fallback(
+    runnable: Any,
+    inputs: Any,
+    config: dict[str, Any],
+    *,
+    component: str,
+) -> tuple[Any, float | None, bool]:
+    try:
+        result, first_chunk_sec = _stream_result(runnable, inputs, config)
+        return result, first_chunk_sec, False
+    except _EmptyModelStream:
+        logger.warning(
+            "LLM stream was empty; falling back to invoke",
+            component=component,
+        )
+        return _invoke_result(runnable, inputs, config), None, True
 
 
 def invoke_with_metrics(
@@ -574,14 +604,18 @@ def invoke_with_metrics(
     }
     started = time.perf_counter()
     first_chunk_sec: float | None = None
+    stream_fallback = False
     use_stream = stream and callable(getattr(runnable, "stream", None))
     try:
         if use_stream:
-            result, first_chunk_sec = _stream_result(runnable, inputs, config)
-        elif _supports_invoke_config(runnable):
-            result = runnable.invoke(inputs, config=config)
+            result, first_chunk_sec, stream_fallback = _stream_result_with_fallback(
+                runnable,
+                inputs,
+                config,
+                component=component,
+            )
         else:
-            result = runnable.invoke(inputs)
+            result = _invoke_result(runnable, inputs, config)
     except Exception as exc:
         duration = time.perf_counter() - started
         if context is not None:
@@ -605,6 +639,7 @@ def invoke_with_metrics(
             component=component,
             first_chunk_sec=round(float(first_chunk_sec or 0.0), 6),
             duration_sec=round(duration, 6),
+            fallback_to_invoke=stream_fallback,
         )
     usage_by_model = dict(callback.usage_metadata or {})
     if context is not None:
