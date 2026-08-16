@@ -1,0 +1,5036 @@
+{
+  "schema_version": 3,
+  "run_id": "e2e-20260816092430-5aa409e0",
+  "status": "failed",
+  "error": "collection failed: keyword='데이터 엔지니어', site=인크루트, resolved=0, persisted=0",
+  "started_at": "2026-08-16T00:24:30.214190+00:00",
+  "scenario_id": "incruit-data-engineer",
+  "experiment_name": "vision-incruit-onboarding",
+  "execution_mode": "autonomous",
+  "site": "incruit",
+  "search_keyword": "데이터 엔지니어",
+  "target_count": 2,
+  "count_mode": "explicit",
+  "original_query": "인크루트에서 데이터 엔지니어 공고 2건 수집",
+  "expected_source_urls": [],
+  "execution_time_sec": 76.139368,
+  "git_commit": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+  "git_dirty": true,
+  "config_fingerprint": "723442b2b2ec",
+  "recipe_version": "",
+  "models": [
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash"
+  ],
+  "python": "3.13.14",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "config": {
+    "COMMANDER_MODEL": "gemini-3.6-flash",
+    "VISION_LIGHTWEIGHT_MODEL": "gemini-3.5-flash-lite",
+    "VISION_WORKER_REASONING_MODEL": "gemini-3.6-flash",
+    "VISION_WORKER_REASONING_THINKING_LEVEL": "low",
+    "VISION_DETAIL_FINAL_EXTRACTION_MODEL": "gemini-3.5-flash-lite",
+    "VISION_RECIPE_CRITIC_MODEL": "gemini-3.6-flash",
+    "VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS": "1536",
+    "PADDLE_OCR_MAX_DIM": "1152",
+    "PADDLE_OCR_REQUEST_TIMEOUT_SEC": "20.0",
+    "REFLEX_ENABLED": "0",
+    "VISION_RECIPE_AUTO_PROMOTE": "1",
+    "VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT": "12",
+    "VISION_BROWSER_WINDOW_WIDTH": "1976",
+    "VISION_BROWSER_WINDOW_HEIGHT": "2129",
+    "VISION_LOADING_TIMEOUT_SEC": "15.0",
+    "VISION_LOADING_BLANK_MAX_STDDEV": "12.0",
+    "VISION_LOADING_BLANK_MAX_EDGE_MEAN": "3.0",
+    "VISION_LOADING_BLANK_MIN_DOMINANT_RATIO": "0.97",
+    "VISION_LOADING_CHECK_INTERVAL_SEC": "0.04",
+    "VISION_LOADING_MOTION_THRESHOLD_PERCENT": "1.0",
+    "VISION_LOADING_STABLE_FRAMES": "2"
+  },
+  "metrics": {
+    "run_id": "e2e-20260816092430-5aa409e0",
+    "duration_sec": 76.146027,
+    "deadline_remaining_sec": 823.853961,
+    "steps": [
+      {
+        "component": "ocr_startup",
+        "stage": "perception",
+        "duration_sec": 4.976737,
+        "pid": 24364
+      },
+      {
+        "component": "worker_prepare_screen",
+        "stage": "browser_prepare",
+        "duration_sec": 6.686489,
+        "success": true
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 0.564893,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 2.4e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 5.6e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.814823,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 1,
+        "boxes": 133,
+        "success": true,
+        "inference_sec": 0.81228,
+        "postprocess_sec": 0.001601,
+        "serialization_sec": 0.000167
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 2.735929,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 1.9e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 0.000108,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.488778,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.268223,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "type_in_marker",
+          "press_key"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.262692,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.063923,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 0.000139,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 2.650297,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.328823,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "type_in_marker",
+          "click_marker"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.241557,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.059117,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.5e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.69262,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 2,
+        "boxes": 104,
+        "success": true,
+        "inference_sec": 0.688971,
+        "postprocess_sec": 0.002561,
+        "serialization_sec": 0.000194
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 1.004461,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.059792,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 8.5e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.934828,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.09605,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "click_marker"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 3.318161,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.068144,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.3e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.793601,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 3,
+        "boxes": 72,
+        "success": true,
+        "inference_sec": 0.791846,
+        "postprocess_sec": 0.001006,
+        "serialization_sec": 0.000119
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 1.013768,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.065021,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 9.7e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.826366,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.062311,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.48166,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.063393,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.2e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.474618,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 4,
+        "boxes": 59,
+        "success": true,
+        "inference_sec": 0.473242,
+        "postprocess_sec": 0.000773,
+        "serialization_sec": 8.8e-05
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.692984,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.064017,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 5.8e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.829638,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.06338,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.455039,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.063079,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.544292,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 5,
+        "boxes": 68,
+        "success": true,
+        "inference_sec": 0.542748,
+        "postprocess_sec": 0.000877,
+        "serialization_sec": 0.0001
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.765148,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.06339,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 6.9e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.870924,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.062824,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.42617,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.060798,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.2e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.500138,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 6,
+        "boxes": 71,
+        "success": true,
+        "inference_sec": 0.4986,
+        "postprocess_sec": 0.000907,
+        "serialization_sec": 0.000102
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.694466,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.061065,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 7e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.75005,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.063096,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.446761,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.059165,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.2e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.560177,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 7,
+        "boxes": 78,
+        "success": true,
+        "inference_sec": 0.558461,
+        "postprocess_sec": 0.001007,
+        "serialization_sec": 0.000112
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.753855,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.05999,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 5.4e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.975436,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.061846,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.635304,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.062306,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 8e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.627073,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.062724,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.463961,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.061074,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.7e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.703096,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 8,
+        "boxes": 70,
+        "success": true,
+        "inference_sec": 0.701553,
+        "postprocess_sec": 0.000918,
+        "serialization_sec": 0.000105
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.926856,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.060914,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 5.9e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.699609,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.097655,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "click_marker"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 2.273141,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.069019,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.3e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.743983,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 9,
+        "boxes": 83,
+        "success": true,
+        "inference_sec": 0.741888,
+        "postprocess_sec": 0.001166,
+        "serialization_sec": 0.000177
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.970724,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.064933,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 8e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.826558,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.063,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.398361,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.063349,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 3.2e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.539991,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 10,
+        "boxes": 58,
+        "success": true,
+        "inference_sec": 0.53845,
+        "postprocess_sec": 0.000865,
+        "serialization_sec": 0.000104
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.726828,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.06806,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 9.3e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.791923,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.062238,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.335817,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.059147,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.5e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.658831,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 11,
+        "boxes": 71,
+        "success": true,
+        "inference_sec": 0.657013,
+        "postprocess_sec": 0.00112,
+        "serialization_sec": 0.000115
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.846129,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.060451,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 0.000111,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.775985,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.06248,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 1.352982,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.059567,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.1e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.538186,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 12,
+        "boxes": 72,
+        "success": true,
+        "inference_sec": 0.536391,
+        "postprocess_sec": 0.001019,
+        "serialization_sec": 0.000111
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 0.742163,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.068256,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 7.8e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 3.272998,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.09307,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "click_marker"
+        ]
+      },
+      {
+        "component": "graph:capture",
+        "stage": "capture",
+        "duration_sec": 2.417578,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.063528,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 2.1e-05,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "ocr_request",
+        "stage": "perception",
+        "duration_sec": 0.844159,
+        "attempt": 1,
+        "request_timeout_sec": 20.0,
+        "pid": 24364,
+        "request_count": 13,
+        "boxes": 75,
+        "success": true,
+        "inference_sec": 0.84239,
+        "postprocess_sec": 0.00105,
+        "serialization_sec": 0.000115
+      },
+      {
+        "component": "graph:ocr",
+        "stage": "ocr",
+        "duration_sec": 1.05928,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:transition",
+        "stage": "transition",
+        "duration_sec": 0.070131,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:selection",
+        "stage": "selection",
+        "duration_sec": 0.000444,
+        "schema_version": 1,
+        "success": true,
+        "action_source": ""
+      },
+      {
+        "component": "graph:reasoning",
+        "stage": "reasoning",
+        "duration_sec": 1.896312,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      {
+        "component": "graph:execution",
+        "stage": "execution",
+        "duration_sec": 0.000936,
+        "schema_version": 1,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "finish_task"
+        ]
+      },
+      {
+        "component": "worker_graph",
+        "stage": "collection",
+        "duration_sec": 69.420717,
+        "recursion_limit": 180,
+        "success": true
+      }
+    ],
+    "llm": {
+      "totals": {
+        "input_tokens": 87061,
+        "output_tokens": 2006,
+        "total_tokens": 89067,
+        "input_token_details": {
+          "cache_read": 0
+        },
+        "output_token_details": {}
+      },
+      "by_model": {
+        "gemini-3.5-flash-lite": {
+          "input_tokens": 75308,
+          "output_tokens": 1650,
+          "total_tokens": 76958,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        },
+        "gemini-3.6-flash": {
+          "input_tokens": 11753,
+          "output_tokens": 356,
+          "total_tokens": 12109,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {}
+        }
+      },
+      "cost": {
+        "currency": "USD",
+        "estimated_total": 0.0470169,
+        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\data\\worktrees\\incruit-vision-f711-rerun\\config\\model_pricing.json",
+        "priced_model_count": 2,
+        "unpriced_models": [],
+        "items": [
+          {
+            "model": "gemini-3.5-flash-lite",
+            "input_tokens": 75308,
+            "cached_input_tokens": 0,
+            "output_tokens": 1650,
+            "estimated_cost_usd": 0.0267174
+          },
+          {
+            "model": "gemini-3.6-flash",
+            "input_tokens": 11753,
+            "cached_input_tokens": 0,
+            "output_tokens": 356,
+            "estimated_cost_usd": 0.0202995
+          }
+        ]
+      },
+      "calls": [
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5744,
+          "output_tokens": 138,
+          "total_tokens": 5882,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.44747,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning",
+          "provider": "langchain",
+          "model": "gemini-3.6-flash",
+          "input_tokens": 5921,
+          "output_tokens": 244,
+          "total_tokens": 6165,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 2.199068,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5859,
+          "output_tokens": 124,
+          "total_tokens": 5983,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.898595,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5960,
+          "output_tokens": 122,
+          "total_tokens": 6082,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.784194,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5466,
+          "output_tokens": 124,
+          "total_tokens": 5590,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.701366,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5632,
+          "output_tokens": 110,
+          "total_tokens": 5742,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.739775,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5645,
+          "output_tokens": 119,
+          "total_tokens": 5764,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.618924,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5802,
+          "output_tokens": 132,
+          "total_tokens": 5934,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.849828,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning",
+          "provider": "langchain",
+          "model": "gemini-3.6-flash",
+          "input_tokens": 5832,
+          "output_tokens": 112,
+          "total_tokens": 5944,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.50619,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5622,
+          "output_tokens": 126,
+          "total_tokens": 5748,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.568269,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 6308,
+          "output_tokens": 126,
+          "total_tokens": 6434,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.693921,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5627,
+          "output_tokens": 129,
+          "total_tokens": 5756,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.656183,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5703,
+          "output_tokens": 124,
+          "total_tokens": 5827,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.648827,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 5859,
+          "output_tokens": 139,
+          "total_tokens": 5998,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 3.1163,
+          "success": true,
+          "error": ""
+        },
+        {
+          "component": "vision_reasoning_lightweight",
+          "provider": "langchain",
+          "model": "gemini-3.5-flash-lite",
+          "input_tokens": 6081,
+          "output_tokens": 137,
+          "total_tokens": 6218,
+          "input_token_details": {
+            "cache_read": 0
+          },
+          "output_token_details": {},
+          "duration_sec": 1.748669,
+          "success": true,
+          "error": ""
+        }
+      ]
+    },
+    "outcome": {
+      "status": "failed",
+      "last_phase": "failed",
+      "failure_stage": "failed",
+      "failure_code": "run_failed"
+    },
+    "langsmith": {
+      "enabled": false,
+      "project": "l2c-local",
+      "trace_id": ""
+    }
+  },
+  "events": [
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "run_started",
+      "phase": "received",
+      "status": "running",
+      "message": "요청을 접수했습니다.",
+      "data": {
+        "query": "인크루트에서 데이터 엔지니어 공고 2건 수집"
+      },
+      "timestamp": "2026-08-16T00:24:30.214352Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "worker_preparing_screen",
+      "phase": "collection",
+      "status": "running",
+      "message": "브라우저 시작 화면을 준비하고 있습니다.",
+      "data": {},
+      "timestamp": "2026-08-16T00:24:30.237049Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "worker_graph_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "화면을 탐색하고 공고를 수집하고 있습니다.",
+      "data": {},
+      "timestamp": "2026-08-16T00:24:36.923778Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:24:36.927308Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 0.564893,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:37.492312Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:37.492961Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 2.4e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:37.493165Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:37.494185Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 5.6e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:37.494412Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:24:37.495182Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 2.735929,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:40.231471Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:40.232345Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 1.9e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:40.232457Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:40.233279Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 0.000108,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:40.233377Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:24:40.233924Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.488778,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:24:41.722806Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:24:41.723738Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.268223,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "type_in_marker",
+          "press_key"
+        ]
+      },
+      "timestamp": "2026-08-16T00:24:41.992221Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:24:41.992930Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.262692,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:43.255867Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:43.256862Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.063923,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:43.321156Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:43.322642Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 0.000139,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:43.322826Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:24:43.323766Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 2.650297,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:24:45.973837Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:24:45.974746Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.328823,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "type_in_marker",
+          "click_marker"
+        ]
+      },
+      "timestamp": "2026-08-16T00:24:46.303726Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:24:46.304495Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.241557,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:47.546006Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:47.546646Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.059117,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:47.605954Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:47.606777Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.5e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:47.606921Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:24:47.607405Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 1.004461,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:48.612051Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:48.612879Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.059792,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:48.672771Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:48.673686Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 8.5e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:48.673869Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:24:48.674762Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.934828,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:24:50.609426Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:24:50.610039Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.09605,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "click_marker"
+        ]
+      },
+      "timestamp": "2026-08-16T00:24:50.706315Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:24:50.707181Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 3.318161,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:54.025460Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:54.026177Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.068144,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:54.094446Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:54.095199Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.3e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:54.095326Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:24:54.095757Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 1.013768,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:55.109675Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:55.110282Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.065021,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:55.175426Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:55.176532Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 9.7e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:55.176671Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:24:55.177222Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.826366,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:24:57.003787Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:24:57.005150Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.062311,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:24:57.067530Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:24:57.068085Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.48166,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:58.549876Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:58.550443Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.063393,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:58.613977Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:58.614705Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.2e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:58.614840Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:24:58.615272Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.692984,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:59.308383Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:24:59.309007Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.064017,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:59.373160Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:24:59.373885Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 5.8e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:24:59.374000Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:24:59.374523Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.829638,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:01.204208Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:01.206128Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.06338,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:01.269150Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:01.270060Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.455039,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:02.725095Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:02.726332Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.063079,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:02.789586Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:02.790408Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:02.790542Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:02.791027Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.765148,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:03.556290Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:03.556957Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.06339,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:03.620473Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:03.621210Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 6.9e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:03.621321Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:03.621864Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.870924,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:05.492862Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:05.493642Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.062824,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:05.556687Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:05.557288Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.42617,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:06.983591Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:06.984161Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.060798,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:07.045090Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:07.045798Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.2e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:07.045931Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:07.046394Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.694466,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:07.740996Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:07.741621Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.061065,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:07.802770Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:07.803487Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 7e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:07.803600Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:07.804111Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.75005,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:09.554282Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:09.555514Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.063096,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:09.618562Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:09.619108Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.446761,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:11.066038Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:11.066670Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.059165,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:11.125972Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:11.126704Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.2e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:11.126829Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:11.127235Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.753855,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:11.881198Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:11.881756Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.05999,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:11.941860Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:11.942516Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 5.4e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:11.942607Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:11.943025Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.975436,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:13.918557Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:13.919326Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.061846,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:13.981145Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:13.981672Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.635304,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:15.617165Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:15.617847Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.062306,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:15.680246Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:15.681106Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 8e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:15.681235Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:15.681742Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.627073,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:17.308932Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:17.310371Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.062724,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:17.373259Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:17.374610Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.463961,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:18.838738Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:18.839395Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.061074,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:18.900595Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:18.901442Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.7e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:18.901592Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:18.902031Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.926856,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:19.829050Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:19.829738Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.060914,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:19.890788Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:19.891616Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 5.9e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:19.891715Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:19.892210Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.699609,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:21.591969Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:21.592798Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.097655,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "click_marker"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:21.690640Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:21.691630Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 2.273141,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:23.964808Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:23.965428Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.069019,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:24.034530Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:24.035249Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.3e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:24.035368Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:24.035808Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.970724,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:25.006681Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:25.007438Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.064933,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:25.072452Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:25.073309Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 8e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:25.073427Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:25.073920Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.826558,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:26.900558Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:26.901304Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.063,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:26.964453Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:26.964965Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.398361,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:28.363476Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:28.364069Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.063349,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:28.427580Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:28.428680Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 3.2e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:28.428828Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:28.429322Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.726828,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:29.156320Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:29.157010Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.06806,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:29.225210Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:29.226175Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 9.3e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:29.226335Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:29.227041Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.791923,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:31.018989Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:31.019599Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.062238,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:31.081974Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:31.082530Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.335817,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:32.418445Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:32.419142Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.059147,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:32.478340Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:32.479122Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.5e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:32.479256Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:32.479722Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.846129,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:33.325961Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:33.326563Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.060451,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:33.387137Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:33.388114Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 0.000111,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:33.388250Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:33.388822Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.775985,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:35.164802Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:35.165361Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.06248,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "scroll"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:35.228405Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:35.228989Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 1.352982,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:36.582120Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:36.582731Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.059567,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:36.642434Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:36.643147Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.1e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:36.643264Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:36.643707Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 0.742163,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:37.386022Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:37.387020Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.068256,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:37.455072Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:37.456009Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 7.8e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:37.456121Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:37.456721Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 3.272998,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:40.729696Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:40.730486Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.09307,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "click_marker"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:40.823681Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture"
+      },
+      "timestamp": "2026-08-16T00:25:40.824319Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 capture 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "capture",
+        "component": "graph:capture",
+        "duration_sec": 2.417578,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:43.242066Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:43.242710Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.063528,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:43.306382Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:43.307065Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 2.1e-05,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:43.307185Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr"
+      },
+      "timestamp": "2026-08-16T00:25:43.307660Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 ocr 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "ocr",
+        "component": "graph:ocr",
+        "duration_sec": 1.05928,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:44.367089Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition"
+      },
+      "timestamp": "2026-08-16T00:25:44.367729Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 transition 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "transition",
+        "component": "graph:transition",
+        "duration_sec": 0.070131,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:44.438000Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection"
+      },
+      "timestamp": "2026-08-16T00:25:44.439254Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 selection 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "selection",
+        "component": "graph:selection",
+        "duration_sec": 0.000444,
+        "success": true,
+        "action_source": ""
+      },
+      "timestamp": "2026-08-16T00:25:44.439398Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning"
+      },
+      "timestamp": "2026-08-16T00:25:44.439918Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 reasoning 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "reasoning",
+        "component": "graph:reasoning",
+        "duration_sec": 1.896312,
+        "success": true,
+        "action_source": "llm",
+        "reasoning_mode": "general"
+      },
+      "timestamp": "2026-08-16T00:25:46.336280Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_started",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 시작",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution"
+      },
+      "timestamp": "2026-08-16T00:25:46.337076Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "graph_step_finished",
+      "phase": "collection",
+      "status": "running",
+      "message": "작업자 단계 execution 완료",
+      "data": {
+        "schema_version": 1,
+        "stage": "execution",
+        "component": "graph:execution",
+        "duration_sec": 0.000936,
+        "success": true,
+        "action_source": "llm",
+        "action_names": [
+          "finish_task"
+        ]
+      },
+      "timestamp": "2026-08-16T00:25:46.338161Z"
+    },
+    {
+      "run_id": "e2e-20260816092430-5aa409e0",
+      "event": "run_failed",
+      "phase": "failed",
+      "status": "failed",
+      "message": "E2E 수집에 실패했습니다.",
+      "data": {
+        "error": "collection failed: keyword='데이터 엔지니어', site=인크루트, resolved=0, persisted=0"
+      },
+      "timestamp": "2026-08-16T00:25:46.359975Z"
+    }
+  ],
+  "quality": {
+    "target_count": 2,
+    "collected_count": 0,
+    "persisted_count": 0,
+    "observed_existing_count": 0,
+    "resolved_count": 0,
+    "target_fulfillment": 0.0,
+    "persistence_rate": 0.0,
+    "detail_url_checked_count": 0,
+    "detail_url_valid_count": 0,
+    "source_url_integrity": 1.0,
+    "accepted": false,
+    "finished": true,
+    "target_contract": {
+      "required": false,
+      "passed": true,
+      "expected_count": 0,
+      "actual_count": 0,
+      "matched_count": 0,
+      "missing_urls": [],
+      "unexpected_urls": []
+    },
+    "passed": false
+  },
+  "target_contract": {
+    "required": false,
+    "passed": true,
+    "expected_count": 0,
+    "actual_count": 0,
+    "matched_count": 0,
+    "missing_urls": [],
+    "unexpected_urls": []
+  },
+  "experience_guided_preconditions": {
+    "required": false,
+    "replay_ready": true,
+    "reasons": []
+  },
+  "recipe_promotion": {},
+  "result": {
+    "status": "failed",
+    "message": "collection failed: keyword='데이터 엔지니어', site=인크루트, resolved=0, persisted=0",
+    "error_code": "",
+    "site": "incruit",
+    "site_name": "인크루트",
+    "search_keyword": "데이터 엔지니어",
+    "task_category": "검색",
+    "target_count": 2,
+    "collected_count": 0,
+    "resolved_count": 0,
+    "persisted_count": 0,
+    "created_count": 0,
+    "updated_count": 0,
+    "rejected_count": 0,
+    "persisted_items": [],
+    "observed_job_ids": [],
+    "document_ids": [],
+    "scope_exhausted": false,
+    "worker_finished": true,
+    "hit_recursion_limit": false,
+    "worker_run_id": "worker-20260816092430-82bc532a"
+  },
+  "observability": {
+    "outcome": "failed",
+    "e2e_success": 0,
+    "terminal_failure_stage": "failed",
+    "terminal_failure_code": "run_failed",
+    "execution_time_sec": 76.139368,
+    "target_fulfillment": 0.0,
+    "persistence_rate": 0.0,
+    "persisted_count": 0,
+    "llm_call_count": 15,
+    "reasoning_call_count": 15,
+    "total_tokens": 89067,
+    "tokens_per_persisted_item": null,
+    "estimated_cost_usd": 0.0470169,
+    "cost_per_persisted_item_usd": null,
+    "wasted_tokens": 89067,
+    "ocr_request_count": 13,
+    "ocr_timeout_count": 0,
+    "recovered_failure_count": 0,
+    "recovery_success": null,
+    "reflex_hits": 0,
+    "reflex_step_hit_count": 0,
+    "reflex_step_completed_count": 0,
+    "reflex_source_reasoning_replaced_count": 0,
+    "reflex_reasoning_call_reduction": 0,
+    "reflex_path_started_count": 0,
+    "reflex_path_completed_count": 0,
+    "reflex_path_failed_count": 0,
+    "reflex_path_mid_failure_count": 0,
+    "reflex_path_fallback_count": 0,
+    "reflex_path_incomplete_count": 0,
+    "reflex_path_completion_rate": null,
+    "queue_replay_hits": 0,
+    "internal_failure_codes": []
+  },
+  "langsmith_feedback": {
+    "status": "skipped",
+    "reason": "trace_id_missing",
+    "published": 0
+  }
+}

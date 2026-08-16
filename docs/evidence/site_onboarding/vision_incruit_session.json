@@ -1,0 +1,93 @@
+{
+  "site": "인크루트",
+  "homepage": "https://job.incruit.com/",
+  "approach": "vision",
+  "baseline_sha": "f711aa9df2dcc9e04af332da705a6836f3d79cb3",
+  "result_sha": "80aa1ef49bc4fc4bea1e1c7902cc4b11c7de30b0",
+  "task_id": "vision_incruit_session",
+  "codex_model": "GPT-5 Codex",
+  "prompt_sha256": "157a9707c312412a509a3886d8b72502b73735a3cc2eec673be8a27c62fc130f",
+  "started_at": "2026-08-15T23:59:44.048917Z",
+  "first_success_at": "2026-08-16T00:11:15.638078Z",
+  "finished_at": "2026-08-16T00:51:59.647292Z",
+  "status": "completed",
+  "human_interventions": [
+    "성공 실행 4개가 확보됐으므로 추가 E2E를 중단하고 현재 결과로 테스트·세션 finish·커밋·최종 보고만 수행하라는 사용자 절차 지시"
+  ],
+  "fix_iterations": [
+    "첫 백엔드 E2E에서 검색 입력 요청의 안전등급 누락과 검색 결과 오판으로 무관한 추천 공고를 열었고 상세 버퍼가 비어 0건 종료됨",
+    "두 번째 백엔드 E2E에서 첫 공고는 정상 저장됐지만 완료된 같은 상세 화면의 빈 버퍼를 반복 검토해 1/2로 종료됨",
+    "백엔드 2건 저장은 완료됐지만 URL 패턴을 선언하지 않은 비전 사이트의 공식 상세 URL을 공통 품질 평가가 0건으로 판정해 자동 승인에 실패함",
+    "백엔드 E2E 자체 품질은 통과했지만 자동 승인기가 모든 쿼리 문자열을 제거해 서로 다른 공고 URL 2건의 고유성을 0.5로 판정함",
+    "프론트엔드 개발자 검증에서 상세 공고 2건을 방문했으나 필수 필드가 충족된 저장 결과가 1건이어서 목표 미달로 판정하고 첫 대체 검색어 QA 엔지니어를 사용함",
+    "데이터 엔지니어 검증에서 관련 상세 공고를 탐색했으나 자동 검토 후 유효 저장 결과가 0건이어서 목표 미달로 판정하고 두 번째 대체 검색어 DevOps 엔지니어를 사용함",
+    "두 번째 대체 검색어 DevOps 엔지니어도 관련 상세 2건 중 유효 저장이 1건에 그쳐 목표 미달이며 요청된 대체 검색어 두 개를 모두 소진함",
+    "안드로이드 개발자 검증에서 첫 공고 저장 후 두 번째 상세 화면에 도달했지만 목표 수량 미달 상태에서 finish_task를 수락해 1/2로 조기 종료됨",
+    "DevOps 재실행에서 상세 OCR 버퍼가 있는 첫 공고는 검토했지만 두 번째 공고 상단은 상세 구획 신호가 생기기 전에 finish_task가 수락돼 다시 1/2로 종료됨",
+    "DevOps 세 번째 실행에서 목표 미달 종료는 차단됐지만 상세 화면에 상세내용 문구만 인식되고 두 번째 가시 단서가 없어 본문 버퍼를 만들지 못한 채 재귀 한도에 도달함",
+    "안드로이드 재검증 2차 실행이 수집 그래프 진입 전 OCR 작업자 준비 실패로 중단되어 실패 acceptance를 보존하고 새 격리 DB와 브라우저 프로필로 재시도함",
+    "안드로이드 재검증 3차에서도 OCR 준비 실패가 재현되어 실행 명령에 지정된 OCR Python 환경 변수가 누락된 원인을 확인했고 후속 실행에 PADDLE_OCR_PYTHON을 명시함",
+    "최종 정적 검사에서 품질 평가기의 선택적 collection_intent 접근에 None 가능성 타입 오류 1건이 발견되어 명시적 dict 타입 좁히기로 수정하고 Mypy 재검사를 통과함"
+  ],
+  "site_specific_changed_loc": 30,
+  "common_runtime_changed_loc": 153,
+  "modified_product_files": [
+    "agent/sites/incruit/profile.json",
+    "agent/application/collection_storage.py",
+    "agent/graph/worker_execution.py",
+    "agent/runtime/job_card_queue.py",
+    "benchmark/quality_eval.py"
+  ],
+  "locator_count": 0,
+  "profile_line_count": 30,
+  "acceptance_runs": [
+    {
+      "query": "QA 엔지니어",
+      "contract_query": "프론트엔드 개발자",
+      "substitution_reason": "원 검색어 수집 결과가 1/2건이어서 첫 번째 예비 검색어를 사용함",
+      "summary_path": "docs/evidence/site_onboarding/incruit/qa.summary.json",
+      "review_path": "docs/evidence/site_onboarding/incruit/qa.acceptance.json",
+      "passed": true,
+      "runtime_sec": 67.460134,
+      "total_tokens": 66461,
+      "estimated_cost_usd": 0.0498541
+    },
+    {
+      "query": "DevOps 엔지니어",
+      "contract_query": "데이터 엔지니어",
+      "substitution_reason": "원 검색어 수집 결과가 0/2건이어서 두 번째 예비 검색어를 사용함",
+      "summary_path": "docs\\evidence\\site_onboarding\\incruit\\devops-r4.summary.json",
+      "review_path": "docs\\evidence\\site_onboarding\\incruit\\devops-r4.acceptance.json",
+      "passed": true,
+      "runtime_sec": 59.743178,
+      "total_tokens": 61215,
+      "estimated_cost_usd": 0.0322339
+    },
+    {
+      "query": "안드로이드 개발자",
+      "contract_query": "",
+      "substitution_reason": "",
+      "summary_path": "docs\\evidence\\site_onboarding\\incruit\\android-r4.summary.json",
+      "review_path": "docs\\evidence\\site_onboarding\\incruit\\android-r4.acceptance.json",
+      "passed": true,
+      "runtime_sec": 41.807231,
+      "total_tokens": 36458,
+      "estimated_cost_usd": 0.0158434
+    }
+  ],
+  "evidence_paths": [
+    "docs/evidence/site_onboarding/incruit/backend-r4.summary.json",
+    "docs/evidence/site_onboarding/incruit/backend-r4.acceptance.json",
+    "docs/evidence/site_onboarding/incruit/frontend.summary.json",
+    "docs/evidence/site_onboarding/incruit/frontend.acceptance.json",
+    "docs/evidence/site_onboarding/incruit/qa.summary.json",
+    "docs/evidence/site_onboarding/incruit/qa.acceptance.json",
+    "docs/evidence/site_onboarding/incruit/data-engineer.summary.json",
+    "docs/evidence/site_onboarding/incruit/data-engineer.acceptance.json",
+    "docs/evidence/site_onboarding/incruit/devops-r4.summary.json",
+    "docs/evidence/site_onboarding/incruit/devops-r4.acceptance.json",
+    "docs/evidence/site_onboarding/incruit/android-r4.summary.json",
+    "docs/evidence/site_onboarding/incruit/android-r4.acceptance.json"
+  ],
+  "notes": "프론트엔드 개발자는 1/2로 QA 엔지니어로 대체했고, 데이터 엔지니어는 0/2로 DevOps 엔지니어로 대체했다. 두 대체 검색어는 요청된 순서로만 사용했다."
+}

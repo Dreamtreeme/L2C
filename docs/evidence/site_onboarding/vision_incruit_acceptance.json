@@ -1,0 +1,47 @@
+{
+  "site": "incruit",
+  "homepage": "https://job.incruit.com/",
+  "development": {
+    "query": "백엔드 개발자",
+    "summary_path": "docs/evidence/site_onboarding/incruit/backend-r4.summary.json",
+    "acceptance_path": "docs/evidence/site_onboarding/incruit/backend-r4.acceptance.json",
+    "automatic_passed": true
+  },
+  "acceptance_runs": [
+    {
+      "query": "QA 엔지니어",
+      "contract_query": "프론트엔드 개발자",
+      "substitution_reason": "원 검색어 수집 결과가 1/2건이어서 첫 번째 예비 검색어를 사용함",
+      "summary_path": "docs/evidence/site_onboarding/incruit/qa.summary.json",
+      "acceptance_path": "docs/evidence/site_onboarding/incruit/qa.acceptance.json",
+      "automatic_passed": true
+    },
+    {
+      "query": "DevOps 엔지니어",
+      "contract_query": "데이터 엔지니어",
+      "substitution_reason": "원 검색어 수집 결과가 0/2건이어서 두 번째 예비 검색어를 사용함",
+      "summary_path": "docs/evidence/site_onboarding/incruit/devops-r4.summary.json",
+      "acceptance_path": "docs/evidence/site_onboarding/incruit/devops-r4.acceptance.json",
+      "automatic_passed": true
+    },
+    {
+      "query": "안드로이드 개발자",
+      "contract_query": "",
+      "substitution_reason": "",
+      "summary_path": "docs/evidence/site_onboarding/incruit/android-r4.summary.json",
+      "acceptance_path": "docs/evidence/site_onboarding/incruit/android-r4.acceptance.json",
+      "automatic_passed": true
+    }
+  ],
+  "query_substitutions": [
+    {
+      "contract_query": "프론트엔드 개발자",
+      "actual_query": "QA 엔지니어"
+    },
+    {
+      "contract_query": "데이터 엔지니어",
+      "actual_query": "DevOps 엔지니어"
+    }
+  ],
+  "automatic_passed": true
+}

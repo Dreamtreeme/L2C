@@ -1,0 +1,634 @@
+diff --git a/agent/application/collection_storage.py b/agent/application/collection_storage.py
+index b33c102..77f100d 100644
+--- a/agent/application/collection_storage.py
++++ b/agent/application/collection_storage.py
+@@ -61,6 +61,7 @@ def _store_job(
+             "position": posting.position or "",
+             "operation": "updated" if existed else "created",
+             "required_fields": [field.value for field in evidence.required_fields],
++            "screenshot_path": evidence.screenshot_path,
+         }
+     )
+ 
+diff --git a/agent/graph/worker_execution.py b/agent/graph/worker_execution.py
+index 700a61c..ed1d753 100644
+--- a/agent/graph/worker_execution.py
++++ b/agent/graph/worker_execution.py
+@@ -14,6 +14,13 @@ from agent.runtime.worker_contracts import (
+     WorkerStateUpdate,
+     build_action_event,
+ )
++from agent.runtime.detail_runtime import detail_context_matches
++from agent.runtime.job_card_queue import (
++    job_detail_key_from_state,
++    resolved_job_card_count,
++)
++from agent.runtime.site_context import is_job_detail_context
++from agent.runtime.worker_state import job_capture_count, target_count_from_state
+ from shared.schema.feedback_schema import ExecutionEvent
+ from agent.graph.worker_action_effects import (
+     activate_clicked_job_card,
+@@ -37,6 +44,92 @@ from agent.runtime.vision_worker_runtime import WorkerDependencies
+ from agent.utils.logger import logger
+ 
+ 
++def _resolved_collection_count(state: WorkerState) -> int:
++    return max(
++        job_capture_count(state),
++        resolved_job_card_count(
++            list(state["collection"].get("job_card_queue", []) or [])
++        ),
++    )
++
++
++def _scope_is_exhausted(state: WorkerState) -> bool:
++    availability = state["collection"].get("job_results_availability") or {}
++    available_count = availability.get("available_job_count")
++    return bool(
++        isinstance(available_count, int)
++        and available_count >= 0
++        and str(availability.get("count_evidence") or "").strip()
++        and _resolved_collection_count(state) >= available_count
++    )
++
++
++def _should_review_before_finish(state: WorkerState) -> bool:
++    """목표 미달 상태의 새 상세 근거를 종료 전에 반드시 검토한다."""
++
++    target_count = target_count_from_state(state)
++    if target_count <= 0 or _resolved_collection_count(state) >= target_count:
++        return False
++    observation = state["observation"]
++    current_url = str(observation.get("current_url") or "")
++    buffer = state["collection"].get("job_detail_buffer") or {}
++    if not buffer.get("lines") or not detail_context_matches(
++        buffer,
++        current_url,
++        job_detail_key_from_state(state),
++    ):
++        return False
++    return is_job_detail_context(
++        current_url,
++        page_role=str(observation.get("current_page_role") or ""),
++        marker_texts=[
++            marker.get("text")
++            for marker in observation.get("current_markers", []) or []
++            if isinstance(marker, dict)
++        ],
++    )
++
++
++def _finish_replacement(
++    state: WorkerState,
++    source: str,
++) -> tuple[str, dict[str, Any]] | None:
++    """근거 없는 목표 미달 종료를 현재 화면의 추가 판독으로 바꾼다."""
++
++    target_count = target_count_from_state(state)
++    if (
++        source != "llm"
++        or target_count <= 0
++        or _resolved_collection_count(state) >= target_count
++        or _scope_is_exhausted(state)
++    ):
++        return None
++    if _should_review_before_finish(state):
++        return (
++            "review_job_detail",
++            {
++                "page_role": "job_detail",
++                "reason": "목표 수량이 남아 있어 현재 상세 근거를 먼저 검토합니다.",
++            },
++        )
++    return (
++        "scroll",
++        {
++            "direction": "down",
++            "amount": "page",
++            "target_label": "현재 화면의 추가 결과 또는 상세 내용",
++            "target_role": "content",
++            "target_component": "page",
++            "reason": "목표 수량이 남아 있어 종료 전에 현재 화면을 더 확인합니다.",
++            "expected_after": "추가 공고 또는 상세 근거가 보인다.",
++            "page_role": str(
++                state["observation"].get("current_page_role") or "unknown"
++            ),
++            "risk_level": "safe_read",
++        },
++    )
++
++
+ def _record_failed_call(
+     context: WorkerExecutionContext,
+     *,
+@@ -128,6 +221,14 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
+         action_name = tool_call.name
+         args = dict(tool_call.args)
+         call_metadata = dict(tool_call.metadata)
++        replacement = (
++            _finish_replacement(state, request.source)
++            if action_name == "finish_task"
++            else None
++        )
++        if replacement is not None:
++            action_name, args = replacement
++            logger.info("Finish deferred while collection target remains")
+         if action_name == "review_job_detail":
+             args.setdefault("page_role", "job_detail")
+ 
+diff --git a/agent/runtime/job_card_queue.py b/agent/runtime/job_card_queue.py
+index 4d47537..2ac9a66 100644
+--- a/agent/runtime/job_card_queue.py
++++ b/agent/runtime/job_card_queue.py
+@@ -203,7 +203,7 @@ def needs_job_results_navigation(state: WorkerState) -> bool:
+         for item in state["collection"].get("job_card_queue", []) or []
+         if isinstance(item, dict)
+     ]
+-    if not queue or active_job_card(queue):
++    if active_job_card(queue):
+         return False
+     target_count = target_count_from_state(state)
+     resolved_count = max(
+diff --git a/agent/sites/incruit/profile.json b/agent/sites/incruit/profile.json
+new file mode 100644
+index 0000000..9983d35
+--- /dev/null
++++ b/agent/sites/incruit/profile.json
+@@ -0,0 +1,30 @@
++{
++  "registration_order": 60,
++  "slug": "incruit",
++  "display_name": "인크루트",
++  "source_platform": "Incruit",
++  "aliases": ["incruit", "인크루트"],
++  "domains": ["incruit.com", "www.incruit.com", "job.incruit.com"],
++  "base_url": "https://job.incruit.com/",
++  "enabled": true,
++  "page_guidance": {
++    "home": {
++      "visible_cues": ["인크루트", "채용정보"],
++      "minimum_visible_cues": 1,
++      "instructions": ["현재 화면의 통합검색 또는 채용정보 검색 입력란을 찾아 사용자 검색어를 입력하고 Enter 키로 제출한다.", "검색어 추천이나 인기 기업 레이어가 열려도 그 항목을 선택하지 말고 입력한 검색어를 그대로 제출한다."]
++    },
++    "search": {
++      "visible_cues": ["지역별", "직종별", "상세조건", "검색결과", "채용정보", "공고"],
++      "minimum_visible_cues": 2,
++      "instructions": ["검색어 추천이나 인기 기업 레이어가 열려 있으면 Esc 키로 닫고, 필터 구획 아래의 실제 채용공고 목록까지 이동한다.", "검색 결과의 회사명과 공고 제목을 함께 읽고 검색어와 관련된 미방문 공고를 선택한다.", "광고나 추천 링크가 아니라 실제 채용공고 제목을 열고 상세 화면 도달 여부를 확인한다."]
++    },
++    "job_detail": {
++      "visible_cues": ["상세내용", "기업정보", "취업자료", "근무환경", "접수기간 및 방법", "채용분야", "직무 및 업무내용", "지원 자격", "모집부문", "담당업무", "자격요건", "근무조건"],
++      "minimum_visible_cues": 2,
++      "instructions": ["공고 상세 본문을 아래로 읽으며 주요 업무와 자격 요건의 구분된 내용을 누적한다.", "접혀 있는 상세 내용이 있으면 보이는 펼치기 동작을 사용한 뒤 근거를 다시 읽는다."],
++      "reading_targets": ["회사명", "공고 제목", "주요 업무", "자격 요건", "기술 스택", "우대 사항", "복리후생", "근무지", "고용형태", "경력", "학력", "마감일"],
++      "navigation_notes": ["상세 공고가 새 탭에서 열리면 해당 탭에서 수집을 마친 뒤 검색 결과 탭으로 돌아간다."]
++    }
++  },
++  "guidance": "공식 홈페이지의 검색 입력란에 검색어를 입력한 뒤 Enter 키로 제출한다. 추천 검색어나 인기 기업 레이어는 선택하지 않고 Esc 키로 닫는다. 결과 화면에서는 필터 구획 아래의 회사명과 공고 제목을 함께 확인해 관련 공고만 선택하고, 상세 화면의 제목·회사 정보·본문 구획을 스크롤하며 읽는다. 팝업이나 새 탭이 나타나면 현재 화면을 다시 관찰한 뒤 실제 공고 상세가 표시된 화면에서만 내용을 제출한다."
++}
+diff --git a/agent/tests/core/test_worker_graph_boundaries.py b/agent/tests/core/test_worker_graph_boundaries.py
+index ad01979..d4eb2dc 100644
+--- a/agent/tests/core/test_worker_graph_boundaries.py
++++ b/agent/tests/core/test_worker_graph_boundaries.py
+@@ -40,7 +40,12 @@ class _FakeVisionRuntime:
+         return self.perception
+ 
+     def get_action_tools(self):
+-        return object()
++        return _FakeActionTools()
++
++
++class _FakeActionTools:
++    def finish_task(self, result):
++        return {"action": "finish_task", "status": "success", "result": result}
+ 
+ 
+ def _execution_state(
+@@ -1020,6 +1025,140 @@ def test_existing_job_card_queue_finishes_without_opening_detail(monkeypatch):
+     )
+ 
+ 
++def test_finish_task_reviews_current_detail_when_target_is_not_met(monkeypatch):
++    dispatched = []
++
++    def fake_dispatch(action_name, args, **kwargs):
++        dispatched.append((action_name, args))
++        return StateActionOutcome(
++            result={"action": action_name, "status": "success"},
++            state_update={},
++        )
++
++    monkeypatch.setattr(
++        worker_execution_dispatch,
++        "dispatch_state_action",
++        fake_dispatch,
++    )
++    request = _request(
++        "llm",
++        [
++            {
++                "name": "finish_task",
++                "args": {"result": "두 건 수집 완료"},
++                "id": "premature-finish",
++            }
++        ],
++    )
++    current_url = "https://example.com/jobs/2"
++    state = _execution_state(
++        request,
++        current_url=current_url,
++        job_captures=[
++            JobCapture(
++                url="https://example.com/jobs/1",
++                raw_ocr_text="첫 번째 공고 상세",
++            )
++        ],
++        collection_intent=CollectionIntent(target_count=2),
++    )
++    state["observation"].update(
++        {
++            "current_page_role": "job_detail",
++            "current_markers": [{"id": 1, "text": "자격요건"}],
++        }
++    )
++    state["collection"]["job_detail_buffer"] = {
++        "url": current_url,
++        "lines": [{"text": "주요 업무와 자격요건"}],
++    }
++
++    result = _run_execution(state)
++
++    assert dispatched == [
++        (
++            "review_job_detail",
++            {
++                "page_role": "job_detail",
++                "reason": "목표 수량이 남아 있어 현재 상세 근거를 먼저 검토합니다.",
++            },
++        )
++    ]
++    assert result["lifecycle"]["is_finished"] is False
++
++
++def test_finish_task_scrolls_when_target_is_unmet_without_detail_buffer(monkeypatch):
++    dispatched = []
++
++    def fake_dispatch(action_name, args, *_args, **_kwargs):
++        dispatched.append((action_name, args))
++        return {"action": action_name, "status": "success"}
++
++    monkeypatch.setattr(
++        worker_execution_dispatch,
++        "dispatch_ui_action",
++        fake_dispatch,
++    )
++    request = _request(
++        "llm",
++        [
++            {
++                "name": "finish_task",
++                "args": {"result": "두 건 수집 완료"},
++                "id": "premature-finish",
++            }
++        ],
++    )
++    state = _execution_state(
++        request,
++        current_url="https://example.com/jobs/2",
++        job_captures=[
++            JobCapture(
++                url="https://example.com/jobs/1",
++                raw_ocr_text="첫 번째 공고 상세",
++            )
++        ],
++        collection_intent=CollectionIntent(target_count=2),
++    )
++
++    result = _run_execution(state)
++
++    assert dispatched[0][0] == "scroll"
++    assert dispatched[0][1]["direction"] == "down"
++    assert result["lifecycle"]["is_finished"] is False
++
++
++def test_finish_task_allows_partial_completion_with_scope_evidence():
++    request = _request(
++        "llm",
++        [
++            {
++                "name": "finish_task",
++                "args": {"result": "검색 결과 한 건 수집"},
++                "id": "scope-finish",
++            }
++        ],
++    )
++    state = _execution_state(
++        request,
++        job_captures=[
++            JobCapture(
++                url="https://example.com/jobs/1",
++                raw_ocr_text="유일한 공고 상세",
++            )
++        ],
++        collection_intent=CollectionIntent(target_count=2),
++    )
++    state["collection"]["job_results_availability"] = {
++        "available_job_count": 1,
++        "count_evidence": "검색 결과 1건",
++    }
++
++    result = _run_execution(state)
++
++    assert result["lifecycle"]["is_finished"] is True
++
++
+ def test_graph_custom_event_is_shared_by_metrics_and_sse():
+     from agent.observability.run_context import run_context
+     from agent.observability.graph_events import forward_graph_event
+diff --git a/agent/tests/core/test_worker_transition_contracts.py b/agent/tests/core/test_worker_transition_contracts.py
+index 78326d6..1c71f69 100644
+--- a/agent/tests/core/test_worker_transition_contracts.py
++++ b/agent/tests/core/test_worker_transition_contracts.py
+@@ -11,6 +11,7 @@ from agent.tests.worker_test_support import (
+     worker_data_services,
+     worker_state,
+ )
++from shared.schema.collection_intent import CollectionIntent
+ from shared.schema.jd_schema import JobCapture
+ from shared.schema.experience_rule_schema import ExpectedEffect
+ 
+@@ -74,6 +75,40 @@ def test_completed_detail_uses_deterministic_results_navigation():
+     assert close_request.tool_calls[0].name == "close_current_tab"
+ 
+ 
++def test_completed_direct_detail_without_card_queue_returns_to_results():
++    current_url = "https://example.com/jobs/1"
++    state = worker_state(
++        request={"collection_intent": CollectionIntent(target_count=2)},
++        observation={
++            "current_url": current_url,
++            "current_page_role": "job_detail",
++            "ocr_complete": True,
++        },
++        transition={
++            "transition_result": {
++                "status": "ready",
++                "action": "review_job_detail",
++                "source": "llm",
++            },
++        },
++        collection={
++            "job_captures": [
++                JobCapture(
++                    url=current_url,
++                    raw_ocr_text="첫 번째 공고 상세 원문",
++                )
++            ],
++            "job_card_queue": [],
++        },
++    )
++
++    selected = worker_selection.selection_node(state, node_runtime())
++
++    request = selected["decision"]["pending_action"]
++    assert request.source == "job_results_navigation"
++    assert request.tool_calls[0].name == "go_back"
++
++
+ def test_detail_click_does_not_return_before_detail_reading_finishes():
+     state = worker_state(
+         observation={
+diff --git a/agent/tests/evaluation/test_quality_evaluation.py b/agent/tests/evaluation/test_quality_evaluation.py
+index 52fecd3..05263ff 100644
+--- a/agent/tests/evaluation/test_quality_evaluation.py
++++ b/agent/tests/evaluation/test_quality_evaluation.py
+@@ -79,6 +79,27 @@ def test_job_quality_uses_canonical_fields_and_detects_duplicate_urls():
+     assert result["unique_url_rate"] == 0.5
+ 
+ 
++def test_job_quality_preserves_query_identity_and_drops_tracking_values():
++    result = evaluate_job_records(
++        {
++            "jobs": [
++                {
++                    "company_name": "A",
++                    "position": "iOS",
++                    "url": "https://example.com/view?posting=1&src=search",
++                },
++                {
++                    "company_name": "B",
++                    "position": "서버",
++                    "url": "https://example.com/view?src=search&posting=2",
++                },
++            ]
++        }
++    )
++
++    assert result["unique_url_rate"] == 1.0
++
++
+ def test_job_quality_uses_exact_reference_identity():
+     result = evaluate_job_records(
+         [
+@@ -201,6 +222,64 @@ def test_fixed_target_failure_reaches_e2e_observability():
+     assert observability["terminal_failure_code"] == "quality_not_passed"
+ 
+ 
++def test_registered_visual_site_uses_persisted_screen_evidence(monkeypatch):
++    from agent.runtime import site_context
++
++    monkeypatch.setattr(site_context, "site_profile_for_url", lambda _url: object())
++    monkeypatch.setattr(
++        site_context,
++        "page_guidance_for_url",
++        lambda _url, _role: {"url_patterns": []},
++    )
++    monkeypatch.setattr(site_context, "looks_like_job_detail_url", lambda _url: False)
++    summary = {
++        "target_count": 1,
++        "collected_count": 1,
++        "persisted_count": 1,
++        "resolved_count": 1,
++        "status": "completed",
++        "worker_finished": True,
++        "persisted_items": [
++            {
++                "job_id": 1,
++                "url": "https://example.com/jobs/1",
++                "screenshot_path": "detail.png",
++            }
++        ],
++    }
++
++    quality = evaluate_collection_summary(summary)
++
++    assert quality["source_url_integrity"] == 1.0
++    assert quality["passed"] is True
++
++
++def test_registered_visual_site_rejects_url_without_screen_evidence(monkeypatch):
++    from agent.runtime import site_context
++
++    monkeypatch.setattr(site_context, "site_profile_for_url", lambda _url: object())
++    monkeypatch.setattr(
++        site_context,
++        "page_guidance_for_url",
++        lambda _url, _role: {"url_patterns": []},
++    )
++    monkeypatch.setattr(site_context, "looks_like_job_detail_url", lambda _url: False)
++    summary = {
++        "target_count": 1,
++        "collected_count": 1,
++        "persisted_count": 1,
++        "resolved_count": 1,
++        "status": "completed",
++        "worker_finished": True,
++        "persisted_items": [{"job_id": 1, "url": "https://example.com/jobs/1"}],
++    }
++
++    quality = evaluate_collection_summary(summary)
++
++    assert quality["source_url_integrity"] == 0.0
++    assert quality["passed"] is False
++
++
+ def test_observability_counts_current_vision_reasoning_tiers():
+     observability = build_e2e_observability(
+         {
+diff --git a/agent/tests/regression/test_collection_storage.py b/agent/tests/regression/test_collection_storage.py
+index 098edeb..9413910 100644
+--- a/agent/tests/regression/test_collection_storage.py
++++ b/agent/tests/regression/test_collection_storage.py
+@@ -42,6 +42,7 @@ def test_storage_upserts_validated_job_and_preserves_evidence(monkeypatch, tmp_p
+ 
+     assert first.persisted_items[0]["operation"] == "created"
+     assert second.persisted_items[0]["operation"] == "updated"
++    assert first.persisted_items[0]["screenshot_path"] == "detail.png"
+     assert saved["raw_ocr_text"] == "원문"
+     assert saved["screenshot_path"] == "detail.png"
+ 
+diff --git a/agent/tests/regression/test_site_registry.py b/agent/tests/regression/test_site_registry.py
+index b40c180..435d833 100644
+--- a/agent/tests/regression/test_site_registry.py
++++ b/agent/tests/regression/test_site_registry.py
+@@ -4,7 +4,14 @@ def test_site_registry_loads_supported_navigation_profiles():
+     profiles = list_supported_sites()
+     slugs = {profile.slug for profile in profiles}
+ 
+-    assert {"wanted", "jobkorea", "saramin", "worknet", "rocketpunch"}.issubset(slugs)
++    assert {
++        "wanted",
++        "jobkorea",
++        "saramin",
++        "worknet",
++        "rocketpunch",
++        "incruit",
++    }.issubset(slugs)
+     for profile in profiles:
+         loaded = load_site_profile(profile.slug)
+         for role in ("home", "search", "job_detail"):
+@@ -21,6 +28,7 @@ def test_official_site_urls_resolve_from_slug_name_and_domain():
+         "https://www.saramin.co.kr": "https://www.saramin.co.kr",
+         "고용24": "https://www.work24.go.kr",
+         "rocketpunch.com": "https://www.rocketpunch.com",
++        "인크루트": "https://job.incruit.com",
+     }
+ 
+     for requested_site, official_url in expected.items():
+diff --git a/benchmark/quality_eval.py b/benchmark/quality_eval.py
+index d3bcc6c..2c2f8ed 100644
+--- a/benchmark/quality_eval.py
++++ b/benchmark/quality_eval.py
+@@ -6,7 +6,7 @@ import argparse
+ import json
+ from pathlib import Path
+ from typing import Any
+-from urllib.parse import parse_qsl, urlsplit, urlunsplit
++from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+ 
+ from pydantic import ValidationError
+ 
+@@ -21,6 +21,7 @@ from shared.schema.jd_schema import (
+ 
+ REQUIRED_FIELDS = tuple(field.value for field in JOB_IDENTITY_FIELDS)
+ CONTENT_FIELDS = tuple(field.value for field in JOB_DETAIL_FIELDS)
++TRACKING_QUERY_KEYS = frozenset({"fbclid", "gclid", "ref", "source", "src"})
+ 
+ 
+ def _normalized_text(value: Any) -> str:
+@@ -34,8 +35,22 @@ def _normalized_url(value: Any) -> str:
+     parts = urlsplit(raw)
+     if parts.scheme.lower() not in {"http", "https"} or not parts.netloc:
+         return ""
++    identity_query = urlencode(
++        sorted(
++            (key, item)
++            for key, item in parse_qsl(parts.query, keep_blank_values=True)
++            if key.casefold() not in TRACKING_QUERY_KEYS
++            and not key.casefold().startswith("utm_")
++        )
++    )
+     return urlunsplit(
+-        (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), "", "")
++        (
++            parts.scheme.lower(),
++            parts.netloc.lower(),
++            parts.path.rstrip("/"),
++            identity_query,
++            "",
++        )
+     )
+ 
+ 
+@@ -142,12 +157,11 @@ def _required_fields_for_payload(
+     actual: Any,
+     required_fields: list[str] | tuple[str, ...] | None,
+ ) -> list[str]:
+-    payload_intent = (
+-        actual.get("collection_intent")
+-        if isinstance(actual, dict)
+-        and isinstance(actual.get("collection_intent"), dict)
+-        else {}
+-    )
++    payload_intent: dict[str, Any] = {}
++    if isinstance(actual, dict):
++        candidate = actual.get("collection_intent")
++        if isinstance(candidate, dict):
++            payload_intent = candidate
+     resolved = normalize_job_collection_fields(
+         required_fields
+         if required_fields is not None
+@@ -273,6 +287,7 @@ def evaluate_collection_summary(
+ ) -> dict[str, Any]:
+     from agent.runtime.site_context import (
+         looks_like_job_detail_url,
++        page_guidance_for_url,
+         site_profile_for_url,
+     )
+ 
+@@ -292,12 +307,22 @@ def evaluate_collection_summary(
+     for item in detail_url_items:
+         url = str(item.get("url") or "")
+         parsed = urlsplit(url)
+-        if site_profile_for_url(url):
+-            valid_detail_urls += int(looks_like_job_detail_url(url))
+-        else:
++        profile = site_profile_for_url(url)
++        valid_web_url = parsed.scheme in {"http", "https"} and bool(parsed.netloc)
++        if profile:
++            detail_guidance = page_guidance_for_url(url, "job_detail")
++            declared_patterns = list(detail_guidance.get("url_patterns") or [])
++            has_visual_evidence = bool(str(item.get("screenshot_path") or "").strip())
+             valid_detail_urls += int(
+-                parsed.scheme in {"http", "https"} and bool(parsed.netloc)
++                looks_like_job_detail_url(url)
++                or (
++                    not declared_patterns
++                    and valid_web_url
++                    and has_visual_evidence
++                )
+             )
++        else:
++            valid_detail_urls += int(valid_web_url)
+     source_url_integrity = (
+         valid_detail_urls / len(detail_url_items) if detail_url_items else 1.0
+     )
