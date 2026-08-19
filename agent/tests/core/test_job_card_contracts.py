@@ -1,5 +1,6 @@
 """채용공고 카드 선택과 재생 계약 테스트."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -51,8 +52,10 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
     Image.new("RGB", (200, 100), "white").save(image_path)
     state = _state(image_path)
     state["request"]["collection_intent"] = CollectionIntent(
+        original_query="신입 iOS 개발자 공고를 정리해줘",
         search_keyword="iOS 개발자",
         target_count=1,
+        filters={"experience": "신입"},
     )
     state["observation"]["current_markers"].append(
         {
@@ -63,25 +66,34 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
         }
     )
 
+    captured = {}
+
     class FakeModel:
         def invoke(self, inputs, config=None):
+            captured["messages"] = inputs
             return selector.JobCardSelection(
                 is_job_results_page=True,
                 cards=[
-                    selector.VisibleJobCard(
+                    selector.EvaluatedJobCard(
                         marker_id=10,
                         title="iOS 개발자",
                         company="회사 A",
+                        filter_status="match",
+                        filter_evidence="신입",
                     ),
-                    selector.VisibleJobCard(
+                    selector.EvaluatedJobCard(
                         marker_id=11,
                         title="iOS 앱 개발자",
                         company="회사 B",
+                        filter_status="conflict",
+                        filter_evidence="경력 3년 이상",
                     ),
-                    selector.VisibleJobCard(
+                    selector.EvaluatedJobCard(
                         marker_id=999,
                         title="화면에 없는 공고",
                         company="회사 C",
+                        filter_status="match",
+                        filter_evidence="신입",
                     ),
                 ],
             )
@@ -94,9 +106,13 @@ def test_selector_builds_queue_only_from_visible_markers(tmp_path, monkeypatch):
     request, trace = selector.select_job_cards(state)
 
     assert trace["reason"] == "cards_selected"
-    assert trace["marker_ids"] == [10, 11]
+    assert trace["marker_ids"] == [10]
+    assert trace["conflict_count"] == 1
     assert request.tool_calls[0].name == "set_job_card_queue"
-    assert len(request.tool_calls[0].args["cards"]) == 2
+    assert len(request.tool_calls[0].args["cards"]) == 1
+    payload = json.loads(captured["messages"][-1].content[0]["text"])
+    assert payload["original_query"] == "신입 iOS 개발자 공고를 정리해줘"
+    assert payload["confirmed_filters"]["experience"] == "신입"
 
 
 def test_selector_does_not_replace_an_unresolved_queue(tmp_path, monkeypatch):
@@ -118,6 +134,42 @@ def test_selector_does_not_replace_an_unresolved_queue(tmp_path, monkeypatch):
 
     assert request is None
     assert trace == {"attempted": False, "reason": "selector_not_applicable"}
+
+
+def test_selector_opens_full_results_before_preview_cards(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from agent.runtime import job_card_selector as selector
+
+    image_path = tmp_path / "marked.jpg"
+    Image.new("RGB", (200, 100), "white").save(image_path)
+    state = _state(image_path)
+    state["observation"]["current_markers"].append(
+        {
+            "id": 18,
+            "type": "text",
+            "text": "포지션 전체보기",
+            "bbox": [90, 10, 180, 30],
+        }
+    )
+
+    class FakeModel:
+        def invoke(self, inputs, config=None):
+            return selector.JobCardSelection(
+                is_job_results_page=False,
+                open_full_results_marker_id=18,
+                open_full_results_label="포지션 전체보기",
+                cards=[],
+            )
+
+    monkeypatch.setattr(selector, "_get_job_card_selector_model", lambda: FakeModel())
+
+    request, trace = selector.select_job_cards(state)
+
+    assert trace["reason"] == "open_full_results"
+    assert request.tool_calls[0].name == "click_marker"
+    assert request.tool_calls[0].args["marker_id"] == 18
+    assert request.tool_calls[0].args["target_component"] == "full_job_results"
 
 
 def test_selector_refills_a_resolved_queue_with_only_new_cards(tmp_path, monkeypatch):
@@ -142,15 +194,17 @@ def test_selector_refills_a_resolved_queue_with_only_new_cards(tmp_path, monkeyp
             return selector.JobCardSelection(
                 is_job_results_page=True,
                 cards=[
-                    selector.VisibleJobCard(
+                    selector.EvaluatedJobCard(
                         marker_id=10,
                         title="iOS 개발자",
                         company="회사 A",
+                        filter_status="match",
                     ),
-                    selector.VisibleJobCard(
+                    selector.EvaluatedJobCard(
                         marker_id=20,
                         title="백엔드 개발자",
                         company="회사 B",
+                        filter_status="unknown",
                     ),
                 ],
             )
@@ -198,6 +252,30 @@ def test_selector_continues_when_result_list_has_no_related_card(
     assert request.tool_calls[0].args["amount"] == "page"
 
 
+def test_visible_all_detail_cannot_finish_with_an_active_card():
+    visible_scope_with_active_card = worker_state(
+        request={
+            "collection_intent": CollectionIntent(
+                count_mode="visible_all",
+            )
+        },
+        observation={"current_page_role": "job_detail"},
+        collection={
+            "job_card_queue": [
+                {
+                    "queue_id": "card-1",
+                    "status": "active",
+                    "title": "신입 백엔드 엔지니어",
+                }
+            ]
+        },
+    )
+
+    assert "finish_task" not in worker_reasoning._reasoning_tool_names(
+        visible_scope_with_active_card
+    )
+
+
 def test_queue_click_requires_an_exact_queue_id():
     from agent.runtime.job_card_queue import (
         activate_job_card,
@@ -223,7 +301,7 @@ def test_queue_click_requires_an_exact_queue_id():
     assert activate_job_card(queue, {"queue_id": "card-1"})[0]["status"] == "active"
 
 
-def test_general_reasoning_converts_model_tool_call(monkeypatch):
+def test_model_action_schema_normalizes_scroll_contract():
     from agent.runtime.tool_schema import model_action_tool_schema
     from agent.runtime.worker_contracts import action_request_from_model_response
 
@@ -256,6 +334,8 @@ def test_general_reasoning_converts_model_tool_call(monkeypatch):
     )
     assert normalized_scroll.tool_calls[0].args["amount"] == "small"
 
+
+def test_general_reasoning_converts_model_tool_call(monkeypatch):
     model_tiers = []
     monkeypatch.setattr(
         worker_reasoning,

@@ -9,6 +9,7 @@ from typing import Any
 from agent.config import get_settings
 from agent.runtime.job_identity import (
     canonical_company_name,
+    canonical_job_url,
     canonical_position_title,
     source_card_key,
 )
@@ -82,9 +83,9 @@ def _index_job_identities(
 
 
 def find_job_id_by_url(url: str, *, db_path: str | Path | None = None) -> int | None:
-    """끝 슬래시 차이만 허용해 동일한 저장 URL의 공고 ID를 찾는다."""
+    """사이트별 공고 식별 URL로 저장된 공고 ID를 찾는다."""
 
-    normalized = str(url or "").strip().rstrip("/")
+    normalized = canonical_job_url(url)
     if not normalized:
         return None
     if db_path is None:

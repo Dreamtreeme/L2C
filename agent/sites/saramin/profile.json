@@ -6,6 +6,7 @@
   "aliases": ["saramin", "사람인"],
   "domains": ["saramin.co.kr", "www.saramin.co.kr"],
   "base_url": "https://www.saramin.co.kr",
+  "job_identity_query_keys": ["rec_idx"],
   "enabled": true,
   "page_guidance": {
     "home": {

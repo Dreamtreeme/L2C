@@ -1,10 +1,10 @@
 import {
-  AlertTriangle,
-  Check,
   Circle,
+  CircleAlert,
+  CircleCheck,
+  CirclePause,
+  CircleX,
   LoaderCircle,
-  Pause,
-  X,
 } from "lucide-react";
 
 import { PHASE_LABELS } from "../lib/format";
@@ -35,21 +35,21 @@ function StageIcon({
   active: boolean;
 }) {
   if (event.status === "failed") {
-    return <AlertTriangle size={14} />;
+    return <CircleAlert size={17} />;
   }
   if (event.status === "cancelled") {
-    return <X size={14} />;
+    return <CircleX size={17} />;
   }
   if (event.status === "waiting_input") {
-    return <Pause size={14} />;
+    return <CirclePause size={17} />;
   }
   if (active) {
-    return <LoaderCircle size={14} className="spin" />;
+    return <LoaderCircle size={17} className="spin" />;
   }
   if (event.status === "completed") {
-    return <Check size={14} />;
+    return <CircleCheck size={17} />;
   }
-  return <Circle size={10} />;
+  return <Circle size={13} />;
 }
 
 export function ProgressTimeline({
@@ -69,7 +69,10 @@ export function ProgressTimeline({
   return (
     <div className="progress-timeline" aria-label="조사 진행 단계">
       {stages.map((event, index) => {
-        const active = pending && index === stages.length - 1;
+        const active =
+          pending &&
+          index === stages.length - 1 &&
+          (event.status === "queued" || event.status === "running");
         return (
           <div
             className={`progress-stage ${

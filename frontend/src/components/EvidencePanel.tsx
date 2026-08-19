@@ -14,7 +14,15 @@ import {
   MapPin,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 
 import { getJob } from "../lib/api";
 import {
@@ -24,7 +32,7 @@ import {
   hostLabel,
   PHASE_LABELS,
 } from "../lib/format";
-import type { ChatMessage, JobDetail, RunMetrics } from "../types";
+import type { JobDetail, RunEvent, RunMetrics } from "../types";
 
 type EvidenceTab = "sources" | "run";
 
@@ -33,7 +41,7 @@ interface EvidencePanelProps {
   selectedJobId: number | null;
   citationIds: number[];
   metrics: RunMetrics | null;
-  messages: ChatMessage[];
+  events: RunEvent[];
   onClose: () => void;
   onSelectJob: (jobId: number) => void;
 }
@@ -59,7 +67,7 @@ export function EvidencePanel({
   selectedJobId,
   citationIds,
   metrics,
-  messages,
+  events,
   onClose,
   onSelectJob,
 }: EvidencePanelProps) {
@@ -108,14 +116,7 @@ export function EvidencePanel({
     }
   }, [selectedJobId]);
 
-  const latestEvents = useMemo(
-    () =>
-      [...messages]
-        .reverse()
-        .find((message) => message.role === "assistant" && message.events?.length)
-        ?.events?.slice(-12) || [],
-    [messages],
-  );
+  const latestEvents = events.slice(-12);
   const totalTokens = metrics?.llm?.totals?.total_tokens || 0;
   const estimatedCost = metrics?.llm?.cost?.estimated_total;
   const steps = metrics?.steps || [];
@@ -131,52 +132,54 @@ export function EvidencePanel({
       <aside className={`evidence-panel ${open ? "is-open" : ""}`}>
         <header className="panel-header">
           <strong>근거 및 실행 정보</strong>
-          <button
+          <Button
             type="button"
-            className="icon-button"
+            variant="ghost"
+            size="icon-lg"
+            className="icon-button evidence-close"
             title="패널 닫기"
             aria-label="근거 패널 닫기"
             onClick={onClose}
           >
             <X size={18} />
-          </button>
+          </Button>
         </header>
 
-        <div className="panel-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "sources"}
-            className={tab === "sources" ? "is-active" : ""}
-            onClick={() => setTab("sources")}
-          >
-            근거 {citationIds.length > 0 ? citationIds.length : ""}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "run"}
-            className={tab === "run" ? "is-active" : ""}
-            onClick={() => setTab("run")}
-          >
-            실행
-          </button>
-        </div>
+        <Tabs
+          className="evidence-tabs"
+          value={tab}
+          onValueChange={(value) => setTab(value as EvidenceTab)}
+        >
+          <TabsList className="panel-tabs" variant="line">
+            <TabsTrigger
+              value="sources"
+              className={tab === "sources" ? "is-active" : ""}
+            >
+              근거 {citationIds.length > 0 ? citationIds.length : ""}
+            </TabsTrigger>
+            <TabsTrigger
+              value="run"
+              className={tab === "run" ? "is-active" : ""}
+            >
+              실행
+            </TabsTrigger>
+          </TabsList>
 
-        {tab === "sources" ? (
-          <div className="panel-scroll">
+          <TabsContent value="sources" className="panel-scroll">
             {citationIds.length > 0 ? (
               <div className="source-index">
                 {citationIds.map((jobId) => (
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="sm"
                     className={jobId === selectedJobId ? "is-active" : ""}
                     key={jobId}
                     onClick={() => onSelectJob(jobId)}
                   >
                     <FileText size={14} />
                     출처 {jobId}
-                  </button>
+                  </Button>
                 ))}
               </div>
             ) : null}
@@ -262,9 +265,9 @@ export function EvidencePanel({
                 </span>
               </div>
             )}
-          </div>
-        ) : (
-          <div className="panel-scroll run-panel">
+          </TabsContent>
+
+          <TabsContent value="run" className="panel-scroll run-panel">
             {metrics ? (
               <>
                 <div className="metrics-grid">
@@ -280,7 +283,11 @@ export function EvidencePanel({
                   )}
                   {metricValue(
                     "LLM 호출",
-                    formatNumber(metrics.llm?.calls?.length || 0),
+                    formatNumber(
+                      metrics.llm?.call_count ??
+                        metrics.llm?.calls?.length ??
+                        0,
+                    ),
                     <Activity size={16} />,
                   )}
                   {metricValue(
@@ -351,8 +358,8 @@ export function EvidencePanel({
                 <span>조사를 실행하면 단계별 지표가 표시됩니다.</span>
               </div>
             )}
-          </div>
-        )}
+          </TabsContent>
+        </Tabs>
       </aside>
     </>
   );

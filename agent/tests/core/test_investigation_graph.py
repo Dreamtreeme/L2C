@@ -84,14 +84,30 @@ def test_evidence_count_normalization_uses_confirmed_count_mode(tmp_path):
             )
         ]
     )
+    unspecified_plan = EvidencePlan(
+        requirements=[
+            EvidenceRequirement(
+                requirement_id="backend-junior",
+                description="신입 백엔드 공고",
+                scope=InvestigationConstraints(
+                    occupation_query="백엔드",
+                    count_mode="unspecified",
+                ),
+                minimum_count=10,
+            )
+        ]
+    )
     taxonomy = prepare_search_taxonomy(tmp_path / "jobs.db")
 
     visible = normalize_evidence_requirements(visible_plan, taxonomy)
     explicit = normalize_evidence_requirements(explicit_plan, taxonomy)
+    unspecified = normalize_evidence_requirements(unspecified_plan, taxonomy)
 
     assert visible[0].minimum_count == 1
     assert visible_plan.requirements[0].minimum_count == 50
     assert explicit[0].minimum_count == 2
+    assert unspecified[0].scope.count_mode == "visible_all"
+    assert unspecified[0].minimum_count == 1
 
 
 def test_unresolved_occupation_builds_candidates_for_semantic_review(tmp_path):

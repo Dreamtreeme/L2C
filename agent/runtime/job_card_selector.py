@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,6 +35,22 @@ from agent.utils.logger import logger
 from agent.utils.model_conversion import parse_model_payload
 
 
+class EvaluatedJobCard(VisibleJobCard):
+    """화면의 필수 조건까지 함께 판정한 공고 카드."""
+
+    filter_status: Literal["match", "conflict", "unknown"] = Field(
+        ...,
+        description=(
+            "confirmed_filters와 화면 근거가 일치하면 match, 명백히 어긋나면 "
+            "conflict, 카드에 조건이 보이지 않으면 unknown"
+        ),
+    )
+    filter_evidence: str = Field(
+        "",
+        description="같은 카드 안에서 조건 판정에 사용한 짧은 화면 문구",
+    )
+
+
 class JobCardSelection(BaseModel):
     """검색 결과 여부와 수집 순서대로 고른 카드 목록."""
 
@@ -49,7 +65,19 @@ class JobCardSelection(BaseModel):
     count_evidence: str = Field(
         "", description="전체 결과 개수를 판단한 화면의 짧은 문구"
     )
-    cards: list[VisibleJobCard] = Field(default_factory=list)
+    open_full_results_marker_id: int | None = Field(
+        None,
+        ge=0,
+        description=(
+            "현재 화면이 일부 공고만 보여주는 미리보기일 때 전체 공고 목록으로 "
+            "이동하는 보이는 마커 ID"
+        ),
+    )
+    open_full_results_label: str = Field(
+        "",
+        description="전체 공고 목록으로 이동하는 마커의 화면 문구",
+    )
+    cards: list[EvaluatedJobCard] = Field(default_factory=list)
 
 
 def should_select_job_cards(state: WorkerState) -> bool:
@@ -136,13 +164,22 @@ def _selection_messages(
         fast=True,
     )
     instruction = (
-        "현재 화면이 채용공고 검색 결과 목록인지 판단하고, 실제로 보이는 공고 중 수집할 카드를 고르십시오. "
+        "현재 화면이 채용공고 검색 결과 목록인지 판단하고, 실제로 보이는 공고를 검토하십시오. "
+        "일부 추천 공고만 보여주면서 '전체보기', '모든 결과', '더 보기'처럼 전체 공고 목록으로 이동하는 "
+        "명시적 컨트롤이 보이면 카드를 고르지 말고 그 컨트롤의 ID와 문구를 open_full_results_marker_id, "
+        "open_full_results_label에 넣으십시오. 단순 페이지네이션이나 상세 본문 더보기는 여기에 넣지 마십시오. "
         "사용자 검색어가 직무를 나타내면 공고 제목의 직무 정체성이 직접 일치해야 합니다. 기술 스택이나 업무 일부의 "
         "일치는 직무가 일치한 공고 사이의 순위 판단에만 사용하고, 제목이 다른 직무를 나타내는 공고를 직접 일치로 "
         "간주하지 마십시오. 검색어가 기술 자체만을 요구한 경우에만 제목 또는 기술 표기의 직접 일치를 사용하십시오. "
         "직접 일치하는 공고가 충분하면 단지 관련 기술이라는 이유만으로 범위가 더 넓거나 다른 직무의 공고를 섞지 마십시오. "
         "현재 화면에 실제로 보이는 직접 관련 공고는 목표 개수와 무관하게 모두 예비 후보로 고르십시오. "
         "작업자는 성공한 공고가 남은 목표 개수에 도달하면 나머지 후보를 실행하지 않습니다. "
+        "confirmed_filters는 사용자가 확정한 필수 조건입니다. 직접 관련된 각 카드마다 같은 카드 안의 경력, "
+        "지역, 고용형태를 확인해 filter_status를 반드시 지정하십시오. 조건과 일치하면 match, 명백히 충돌하면 "
+        "conflict, 해당 조건이 카드에 보이지 않아 상세 페이지가 필요할 때만 unknown입니다. 필터가 모두 비어 "
+        "있으면 match입니다. filter_evidence에는 판정에 사용한 같은 카드의 실제 문구만 넣으십시오. "
+        "충돌하는 카드도 판정 결과 확인을 위해 cards에 포함하되, 관련 없는 직무는 넣지 마십시오. "
+        "한 카드의 제목에 다른 카드의 회사명이나 경력 문구를 결합하지 마십시오. "
         "cards에는 공고 제목 자체에 붙은 마커 ID만 사용하고 회사명, 보상금, 배지, 버튼, 필터의 마커를 넣지 마십시오. "
         "각 card의 company에는 같은 카드에서 제목과 인접해 별도로 표시된 회사명만 넣으십시오. "
         "'Data Engineer(AI데이터플랫폼)'처럼 제목 괄호 안의 직무 분야나 조직명은 회사명으로 분리하지 마십시오. "
@@ -162,7 +199,11 @@ def _selection_messages(
     if site_guidance:
         instruction += "\n\n" + site_guidance.strip()
     payload = {
+        "original_query": state["request"]["collection_intent"].original_query,
         "search_query": search_query,
+        "confirmed_filters": state["request"][
+            "collection_intent"
+        ].filters.model_dump(mode="json"),
         "count_mode": count_mode_from_state(state),
         "remaining_count": remaining_count,
         "current_url": current_url,
@@ -225,6 +266,8 @@ def _selected_card(
         "marker_id": marker_id,
         "title": title,
         "company": str(raw.get("company") or "").strip(),
+        "filter_status": str(raw.get("filter_status") or "unknown"),
+        "filter_evidence": str(raw.get("filter_evidence") or "").strip(),
     }
 
 
@@ -232,9 +275,10 @@ def _validated_cards(
     selection: dict[str, Any],
     markers: list[ScreenMarker],
     known_cards: list[dict],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     marker_ids = _marker_index(markers)
     cards: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
     used_ids: set[int] = set()
     for raw in selection.get("cards") or []:
         card = _selected_card(raw, marker_ids)
@@ -242,9 +286,18 @@ def _validated_cards(
             continue
         if job_card_is_known(card, known_cards):
             continue
-        cards.append(card)
         used_ids.add(card["marker_id"])
-    return cards
+        if card["filter_status"] == "conflict":
+            conflicts.append(card)
+            continue
+        cards.append(
+            {
+                "marker_id": card["marker_id"],
+                "title": card["title"],
+                "company": card["company"],
+            }
+        )
+    return cards, conflicts
 
 
 def _remaining_job_count(state: WorkerState) -> int | None:
@@ -292,6 +345,8 @@ def _selection_availability(
 def _build_queue_selection(
     cards: list[dict[str, Any]],
     availability: dict[str, Any],
+    *,
+    conflict_count: int,
 ) -> tuple[ActionRequest, dict[str, Any]]:
     request = build_action_request(
         "card_selector",
@@ -311,6 +366,7 @@ def _build_queue_selection(
     logger.info(
         "Job card selector prepared queue",
         card_count=len(cards),
+        conflict_count=conflict_count,
         first_marker_id=cards[0]["marker_id"],
         first_title=cards[0]["title"],
     )
@@ -318,14 +374,70 @@ def _build_queue_selection(
         "attempted": True,
         "reason": "cards_selected",
         "card_count": len(cards),
+        "conflict_count": conflict_count,
         "marker_ids": [card["marker_id"] for card in cards],
         "model": _selector_model_name(),
         **availability,
     }
 
 
+def _build_full_results_navigation(
+    selection: dict[str, Any],
+    markers: list[ScreenMarker],
+) -> tuple[ActionRequest, dict[str, Any]] | None:
+    raw_marker_id = selection.get("open_full_results_marker_id")
+    if raw_marker_id is None:
+        return None
+    try:
+        marker_id = int(raw_marker_id)
+    except (TypeError, ValueError):
+        return None
+    marker = _marker_index(markers).get(marker_id)
+    if marker is None:
+        return None
+    label = str(
+        selection.get("open_full_results_label")
+        or marker.get("text")
+        or "전체 공고 목록"
+    ).strip()
+    reason = "일부 추천 공고가 아닌 전체 검색 결과 목록을 확인합니다."
+    request = build_action_request(
+        "card_selector",
+        reason,
+        [
+            {
+                "name": "click_marker",
+                "args": {
+                    "marker_id": marker_id,
+                    "target_label": label,
+                    "target_role": "navigation",
+                    "target_component": "full_job_results",
+                    "reason": reason,
+                    "expected_after": "전체 채용공고 검색 결과 목록이 보입니다.",
+                    "page_role": "search",
+                    "risk_level": "safe_navigation",
+                },
+                "id": "card_selector_open_full_results",
+            }
+        ],
+    )
+    logger.info(
+        "Job card selector opens full results",
+        marker_id=marker_id,
+        label=label,
+    )
+    return request, {
+        "attempted": True,
+        "reason": "open_full_results",
+        "marker_id": marker_id,
+        "model": _selector_model_name(),
+    }
+
+
 def _build_continue_selection(
     availability: dict[str, Any],
+    *,
+    conflict_count: int = 0,
 ) -> tuple[ActionRequest, dict[str, Any]]:
     """현재 결과 화면에 관련 공고가 없으면 다음 화면 범위를 확인한다."""
 
@@ -354,6 +466,7 @@ def _build_continue_selection(
         "attempted": True,
         "reason": "no_valid_card_continue",
         "card_count": 0,
+        "conflict_count": conflict_count,
         "model": _selector_model_name(),
         **availability,
     }
@@ -382,6 +495,10 @@ def select_job_cards(
         }
 
     availability = _selection_availability(selection)
+    markers = list(state["observation"].get("current_markers") or [])
+    full_results_navigation = _build_full_results_navigation(selection, markers)
+    if full_results_navigation is not None:
+        return full_results_navigation
     if not selection.get("is_job_results_page"):
         return None, {
             "attempted": True,
@@ -389,9 +506,9 @@ def select_job_cards(
             **availability,
         }
 
-    cards = _validated_cards(
+    cards, conflicts = _validated_cards(
         selection,
-        list(state["observation"].get("current_markers") or []),
+        markers,
         [
             dict(item)
             for item in state["collection"].get("job_card_queue", []) or []
@@ -401,12 +518,20 @@ def select_job_cards(
     if availability and availability["available_job_count"] < len(cards):
         availability = {}
     if not cards:
-        return _build_continue_selection(availability)
-    return _build_queue_selection(cards, availability)
+        return _build_continue_selection(
+            availability,
+            conflict_count=len(conflicts),
+        )
+    return _build_queue_selection(
+        cards,
+        availability,
+        conflict_count=len(conflicts),
+    )
 
 
 __all__ = [
     "JobCardSelection",
+    "EvaluatedJobCard",
     "VisibleJobCard",
     "prepare_job_card_selector_model",
     "select_job_cards",

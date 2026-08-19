@@ -40,6 +40,7 @@ class SiteProfile(SiteModel):
     aliases: tuple[str, ...] = ()
     domains: tuple[str, ...]
     base_url: str
+    job_identity_query_keys: tuple[str, ...] = ()
     enabled: bool = True
     page_guidance: dict[str, PageGuidance]
     guidance: str = ""

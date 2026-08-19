@@ -30,7 +30,7 @@ def test_extracted_job_uses_registered_source_and_hash():
             requirements=["Python"],
             source_platform="원티드",
         ),
-        current_url="https://www.wanted.co.kr/wd/123",
+        current_url="https://www.wanted.co.kr/wd/123?ref=search",
         raw_ocr_text="실제 OCR 원문",
     )
 
@@ -38,6 +38,18 @@ def test_extracted_job_uses_registered_source_and_hash():
     assert posting.source_platform == "Wanted"
     assert posting.raw_ocr_text == "실제 OCR 원문"
     assert posting.content_hash
+
+    saramin = complete_extracted_job(
+        JobPosting(company_name="Acme", position="AI Engineer"),
+        current_url=(
+            "https://www.saramin.co.kr/zf_user/jobs/relay/view"
+            "?view_type=search&rec_idx=54644086&search_uuid=temporary#seq=0"
+        ),
+        raw_ocr_text="실제 OCR 원문",
+    )
+    assert saramin.url == (
+        "https://www.saramin.co.kr/zf_user/jobs/relay/view?rec_idx=54644086"
+    )
 
 
 def test_collected_job_rejects_unresolved_required_field():
@@ -73,7 +85,7 @@ def test_collected_job_rejects_required_field_absent_from_source():
         )
 
 
-def test_database_preserves_same_content_at_different_urls(tmp_path):
+def test_database_uses_source_url_identity_instead_of_content_hash(tmp_path):
     db = Database(tmp_path / "same-content.db")
     first = complete_extracted_job(
         JobPosting(
@@ -92,6 +104,27 @@ def test_database_preserves_same_content_at_different_urls(tmp_path):
     assert first_id != second_id
     assert db.get(first_id)["url"] == first.url
     assert db.get(second_id)["url"] == second.url
+
+    saramin_first = complete_extracted_job(
+        JobPosting(company_name="Acme", position="AI Engineer"),
+        current_url=(
+            "https://www.saramin.co.kr/zf_user/jobs/relay/view"
+            "?rec_idx=123&search_uuid=first"
+        ),
+        raw_ocr_text="첫 수집",
+    )
+    saramin_second = complete_extracted_job(
+        JobPosting(company_name="Acme", position="AI Engineer"),
+        current_url=(
+            "https://www.saramin.co.kr/zf_user/jobs/relay/view"
+            "?view_type=search&rec_idx=123&search_uuid=second#seq=0"
+        ),
+        raw_ocr_text="두 번째 수집",
+    )
+
+    saramin_id = db.upsert(saramin_first)
+    assert db.upsert(saramin_second) == saramin_id
+    assert db.get(saramin_id)["raw_ocr_text"] == "두 번째 수집"
 
 
 def test_job_posting_keeps_only_iso_posted_date():

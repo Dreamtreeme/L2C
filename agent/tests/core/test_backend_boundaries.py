@@ -576,6 +576,37 @@ def test_browser_launch_keeps_occluded_window_rendering():
     )
 
 
+def test_browser_window_is_fitted_to_monitor_work_area(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent.tools.actions import ActionTools
+
+    moves = []
+    resizes = []
+    activations = []
+    work_area = {"left": 0, "top": 0, "width": 1366, "height": 728}
+    perception = SimpleNamespace(
+        browser_window_id=None,
+        _monitor_work_area=lambda _window: work_area,
+    )
+    window = SimpleNamespace(
+        isMaximized=False,
+        width=1366,
+        height=728,
+        moveTo=lambda left, top: moves.append((left, top)),
+        resizeTo=lambda width, height: resizes.append((width, height)),
+        activate=lambda: activations.append(True),
+    )
+    tools = ActionTools(perception)
+    monkeypatch.setattr(tools, "_browser_window_dimensions", lambda: (1920, 1080))
+    monkeypatch.setattr(tools, "_sleep", lambda _seconds: None)
+
+    assert tools._normalize_browser_window(window) is True
+    assert moves == [(0, 0)]
+    assert resizes == [(1366, 728)]
+    assert activations == [True]
+
+
 def test_vision_runtime_reuses_ocr_worker_until_application_shutdown():
     from agent.runtime.vision_worker_runtime import VisionWorkerRuntime
 

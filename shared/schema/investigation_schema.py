@@ -161,7 +161,7 @@ class InvestigationConstraints(BaseModel):
     comparison_posted_from: str = ""
     comparison_posted_to: str = ""
     count_mode: Literal["unspecified", "explicit", "visible_all"] = Field(
-        default="unspecified",
+        default="visible_all",
         description="사용자가 요청한 채용공고 결과 수의 지정 방식.",
     )
     target_count: int = Field(
@@ -232,6 +232,8 @@ class InvestigationConstraints(BaseModel):
 
     @model_validator(mode="after")
     def validate_count_mode(self) -> "InvestigationConstraints":
+        if self.count_mode == "unspecified":
+            self.count_mode = "visible_all"
         if self.count_mode == "explicit" and self.target_count == 0:
             raise ValueError("명시적 수집 개수에는 1 이상의 target_count가 필요합니다.")
         if self.count_mode != "explicit" and self.target_count > 0:

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 
 import { cancelRun, getOperations, streamChat } from "./lib/api";
-import { extractCitationIds } from "./lib/format";
+import { evidenceDocumentIds, extractCitationIds } from "./lib/format";
 import type {
   ChatFinalPayload,
   ChatMessage,
@@ -21,19 +21,19 @@ import { OperationsDrawer } from "./components/OperationsDrawer";
 const MESSAGE_STORAGE_KEY = "l2c.workspace.messages.v1";
 const CONVERSATION_STORAGE_KEY = "l2c.workspace.conversation.v1";
 
-interface WorkspaceState {
+export interface WorkspaceState {
   messages: ChatMessage[];
   isRunning: boolean;
   activeRunId: string | null;
   activePhase: RunPhase | null;
   pendingResume: PendingResume | null;
-  metrics: RunMetrics | null;
-  citationIds: number[];
+  selectedMessageId: string | null;
   selectedJobId: number | null;
   cancelRequested: boolean;
+  cancelError: string | null;
 }
 
-type WorkspaceAction =
+export type WorkspaceAction =
   | {
       type: "start_turn";
       user: ChatMessage;
@@ -49,7 +49,9 @@ type WorkspaceAction =
   | { type: "error"; assistantId: string; message: string }
   | { type: "finish" }
   | { type: "cancel_requested" }
+  | { type: "cancel_failed"; message: string }
   | { type: "select_job"; jobId: number | null }
+  | { type: "select_evidence"; messageId: string; jobId: number }
   | { type: "reset" };
 
 function loadStoredMessages(): ChatMessage[] {
@@ -82,14 +84,21 @@ function loadStoredMessages(): ChatMessage[] {
   }
 }
 
-function initialState(): WorkspaceState {
+function messageCitationIds(message: ChatMessage | undefined): number[] {
+  if (!message) {
+    return [];
+  }
+  return message.citationIds?.length
+    ? message.citationIds
+    : extractCitationIds(message.text);
+}
+
+export function initialState(): WorkspaceState {
   const messages = loadStoredMessages();
   const latestAssistant = [...messages]
     .reverse()
     .find((message) => message.role === "assistant");
-  const citationIds = latestAssistant
-    ? extractCitationIds(latestAssistant.text)
-    : [];
+  const citationIds = messageCitationIds(latestAssistant);
   const pendingResume =
     latestAssistant?.state === "waiting_input" &&
     latestAssistant.runId &&
@@ -107,10 +116,10 @@ function initialState(): WorkspaceState {
     activeRunId: null,
     activePhase: null,
     pendingResume,
-    metrics: latestAssistant?.metrics || null,
-    citationIds,
+    selectedMessageId: latestAssistant?.id || null,
     selectedJobId: citationIds[0] || null,
     cancelRequested: false,
+    cancelError: null,
   };
 }
 
@@ -124,7 +133,28 @@ function updateMessage(
   );
 }
 
-function workspaceReducer(
+function compactMetrics(metrics: RunMetrics | undefined): RunMetrics | undefined {
+  if (!metrics) {
+    return undefined;
+  }
+  return {
+    run_id: metrics.run_id,
+    duration_sec: metrics.duration_sec,
+    steps: metrics.steps?.slice(-16),
+    llm: metrics.llm
+      ? {
+          totals: metrics.llm.totals,
+          call_count:
+            metrics.llm.call_count ?? metrics.llm.calls?.length ?? 0,
+          cost: metrics.llm.cost,
+        }
+      : undefined,
+    outcome: metrics.outcome,
+    langsmith: metrics.langsmith,
+  };
+}
+
+export function workspaceReducer(
   state: WorkspaceState,
   action: WorkspaceAction,
 ): WorkspaceState {
@@ -136,7 +166,11 @@ function workspaceReducer(
         isRunning: true,
         activeRunId: null,
         activePhase: "received",
+        pendingResume: null,
+        selectedMessageId: action.assistant.id,
+        selectedJobId: null,
         cancelRequested: false,
+        cancelError: null,
       };
     case "processing":
       return {
@@ -163,8 +197,13 @@ function workspaceReducer(
         ),
       };
     case "final": {
-      const citationIds = extractCitationIds(action.payload.text);
-      const waitingForInput = action.payload.status === "waiting_input";
+      const citationIds = evidenceDocumentIds(
+        action.payload.grounded_answer,
+        action.payload.text,
+      );
+      const clarification = action.payload.clarification || null;
+      const waitingForInput =
+        action.payload.status === "waiting_input" && Boolean(clarification);
       return {
         ...state,
         activeRunId: action.payload.run_id,
@@ -173,17 +212,23 @@ function workspaceReducer(
             ? "completed"
             : action.payload.status === "partial"
               ? "partial"
-            : action.payload.status === "cancelled"
-              ? "cancelled"
-              : state.activePhase,
-        metrics: action.payload.metrics || null,
-        citationIds,
+              : action.payload.status === "cancelled"
+                ? "cancelled"
+                : action.payload.status === "failed"
+                  ? "failed"
+                  : action.payload.status === "waiting_input"
+                    ? waitingForInput
+                      ? "clarification"
+                      : "failed"
+                    : state.activePhase,
+        selectedMessageId: action.assistantId,
         selectedJobId: citationIds[0] || null,
+        cancelError: null,
         pendingResume: waitingForInput
           ? {
               runId: action.payload.run_id,
               investigationId: action.payload.investigation_id || "",
-              clarification: action.payload.clarification || null,
+              clarification,
               status: action.payload.status,
             }
           : null,
@@ -196,14 +241,17 @@ function workspaceReducer(
             runId: action.payload.run_id,
             investigationId: action.payload.investigation_id || "",
             state:
-              action.payload.status === "waiting_input"
+              waitingForInput
                 ? "waiting_input"
+                : action.payload.status === "waiting_input"
+                  ? "error"
                 : action.payload.status === "cancelled"
                   ? "cancelled"
                   : action.payload.status === "failed"
                     ? "error"
                     : "complete",
-            clarification: action.payload.clarification || null,
+            clarification,
+            citationIds,
             metrics: action.payload.metrics,
           }),
         ),
@@ -214,6 +262,9 @@ function workspaceReducer(
         ...state,
         activePhase: "failed",
         pendingResume: null,
+        selectedMessageId: action.assistantId,
+        selectedJobId: null,
+        cancelError: null,
         messages: updateMessage(
           state.messages,
           action.assistantId,
@@ -230,18 +281,30 @@ function workspaceReducer(
         isRunning: false,
         activeRunId: null,
         cancelRequested: false,
+        cancelError: null,
       };
     case "cancel_requested":
-      return { ...state, cancelRequested: true };
+      return { ...state, cancelRequested: true, cancelError: null };
+    case "cancel_failed":
+      return {
+        ...state,
+        cancelRequested: false,
+        cancelError: action.message,
+      };
     case "select_job":
       return { ...state, selectedJobId: action.jobId };
+    case "select_evidence":
+      return {
+        ...state,
+        selectedMessageId: action.messageId,
+        selectedJobId: action.jobId,
+      };
     case "reset":
       return {
         ...initialState(),
         messages: [],
-        citationIds: [],
+        selectedMessageId: null,
         selectedJobId: null,
-        metrics: null,
       };
   }
 }
@@ -296,8 +359,13 @@ export default function App() {
     const persisted = state.messages.slice(-40).map((message) => ({
       ...message,
       events: (message.events || []).slice(-12),
+      metrics: compactMetrics(message.metrics),
     }));
-    localStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(persisted));
+    try {
+      localStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(persisted));
+    } catch {
+      localStorage.removeItem(MESSAGE_STORAGE_KEY);
+    }
   }, [state.isRunning, state.messages]);
 
   const sendQuery = useCallback(
@@ -412,8 +480,14 @@ export default function App() {
     dispatch({ type: "cancel_requested" });
     try {
       await cancelRun(state.activeRunId);
-    } catch {
-      dispatch({ type: "finish" });
+    } catch (error) {
+      dispatch({
+        type: "cancel_failed",
+        message:
+          error instanceof Error
+            ? `취소 요청 실패: ${error.message}`
+            : "취소 요청에 실패했습니다.",
+      });
     }
   }, [state.activeRunId, state.cancelRequested]);
 
@@ -434,11 +508,14 @@ export default function App() {
     if (state.cancelRequested) {
       return "취소 처리 중";
     }
-    if (state.pendingResume) {
-      return "사용자 선택 필요";
+    if (state.cancelError) {
+      return "취소 요청 실패 · 실행 계속됨";
     }
     if (state.isRunning) {
       return "조사 실행 중";
+    }
+    if (state.pendingResume) {
+      return "사용자 선택 필요";
     }
     if (connectionState === "offline") {
       return "백엔드 연결 끊김";
@@ -446,25 +523,34 @@ export default function App() {
     return "준비됨";
   }, [
     connectionState,
+    state.cancelError,
     state.cancelRequested,
     state.isRunning,
     state.pendingResume,
   ]);
+
+  const selectedEvidenceMessage = useMemo(
+    () =>
+      state.messages.find(
+        (message) => message.id === state.selectedMessageId,
+      ) || null,
+    [state.messages, state.selectedMessageId],
+  );
+  const selectedCitationIds = messageCitationIds(
+    selectedEvidenceMessage || undefined,
+  );
 
   return (
     <div className="app-frame">
       <AppSidebar
         open={leftOpen}
         connectionState={connectionState}
-        recentRuns={operations?.runs || []}
-        activeRunId={state.activeRunId}
         disabled={state.isRunning}
         onClose={() => setLeftOpen(false)}
         onNewConversation={startNewConversation}
         onOpenOperations={() => {
           setOperationsOpen(true);
           setLeftOpen(false);
-          void refreshOperations();
         }}
       />
 
@@ -473,12 +559,13 @@ export default function App() {
         isRunning={state.isRunning}
         cancelRequested={state.cancelRequested}
         activeStatus={activeStatus}
+        statusError={Boolean(state.cancelError)}
         activePhase={state.activePhase}
         pendingResume={state.pendingResume}
         onOpenSidebar={() => setLeftOpen(true)}
         onOpenEvidence={() => setEvidenceOpen(true)}
-        onSelectCitation={(jobId) => {
-          dispatch({ type: "select_job", jobId });
+        onSelectCitation={(jobId, messageId) => {
+          dispatch({ type: "select_evidence", jobId, messageId });
           setEvidenceOpen(true);
         }}
         onSubmit={submitQuery}
@@ -489,9 +576,9 @@ export default function App() {
       <EvidencePanel
         open={evidenceOpen}
         selectedJobId={state.selectedJobId}
-        citationIds={state.citationIds}
-        metrics={state.metrics}
-        messages={state.messages}
+        citationIds={selectedCitationIds}
+        metrics={selectedEvidenceMessage?.metrics || null}
+        events={selectedEvidenceMessage?.events || []}
         onClose={() => setEvidenceOpen(false)}
         onSelectJob={(jobId) =>
           dispatch({ type: "select_job", jobId })

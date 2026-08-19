@@ -13,6 +13,9 @@ import {
   useState,
 } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+
 import { PHASE_LABELS } from "../lib/format";
 import type {
   ChatMessage,
@@ -33,11 +36,12 @@ interface ChatWorkspaceProps {
   isRunning: boolean;
   cancelRequested: boolean;
   activeStatus: string;
+  statusError: boolean;
   activePhase: RunPhase | null;
   pendingResume: PendingResume | null;
   onOpenSidebar: () => void;
   onOpenEvidence: () => void;
-  onSelectCitation: (jobId: number) => void;
+  onSelectCitation: (jobId: number, messageId: string) => void;
   onSubmit: (query: string) => void;
   onSubmitClarification: (
     answer: ClarificationAnswer,
@@ -51,6 +55,7 @@ export function ChatWorkspace({
   isRunning,
   cancelRequested,
   activeStatus,
+  statusError,
   activePhase,
   pendingResume,
   onOpenSidebar,
@@ -63,22 +68,17 @@ export function ChatWorkspace({
   const [query, setQuery] = useState("");
   const scrollerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const stickToBottomRef = useRef(true);
+  const previousMessageCountRef = useRef(messages.length);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
-    if (scroller) {
+    const hasNewMessage = messages.length > previousMessageCountRef.current;
+    if (scroller && (stickToBottomRef.current || hasNewMessage)) {
       scroller.scrollTop = scroller.scrollHeight;
     }
+    previousMessageCountRef.current = messages.length;
   }, [messages]);
-
-  useEffect(() => {
-    const input = inputRef.current;
-    if (!input) {
-      return;
-    }
-    input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
-  }, [query]);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -91,29 +91,45 @@ export function ChatWorkspace({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       submit();
     }
   };
 
+  const fillExampleQuery = (example: string) => {
+    setQuery(example);
+    inputRef.current?.focus();
+  };
+
   return (
     <main className="chat-workspace">
       <header className="workspace-header">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-lg"
           className="icon-button mobile-only"
           title="탐색 메뉴"
           aria-label="탐색 메뉴 열기"
           onClick={onOpenSidebar}
         >
           <Menu size={19} />
-        </button>
+        </Button>
         <div className="workspace-title">
           <strong>현재 조사</strong>
           <span
             className={`run-status ${
-              isRunning ? "is-running" : pendingResume ? "is-waiting" : ""
+              statusError
+                ? "is-error"
+                : isRunning
+                  ? "is-running"
+                  : pendingResume
+                    ? "is-waiting"
+                    : ""
             }`}
           >
             <i aria-hidden="true" />
@@ -125,18 +141,29 @@ export function ChatWorkspace({
             {PHASE_LABELS[activePhase]}
           </span>
         ) : null}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-lg"
           className="icon-button evidence-toggle"
           title="근거 및 실행 정보"
           aria-label="근거 및 실행 정보 열기"
           onClick={onOpenEvidence}
         >
           <PanelRight size={19} />
-        </button>
+        </Button>
       </header>
 
-      <div className="message-scroller" ref={scrollerRef}>
+      <div
+        className="message-scroller"
+        ref={scrollerRef}
+        onScroll={(event) => {
+          const scroller = event.currentTarget;
+          stickToBottomRef.current =
+            scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <
+            80;
+        }}
+      >
         {messages.length === 0 ? (
           <section className="empty-workspace">
             <span className="empty-icon" aria-hidden="true">
@@ -145,13 +172,15 @@ export function ChatWorkspace({
             <h1>어떤 채용 정보를 조사할까요?</h1>
             <div className="example-query-list">
               {EXAMPLE_QUERIES.map((example) => (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  className="w-full justify-start"
                   key={example}
-                  onClick={() => onSubmit(example)}
+                  onClick={() => fillExampleQuery(example)}
                 >
                   {example}
-                </button>
+                </Button>
               ))}
             </div>
           </section>
@@ -173,7 +202,7 @@ export function ChatWorkspace({
 
       <footer className="composer-area">
         <form className="composer" onSubmit={submit}>
-          <textarea
+          <Textarea
             ref={inputRef}
             rows={1}
             value={query}
@@ -188,8 +217,10 @@ export function ChatWorkspace({
             onKeyDown={handleKeyDown}
           />
           {isRunning ? (
-            <button
+            <Button
               type="button"
+              variant="destructive"
+              size="icon"
               className="composer-action is-stop"
               title="실행 취소"
               aria-label="실행 취소"
@@ -197,17 +228,18 @@ export function ChatWorkspace({
               onClick={onCancel}
             >
               <Square size={15} fill="currentColor" />
-            </button>
+            </Button>
           ) : (
-            <button
+            <Button
               type="submit"
+              size="icon"
               className="composer-action"
               title="질문 보내기"
               aria-label="질문 보내기"
               disabled={!query.trim()}
             >
               <Send size={18} />
-            </button>
+            </Button>
           )}
         </form>
       </footer>

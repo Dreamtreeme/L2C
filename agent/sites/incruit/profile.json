@@ -6,6 +6,7 @@
   "aliases": ["incruit", "인크루트"],
   "domains": ["incruit.com", "www.incruit.com", "job.incruit.com"],
   "base_url": "https://job.incruit.com/",
+  "job_identity_query_keys": ["job"],
   "enabled": true,
   "page_guidance": {
     "home": {

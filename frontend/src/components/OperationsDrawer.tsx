@@ -1,6 +1,15 @@
 import { Activity, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { useEffect } from "react";
 
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
+
 import { PHASE_LABELS, relativeDate, STATUS_LABELS } from "../lib/format";
 import type { OperationsResponse } from "../types";
 
@@ -23,45 +32,54 @@ export function OperationsDrawer({
     }
   }, [onRefresh, open]);
 
-  if (!open) {
-    return null;
-  }
-
   return (
-    <div className="drawer-layer" role="dialog" aria-modal="true">
-      <button
-        type="button"
-        className="drawer-scrim"
-        aria-label="운영 현황 닫기"
-        onClick={onClose}
-      />
-      <aside className="operations-drawer">
+    <Sheet
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          onClose();
+        }
+      }}
+    >
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="operations-drawer"
+      >
         <header className="panel-header">
-          <div>
+          <SheetTitle className="operations-title">
             <Activity size={18} />
             <strong>실행 현황</strong>
-          </div>
+          </SheetTitle>
           <div className="header-actions">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-lg"
               className="icon-button"
               title="새로고침"
               aria-label="운영 현황 새로고침"
               onClick={() => void onRefresh()}
             >
               <RefreshCw size={17} />
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              title="닫기"
-              aria-label="운영 현황 닫기"
-              onClick={onClose}
-            >
-              <X size={18} />
-            </button>
+            </Button>
+            <SheetClose asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-lg"
+                className="icon-button"
+                title="닫기"
+                aria-label="운영 현황 닫기"
+              >
+                <X size={18} />
+              </Button>
+            </SheetClose>
           </div>
         </header>
+        <SheetDescription className="sr-only">
+          최근 채용 조사 실행 상태와 진행 결과
+        </SheetDescription>
 
         <div className="operations-scroll">
           {!data ? (
@@ -100,7 +118,7 @@ export function OperationsDrawer({
             </section>
           )}
         </div>
-      </aside>
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }

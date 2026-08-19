@@ -41,31 +41,7 @@ const server = createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/api/operations") {
     json(response, 200, {
       runs,
-      retention: {
-        inventory: {
-          job_postings: 34,
-          recipe_candidates: 8,
-          active_recipes: 5,
-        },
-        files: {
-          log_count: 2,
-          artifact_count: 3,
-          reclaimable_bytes: 2841000,
-        },
-        database: {
-          run_events: 4,
-          expired_snapshots: 1,
-        },
-      },
     });
-    return;
-  }
-
-  if (
-    request.method === "POST" &&
-    url.pathname === "/api/operations/retention"
-  ) {
-    json(response, 200, { deleted_files: 5, deleted_rows: 5 });
     return;
   }
 
@@ -121,7 +97,6 @@ const server = createServer(async (request, response) => {
     const now = new Date().toISOString();
     runs.unshift({
       run_id: runId,
-      user_query: String(payload.query || ""),
       query: String(payload.query || ""),
       status: "running",
       phase: "received",
@@ -208,7 +183,7 @@ const server = createServer(async (request, response) => {
       runEvent(runId, "planning", "질문의 조사 조건을 확인하고 있습니다."),
       runEvent(runId, "database", "로컬 DB에서 기존 근거를 확인하고 있습니다."),
       runEvent(runId, "collection", "원티드에서 공고 2개를 수집했습니다."),
-      runEvent(runId, "review", "수집한 공고의 직무와 출처를 검증하고 있습니다."),
+      runEvent(runId, "validation", "수집한 공고의 직무와 출처를 검증하고 있습니다."),
       runEvent(runId, "answering", "DB 근거를 이용해 답변을 작성하고 있습니다."),
     ];
 
@@ -230,7 +205,7 @@ const server = createServer(async (request, response) => {
             action_source:
               event.phase === "collection"
                 ? "job_card_queue"
-                : event.phase === "review"
+                : event.phase === "validation"
                   ? "reflex"
                   : "commander",
             success: true,
@@ -258,6 +233,38 @@ const server = createServer(async (request, response) => {
           text:
             "확인된 iOS 개발자 공고는 2건입니다.\n\n## 비교 결과\n\n- **보이저엑스**는 Swift 기반 제품 개발과 영상 처리 경험을 중요하게 봅니다. SwiftUI와 AVFoundation 경험이 있으면 유리합니다. [job_id:101]\n- **넛지헬스케어**는 대규모 소비자 앱의 안정성과 비동기 프로그래밍 경험을 강조합니다. [job_id:102]\n\n두 공고 모두 iOS 실무 경험을 요구하지만, 제품 기능 개발은 보이저엑스, 서비스 운영 경험은 넛지헬스케어 쪽에 더 가깝습니다.",
           status: "completed",
+          grounded_answer: {
+            lines: [
+              {
+                kind: "detail",
+                document_id: 101,
+                title: "보이저엑스",
+                text: "Swift 기반 제품 개발과 영상 처리 경험을 중요하게 봅니다.",
+                citation_ids: [1],
+              },
+              {
+                kind: "detail",
+                document_id: 102,
+                title: "넛지헬스케어",
+                text: "대규모 소비자 앱 운영 경험을 강조합니다.",
+                citation_ids: [2],
+              },
+            ],
+            citations: [
+              {
+                citation_id: 1,
+                document_id: 101,
+                field: "raw_text",
+                evidence_text: "Swift 기반 iOS 개발 경험",
+              },
+              {
+                citation_id: 2,
+                document_id: 102,
+                field: "raw_text",
+                evidence_text: "대규모 사용자 서비스 운영 경험",
+              },
+            ],
+          },
           clarification: null,
           investigation_id: "mock-investigation",
           conversation_id: payload.conversation_id || "",

@@ -15,8 +15,11 @@
       "instructions": ["검색어를 입력한 뒤 같은 검색어의 직무 검색 결과를 클릭해 공고 목록으로 이동한다."]
     },
     "search": {
-      "url_patterns": ["/search"],
-      "instructions": ["직무명과 회사명이 보이는 미방문 공고만 큐에 넣는다."]
+      "url_patterns": ["/search", "/wdlist"],
+      "instructions": [
+        "일부 추천 포지션과 전체보기 컨트롤이 함께 보이면 전체보기로 이동한 뒤 공고를 고른다.",
+        "전체 결과에서는 사용자 조건과 같은 카드 안의 직무명·회사명·경력 정보를 함께 확인한다."
+      ]
     },
     "job_detail": {
       "url_patterns": ["/wd/\\d+"],

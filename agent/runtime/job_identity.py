@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -72,8 +73,68 @@ def url_with_source_card_key(url: str, card_key: str) -> str:
     )
 
 
+def canonical_job_url(value: Any) -> str:
+    """사이트가 노출한 공고 식별자만 남긴 상세 URL을 반환한다."""
+
+    raw_url = str(value or "").strip()
+    if not raw_url:
+        return ""
+    parts = urlsplit(raw_url)
+    if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
+        return raw_url.rstrip("/")
+    try:
+        profile = load_site_profile(site_of(raw_url))
+    except SiteProfileError:
+        return raw_url.rstrip("/")
+
+    detail = profile.page_guidance.get("job_detail")
+    target = f"{parts.path}?{parts.query}" if parts.query else parts.path
+    if not detail or not any(
+        re.search(pattern, target, flags=re.IGNORECASE)
+        for pattern in detail.url_patterns
+    ):
+        return raw_url.rstrip("/")
+
+    query_items = parse_qsl(parts.query, keep_blank_values=True)
+    identity_keys = {
+        key.casefold(): key for key in profile.job_identity_query_keys
+    }
+    if identity_keys:
+        selected = {
+            key.casefold(): value
+            for key, value in query_items
+            if key.casefold() in identity_keys and value
+        }
+        if not selected:
+            return raw_url.rstrip("/")
+        canonical_query = urlencode(
+            [
+                (
+                    identity_keys[key.casefold()],
+                    selected[key.casefold()],
+                )
+                for key in profile.job_identity_query_keys
+                if key.casefold() in selected
+            ]
+        )
+    else:
+        canonical_query = ""
+
+    canonical_host = urlsplit(profile.base_url).netloc.lower()
+    return urlunsplit(
+        (
+            "https",
+            canonical_host,
+            parts.path.rstrip("/") or "/",
+            canonical_query,
+            "",
+        )
+    )
+
+
 __all__ = [
     "canonical_company_name",
+    "canonical_job_url",
     "canonical_position_title",
     "source_card_key",
     "url_with_source_card_key",

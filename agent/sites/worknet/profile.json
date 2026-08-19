@@ -6,6 +6,7 @@
   "aliases": ["worknet", "work24", "워크넷", "고용24"],
   "domains": ["work.go.kr", "www.work.go.kr", "work24.go.kr", "www.work24.go.kr"],
   "base_url": "https://www.work24.go.kr",
+  "job_identity_query_keys": ["wantedAuthNo", "infoTypeCd", "infoTypeGroup"],
   "enabled": true,
   "page_guidance": {
     "home": {

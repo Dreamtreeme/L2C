@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from agent.config import get_settings
+from agent.runtime.job_identity import canonical_job_url
 from agent.application.job_lookup_service import (
     find_job_ids_by_card_identities,
     find_job_id_by_url,
@@ -15,7 +16,7 @@ from shared.schema.jd_schema import JobCapture
 
 
 def _url_key(value: Any) -> str:
-    return str(value or "").strip().rstrip("/")
+    return canonical_job_url(value)
 
 
 def _current_run_contains_url(

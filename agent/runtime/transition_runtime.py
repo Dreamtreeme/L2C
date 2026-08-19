@@ -39,7 +39,9 @@ def detect_two_screen_transition_cycle(
     recent = [
         transition
         for transition in observations
-        if transition.evidence and transition.evidence.screenshot
+        if transition.evidence
+        and transition.evidence.status == "ready"
+        and transition.evidence.screenshot
     ][-4:]
     if len(recent) < 4:
         return {"detected": False}

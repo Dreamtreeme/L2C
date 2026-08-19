@@ -7,6 +7,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+
+if os.name == "nt":
+    # 캡처, 창 좌표, 마우스 입력이 모두 실제 화면 픽셀을 사용하게 한다.
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+
 import mss
 import mss.tools
 import pyautogui

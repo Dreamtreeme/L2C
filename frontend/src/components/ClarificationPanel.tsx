@@ -1,5 +1,12 @@
-import { Check, CornerDownLeft } from "lucide-react";
+import { CornerDownLeft } from "lucide-react";
 import { useMemo, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  RadioGroup,
+  RadioGroupItem,
+} from "@/components/ui/radio-group";
 
 import type {
   ClarificationAnswer,
@@ -59,25 +66,25 @@ export function ClarificationPanel({
       {clarification.reason ? (
         <p className="clarification-reason">{clarification.reason}</p>
       ) : null}
-      <div className="clarification-options">
+      <RadioGroup
+        className="clarification-options"
+        value={selected}
+        disabled={disabled}
+        onValueChange={setSelected}
+      >
         {clarification.options.map((option) => (
           <label
             className={`clarification-option ${
               selected === option.option_id ? "is-selected" : ""
             }`}
             key={option.option_id}
+            htmlFor={`${clarification.question_id}-${option.option_id}`}
           >
-            <input
-              type="radio"
-              name={clarification.question_id}
+            <RadioGroupItem
+              id={`${clarification.question_id}-${option.option_id}`}
               value={option.option_id}
-              checked={selected === option.option_id}
-              disabled={disabled}
-              onChange={() => setSelected(option.option_id)}
+              className="option-indicator"
             />
-            <span className="option-indicator">
-              {selected === option.option_id ? <Check size={13} /> : null}
-            </span>
             <span className="option-copy">
               <strong>{option.label}</strong>
               {option.description ? <span>{option.description}</span> : null}
@@ -93,19 +100,14 @@ export function ClarificationPanel({
             className={`clarification-option custom-option ${
               selected === "__custom__" ? "is-selected" : ""
             }`}
+            htmlFor={`${clarification.question_id}-custom`}
           >
-            <input
-              type="radio"
-              name={clarification.question_id}
+            <RadioGroupItem
+              id={`${clarification.question_id}-custom`}
               value="__custom__"
-              checked={selected === "__custom__"}
-              disabled={disabled}
-              onChange={() => setSelected("__custom__")}
+              className="option-indicator"
             />
-            <span className="option-indicator">
-              {selected === "__custom__" ? <Check size={13} /> : null}
-            </span>
-            <input
+            <Input
               type="text"
               value={customValue}
               disabled={disabled}
@@ -122,8 +124,8 @@ export function ClarificationPanel({
             />
           </label>
         ) : null}
-      </div>
-      <button
+      </RadioGroup>
+      <Button
         type="button"
         className="clarification-submit"
         disabled={
@@ -135,7 +137,7 @@ export function ClarificationPanel({
       >
         선택
         <CornerDownLeft size={15} />
-      </button>
+      </Button>
     </div>
   );
 }

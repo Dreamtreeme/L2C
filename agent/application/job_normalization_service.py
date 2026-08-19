@@ -6,6 +6,7 @@ import hashlib
 import re
 
 from agent.runtime.site_context import site_profile_for_url
+from agent.runtime.job_identity import canonical_job_url
 from shared.schema.jd_schema import JobPosting
 
 
@@ -71,7 +72,7 @@ def complete_extracted_job(
 ) -> JobPosting:
     """화면에서 확정한 출처와 공고 파생값을 구조화 결과에 결합한다."""
 
-    url = str(posting.url or current_url).strip()
+    url = canonical_job_url(posting.url or current_url)
     completed = normalize_experience_minimum(posting).model_copy(
         update={
             "url": url or None,

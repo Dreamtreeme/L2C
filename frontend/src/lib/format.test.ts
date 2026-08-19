@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   collapseInvestigationRuns,
+  evidenceDocumentIds,
   extractCitationIds,
   formatDuration,
   hostLabel,
@@ -12,6 +13,31 @@ describe("format helpers", () => {
     expect(
       extractCitationIds("첫 공고 [job_id:12], 다시 [job_id:12], 다음 [job_id:27]"),
     ).toEqual([12, 27]);
+  });
+
+  it("구조화된 근거 식별자를 본문 표식보다 우선한다", () => {
+    expect(
+      evidenceDocumentIds(
+        {
+          lines: [],
+          citations: [
+            {
+              citation_id: 1,
+              document_id: 27,
+              field: "raw_text",
+              evidence_text: "근거",
+            },
+            {
+              citation_id: 2,
+              document_id: 27,
+              field: "raw_text",
+              evidence_text: "중복 근거",
+            },
+          ],
+        },
+        "이전 표식 [job_id:12]",
+      ),
+    ).toEqual([27]);
   });
 
   it("분 단위 실행시간을 표시한다", () => {

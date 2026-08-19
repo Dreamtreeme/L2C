@@ -1,25 +1,15 @@
 import {
   Activity,
-  CircleDot,
-  Clock3,
   PanelLeftClose,
   Plus,
   ScanSearch,
 } from "lucide-react";
 
-import {
-  collapseInvestigationRuns,
-  PHASE_LABELS,
-  relativeDate,
-  STATUS_LABELS,
-} from "../lib/format";
-import type { RunRecord } from "../types";
+import { Button } from "@/components/ui/button";
 
 interface AppSidebarProps {
   open: boolean;
   connectionState: "checking" | "online" | "offline";
-  recentRuns: RunRecord[];
-  activeRunId: string | null;
   disabled: boolean;
   onClose: () => void;
   onNewConversation: () => void;
@@ -29,15 +19,11 @@ interface AppSidebarProps {
 export function AppSidebar({
   open,
   connectionState,
-  recentRuns,
-  activeRunId,
   disabled,
   onClose,
   onNewConversation,
   onOpenOperations,
 }: AppSidebarProps) {
-  const investigations = collapseInvestigationRuns(recentRuns);
-
   return (
     <>
       <button
@@ -55,68 +41,42 @@ export function AppSidebar({
             <strong>L2C</strong>
             <span>채용 조사</span>
           </div>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-lg"
             className="icon-button sidebar-close"
             title="메뉴 닫기"
             aria-label="메뉴 닫기"
             onClick={onClose}
           >
             <PanelLeftClose size={18} />
-          </button>
+          </Button>
         </div>
 
-        <button
+        <Button
           type="button"
+          size="lg"
           className="new-investigation-button"
           disabled={disabled}
           onClick={onNewConversation}
         >
           <Plus size={17} />
           새 조사
-        </button>
+        </Button>
 
         <nav className="sidebar-nav" aria-label="주요 메뉴">
-          <button type="button" className="sidebar-nav-item is-active">
-            <CircleDot size={16} />
-            현재 조사
-          </button>
-          <button
+          <Button
             type="button"
-            className="sidebar-nav-item"
+            variant="ghost"
+            size="lg"
+            className="sidebar-nav-item w-full justify-start"
             onClick={onOpenOperations}
           >
             <Activity size={16} />
             실행 현황
-          </button>
+          </Button>
         </nav>
-
-        <section className="recent-section">
-          <div className="section-label">
-            <Clock3 size={14} />
-            최근 실행
-          </div>
-          <div className="recent-run-list">
-            {investigations.length === 0 ? (
-              <p className="sidebar-empty">실행 기록이 없습니다.</p>
-            ) : (
-              investigations.slice(0, 8).map((run) => (
-                <div
-                  className={`recent-run ${
-                    run.run_id === activeRunId ? "is-active" : ""
-                  }`}
-                  key={run.run_id}
-                >
-                  <p>{run.query || "제목 없는 조사"}</p>
-                  <span>
-                    {PHASE_LABELS[run.phase] || STATUS_LABELS[run.status]}
-                    {run.updated_at ? ` · ${relativeDate(run.updated_at)}` : ""}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
 
         <div className="connection-row">
           <span

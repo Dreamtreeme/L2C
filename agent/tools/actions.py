@@ -103,20 +103,36 @@ class ActionTools:
         return profile_dir
 
     def _normalize_browser_window(self, window: Any) -> bool:
-        """전용 브라우저의 실제 창 크기를 고정해 비전 좌표계를 안정화한다."""
+        """전용 브라우저를 현재 모니터 안에 배치해 전체 화면을 관찰 가능하게 한다."""
 
-        width, height = self._browser_window_dimensions()
-        if width <= 0 or height <= 0:
+        requested_width, requested_height = self._browser_window_dimensions()
+        if requested_width <= 0 or requested_height <= 0:
             return False
         try:
+            work_area = self.perception._monitor_work_area(window)
+            width = requested_width
+            height = requested_height
+            if work_area:
+                width = min(width, int(work_area["width"]))
+                height = min(height, int(work_area["height"]))
+
             if bool(getattr(window, "isMaximized", False)):
                 window.restore()
+            if work_area:
+                window.moveTo(int(work_area["left"]), int(work_area["top"]))
             window.resizeTo(width, height)
+            try:
+                window.activate()
+            except Exception as exc:
+                logger.debug("Browser activation after resize skipped", error=str(exc))
             self._sleep(get_settings().browser.resize_wait_sec)
             logger.info(
                 "Normalized browser window geometry",
-                requested_width=width,
-                requested_height=height,
+                requested_width=requested_width,
+                requested_height=requested_height,
+                fitted_width=width,
+                fitted_height=height,
+                work_area=work_area,
                 actual_width=int(getattr(window, "width", 0) or 0),
                 actual_height=int(getattr(window, "height", 0) or 0),
             )
@@ -439,7 +455,12 @@ class ActionTools:
 
         def _open():
             if self._bound_browser_window_exists():
-                return self._navigate_bound_browser(target_url)
+                result = self._navigate_bound_browser(target_url)
+                window = self._find_bound_browser_window()
+                if window:
+                    self._normalize_browser_window(window)
+                self._reset_browser_zoom()
+                return result
 
             result = self._open_url_in_new_window(target_url)
             self._reset_browser_zoom()

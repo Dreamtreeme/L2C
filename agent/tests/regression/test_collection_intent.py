@@ -11,7 +11,8 @@ from shared.schema.collection_intent import (
     [
         ("visible_all", 3, CollectionCountMode.EXPLICIT),
         ("visible_all", 0, CollectionCountMode.VISIBLE_ALL),
-        ("explicit", 0, CollectionCountMode.UNSPECIFIED),
+        ("explicit", 0, CollectionCountMode.VISIBLE_ALL),
+        ("unspecified", 0, CollectionCountMode.VISIBLE_ALL),
     ],
 )
 def test_collection_intent_aligns_count_mode(

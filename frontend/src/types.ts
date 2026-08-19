@@ -85,6 +85,7 @@ export interface RunMetrics {
   steps?: RunStepMetric[];
   llm?: {
     totals?: TokenUsage;
+    call_count?: number;
     cost?: {
       currency?: string;
       estimated_total?: number | null;
@@ -195,6 +196,7 @@ export interface ChatMessage {
   investigationId?: string;
   events?: RunEvent[];
   clarification?: ClarificationQuestion | null;
+  citationIds?: number[];
   metrics?: RunMetrics;
 }
 

@@ -1,4 +1,9 @@
-import type { RunPhase, RunRecord, RunStatus } from "../types";
+import type {
+  GroundedAnswer,
+  RunPhase,
+  RunRecord,
+  RunStatus,
+} from "../types";
 
 export const PHASE_LABELS: Record<RunPhase, string> = {
   received: "요청 접수",
@@ -83,6 +88,18 @@ export function relativeDate(value?: string): string {
 export function extractCitationIds(text: string): number[] {
   const matches = text.matchAll(/\[job_id:(\d+)\]/g);
   return [...new Set(Array.from(matches, (match) => Number(match[1])))];
+}
+
+export function evidenceDocumentIds(
+  groundedAnswer: GroundedAnswer | null | undefined,
+  fallbackText: string,
+): number[] {
+  const documentIds = groundedAnswer?.citations
+    .map((citation) => citation.document_id)
+    .filter((documentId) => Number.isInteger(documentId) && documentId > 0);
+  return documentIds?.length
+    ? [...new Set(documentIds)]
+    : extractCitationIds(fallbackText);
 }
 
 export function collapseInvestigationRuns(runs: RunRecord[]): RunRecord[] {

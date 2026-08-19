@@ -52,7 +52,7 @@ class CollectionIntent(BaseModel):
     )
     site: str = Field(default="", description="수집 대상 사이트 slug")
     search_keyword: str = Field(default="", description="사이트 검색창에 입력할 검색어")
-    count_mode: CollectionCountMode = CollectionCountMode.UNSPECIFIED
+    count_mode: CollectionCountMode = CollectionCountMode.VISIBLE_ALL
     target_count: int = Field(default=0, ge=0, le=100)
     filters: JobSearchFilters = Field(default_factory=JobSearchFilters)
     freshness_required: bool = Field(
@@ -81,8 +81,11 @@ class CollectionIntent(BaseModel):
     def align_count_mode(self) -> "CollectionIntent":
         if self.target_count > 0:
             self.count_mode = CollectionCountMode.EXPLICIT
-        elif self.count_mode == CollectionCountMode.EXPLICIT:
-            self.count_mode = CollectionCountMode.UNSPECIFIED
+        elif self.count_mode in {
+            CollectionCountMode.UNSPECIFIED,
+            CollectionCountMode.EXPLICIT,
+        }:
+            self.count_mode = CollectionCountMode.VISIBLE_ALL
         return self
 
 

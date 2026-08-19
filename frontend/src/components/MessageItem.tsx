@@ -1,7 +1,9 @@
 import DOMPurify from "dompurify";
-import { AlertCircle, Bot, Clock3, UserRound } from "lucide-react";
+import { AlertCircle, Bot, Clock3, FileText, UserRound } from "lucide-react";
 import { marked } from "marked";
 import { useMemo } from "react";
+
+import { Button } from "@/components/ui/button";
 
 import { formatDuration } from "../lib/format";
 import type {
@@ -16,7 +18,7 @@ interface MessageItemProps {
   message: ChatMessage;
   isRunning: boolean;
   pendingResume: PendingResume | null;
-  onSelectCitation: (jobId: number) => void;
+  onSelectCitation: (jobId: number, messageId: string) => void;
   onSubmitClarification: (
     answer: ClarificationAnswer,
     label: string,
@@ -84,6 +86,7 @@ export function MessageItem({
   }
 
   const isPending = message.state === "pending";
+  const hasInlineCitations = /\[job_id:\d+\]/.test(message.text);
   const clarificationActive =
     message.state === "waiting_input" &&
     pendingResume?.clarification?.question_id ===
@@ -108,8 +111,26 @@ export function MessageItem({
           <>
             <MarkdownContent
               text={message.text || "응답 내용이 없습니다."}
-              onSelectCitation={onSelectCitation}
+              onSelectCitation={(jobId) =>
+                onSelectCitation(jobId, message.id)
+              }
             />
+            {!hasInlineCitations && message.citationIds?.length ? (
+              <div className="message-source-list" aria-label="답변 출처">
+                {message.citationIds.map((jobId) => (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    key={jobId}
+                    onClick={() => onSelectCitation(jobId, message.id)}
+                  >
+                    <FileText size={13} />
+                    출처 {jobId}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
             {message.metrics?.duration_sec ? (
               <div className="message-metrics">
                 <Clock3 size={13} />

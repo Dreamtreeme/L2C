@@ -32,7 +32,10 @@ from agent.runtime.tool_schema import (
 )
 from agent.graph.worker_reasoning_prompt import build_reasoning_messages
 from agent.runtime.job_card_selector import select_job_cards
-from agent.runtime.job_card_queue import resolved_job_card_count
+from agent.runtime.job_card_queue import (
+    has_unresolved_job_card_queue,
+    resolved_job_card_count,
+)
 from agent.runtime.site_context import normalize_page_role
 from agent.runtime.transition_runtime import (
     detect_two_screen_transition_cycle,
@@ -96,9 +99,12 @@ def _reasoning_tool_names(state: WorkerState) -> tuple[str, ...]:
     target_count = target_count_from_state(state)
     resolved_count = _resolved_job_count(state)
     if (
-        target_count > 0
-        and resolved_count < target_count
-        and not _collection_scope_exhausted(state, resolved_count=resolved_count)
+        has_unresolved_job_card_queue(state)
+        or (
+            target_count > 0
+            and resolved_count < target_count
+            and not _collection_scope_exhausted(state, resolved_count=resolved_count)
+        )
     ):
         return tuple(name for name in tool_names if name != "finish_task")
     return tool_names

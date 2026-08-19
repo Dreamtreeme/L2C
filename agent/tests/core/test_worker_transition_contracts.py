@@ -5,6 +5,7 @@ from agent.graph import (
     worker_transition,
 )
 from agent.graph.workflow import route_after_execution, route_after_selection
+from agent.runtime.transition_runtime import detect_two_screen_transition_cycle
 from agent.tests.worker_test_support import (
     apply_update,
     node_runtime,
@@ -14,6 +15,42 @@ from agent.tests.worker_test_support import (
 from shared.schema.collection_intent import CollectionIntent
 from shared.schema.jd_schema import JobCapture
 from shared.schema.experience_rule_schema import ExpectedEffect
+from shared.schema.execution_record_schema import ObservedTransition
+
+
+def test_transition_cycle_ignores_actions_without_screen_change(monkeypatch):
+    signatures = {
+        "screen-a.png": {"phash": "0000000000000000", "size": [100, 100]},
+        "screen-b.png": {"phash": "ffffffffffffffff", "size": [100, 100]},
+    }
+    monkeypatch.setattr(
+        "agent.runtime.transition_runtime.compute_screen_phash_signature",
+        lambda path: signatures[path],
+    )
+
+    def transition(seq, screen, status, action):
+        return ObservedTransition.model_validate(
+            {
+                "seq": seq,
+                "before": {"observation_id": f"before-{seq}"},
+                "actions": [{"source_seq": seq, "action": action}],
+                "after": {"observation_id": f"after-{seq}"},
+                "evidence": {"status": status, "screenshot": screen},
+            }
+        )
+
+    result = detect_two_screen_transition_cycle(
+        [
+            transition(1, "screen-a.png", "ready", "click_marker"),
+            transition(2, "screen-a.png", "unknown", "click_marker"),
+            transition(3, "screen-b.png", "ready", "open_browser"),
+            transition(4, "screen-a.png", "ready", "click_marker"),
+            transition(5, "screen-a.png", "unknown", "click_marker"),
+            transition(6, "screen-b.png", "ready", "open_browser"),
+        ]
+    )
+
+    assert result["detected"] is True
 
 
 def test_completed_detail_uses_deterministic_results_navigation():

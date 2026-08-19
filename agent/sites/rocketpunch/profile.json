@@ -6,6 +6,7 @@
   "aliases": ["rocketpunch", "로켓펀치"],
   "domains": ["rocketpunch.com", "www.rocketpunch.com"],
   "base_url": "https://www.rocketpunch.com",
+  "job_identity_query_keys": ["selectedJobId"],
   "enabled": true,
   "page_guidance": {
     "home": {"instructions": ["왼쪽 통합검색을 사용하지 말고 사이드바의 '채용' 메뉴로 이동한다."]},

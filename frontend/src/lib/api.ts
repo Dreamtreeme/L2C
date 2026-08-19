@@ -108,40 +108,56 @@ export async function streamChat(
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let finished = false;
+  let receivedTerminalFrame = false;
 
-  while (!finished) {
-    const chunk = await reader.read();
-    buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-    const frames = buffer.split(/\r?\n\r?\n/);
-    buffer = frames.pop() ?? "";
+  const handleFrame = (frame: StreamFrame) => {
+    if (frame.type === "final" || frame.type === "error") {
+      receivedTerminalFrame = true;
+    }
+    return dispatchFrame(frame, handlers);
+  };
 
-    for (const rawFrame of frames) {
-      const data = rawFrame
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (!data) {
-        continue;
+  try {
+    while (!finished) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() ?? "";
+
+      for (const rawFrame of frames) {
+        const data = rawFrame
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (!data) {
+          continue;
+        }
+        finished = handleFrame(parseStreamData(data));
+        if (finished) {
+          break;
+        }
       }
-      finished = dispatchFrame(parseStreamData(data), handlers);
-      if (finished) {
+
+      if (chunk.done) {
         break;
       }
     }
 
-    if (chunk.done) {
-      break;
+    const tail = buffer
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (tail && !finished) {
+      handleFrame(parseStreamData(tail));
     }
+  } finally {
+    reader.releaseLock();
   }
 
-  const tail = buffer
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart())
-    .join("\n");
-  if (tail && !finished) {
-    dispatchFrame(parseStreamData(tail), handlers);
+  if (!receivedTerminalFrame) {
+    throw new Error("최종 결과를 받기 전에 응답 연결이 종료됐습니다.");
   }
 }
 
