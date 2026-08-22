@@ -1,8 +1,11 @@
 import sqlite3
 
+import pytest
+
 from benchmark.run_realtime_e2e import (
     _apply_execution_mode_environment,
     _experience_guided_preconditions,
+    _stored_job_snapshots,
 )
 from benchmark.quality_eval import evaluate_expected_source_urls
 from benchmark.run_regression_matrix import (
@@ -15,11 +18,49 @@ from benchmark.run_regression_matrix import (
     _experience_reuse_effectiveness,
     _paired_autonomous_failed,
     _promote_autonomous_candidate,
+    _require_new_test_database,
     _scenario_environment,
     _scenario_pair_key,
     _scenario_workload_key,
     _target_contract_passed,
 )
+from shared.db.database import Database
+from shared.schema.jd_schema import JobCollectionEvidence, JobPosting
+
+
+def test_e2e_summary_preserves_stored_job_fields_before_database_reset(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "jobs.db"
+    job_id = Database(db_path).upsert(
+        JobPosting(
+            company_name="테스트 회사",
+            position="AI 엔지니어",
+            url="https://example.com/jobs/1",
+            main_tasks=["AI 에이전트 개발"],
+            requirements=["Python 경험"],
+            tech_stack=["Python"],
+            raw_ocr_text="주요 업무 AI 에이전트 개발 자격요건 Python 경험",
+        ),
+        evidence=JobCollectionEvidence(screenshot_path="screen.png"),
+    )
+
+    snapshots = _stored_job_snapshots(
+        {"document_ids": [job_id]},
+        db_path=db_path,
+    )
+
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot["company_name"] == "테스트 회사"
+    assert snapshot["position"] == "AI 엔지니어"
+    assert snapshot["main_tasks"] == ["AI 에이전트 개발"]
+    assert snapshot["requirements"] == ["Python 경험"]
+    assert snapshot["raw_ocr_text"] == (
+        "주요 업무 AI 에이전트 개발 자격요건 Python 경험"
+    )
+    assert snapshot["screenshot_path"] == "screen.png"
+    assert snapshot["evidence_hash"]
 
 
 def test_expected_target_contract_requires_each_fixed_url_once() -> None:
@@ -300,6 +341,18 @@ def test_collection_run_reset_keeps_recipes_and_removes_jobs(
         assert connection.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 1
 
 
+def test_collection_matrix_requires_a_new_empty_database_path(tmp_path) -> None:
+    new_db_path = tmp_path / "new" / "regression.db"
+    _require_new_test_database(new_db_path)
+    assert new_db_path.exists() is False
+    assert new_db_path.parent.is_dir()
+
+    existing_db_path = tmp_path / "existing.db"
+    existing_db_path.touch()
+    with pytest.raises(SystemExit, match="이미 존재합니다"):
+        _require_new_test_database(existing_db_path)
+
+
 def test_scenario_workload_key_matches_both_execution_modes() -> None:
     autonomous = {
         "site": "Wanted",
@@ -509,7 +562,7 @@ def test_autonomous_promotion_uses_worker_retry_and_persists_attempts(
             "promoted": True,
             "saved_count": 1,
             "promoted_action_count": 1,
-            "pruned_transitions": [],
+            "pruned_nodes": [],
         }
         RecipeCandidateStore(db_path).update_status(
             value,

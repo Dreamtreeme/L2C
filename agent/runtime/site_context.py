@@ -182,7 +182,10 @@ def site_runtime_guidance(url: str, page_role: str) -> str:
     if not guidance:
         return ""
     display_name = profile.display_name or profile.slug
-    parts = [f"현재 사이트 안내: {display_name} / {role}"]
+    parts = [
+        f"현재 사이트 참고: {display_name} / 추정 화면 역할 {role}",
+        "- 화면 역할은 URL과 OCR 단서로 계산한 참고값입니다. 실제 캡처와 마커를 우선해 판단하십시오.",
+    ]
     instructions = [str(item).strip() for item in guidance.get("instructions", []) if str(item).strip()]
     reading_targets = [str(item).strip() for item in guidance.get("reading_targets", []) if str(item).strip()]
     navigation_notes = [str(item).strip() for item in guidance.get("navigation_notes", []) if str(item).strip()]

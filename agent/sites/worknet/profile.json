@@ -22,8 +22,9 @@
       "url_patterns": ["/empDetailAuthView\\.do"],
       "visible_cues": ["모집요강", "직무내용", "근무조건", "전형방법"],
       "minimum_visible_cues": 2,
-      "instructions": ["공공 채용 상세의 직무내용과 근무조건 영역을 모두 누적해서 읽는다."],
+      "instructions": ["접힌 직무내용은 화면에 보이는 펼치기 컨트롤을 연 뒤 근무조건까지 누적해서 읽는다."],
       "reading_targets": ["회사명", "직무명", "직무내용", "경력", "학력", "고용형태", "근무지", "임금", "마감일"],
+      "reveal_controls": ["더보기"],
       "navigation_notes": ["워크넷과 고용24의 공식 도메인 이동은 같은 흐름으로 취급한다."]
     }
   },

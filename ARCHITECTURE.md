@@ -23,14 +23,14 @@ flowchart TD
     WG --> WEB[브라우저 화면과 물리 입력]
     WG --> REVIEW[JobReview: 계속 읽기·완료·자료 부족·잘못된 대상]
     REVIEW --> BATCH[CollectionBatch: 검토 완료 CollectedJob과 화면 근거]
-    BATCH --> POSTPROCESS[postprocess 노드: 검토 결과 전달]
-    POSTPROCESS --> STORE[persist 노드: 공고 UPSERT]
+    BATCH --> STORE[persist 노드: 공고 UPSERT와 검색 사전 연결]
     STORE --> DB
     DB[(SQLite)] --> DBQ
     STORE --> EXPERIENCE[실행 기록과 레시피 후보 저장]
     EXPERIENCE --> CANDIDATE[승격 후보 recorded 또는 pending_review]
     CANDIDATE --> PROMOTION[별도 승격 작업자]
-    PROMOTION --> RECIPE[활성 Reflex Recipe]
+    PROMOTION --> EXECUTION_GRAPH[목적별 실행 그래프 구성]
+    EXECUTION_GRAPH --> RECIPE[Critic 가지치기와 활성 Reflex Recipe]
     ANSWER --> U
 ```
 
@@ -59,12 +59,13 @@ flowchart TD
     TRANSITION --> SELECT
     OCR[SoM 및 OCR] --> TRANSITION
     SELECT -->|OCR 필요| OCR
-    SELECT -->|카드 큐 또는 상세 정책| EXECUTION[행동 또는 입력·제출 묶음 실행]
+    SELECT -->|기존 카드 큐 또는 상세 정책| EXECUTION[행동 또는 입력·제출 묶음 실행]
     SELECT -->|재생 후보| REFLEX[Reflex ROI 검증]
     SELECT -->|의미 판단 필요| REASON[Reasoning]
     REFLEX -->|ROI pHash 일치와 저장 좌표 복원| EXECUTION
     REFLEX -->|불일치| REASON
-    REASON --> EXECUTION
+    REASON -->|검색 화면: 카드 큐 생성| EXECUTION
+    REASON -->|그 밖의 화면: 다음 행동 선택| EXECUTION
     EXECUTION -->|화면 변경| CAPTURE
     EXECUTION -->|같은 화면에서 재판단| REASON
     EXECUTION -->|후속 결정론적 행동| EXECUTION
@@ -78,11 +79,11 @@ flowchart TD
 - `Loading Wait`: 저해상도 OpenCV 프레임을 메모리에서 비교해 화면 변화 시작, 렌더링 안정화와 회색 저정보 화면 해소를 기다립니다. 변화 뒤 일정 시간 추가 움직임이 없는 화면만 준비 완료로 판정하고 최종 화면만 파일로 저장합니다.
 - `OCR`: `OcrEngine`이 `PaddleOcr` 문자 검출과 `OmniParser` 아이콘 검출 결과를 합쳐 마커를 만듭니다. Paddle 작업자는 작업 동안 재사용합니다.
 - `pHash`: 저장된 화면 문맥·ROI 서명과 현재 화면을 비교해 카드 큐 복귀와 Reflex 대상 영역의 동일성을 검증합니다.
-- `Job Card Queue`: 검색 결과에서 LLM이 한 번 고른 공고 카드 좌표비율을 작업 큐로 보관합니다. 상세 수집 후 뒤로가면 목록 화면 pHash를 확인하고 다음 카드를 바로 클릭합니다.
+- `Job Card Queue`: 검색 결과 화면은 Reasoning이 한 번 해석해 관련 공고를 큐에 저장합니다. Selection은 의미를 다시 판단하지 않고 현재 OCR에서 큐의 다음 카드를 찾아 클릭합니다.
 - `Detail Runtime`: 상세 OCR 마커를 읽기용 줄로 합치고 여러 화면의 본문을 누적합니다. 물리 도구는 읽은 필드나 완료 여부를 보고하지 않습니다.
-- `JobReview`: 작업자 그래프가 누적 OCR, 현재 URL과 마지막 화면 전환을 `JobDraft`로 검토합니다. `needs_more`는 같은 상세를 계속 읽고, `complete`만 `JobCapture`와 `CollectedJob`을 만들며, `source_incomplete`와 `invalid_target`은 현재 카드를 제외합니다. 검색 목록의 카드 메타데이터는 사실 근거로 사용하지 않습니다.
+- `JobReview`: 작업자 그래프가 누적 OCR, 현재 URL, 마지막 화면 전환과 대표 상세 스크린샷 한 장을 `JobDraft`로 검토합니다. 스크린샷은 OCR 줄에서 섞인 본문과 사이드바의 공간 관계를 확인하는 근거입니다. `needs_more`는 같은 상세를 계속 읽고, `complete`만 `JobCapture`와 `CollectedJob`을 만들며, `source_incomplete`와 `invalid_target`은 현재 카드를 제외합니다. 검색 목록의 카드 메타데이터는 사실 근거로 사용하지 않습니다.
 - `Reflex Runtime`: `site + task_category`로 활성 레시피 후보를 조회하고 URL 범위와 화면 역할을 먼저 거른 뒤 ROI pHash가 맞으면 저장된 비율 좌표를 현재 화면에 복원해 경로를 재생합니다.
-- `Reasoning`: 큐, 상세 정책, Reflex로 고정할 수 없는 현재 화면의 의미 판단만 수행합니다.
+- `Reasoning`: 검색 화면의 관련 카드 선택을 포함해 큐, 상세 정책, Reflex로 고정할 수 없는 현재 화면의 의미 판단을 한 곳에서 수행합니다.
 - `Execution`: `click_marker`, `type_in_marker`, `scroll`, `press_key`, `go_back`을 물리 입력으로 실행합니다.
 
 ## 계층과 책임
@@ -94,13 +95,12 @@ flowchart TD
 | 애플리케이션 | `agent/application/chat_service.py`, `evidence_service.py`, `conversation_context_service.py` | 실행 계측·응답 변환과 그래프가 호출하는 DB·대화 어댑터 |
 | 수집 요청 | `agent/application/collection_request_builder.py` | 사이트 프로필 선택, 확정된 수집 의도로 작업자 목표 생성 |
 | 공고 검토 | `agent/application/job_review_service.py`, `agent/graph/worker_review.py` | 누적 OCR을 구조화하고 필수 필드·날짜 조건을 판정해 작업자 그래프 분기 |
-| 수집 후처리 | `agent/application/collection_postprocessing.py` | 작업자가 검토한 `CollectedJob`과 제외 사유를 조사 그래프로 전달 |
-| 공고 저장 | `agent/application/collection_storage.py` | 후처리된 공고 UPSERT와 검색 사전 연결 결과 기록 |
+| 공고 저장 | `agent/application/collection_storage.py` | `CollectionBatch`의 공고 UPSERT와 검색 사전 연결 결과 기록 |
 | 경험 기록 | `agent/application/collection_experience.py` | 작업자 제출물 저장과 레시피 후보 등록 |
 | 구성·수명주기 | `agent/bootstrap.py` | 체크포인터·서비스·그래프·비전 런타임·승격 작업자의 생성과 종료 |
 | 비전 런타임 | `agent/runtime/vision_worker_runtime.py` | OCR·Perception·ActionTools·판단 모델·작업자 그래프의 지연 생성과 실행 잠금 |
 | 작업자 실행 | `agent/application/worker_execution_service.py` | 수집 의도 정규화, 작업자 상태·제출물 생성, 화면 잠금, 그래프 실행과 브라우저 정리 |
-| 비동기 승격 | `agent/application/recipe_promotion_worker.py`, `recipe_candidate_review_service.py` | 후보 DB 등록, Critic 검토·승격 작업자 수명주기 |
+| 비동기 승격 | `agent/application/recipe_promotion_worker.py`, `recipe_execution_graph_service.py`, `recipe_candidate_review_service.py` | 원본 로그 그래프 구성, Critic 가지치기와 승격 작업자 수명주기 |
 | 지휘자 그래프 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 주입된 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
 | 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 문맥을 반영한 요청 해석, 근거 판정, 수집·저장, 재검사와 답변 |
 | 직무 확인 | `agent/application/occupation_clarification_service.py` | 직무 사전 후보 질문 생성과 사용자 승인 별칭 기록 |
@@ -113,13 +113,14 @@ flowchart TD
 | OCR | `agent/tools/ocr_engine.py`, `paddle_ocr.py`, `omni_parser.py` | 문자·아이콘 검출과 마커 합성 |
 | pHash | `agent/vision/screen_signature.py` | 저장 화면·ROI 서명 생성과 유사도 비교 |
 | 화면·입력 | `agent/tools/perception.py`, `actions.py` | 화면 캡처 진입점과 물리 입력 |
-| 경험 메모리 | `agent/recipe/` | 행동 묶음 전이 기록, Critic 가지치기, 활성 경로 저장·매칭·재생 |
+| 경험 메모리 | `agent/recipe/` | 원본 전이 저장, 의미 노드와 물리 단계 저장·매칭·재생 |
 
 ## 상태와 행동 계약
 
 - 모든 작업자 진입점은 `create_worker_state()`로 독립된 초기 상태를 만듭니다.
-- `WorkerState`는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `lifecycle` 구역으로 구성됩니다. 각 구역의 reducer는 노드가 반환한 부분 갱신을 기존 구역에 병합합니다.
-- 상태 구역은 책임 경계입니다. 요청 계약은 실행 중 바뀌지 않고, 화면 관찰은 관찰 노드, 행동 선택은 선택·Reflex·추론 노드, 행동 결과와 전환 요청은 실행 노드가 갱신합니다.
+- `WorkerState`는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `progress`, `lifecycle` 구역으로 구성됩니다. 각 구역의 reducer는 노드가 반환한 부분 갱신을 기존 구역에 병합합니다.
+- 상태 구역은 책임 경계입니다. 요청 계약은 실행 중 바뀌지 않고, 화면 관찰과 현재 진행 단계는 관찰 노드, 행동 선택은 Selection·Reflex·Reasoning, 행동 결과와 전환 요청은 Execution이 갱신합니다.
+- 검색 결과의 의미 판단과 카드 큐 생성은 Reasoning이 소유합니다. Selection은 이미 생성된 큐의 실행 순서, 상세 완료 후 목록 복귀와 중복 건너뛰기만 소유합니다.
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `decision.pending_action: ActionRequest`, 실행 결과는 `transition.action_events`에 순서대로 기록합니다.
 - `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
@@ -151,7 +152,7 @@ flowchart TD
 - OCR subprocess는 요청 횟수로 재시작하지 않으며 실제 timeout이나 프로세스 실패 때만 한 번 복구합니다.
 - 무거운 화면 모델과 GUI 도구는 수집이 실제로 호출될 때 지연 초기화합니다.
 - DB 근거만으로 답할 수 있는 요청은 비전 런타임을 초기화하지 않습니다.
-- 자동승격은 `recipe_candidates` SQLite 상태를 영속 대기열로 사용합니다. API 요청은 `pending_review` 등록 후 답변을 계속하고, FastAPI 수명주기의 단일 작업자가 `reviewing`으로 선점해 Critic을 실행합니다.
+- 자동승격은 `recipe_candidates` SQLite 상태를 영속 대기열로 사용합니다. API 요청은 `pending_review` 등록 후 답변을 계속하고, FastAPI 수명주기의 단일 작업자가 `reviewing`으로 선점해 원본 실행 그래프 구성, Critic의 노드 선택과 경험 규칙 컴파일을 순서대로 실행합니다. 그래프 노드는 의미 경계로 보존하고 노드 내부의 원본 화면 전이는 별도 물리 단계로 저장합니다.
 - 백엔드가 중단되면 처리 중이던 후보는 다음 시작에서 `pending_review`로 복구됩니다. Critic 전송 오류는 재시도하고 한도를 넘기면 `review_failed`로 남깁니다. 내용 판정은 `accepted` 또는 `rejected`로 끝납니다.
 
 ## Classic 경로

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-08-20",
+  "database_path": "data/jobs.db",
+  "commit_sha": "04a2783ce01e394f2df41b4099c0db939a0636c3",
+  "population": {
+    "stored_jobs": 152,
+    "jobs_with_screenshot": 61,
+    "sample_size": 30
+  },
+  "sampling": {
+    "method": "사이트별 층화 무작위 표본",
+    "seed": 20260820,
+    "eligible_population": "screenshot_path와 raw_ocr_text가 모두 저장된 공고",
+    "site_quotas": {
+      "Wanted": 10,
+      "Saramin": 6,
+      "JobKorea": 5,
+      "RocketPunch": 5,
+      "Work24": 4
+    }
+  },
+  "review_contract": {
+    "company_name": "스크린샷, 브라우저 탭 또는 OCR 근거에서 목표 회사와 일치",
+    "job_title": "경미한 OCR 오탈자를 허용하되 직무 의미와 목표 공고가 일치",
+    "responsibilities": "저장된 주요 업무가 OCR의 목표 공고 업무 섹션에 근거하며 중요한 항목을 누락하거나 다른 섹션과 뒤바꾸지 않음",
+    "requirements": "저장된 자격요건이 OCR의 목표 공고 자격 섹션에 근거하며 중요한 항목을 누락하거나 다른 섹션과 뒤바꾸지 않음",
+    "strict_job_pass": "네 필드가 모두 pass"
+  },
+  "summary": {
+    "company_name": {"passed": 30, "total": 30, "rate": 1.0},
+    "job_title": {"passed": 30, "total": 30, "rate": 1.0},
+    "responsibilities": {"passed": 24, "total": 30, "rate": 0.8},
+    "requirements": {"passed": 26, "total": 30, "rate": 0.866667},
+    "strict_job": {"passed": 24, "total": 30, "rate": 0.8},
+    "strict_job_by_site": {
+      "Wanted": {"passed": 9, "total": 10, "rate": 0.9},
+      "Saramin": {"passed": 5, "total": 6, "rate": 0.833333},
+      "JobKorea": {"passed": 5, "total": 5, "rate": 1.0},
+      "RocketPunch": {"passed": 5, "total": 5, "rate": 1.0},
+      "Work24": {"passed": 0, "total": 4, "rate": 0.0}
+    }
+  },
+  "records": [
+    {"id": 114, "site": "Wanted", "company": "오토메타", "title": "AI Agent Engineer (AI 에이전트 엔지니어)", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "업무와 자격 섹션이 구조화 결과를 직접 뒷받침함"},
+    {"id": 119, "site": "Wanted", "company": "지니파이", "title": "AI에이전트 전문가", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "목표 공고의 업무와 자격을 섹션별로 보존함"},
+    {"id": 120, "site": "Wanted", "company": "에이엑스", "title": "AI 에이전트 개발자(백엔드 + 데이터 엔지니어링)", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "복합 직무의 업무와 자격을 구분해 저장함"},
+    {"id": 121, "site": "Wanted", "company": "씨제이올리브영(CJ올리브영)", "title": "SRE", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "회사, 직무, 업무, 자격이 화면 근거와 일치함"},
+    {"id": 122, "site": "Wanted", "company": "엘리스", "title": "AI엔지니어", "company_name": "pass", "job_title": "pass", "responsibilities": "fail", "requirements": "pass", "note": "주요 업무를 세 개의 상위 제목으로만 저장해 멀티에이전트·RAG, MLOps, 고객사 배포, AX 교육 등 실제 하위 업무를 누락함"},
+    {"id": 125, "site": "Wanted", "company": "네오와이즈", "title": "AI엔지니어", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "업무와 자격 섹션을 정확히 분리함"},
+    {"id": 126, "site": "Wanted", "company": "딥아이", "title": "AI엔지니어", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "화면 근거와 구조화 필드가 일치함"},
+    {"id": 128, "site": "Wanted", "company": "데이터드리븐", "title": "AI엔지니어", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "화면 근거와 구조화 필드가 일치함"},
+    {"id": 147, "site": "Wanted", "company": "포디(FODI)", "title": "iOS 개발자", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "OCR에 Windows Defender 오버레이 문구가 섞였지만 구조화 결과에서는 제거됨"},
+    {"id": 151, "site": "Wanted", "company": "아타드(ATAD)", "title": "클라우드엔지니어", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "화면 근거와 구조화 필드가 일치함"},
+
+    {"id": 14, "site": "Saramin", "company": "(주)솔비트", "title": "[경력직] AI개발자 모집합니다 머신러닝 엔지니어", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "제목의 경미한 OCR 탈락은 의미 일치로 판정하고 본문 필드는 화면과 일치함"},
+    {"id": 17, "site": "Saramin", "company": "(주)코너스톤앤컴퍼니", "title": "[CORNERSTONE] AI Engineer(ML)", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "업무와 자격 섹션이 구조화 결과를 뒷받침함"},
+    {"id": 22, "site": "Saramin", "company": "하마랩(주)", "title": "AI영상분석 백엔드 엔지니어", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "경미한 OCR 오탈자 외에 의미 손실이 없음"},
+    {"id": 129, "site": "Saramin", "company": "위프로커넥티드서비시즈인크", "title": "AI Architect - Agentic AI", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "What You Need와 형식 자격 조건을 함께 보존함"},
+    {"id": 130, "site": "Saramin", "company": "(주)브릭", "title": "AI Agent 개발자", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "목표 공고의 업무와 자격을 정확히 분리함"},
+    {"id": 131, "site": "Saramin", "company": "모드니사회적협동조합", "title": "긴급) 유닉스 분당 AI 개발자(Python / LangGraph) 고급", "company_name": "pass", "job_title": "pass", "responsibilities": "fail", "requirements": "fail", "note": "본문이 빈 화면으로 캡처됐고 저장된 업무·자격 배열도 비어 있음. 회사와 제목만 브라우저 탭에서 확인됨"},
+
+    {"id": 5, "site": "JobKorea", "company": "뉴셀렉트", "title": "ERP시스템 백엔드 개발자", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "업무와 자격 섹션이 구조화 결과를 뒷받침함"},
+    {"id": 8, "site": "JobKorea", "company": "카카오뱅크", "title": "블록체인 서비스 백엔드 개발자", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "업무와 자격 섹션이 구조화 결과를 뒷받침함"},
+    {"id": 133, "site": "JobKorea", "company": "푸른IT", "title": "분당 S반도체 대기업 AI 에이전트 개발 (고급 Python / LangGraph) 즉시", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "파견형 공고의 업무와 자격을 원문대로 보존함"},
+    {"id": 134, "site": "JobKorea", "company": "엔에이치엔두레이(주)", "title": "백엔드개발", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "업무와 자격 섹션이 구조화 결과를 뒷받침함"},
+    {"id": 136, "site": "JobKorea", "company": "삼정회계법인", "title": "[삼정KPMG] Audit Innovation팀 Senior Full-stack & AI Engineer 개발자", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "복합 직무의 업무와 자격을 구분해 저장함"},
+
+    {"id": 12, "site": "RocketPunch", "company": "피노키오랩", "title": "백엔드 개발자 Backend Engineer FastAPI", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "업무와 자격 섹션이 구조화 결과를 뒷받침함"},
+    {"id": 143, "site": "RocketPunch", "company": "블리츠다이나믹스", "title": "데이터 엔지니어 인턴 모집", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "주변 추천 공고가 OCR에 섞였지만 목표 공고 섹션만 구조화함"},
+    {"id": 144, "site": "RocketPunch", "company": "팀카이", "title": "FDE(Forward-Deployed 엔지니어) 인턴", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "주변 카드가 섞인 긴 OCR에서 목표 업무와 자격을 정확히 추출함"},
+    {"id": 145, "site": "RocketPunch", "company": "에이아이카데미주식회사", "title": "LLM-AI Agent Engineer", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "주변 공고 노이즈에도 GPTalk 업무와 지원 자격을 정확히 분리함"},
+    {"id": 146, "site": "RocketPunch", "company": "주식회사케이엠컬렉티브", "title": "디지털에디터", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "화면 근거와 구조화 필드가 일치함"},
+
+    {"id": 112, "site": "Work24", "company": "(주)아크라인소프트", "title": "데이터 분석가(빅데이터 분석가)", "company_name": "pass", "job_title": "pass", "responsibilities": "fail", "requirements": "pass", "note": "직무내용이 렌더링되지 않았는데 제목 설명을 주요 업무로 대신 저장함. 경력과 학력 자격은 정확함"},
+    {"id": 137, "site": "Work24", "company": "몬드리안에이아이", "title": "AI/LLM Agent Engineer", "company_name": "pass", "job_title": "pass", "responsibilities": "fail", "requirements": "fail", "note": "활용 경험 목록 일부를 주요 업무로 잘못 분류하고 같은 자격 목록의 나머지를 누락함"},
+    {"id": 138, "site": "Work24", "company": "몬드리안에이아이", "title": "AI Engineer (LLM Agent / ML)", "company_name": "pass", "job_title": "pass", "responsibilities": "fail", "requirements": "fail", "note": "접힌 직무 본문을 열지 못해 복리후생만 수집했고 업무·자격 배열이 비어 있음"},
+    {"id": 139, "site": "Work24", "company": "타인에이아이", "title": "AI-Native Developer", "company_name": "pass", "job_title": "pass", "responsibilities": "fail", "requirements": "fail", "note": "포트폴리오 제출 항목을 주요 업무로 잘못 분류했고 실제 업무 본문을 수집하지 못함"}
+  ]
+}

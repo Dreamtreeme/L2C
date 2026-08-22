@@ -130,6 +130,10 @@ def _metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "persisted_count": int(quality.get("persisted_count") or 0),
         "observed_existing_count": int(quality.get("observed_existing_count") or 0),
         "resolved_count": int(quality.get("resolved_count") or 0),
+        "execution_status": str(quality.get("execution_status") or ""),
+        "data_status": str(quality.get("data_status") or ""),
+        "fulfillment_status": str(quality.get("fulfillment_status") or ""),
+        "completion_reason": str(quality.get("completion_reason") or ""),
         "execution_time_sec": payload.get("execution_time_sec"),
         "ocr_count": len(ocr),
         "ocr_time_sec": round(sum(ocr), 6),
@@ -248,6 +252,17 @@ def _clear_jobs_for_collection_run(db_path: Path) -> int:
         connection.execute("DELETE FROM jobs")
         connection.commit()
     return removed_count
+
+
+def _require_new_test_database(db_path: Path) -> None:
+    """수집 E2E가 기존 DB 상태를 이어받지 않도록 새 경로만 허용한다."""
+
+    if db_path.exists():
+        raise SystemExit(
+            "수집 E2E DB가 이미 존재합니다. 기존 DB를 재사용하지 말고 "
+            f"새 테스트 경로를 지정하십시오: {db_path}"
+        )
+    db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _scenario_workload_key(scenario: dict[str, Any]) -> str:
@@ -716,6 +731,7 @@ def main() -> int:
         raise SystemExit("이 평가 행렬은 깨끗한 작업 트리에서만 실행할 수 있습니다.")
 
     output_dir.mkdir(parents=True, exist_ok=False)
+    _require_new_test_database(db_path)
     results, exit_code = _run_scenario_matrix(
         scenarios,
         commands,
@@ -727,6 +743,7 @@ def main() -> int:
         "schema_version": 3,
         "matrix": str(matrix_path),
         "db_path": str(db_path),
+        "database_started_empty": True,
         "created_at": datetime.now().astimezone().isoformat(),
         "git": git_contract,
         "runtime": _runtime_execution_contract(),

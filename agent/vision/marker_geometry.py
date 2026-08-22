@@ -78,15 +78,22 @@ def center_ratio_from_bbox(
     ratios = bbox_to_ratio(bbox, size)
     if len(ratios) != 4:
         return []
-    return [round((ratios[0] + ratios[2]) / 2, 4), round((ratios[1] + ratios[3]) / 2, 4)]
+    return [
+        round((ratios[0] + ratios[2]) / 2, 4),
+        round((ratios[1] + ratios[3]) / 2, 4),
+    ]
 
 
-def marker_center_ratio(marker: dict[str, Any], size: list[int] | tuple[int, int]) -> list[float]:
+def marker_center_ratio(
+    marker: dict[str, Any], size: list[int] | tuple[int, int]
+) -> list[float]:
     """마커 중심점을 화면 크기 대비 비율 좌표로 반환한다."""
     return center_ratio_from_bbox(marker_bbox(marker), size)
 
 
-def bbox_from_ratio(bbox_ratio: list[float], size: list[int] | tuple[int, int]) -> list[int]:
+def bbox_from_ratio(
+    bbox_ratio: list[float], size: list[int] | tuple[int, int]
+) -> list[int]:
     """화면 비율 bbox를 픽셀 bbox로 변환한다."""
     if not isinstance(bbox_ratio, (list, tuple)) or len(bbox_ratio) != 4:
         return [0, 0, 0, 0]
@@ -126,7 +133,9 @@ def rect_to_ratio(rect: list[float], size: list[int] | tuple[int, int]) -> list[
     ]
 
 
-def ratio_rect_to_pixels(rect_ratio: list[float], size: list[int] | tuple[int, int]) -> list[int]:
+def ratio_rect_to_pixels(
+    rect_ratio: list[float], size: list[int] | tuple[int, int]
+) -> list[int]:
     """화면 비율 사각형을 픽셀 사각형으로 변환한다."""
     if not isinstance(rect_ratio, (list, tuple)) or len(rect_ratio) != 4:
         return [0, 0, 0, 0]
@@ -169,8 +178,14 @@ def roi_rect_around_bbox(
         return []
     box_w = max(1.0, x2 - x1)
     box_h = max(1.0, y2 - y1)
-    crop_w = min(width * max_width_ratio, max(box_w * (1 + margin_scale * 2), width * min_width_ratio))
-    crop_h = min(height * max_height_ratio, max(box_h * (1 + margin_scale * 2), height * min_height_ratio))
+    crop_w = min(
+        width * max_width_ratio,
+        max(box_w * (1 + margin_scale * 2), width * min_width_ratio),
+    )
+    crop_h = min(
+        height * max_height_ratio,
+        max(box_h * (1 + margin_scale * 2), height * min_height_ratio),
+    )
     cx = (x1 + x2) / 2
     cy = (y1 + y2) / 2
 

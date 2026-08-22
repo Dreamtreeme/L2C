@@ -7,6 +7,7 @@ from collections import Counter
 from typing import Any
 
 from shared.schema.agent_contract import DEFAULT_JOB_COLLECTION_FIELDS
+from shared.schema.collection_intent import CollectionIntent, JobSearchFilters
 from shared.schema.investigation_schema import (
     EvidencePlan,
     EvidenceRequirement,
@@ -15,6 +16,14 @@ from shared.schema.investigation_schema import (
     InvestigationPlanStep,
     InvestigationRequest,
 )
+
+
+def _realtime_sites(collection_capabilities: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(item.get("tool_name") or "").split(":", 1)[1]
+        for item in collection_capabilities
+        if str(item.get("tool_name") or "").startswith("realtime_scraping:")
+    }
 
 
 def build_database_lookup_evidence_plan(
@@ -124,11 +133,7 @@ def select_collection_steps(
 ) -> list[InvestigationPlanStep]:
     """LLM 계획에서 실제 제공되는 사이트와 근거를 가리키는 단계만 남긴다."""
 
-    allowed_sites = {
-        str(item.get("tool_name") or "").split(":", 1)[1]
-        for item in collection_capabilities
-        if str(item.get("tool_name") or "").startswith("realtime_scraping:")
-    }
+    allowed_sites = _realtime_sites(collection_capabilities)
     requirement_ids = {item.requirement_id for item in evidence_requirements}
     normalized: list[InvestigationPlanStep] = []
     signatures: set[str] = set()
@@ -177,6 +182,94 @@ def select_collection_steps(
         if len(normalized) >= maximum_steps:
             break
     return normalized
+
+
+def build_single_site_collection_step(
+    investigation: InvestigationRequest,
+    evidence_requirements: list[EvidenceRequirement],
+    collection_capabilities: list[dict[str, Any]],
+) -> InvestigationPlanStep | None:
+    """사이트와 검색어가 하나로 확정된 근거를 실행 단계로 옮긴다."""
+
+    if len(evidence_requirements) != 1:
+        return None
+    requirement = evidence_requirements[0]
+    scope = requirement.scope
+    allowed_sites = _realtime_sites(collection_capabilities)
+    requested_sites = list(
+        dict.fromkeys(scope.sites or investigation.constraints.sites)
+    )
+    candidate_sites = (
+        [site for site in requested_sites if site in allowed_sites]
+        if requested_sites
+        else sorted(allowed_sites)
+    )
+    if len(candidate_sites) != 1:
+        return None
+    search_keyword = scope.collection_search_term.strip()
+    if not search_keyword:
+        return None
+
+    intent = CollectionIntent(
+        original_query=investigation.original_query,
+        site=candidate_sites[0],
+        search_keyword=search_keyword,
+        count_mode=scope.count_mode,
+        target_count=scope.target_count,
+        filters=JobSearchFilters(
+            posted_from=scope.posted_from,
+            posted_to=scope.posted_to,
+            experience=scope.experience,
+            location=scope.location,
+            employment_type=scope.employment_type,
+        ),
+        freshness_required=bool(
+            scope.posted_from
+            or scope.posted_to
+            or any(field.value == "posted_at" for field in requirement.required_fields)
+        ),
+        purpose=investigation.purpose.value,
+        required_fields=requirement.required_fields,
+    )
+    return InvestigationPlanStep(
+        step_id=f"collect:{requirement.requirement_id}:{candidate_sites[0]}",
+        tool_name="realtime_scraping",
+        arguments=intent,
+        purpose=requirement.reason or requirement.description,
+        expected_evidence=[requirement.requirement_id],
+    )
+
+
+def collection_step_signature(step: InvestigationPlanStep) -> str:
+    """도구 입력과 기대 근거가 같은 수집 단계를 식별한다."""
+
+    return json.dumps(
+        {
+            "arguments": step.arguments.model_dump(mode="json"),
+            "expected_evidence": sorted(set(step.expected_evidence)),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def new_collection_steps(
+    existing_steps: list[InvestigationPlanStep],
+    proposed_steps: list[InvestigationPlanStep],
+) -> list[InvestigationPlanStep]:
+    """기존 계획과 ID 또는 실행 의미가 겹치지 않는 단계만 반환한다."""
+
+    known_ids = {step.step_id for step in existing_steps}
+    known_signatures = {collection_step_signature(step) for step in existing_steps}
+    accepted: list[InvestigationPlanStep] = []
+    for step in proposed_steps:
+        signature = collection_step_signature(step)
+        if step.step_id in known_ids or signature in known_signatures:
+            continue
+        known_ids.add(step.step_id)
+        known_signatures.add(signature)
+        accepted.append(step)
+    return accepted
 
 
 def normalize_evidence_requirements(
@@ -334,8 +427,11 @@ __all__ = [
     "apply_evidence_validation",
     "build_database_lookup_evidence_plan",
     "build_evidence_validation_payload",
+    "build_single_site_collection_step",
+    "collection_step_signature",
     "compact_db_report",
     "needs_semantic_evidence_validation",
+    "new_collection_steps",
     "select_collection_steps",
     "normalize_evidence_requirements",
 ]

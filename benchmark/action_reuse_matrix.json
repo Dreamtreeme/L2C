@@ -1,0 +1,28 @@
+{
+  "schema_version": 3,
+  "description": "서로 다른 검색어에서 저장된 행동이 LLM 판단을 얼마나 생략하는지 확인한다.",
+  "require_clean_worktree": false,
+  "require_recipe_promotion": true,
+  "scenarios": [
+    {"id": "wanted-kotlin-learn", "site": "wanted", "search_keyword": "Kotlin 개발자", "original_query": "원티드에서 Kotlin 개발자 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "wanted-kotlin-reuse", "site": "wanted", "search_keyword": "Kotlin 개발자", "original_query": "원티드에서 Kotlin 개발자 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "wanted-security-learn", "site": "wanted", "search_keyword": "보안 엔지니어", "original_query": "원티드에서 보안 엔지니어 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "wanted-security-reuse", "site": "wanted", "search_keyword": "보안 엔지니어", "original_query": "원티드에서 보안 엔지니어 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "wanted-frontend-learn", "site": "wanted", "search_keyword": "프론트엔드 개발자", "original_query": "원티드에서 프론트엔드 개발자 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "wanted-frontend-reuse", "site": "wanted", "search_keyword": "프론트엔드 개발자", "original_query": "원티드에서 프론트엔드 개발자 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "wanted-product-learn", "site": "wanted", "search_keyword": "프로덕트 매니저", "original_query": "원티드에서 프로덕트 매니저 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "wanted-product-reuse", "site": "wanted", "search_keyword": "프로덕트 매니저", "original_query": "원티드에서 프로덕트 매니저 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "wanted-data-learn", "site": "wanted", "search_keyword": "데이터 엔지니어", "original_query": "원티드에서 데이터 엔지니어 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "wanted-data-reuse", "site": "wanted", "search_keyword": "데이터 엔지니어", "original_query": "원티드에서 데이터 엔지니어 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "saramin-java-learn", "site": "saramin", "search_keyword": "Java 개발자", "original_query": "사람인에서 Java 개발자 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "saramin-java-reuse", "site": "saramin", "search_keyword": "Java 개발자", "original_query": "사람인에서 Java 개발자 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "saramin-android-learn", "site": "saramin", "search_keyword": "Android 개발자", "original_query": "사람인에서 Android 개발자 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "saramin-android-reuse", "site": "saramin", "search_keyword": "Android 개발자", "original_query": "사람인에서 Android 개발자 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "saramin-devops-learn", "site": "saramin", "search_keyword": "DevOps 엔지니어", "original_query": "사람인에서 DevOps 엔지니어 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "saramin-devops-reuse", "site": "saramin", "search_keyword": "DevOps 엔지니어", "original_query": "사람인에서 DevOps 엔지니어 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "saramin-data-learn", "site": "saramin", "search_keyword": "데이터 엔지니어", "original_query": "사람인에서 데이터 엔지니어 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "saramin-data-reuse", "site": "saramin", "search_keyword": "데이터 엔지니어", "original_query": "사람인에서 데이터 엔지니어 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"},
+    {"id": "saramin-design-learn", "site": "saramin", "search_keyword": "UI UX 디자이너", "original_query": "사람인에서 UI UX 디자이너 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "autonomous"},
+    {"id": "saramin-design-reuse", "site": "saramin", "search_keyword": "UI UX 디자이너", "original_query": "사람인에서 UI UX 디자이너 공고 1개를 수집해줘.", "target_count": 1, "count_mode": "explicit", "execution_mode": "experience_guided"}
+  ]
+}

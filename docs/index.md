@@ -32,6 +32,7 @@ tags:
 | [L2C 네이밍 규칙](naming_conventions.md) | 현재 | 코드와 레시피 단계의 명명 기준 |
 | [런타임 호환 기준](runtime_compatibility.md) | 현재 | Python, CUDA, PaddleOCR, PyTorch 검증 조합 |
 | [E2E 관측 환경](e2e_observability.md) | 현재 | 실행시간, 토큰, 실패 단계, LangSmith 관측 기준 |
+| [현재 버전 검증 기록](evidence/l2c_metrics_20260822.md) | 현재 | 5개 사이트 수집, 저장 행동 재사용, DB 근거 답변 결과 |
 
 ## Reflex와 실험
 
@@ -50,6 +51,7 @@ tags:
 
 ## 문서 관리
 
+- [다음 해야 할 일](next_steps.md)
 - [문서 작성 규칙](documentation_conventions.md)
 - [Obsidian 문서 대시보드](documentation.base)
 

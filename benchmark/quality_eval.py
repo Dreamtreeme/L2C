@@ -344,7 +344,26 @@ def evaluate_collection_summary(
         if str(job_id).isdigit() and int(job_id) > 0
     }
     resolved = max(0, int(payload.get("resolved_count") or 0))
-    accepted = payload.get("status") in {"completed", "partial"}
+    execution_status = str(
+        payload.get("execution_status")
+        or (
+            "completed"
+            if payload.get("status") in {"completed", "partial"}
+            else "failed"
+        )
+    )
+    data_status = str(
+        payload.get("data_status") or ("available" if resolved > 0 else "no_match")
+    )
+    fulfillment_status = str(
+        payload.get("fulfillment_status")
+        or (
+            "fulfilled"
+            if (resolved >= target if target else resolved > 0)
+            else ("partial" if resolved > 0 else "unfulfilled")
+        )
+    )
+    accepted = execution_status == "completed"
     target_met = resolved >= target if target else resolved > 0
     return {
         "target_count": target,
@@ -352,6 +371,10 @@ def evaluate_collection_summary(
         "persisted_count": persisted,
         "observed_existing_count": len(observed_ids),
         "resolved_count": resolved,
+        "execution_status": execution_status,
+        "data_status": data_status,
+        "fulfillment_status": fulfillment_status,
+        "completion_reason": str(payload.get("completion_reason") or ""),
         "target_fulfillment": round(min(1.0, resolved / target), 6) if target else None,
         "persistence_rate": round(min(1.0, persisted / collected), 6)
         if collected

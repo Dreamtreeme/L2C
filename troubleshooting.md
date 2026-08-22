@@ -120,7 +120,7 @@ ScreenCheckpoint(before)
 - 입력과 `Enter`, 입력과 제출 클릭처럼 함께 있어야 효과가 나는 행동은 같은 전이에 기록할 수 있다.
 - 행동 전후 화면은 `before_observation_id`, `after_observation_id`로 연결한다.
 - 클릭·입력 대상은 저장 당시 bbox·중심 비율과 대상 주변 ROI pHash를 가진다.
-- 한 성공 실행의 연속 전이를 `ExperienceRule` 하나로 저장한다.
+- 한 성공 실행의 의미 노드를 `ExperienceRuleNode`로, 노드 내부 화면 전이를 `ExperienceRuleStep`으로 저장한다.
 - 활성 경로의 목적 키는 `site + task_category`다. 같은 목적의 새 경로는 중복 행을 만들지 않고 현재 경로를 갱신한다.
 
 ### 현재 재생 계약
@@ -137,7 +137,7 @@ ROI 일치는 클릭 성공을 보장하지 않는다. 현재 구현은 “같�
 
 ### Critic의 권한
 
-Critic은 자율탐색이 실제 실행한 전이에 대해 `keep` 또는 `drop`만 선택한다. 새로운 행동, 좌표, 화면 조건이나 실행 순서를 합성하지 않는다. 남긴 전이가 하나의 연속 경로를 이루지 못하면 후보 전체를 승격하지 않는다.
+그래프 구성 모델은 자율탐색 원본 이벤트를 삭제하지 않고 목적 노드와 `next`, `branch`, `recovery`, `feedback` 간선으로 구조화한다. Critic은 완성된 그래프를 본 뒤 실행 가능한 의미 노드에 대해 `keep` 또는 `drop`만 선택한다. 새로운 행동, 좌표, 화면 조건이나 실행 순서를 합성하지 않는다. 규칙 생성기는 선택된 노드를 다시 묶지 않고 각 원본 화면 전이를 물리 단계로 보존한다. 한 노드에 정상 경로와 실패 경로가 섞였거나 컴파일할 수 없는 행동이 있으면 후보 전체를 거부한다.
 
 ### 재발 확인
 
@@ -168,7 +168,8 @@ Critic은 자율탐색이 실제 실행한 전이에 대해 `keep` 또는 `drop`
 별도 RecipePromotionWorker
 -> pending_review 선점
 -> reviewing
--> Critic keep/drop
+-> 원본 로그 실행 그래프 구성
+-> Critic 노드 keep/drop
 -> accepted + active recipe 또는 rejected
 ```
 
@@ -304,7 +305,7 @@ URL만으로 화면 상태를 판별하거나 특정 사이트의 버튼 이름�
 ### 재발 확인
 
 - [DB 영속성 테스트](agent/tests/core/test_db_persistence.py)
-- [수집 후처리 테스트](agent/tests/core/test_collection_postprocessing.py)
+- [공고 검토 테스트](agent/tests/core/test_job_review_service.py)
 - [답변 경계 테스트](agent/tests/core/test_backend_boundaries.py)
 - [제품 데모 및 검증](docs/product_demo.md)
 
@@ -326,7 +327,7 @@ URL만으로 화면 상태를 판별하거나 특정 사이트의 버튼 이름�
 
 고정 URL 또는 고정 결과 계약을 만들 수 있는 경우에는 자율탐색과 경험 기반 탐색의 결과 품질을 먼저 맞춘다. 그다음 경험 경로가 대체한 추론 구간을 비교한다. 고정할 수 없는 실행은 성공 사례로 남길 수는 있지만 인과적인 속도 비교 근거로 사용하지 않는다.
 
-보고서에는 `reflex hit`와 함께 `reflex_path_completed_count`, `reflex_path_failed_count`, `reflex_path_fallback_count`와 추론 순감소량을 기록한다. 총 실행시간은 OCR·네트워크·모델 지연을 포함한 운영 지표로 남기고, 개선 원인은 고정 대상 계약과 단계별 계측으로 판별한다.
+보고서에는 저장된 행동 사용 횟수와 함께 `reflex_path_completed_count`, `reflex_path_failed_count`, `reflex_path_fallback_count`와 대체한 LLM 판단 수를 기록한다. 총 실행시간은 OCR·네트워크·모델 지연을 포함한 운영 지표로 남기고, 개선 원인은 고정 대상 계약과 단계별 계측으로 판별한다.
 
 ### 변경 규칙
 

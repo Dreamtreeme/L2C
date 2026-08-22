@@ -22,24 +22,18 @@ class CollectionBatch(BaseModel):
     site_name: str
 
 
-class PostprocessedCollection(BaseModel):
-    """원문을 구조화하고 요청 조건까지 적용한 저장 입력."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    submission: WorkerSubmission
-    collected_jobs: list[CollectedJob] = Field(default_factory=list)
-    rejected_items: list[dict[str, Any]] = Field(default_factory=list)
-    site_name: str
-
-
 class PersistenceReport(BaseModel):
-    """수집 공고를 DB와 검색 사전에 저장한 결과."""
+    """DB 저장과 검색 사전 연결이 끝난 공고의 결과."""
 
     model_config = ConfigDict(extra="forbid")
 
+    stored_items: list[dict[str, Any]] = Field(default_factory=list)
     persisted_items: list[dict[str, Any]] = Field(default_factory=list)
     rejected_items: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def stored_count(self) -> int:
+        return len(self.stored_items)
 
     @property
     def persisted_count(self) -> int:
@@ -76,14 +70,12 @@ class CollectionExperienceResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str
     recipe_learning: RecipeLearningResult
 
 
 __all__ = [
     "CollectionBatch",
     "CollectionExperienceResult",
-    "PostprocessedCollection",
     "PersistenceReport",
     "RecipeLearningResult",
 ]

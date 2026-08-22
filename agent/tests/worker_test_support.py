@@ -29,6 +29,7 @@ def worker_state(
     transition: dict[str, Any] | None = None,
     replay: dict[str, Any] | None = None,
     collection: dict[str, Any] | None = None,
+    progress: dict[str, Any] | None = None,
     lifecycle: dict[str, Any] | None = None,
 ) -> WorkerState:
     return create_worker_state(
@@ -39,6 +40,7 @@ def worker_state(
         transition=transition,
         replay=replay,
         collection=collection,
+        progress=progress,
         lifecycle=lifecycle,
     )
 

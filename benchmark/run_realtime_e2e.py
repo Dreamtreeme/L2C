@@ -12,7 +12,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, cast
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -88,9 +88,6 @@ def _runtime_config() -> dict[str, str]:
         "PADDLE_OCR_REQUEST_TIMEOUT_SEC": str(settings.ocr.request_timeout_sec),
         "REFLEX_ENABLED": str(int(settings.reflex.enabled)),
         "VISION_RECIPE_AUTO_PROMOTE": str(int(settings.recipe.auto_promote)),
-        "VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT": str(
-            settings.recipe.critic_evidence_text_limit
-        ),
         "VISION_BROWSER_WINDOW_WIDTH": str(settings.browser.vision_window_width),
         "VISION_BROWSER_WINDOW_HEIGHT": str(settings.browser.vision_window_height),
         "VISION_LOADING_TIMEOUT_SEC": str(settings.vision.loading_timeout_sec),
@@ -110,6 +107,9 @@ def _runtime_config() -> dict[str, str]:
             settings.vision.loading_motion_threshold_percent
         ),
         "VISION_LOADING_STABLE_FRAMES": str(settings.vision.loading_stable_frames),
+        "VISION_TRANSITION_VISUAL_CHANGE_MIN_RATIO": str(
+            settings.vision.transition_visual_change_min_ratio
+        ),
     }
     return {
         key: os.getenv(key, "").strip() or default for key, default in defaults.items()
@@ -242,8 +242,7 @@ def _execute_collection(
     db_path: Path,
 ) -> dict[str, object]:
     from agent.application.collection_experience import record_collection_experience
-    from agent.application.collection_postprocessing import postprocess_collection_batch
-    from agent.application.collection_storage import store_postprocessed_collection
+    from agent.application.collection_storage import store_collection_batch
     from agent.graph.investigation_collection_nodes import build_collection_result
     from agent.observability.run_contracts import RunPhase
     from benchmark.quality_eval import evaluate_collection_summary
@@ -254,6 +253,7 @@ def _execute_collection(
     error = ""
     parsed_result: dict[str, object] = {}
     quality: dict[str, object] = {}
+    stored_jobs: list[dict[str, object]] = []
     started = time.perf_counter()
     try:
         intent = CollectionIntent(
@@ -264,8 +264,7 @@ def _execute_collection(
             original_query=args.original_query or args.search_keyword,
         )
         batch = worker_service.run(intent)
-        processed = postprocess_collection_batch(batch)
-        persistence = store_postprocessed_collection(processed, db_path=db_path)
+        persistence = store_collection_batch(batch, db_path=db_path)
         experience = record_collection_experience(
             batch,
             persistence,
@@ -273,6 +272,7 @@ def _execute_collection(
         )
         result = build_collection_result(batch, persistence, experience)
         parsed_result = result.model_dump(mode="json")
+        stored_jobs = _stored_job_snapshots(parsed_result, db_path=db_path)
         quality = evaluate_collection_summary(
             parsed_result,
             expected_source_urls=args.expected_source_url,
@@ -315,9 +315,44 @@ def _execute_collection(
         "status": status,
         "error": error,
         "result": parsed_result,
+        "stored_jobs": stored_jobs,
         "quality": quality,
         "elapsed": time.perf_counter() - started,
     }
+
+
+def _stored_job_snapshots(
+    result: dict[str, object],
+    *,
+    db_path: Path,
+) -> list[dict[str, object]]:
+    """다음 시나리오의 DB 초기화 전에 저장된 공고 근거를 보존한다."""
+
+    from shared.db.database import Database
+
+    database = Database(db_path)
+    snapshots = []
+    document_ids = cast(list[int], result.get("document_ids", []))
+    for document_id in document_ids:
+        row = database.get(int(document_id))
+        if row is None:
+            continue
+        snapshots.append(
+            {
+                "job_id": int(row["id"]),
+                "company_name": row.get("company_name"),
+                "position": row.get("position"),
+                "url": row.get("url"),
+                "main_tasks": row.get("main_tasks") or [],
+                "requirements": row.get("requirements") or [],
+                "tech_stack": row.get("tech_stack") or [],
+                "raw_ocr_text": row.get("raw_ocr_text") or "",
+                "screenshot_path": row.get("screenshot_path") or "",
+                "ocr_text_path": row.get("ocr_text_path") or "",
+                "evidence_hash": row.get("evidence_hash") or "",
+            }
+        )
+    return snapshots
 
 
 def _recipe_promotion(
@@ -392,6 +427,7 @@ def _build_summary(
         "experience_guided_preconditions": preconditions,
         "recipe_promotion": promotion,
         "result": execution["result"],
+        "stored_jobs": execution["stored_jobs"],
     }
 
 

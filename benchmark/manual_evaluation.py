@@ -1,4 +1,4 @@
-"""자동 E2E 요약과 사람 판정표를 결합해 엄격 성공률을 계산한다."""
+"""자동 E2E 요약과 사람 판정표를 결합해 실제 수집 성공률을 계산한다."""
 
 from __future__ import annotations
 
@@ -206,7 +206,7 @@ def evaluate_manifest(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="사람 판정표와 E2E summary로 엄격 성공률을 계산합니다.",
+        description="사람 판정표와 E2E summary로 실제 수집 성공률을 계산합니다.",
     )
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--output", type=Path)

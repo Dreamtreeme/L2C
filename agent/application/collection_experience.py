@@ -91,7 +91,6 @@ def record_collection_experience(
     except Exception as exc:
         logger.warning("작업자 제출물 저장 실패: %s", exc)
         return CollectionExperienceResult(
-            run_id="",
             recipe_learning=_learning_result(
                 "failed",
                 reason="submission_registration_failed",
@@ -99,7 +98,6 @@ def record_collection_experience(
             ),
         )
     return CollectionExperienceResult(
-        run_id=run_id,
         recipe_learning=_record_recipe_candidate(
             submission,
             persistence,

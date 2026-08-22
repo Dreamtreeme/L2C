@@ -187,6 +187,10 @@ def _build_collection_batch(
             "observed_job_count": len(observed_job_ids),
             "current_url": state["observation"].get("current_url", "") or "",
             "action_count": len(action_events),
+            "worker_stage": state["progress"].get("stage", "navigation"),
+            "completion_reason": state["lifecycle"].get(
+                "completion_reason", ""
+            ),
             "job_results_availability": dict(
                 state["collection"].get("job_results_availability", {}) or {}
             ),

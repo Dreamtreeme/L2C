@@ -283,7 +283,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
     result = {}
     for node in (
         worker_observation.capture_node,
-        worker_transition.transition_node,
+        worker_transition.inspect_action_effect,
         selection_node,
     ):
         update = node(working, runtime)
@@ -306,7 +306,7 @@ def test_no_effect_reuses_ocr_only_for_matching_capture(monkeypatch, tmp_path):
         "transition_has_visual_change",
         lambda _pending, _path: (False, 0.0),
     )
-    stale = worker_transition.transition_node(
+    stale = worker_transition.inspect_action_effect(
         worker_state(
             observation={
                 "observation_id": "worker-test:observation:0003",

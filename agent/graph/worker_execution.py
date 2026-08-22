@@ -10,6 +10,7 @@ from langgraph.runtime import Runtime
 from agent.observability.run_context import raise_if_cancelled
 from agent.runtime.worker_contracts import (
     ActionRequest,
+    WorkerCompletionReason,
     WorkerState,
     WorkerStateUpdate,
     build_action_event,
@@ -22,6 +23,7 @@ from agent.graph.worker_action_effects import (
     raise_for_action_failure,
 )
 from agent.graph.worker_action_guard import (
+    guard_action_request,
     guard_ui_action,
 )
 from agent.graph.worker_action_recording import record_action_result
@@ -114,7 +116,14 @@ def _execute_tool_call(
     if action_name in TERMINAL_ACTIONS:
         result = context.worker_runtime.get_action_tools().finish_task(args["result"])
         raise_for_action_failure(result)
+        completion_reason: WorkerCompletionReason = "agent_finished"
+        if context.action_request.source == "reasoning_policy":
+            completion_reason = "reasoning_limit"
+        elif context.action_request.source == "screen_policy":
+            completion_reason = "screen_unavailable"
         state["lifecycle"]["is_finished"] = True
+        state["lifecycle"]["completion_reason"] = completion_reason
+        state["progress"]["stage"] = "finished"
         return result, False
     raise ValueError(f"Unknown tool: {action_name}")
 
@@ -124,6 +133,8 @@ def _execute_action_request(context: WorkerExecutionContext) -> None:
 
     state = context.state
     request = context.action_request
+    if guard_action_request(context):
+        return
     for tool_call in request.tool_calls:
         action_name = tool_call.name
         args = dict(tool_call.args)

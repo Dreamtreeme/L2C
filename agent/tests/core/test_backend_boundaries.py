@@ -576,6 +576,64 @@ def test_browser_launch_keeps_occluded_window_rendering():
     )
 
 
+def test_page_scroll_uses_a_cursor_independent_key(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent.tools.actions import ActionTools
+
+    pressed = []
+    wheel = []
+    perception = SimpleNamespace(last_region=None, browser_window_id=None)
+    tools = ActionTools(perception)
+    monkeypatch.setattr("agent.tools.actions.gw.getActiveWindow", lambda: None)
+    monkeypatch.setattr("agent.tools.actions.pyautogui.press", pressed.append)
+    monkeypatch.setattr("agent.tools.actions.pyautogui.scroll", wheel.append)
+
+    result = tools.scroll(direction="down", amount="page")
+
+    assert result["status"] == "success"
+    assert pressed == ["pagedown"]
+    assert wheel == []
+
+
+def test_targeted_scroll_moves_pointer_without_clicking(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent.tools.actions import ActionTools
+
+    events = []
+    perception = SimpleNamespace(
+        last_region={"left": 0, "top": 0, "width": 800, "height": 600},
+        browser_window_id=None,
+        scale_x=1.0,
+        scale_y=1.0,
+    )
+    tools = ActionTools(perception)
+    monkeypatch.setattr(
+        "agent.tools.actions.pyautogui.moveTo",
+        lambda x, y, duration=0: events.append(("move", x, y)),
+    )
+    monkeypatch.setattr(
+        "agent.tools.actions.pyautogui.click",
+        lambda: events.append(("click",)),
+    )
+    monkeypatch.setattr(
+        "agent.tools.actions.pyautogui.scroll",
+        lambda amount: events.append(("scroll", amount)),
+    )
+
+    result = tools.scroll(
+        direction="down",
+        bbox=[300, 200, 420, 230],
+        amount="small",
+    )
+
+    assert result["status"] == "success"
+    assert events[0] == ("move", 360, 215)
+    assert not any(event[0] == "click" for event in events)
+    assert events[1][0] == "scroll"
+
+
 def test_browser_window_is_fitted_to_monitor_work_area(monkeypatch):
     from types import SimpleNamespace
 

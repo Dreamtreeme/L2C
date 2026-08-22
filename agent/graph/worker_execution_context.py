@@ -90,6 +90,7 @@ class WorkerExecutionContext:
             "transition": state["transition"],
             "replay": state["replay"],
             "collection": state["collection"],
+            "progress": state["progress"],
             "lifecycle": state["lifecycle"],
         }
 

@@ -1,9 +1,12 @@
 """상세 OCR 초안과 작업자 검토 상태 전이를 검증한다."""
 
-from agent.graph import worker_execution_dispatch
+from agent.graph import worker_execution_dispatch, worker_reasoning
 from agent.graph.worker_execution_policy import compact_action_args
 from agent.graph.worker_review import review_node
-from agent.runtime.detail_runtime import update_job_detail_buffer
+from agent.runtime.detail_runtime import (
+    detail_action_marker_candidates,
+    update_job_detail_buffer,
+)
 from agent.runtime.tool_schema import scroll
 from agent.tests.worker_test_support import node_runtime, worker_data_services, worker_state
 from shared.schema.collection_intent import CollectionIntent
@@ -17,6 +20,15 @@ REQUIRED_FIELDS = [
     "main_tasks",
     "requirements",
 ]
+
+
+def test_detail_reveal_marker_ignores_ocr_punctuation_noise():
+    markers = [
+        {"id": 22, "text": "더보기 ¸", "bbox": [777, 510, 876, 547], "type": "text"},
+        {"id": 23, "text": "모집 인원", "bbox": [135, 617, 230, 654], "type": "text"},
+    ]
+
+    assert detail_action_marker_candidates(markers, 35, ["더보기"]) == [markers[0]]
 
 
 def _detail_state(current_url: str):
@@ -89,10 +101,7 @@ def test_review_request_creates_draft_without_completing_job():
     assert draft.detail_key == "card-1"
     assert draft.screen_count == 1
     assert "자격 요건 Python" in draft.raw_ocr_text
-    assert draft.target_company_name == "예시회사"
-    assert draft.target_position == "AI 엔지니어"
-    assert draft.ocr_items[0].id == 1
-    assert draft.ocr_items[0].bbox_ratio == [0.05, 0.1, 0.4, 0.13]
+    assert draft.raw_ocr_text.startswith("1. 예시회사")
     assert "job_captures" not in update
     assert "job_detail_buffer" not in update
 
@@ -174,6 +183,14 @@ def test_needs_more_review_keeps_detail_buffer_and_card_active():
     repeated_primary = _request_review(state)
     assert repeated_primary.result["status"] == "skipped"
     assert repeated_primary.result["reason"] == "detail_evidence_unchanged"
+    assert "review_job_detail" not in worker_reasoning._reasoning_tool_names(state)
+
+    state["transition"]["transition_result"] = {
+        "status": "ready",
+        "action": "scroll",
+        "reason": "screen_change_pixels_matched",
+    }
+    assert "review_job_detail" in worker_reasoning._reasoning_tool_names(state)
 
 
 def test_source_incomplete_review_rejects_card_without_counting_job():

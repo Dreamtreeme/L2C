@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,6 +19,7 @@ from agent.prompts.detail_extraction import build_detail_extraction_system_promp
 from agent.runtime.job_identity import url_with_source_card_key
 from agent.runtime.site_context import looks_like_job_detail_url
 from agent.utils.job_fields import missing_job_fields, normalize_job_collection_fields
+from agent.utils.image_utils import image_to_base64_jpeg
 from agent.utils.logger import logger
 from shared.schema.collection_intent import CollectionIntent
 from shared.schema.jd_schema import (
@@ -37,9 +40,6 @@ class JobReviewExtraction(BaseModel):
     is_job_posting: bool
     source_exhausted: bool
     field_evidence: dict[str, str] = Field(default_factory=dict)
-    field_evidence_line_ids: dict[str, list[int]]
-    identity_conflict: bool
-    identity_candidates: list[str] = Field(default_factory=list)
     reason: str = ""
 
 
@@ -58,6 +58,7 @@ def get_job_review_llm(tier: str = "lightweight") -> Any:
         job_review_model_spec(tier),
         JobReviewExtraction,
         temperature=0.0,
+        max_output_tokens=get_settings().models.detail_max_output_tokens,
         execution_role="detail",
     )
 
@@ -66,22 +67,42 @@ def _review_messages(draft: JobDraft) -> list[SystemMessage | HumanMessage]:
     payload: dict[str, Any] = {
         "current_url": draft.url,
         "detail_key": draft.detail_key,
-        "target_context": {
-            "company_name": draft.target_company_name,
-            "position": draft.target_position,
-        },
         "required_fields": [field.value for field in draft.required_fields],
         "screen_count": draft.screen_count,
         "last_action": draft.last_action,
         "transition_status": draft.transition_status,
         "transition_reason": draft.transition_reason,
+        "ocr_text": draft.raw_ocr_text,
     }
-    if draft.ocr_items:
-        payload["ocr_items"] = [
-            item.model_dump(mode="json") for item in draft.ocr_items
+    payload_text = json.dumps(
+        payload,
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_content: str | list[dict[str, Any]] = payload_text
+    screenshot = Path(draft.screenshot_path)
+    if screenshot.is_file():
+        vision = get_settings().vision
+        encoded = image_to_base64_jpeg(
+            screenshot,
+            max_dim=vision.reasoning_image_max_dim,
+            quality=vision.reasoning_image_quality,
+            fast=True,
+        )
+        user_content = [
+            {"type": "text", "text": payload_text},
+            {
+                "type": "text",
+                "text": (
+                    "대표 상세 화면입니다. OCR 줄 순서가 본문과 사이드바를 섞을 수 "
+                    "있으므로 화면의 공간 배치로 현재 공고와 추천 영역을 구분하십시오."
+                ),
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
+            },
         ]
-    else:
-        payload["ocr_text"] = draft.raw_ocr_text
     return [
         SystemMessage(
             content=build_detail_extraction_system_prompt(
@@ -91,18 +112,42 @@ def _review_messages(draft: JobDraft) -> list[SystemMessage | HumanMessage]:
                 "각 필드 판단을 뒷받침하는 실제 OCR 문구를 넣으십시오. 섹션 제목, 빈 양식, "
                 "placeholder는 사실 근거가 아닙니다. source_exhausted는 누적 화면과 직전 화면 "
                 "전환 근거상 더 읽을 공고 본문이 없을 때만 true로 설정하십시오. 단순히 필드가 "
-                "보이지 않는다는 이유만으로 true로 설정하지 마십시오. 현재 상세 URL은 보존하십시오.",
-                layout_evidence=bool(draft.ocr_items),
+                "보이지 않는다는 이유만으로 true로 설정하지 마십시오. 첨부 화면이 있으면 현재 "
+                "공고의 본문 주 열과 상단 회사명·직무명을 우선하고 추천 사이드바를 제외하십시오. "
+                "현재 상세 URL은 보존하십시오.",
             )
         ),
-        HumanMessage(
-            content=json.dumps(
-                payload,
-                ensure_ascii=False,
-                indent=2,
-            )
-        ),
+        HumanMessage(content=user_content),
     ]
+
+
+def _extract_review(draft: JobDraft) -> JobReviewExtraction:
+    """경량 모델의 구조화 출력이 비었을 때 상위 모델로 한 번 복구한다."""
+
+    try:
+        response = invoke_with_metrics(
+            get_job_review_llm(draft.review_model_tier),
+            _review_messages(draft),
+            "detail_review",
+        )
+    except OutputParserException:
+        if draft.review_model_tier == "primary":
+            raise
+        logger.warning(
+            "Job detail structured output fallback",
+            failed_model=job_review_model_spec(draft.review_model_tier),
+            fallback_model=job_review_model_spec("primary"),
+        )
+        response = invoke_with_metrics(
+            get_job_review_llm("primary"),
+            _review_messages(draft),
+            "detail_review_fallback",
+        )
+    return (
+        response
+        if isinstance(response, JobReviewExtraction)
+        else JobReviewExtraction.model_validate(response)
+    )
 
 
 def _request_filter_issues(
@@ -139,82 +184,20 @@ def _normalized_field_evidence(
     return evidence
 
 
-def _normalized_field_evidence_line_ids(
-    extraction: JobReviewExtraction,
-    draft: JobDraft,
-) -> dict[JobField, list[int]]:
-    valid_line_ids = {item.id for item in draft.ocr_items}
-    if not valid_line_ids:
-        return {}
-    allowed = normalize_job_collection_fields(
-        list(extraction.field_evidence_line_ids)
-    )
-    evidence_line_ids: dict[JobField, list[int]] = {}
-    for field in allowed:
-        values = extraction.field_evidence_line_ids.get(field) or []
-        line_ids = list(
-            dict.fromkeys(
-                int(value)
-                for value in values
-                if str(value).isdigit() and int(value) in valid_line_ids
-            )
-        )
-        if line_ids:
-            evidence_line_ids[JobField(field)] = line_ids
-    return evidence_line_ids
-
-
-def _identity_evidence_issues(
-    extraction: JobReviewExtraction,
-    posting: JobPosting,
-    draft: JobDraft,
-    evidence_line_ids: dict[JobField, list[int]],
-) -> list[str]:
-    issues: list[str] = []
-    if extraction.identity_conflict:
-        issues.append("identity_conflict")
-    if not draft.ocr_items:
-        return issues
-    for field in (JobField.COMPANY_NAME, JobField.POSITION):
-        if getattr(posting, field.value) and not evidence_line_ids.get(field):
-            issues.append(f"identity_evidence_missing:{field.value}")
-    return issues
-
-
 def _review_status(
     extraction: JobReviewExtraction,
     missing_fields: list[JobField],
     filter_issues: list[str],
-    identity_issues: list[str],
     *,
     source_exhausted: bool,
 ) -> JobReviewStatus:
     if not extraction.is_job_posting or filter_issues:
         return JobReviewStatus.INVALID_TARGET
-    if identity_issues:
-        return (
-            JobReviewStatus.SOURCE_INCOMPLETE
-            if source_exhausted
-            else JobReviewStatus.NEEDS_MORE
-        )
     if not missing_fields:
         return JobReviewStatus.COMPLETE
     if source_exhausted:
         return JobReviewStatus.SOURCE_INCOMPLETE
     return JobReviewStatus.NEEDS_MORE
-
-
-def _source_exhaustion_confirmed(
-    extraction: JobReviewExtraction,
-    draft: JobDraft,
-) -> bool:
-    """모델 판단과 실제 무변화 전이가 함께 있을 때만 본문 소진을 확정한다."""
-
-    return bool(
-        extraction.source_exhausted
-        and draft.transition_status == "unknown"
-        and draft.transition_reason in {"no_screen_change", "reflex_no_screen_change"}
-    )
 
 
 def review_job_draft(
@@ -224,17 +207,7 @@ def review_job_draft(
     """공고 초안을 구조화하고 작업자가 수행할 다음 상태를 확정한다."""
 
     started = time.perf_counter()
-    response = invoke_with_metrics(
-        get_job_review_llm(draft.review_model_tier),
-        _review_messages(draft),
-        "detail_review",
-        stream=True,
-    )
-    extraction = (
-        response
-        if isinstance(response, JobReviewExtraction)
-        else JobReviewExtraction.model_validate(response)
-    )
+    extraction = _extract_review(draft)
     posting = complete_extracted_job(
         extraction.posting,
         current_url=draft.url,
@@ -246,7 +219,6 @@ def review_job_draft(
         posting = posting.model_copy(update={"url": url})
 
     field_evidence = _normalized_field_evidence(extraction, draft)
-    field_evidence_line_ids = _normalized_field_evidence_line_ids(extraction, draft)
     required_names = [field.value for field in draft.required_fields]
     missing_names = missing_job_fields(posting, required_names)
     missing_names.extend(
@@ -256,28 +228,11 @@ def review_job_draft(
     )
     missing_fields = [JobField(field) for field in dict.fromkeys(missing_names)]
     filter_issues = _request_filter_issues(posting, collection_intent)
-    identity_issues = _identity_evidence_issues(
-        extraction,
-        posting,
-        draft,
-        field_evidence_line_ids,
-    )
-    if identity_issues:
-        missing_fields = list(
-            dict.fromkeys(
-                [
-                    *missing_fields,
-                    JobField.COMPANY_NAME,
-                    JobField.POSITION,
-                ]
-            )
-        )
-    source_exhausted = _source_exhaustion_confirmed(extraction, draft)
+    source_exhausted = extraction.source_exhausted
     status = _review_status(
         extraction,
         missing_fields,
         filter_issues,
-        identity_issues,
         source_exhausted=source_exhausted,
     )
     logger.info(
@@ -289,7 +244,6 @@ def review_job_draft(
         model_tier=draft.review_model_tier,
         ocr_chars=len(draft.raw_ocr_text),
         source_exhausted=source_exhausted,
-        identity_conflict=extraction.identity_conflict,
     )
     return JobReview(
         detail_key=draft.detail_key,
@@ -298,17 +252,10 @@ def review_job_draft(
         posting=posting,
         missing_fields=missing_fields,
         field_evidence=field_evidence,
-        field_evidence_line_ids=field_evidence_line_ids,
-        identity_conflict=extraction.identity_conflict,
-        identity_candidates=[
-            str(candidate).strip()[:160]
-            for candidate in extraction.identity_candidates[:10]
-            if str(candidate).strip()
-        ],
         draft_fingerprint=draft.fingerprint(),
         model_tier=draft.review_model_tier,
         reason=extraction.reason,
-        issues=[*filter_issues, *identity_issues],
+        issues=filter_issues,
     )
 
 

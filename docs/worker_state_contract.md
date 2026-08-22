@@ -29,7 +29,7 @@ Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`�
 복사하지 않고 `collection_intent.search_keyword`에서 직접 가져온다. 나머지
 구역은 그래프가 현재 캡처를 처리하면서 갱신하는 실행 상태다.
 
-상세 읽기가 끝났다고 판단한 실행 노드는 누적 OCR을 `JobDraft`로 만들고 `collection.pending_job_draft`에 둔다. `worker_review` 노드는 이 초안을 검토해 `needs_more`, `complete`, `source_incomplete`, `invalid_target` 중 하나를 반환한다. `complete`일 때만 `collection.job_captures`와 `collection.collected_jobs`에 각각 화면 근거와 구조화된 공고를 추가한다.
+상세 읽기가 끝났다고 판단한 실행 노드는 누적 OCR과 대표 상세 스크린샷을 `JobDraft`로 만들고 `collection.pending_job_draft`에 둔다. `worker_review` 노드는 OCR 내용과 화면의 공간 배치를 함께 검토해 `needs_more`, `complete`, `source_incomplete`, `invalid_target` 중 하나를 반환한다. `complete`일 때만 `collection.job_captures`와 `collection.collected_jobs`에 각각 화면 근거와 구조화된 공고를 추가한다.
 
 `collection.job_card_queue`는 선택한 공고의 제목과 처리 상태를 보관한다. 상세 수집 뒤에는 결정된 복귀 행동을 수행하고, 현재 목록 OCR에서 다음 제목을 찾아 클릭한다. 최초 큐가 만들어진 뒤에는 카드 선택 모델을 다시 호출하지 않는다. 큐를 소진하고도 목표가 남으면 일반 화면 추론이 현재 목록을 스크롤하거나 필터를 조정하고 새 미방문 카드를 큐에 추가한다.
 

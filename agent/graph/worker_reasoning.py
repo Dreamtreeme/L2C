@@ -1,7 +1,8 @@
-"""결정론적 카드 선택과 LLM 호출로 다음 작업자 행동을 선택한다."""
+"""현재 화면을 해석해 다음 작업자 행동을 선택한다."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import time
 from typing import Any
@@ -18,7 +19,9 @@ from agent.observability.run_context import (
 )
 from agent.runtime.worker_contracts import (
     ActionRequest,
+    DecisionPatch,
     WorkerState,
+    WorkerStage,
     action_event_results,
     action_event_transitions,
     action_request_from_model_response,
@@ -26,88 +29,66 @@ from agent.runtime.worker_contracts import (
 )
 from agent.runtime.tool_schema import (
     ACTION_TOOL_SCHEMAS,
-    DETAIL_ACTION_TOOL_NAMES,
-    NAVIGATION_ACTION_TOOL_NAMES,
-    UNKNOWN_ACTION_TOOL_NAMES,
 )
 from agent.graph.worker_reasoning_prompt import build_reasoning_messages
-from agent.runtime.job_card_selector import select_job_cards
-from agent.runtime.job_card_queue import (
-    has_unresolved_job_card_queue,
-    resolved_job_card_count,
-)
-from agent.runtime.site_context import normalize_page_role
+from agent.graph.worker_execution_dispatch import can_request_job_detail_review
+from agent.runtime.job_card_queue import has_unresolved_job_card_queue
 from agent.runtime.transition_runtime import (
     detect_two_screen_transition_cycle,
 )
-from agent.runtime.worker_state import job_capture_count, target_count_from_state
 from agent.utils.logger import logger
-from agent.vision.target_snapshot import is_icon_marker, marker_by_id
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 
 
 _REASONING_COMPONENTS = {
-    "job_card_selection",
     "vision_reasoning_lightweight",
     "vision_reasoning",
 }
 
 
-def _resolved_job_count(state: WorkerState) -> int:
-    queue = [
-        dict(item)
-        for item in state["collection"].get("job_card_queue", []) or []
-        if isinstance(item, dict)
-    ]
-    return max(job_capture_count(state), resolved_job_card_count(queue))
+@dataclass
+class _ReasoningUsage:
+    """전체 관측치와 현재 업무 단계의 중단 예산을 분리한다."""
 
+    stage: WorkerStage
+    total_call_count: int
+    stage_call_count: int
+    estimated_cost_usd: float
 
-def _collection_scope_exhausted(
-    state: WorkerState,
-    *,
-    resolved_count: int,
-) -> bool:
-    availability = dict(
-        state["collection"].get("job_results_availability", {}) or {}
-    )
-    available_count = availability.get("available_job_count")
-    evidence = str(availability.get("count_evidence") or "").strip()
-    return bool(
-        isinstance(available_count, int)
-        and available_count >= 0
-        and evidence
-        and resolved_count >= available_count
-    )
+    def record_call(self) -> None:
+        self.total_call_count += 1
+        self.stage_call_count += 1
 
 
 def _reasoning_tool_names(state: WorkerState) -> tuple[str, ...]:
-    """현재 화면 역할에 필요한 원자 도구만 모델에 노출한다."""
+    """화면 역할 대신 실제 실행 전제조건으로 모델 도구를 제한한다."""
 
-    role = normalize_page_role(
-        state["observation"].get("current_page_role")
+    observation = state["observation"]
+    markers_ready = bool(
+        observation.get("ocr_complete") and observation.get("current_markers")
     )
-    if role == "job_detail":
-        tool_names = tuple(
-            name
-            for name in DETAIL_ACTION_TOOL_NAMES
-            if name != "review_job_detail"
-        )
-    elif role in {"home", "search", "form", "popup", "error"}:
-        tool_names = NAVIGATION_ACTION_TOOL_NAMES
-    else:
-        tool_names = UNKNOWN_ACTION_TOOL_NAMES
-    target_count = target_count_from_state(state)
-    resolved_count = _resolved_job_count(state)
-    if (
-        has_unresolved_job_card_queue(state)
-        or (
-            target_count > 0
-            and resolved_count < target_count
-            and not _collection_scope_exhausted(state, resolved_count=resolved_count)
-        )
-    ):
-        return tuple(name for name in tool_names if name != "finish_task")
-    return tool_names
+    unresolved_queue = has_unresolved_job_card_queue(state)
+    review_available = can_request_job_detail_review(
+        state,
+        str(observation.get("current_url") or ""),
+    )
+    allowed = {
+        "scroll",
+        "press_key",
+        "open_browser",
+        "go_back",
+        "close_current_tab",
+        "switch_tab",
+    }
+    if markers_ready:
+        allowed.update({"click_marker", "type_in_marker"})
+        if not unresolved_queue:
+            allowed.add("set_job_card_queue")
+    if review_available:
+        allowed.add("review_job_detail")
+    elif not unresolved_queue:
+        allowed.add("finish_task")
+    return tuple(name for name in ACTION_TOOL_SCHEMAS if name in allowed)
 
 
 def _get_ui_llm_with_tools(
@@ -116,7 +97,7 @@ def _get_ui_llm_with_tools(
     *,
     tier: str,
 ):
-    """화면 역할과 모델 단계가 같은 바인딩을 재사용한다."""
+    """현재 실행 전제조건과 모델 단계가 같은 바인딩을 재사용한다."""
 
     tool_names = _reasoning_tool_names(state)
     return runtime.context.vision.get_ui_model_with_tools(
@@ -126,17 +107,9 @@ def _get_ui_llm_with_tools(
     )
 
 
-def _reasoning_budget(
-    state: WorkerState,
-    call_count: int = 0,
-) -> tuple[int, float, str]:
-    """현재 실행의 화면 판단 호출 수와 비용 제한을 검사한다."""
+def _observed_reasoning_usage() -> tuple[int, float]:
+    """현재 실행 컨텍스트가 기록한 화면 판단 호출 수와 비용을 읽는다."""
 
-    settings = get_settings().vision
-    state_calls = max(
-        int(state["decision"].get("reasoning_call_count") or 0),
-        call_count,
-    )
     observed_calls = 0
     spent_usd = 0.0
     context = current_run_context()
@@ -144,22 +117,65 @@ def _reasoning_budget(
         usage = context.llm_budget_usage(_REASONING_COMPONENTS)
         observed_calls = int(usage.get("call_count") or 0)
         spent_usd = float(usage.get("estimated_cost_usd") or 0.0)
-    call_count = max(state_calls, observed_calls)
-    if call_count >= settings.reasoning_call_limit:
-        return call_count, spent_usd, "reasoning_call_limit"
+    return observed_calls, spent_usd
+
+
+def _reasoning_usage(state: WorkerState) -> _ReasoningUsage:
+    """상태의 누적 호출 수와 현재 단계 호출 수를 복원한다."""
+
+    stage = state["progress"]["stage"]
+    decision = state["decision"]
+    observed_calls, spent_usd = _observed_reasoning_usage()
+    stage_call_count = (
+        int(decision.get("reasoning_stage_call_count") or 0)
+        if decision.get("reasoning_stage") == stage
+        else 0
+    )
+    return _ReasoningUsage(
+        stage=stage,
+        total_call_count=max(
+            int(decision.get("reasoning_call_count") or 0),
+            observed_calls,
+        ),
+        stage_call_count=stage_call_count,
+        estimated_cost_usd=spent_usd,
+    )
+
+
+def _reasoning_stop_reason(usage: _ReasoningUsage) -> str:
+    """현재 단계 호출 한도와 전체 실행 비용 한도를 검사한다."""
+
+    observed_calls, spent_usd = _observed_reasoning_usage()
+    usage.total_call_count = max(usage.total_call_count, observed_calls)
+    usage.estimated_cost_usd = spent_usd
+    settings = get_settings().vision
+    if usage.stage_call_count >= settings.reasoning_call_limit:
+        return "reasoning_call_limit"
     if (
         settings.reasoning_cost_limit_usd > 0
-        and spent_usd >= settings.reasoning_cost_limit_usd
+        and usage.estimated_cost_usd >= settings.reasoning_cost_limit_usd
     ):
-        return call_count, spent_usd, "reasoning_cost_limit"
-    return call_count, spent_usd, ""
+        return "reasoning_cost_limit"
+    return ""
+
+
+def _decision_patch(
+    request: ActionRequest,
+    usage: _ReasoningUsage,
+) -> DecisionPatch:
+    return {
+        "pending_action": request,
+        "reasoning_call_count": usage.total_call_count,
+        "reasoning_stage": usage.stage,
+        "reasoning_stage_call_count": usage.stage_call_count,
+    }
 
 
 def _reasoning_stop(
-    call_count: int,
-    spent_usd: float,
+    usage: _ReasoningUsage,
     reason: str,
 ) -> dict[str, Any]:
+    _reasoning_stop_reason(usage)
     model_failed = reason == "primary_reasoning_failed"
     summary = (
         "화면 판단 모델의 복구 호출이 실패해 현재까지 수집한 결과로 종료합니다."
@@ -184,21 +200,22 @@ def _reasoning_stop(
         ],
         metadata={
             "reason": reason,
-            "call_count": call_count,
-            "estimated_cost_usd": spent_usd,
+            "call_count": usage.total_call_count,
+            "stage": usage.stage,
+            "stage_call_count": usage.stage_call_count,
+            "estimated_cost_usd": usage.estimated_cost_usd,
         },
     )
     logger.warning(
         "Reasoning stopped by policy",
         reason=reason,
-        call_count=call_count,
-        estimated_cost_usd=spent_usd,
+        call_count=usage.total_call_count,
+        stage=usage.stage,
+        stage_call_count=usage.stage_call_count,
+        estimated_cost_usd=usage.estimated_cost_usd,
     )
     return {
-        "decision": {
-            "pending_action": request,
-            "reasoning_call_count": call_count,
-        },
+        "decision": _decision_patch(request, usage),
         "replay": {
             "reflex_trace": {"hit": False, "source": "reasoning_policy"}
         },
@@ -229,34 +246,7 @@ def _invoke_reasoning_model(
     )
     if not request.tool_calls:
         raise ValueError("모델이 실행할 도구를 선택하지 않았습니다.")
-    _validate_reasoning_target_markers(state, request)
     return request
-
-
-def _validate_reasoning_target_markers(
-    state: WorkerState,
-    request: ActionRequest,
-) -> None:
-    """입력 도구가 현재 화면의 실제 텍스트 입력 대상을 가리키는지 확인한다."""
-
-    markers = list(state["observation"].get("current_markers") or [])
-    for call in request.tool_calls:
-        if call.name != "type_in_marker":
-            continue
-        marker = marker_by_id(markers, int(call.args["marker_id"]))
-        if marker is None:
-            raise ValueError("입력 대상 마커가 현재 화면에 없습니다.")
-        if is_icon_marker(marker):
-            allowed_marker_ids = [
-                int(item["id"])
-                for item in markers
-                if item.get("id") is not None and not is_icon_marker(item)
-            ]
-            raise ValueError(
-                f"type_in_marker 대상 [{call.args['marker_id']}]은 아이콘 마커입니다. "
-                "현재 화면에서 입력 영역 또는 placeholder 텍스트 마커를 다시 선택하십시오. "
-                f"허용된 텍스트 마커 ID: {allowed_marker_ids}"
-            )
 
 
 def _choose_reasoning_action(
@@ -265,8 +255,8 @@ def _choose_reasoning_action(
     loop_warning: str,
     *,
     initial_tier: str,
-    call_count: int,
-) -> tuple[ActionRequest | None, int, str, str, float]:
+    usage: _ReasoningUsage,
+) -> tuple[ActionRequest | None, str, str]:
     """경량 판단이 실패한 경우에만 고성능 모델로 한 번 복구한다."""
 
     tiers = (
@@ -274,15 +264,11 @@ def _choose_reasoning_action(
         if initial_tier == "primary"
         else ("lightweight", "primary")
     )
-    spent_usd = 0.0
     retry_warning = loop_warning
     for tier in tiers:
-        call_count, spent_usd, stop_reason = _reasoning_budget(
-            state,
-            call_count,
-        )
+        stop_reason = _reasoning_stop_reason(usage)
         if stop_reason:
-            return None, call_count, tier, stop_reason, spent_usd
+            return None, tier, stop_reason
         try:
             request = _invoke_reasoning_model(
                 state,
@@ -290,12 +276,12 @@ def _choose_reasoning_action(
                 retry_warning,
                 tier=tier,
             )
-            call_count += 1
-            return request, call_count, tier, "", spent_usd
+            usage.record_call()
+            return request, tier, ""
         except (RunCancelled, RunDeadlineExceeded):
             raise
         except Exception as exc:
-            call_count += 1
+            usage.record_call()
             logger.warning(
                 "Worker reasoning attempt failed",
                 tier=tier,
@@ -306,8 +292,8 @@ def _choose_reasoning_action(
                 f"- 오류: {exc}\n"
                 "같은 잘못된 도구 인자를 반복하지 말고 현재 화면 근거로 수정하십시오."
             )
-    _, spent_usd, _ = _reasoning_budget(state, call_count)
-    return None, call_count, "primary", "primary_reasoning_failed", spent_usd
+    _reasoning_stop_reason(usage)
+    return None, "primary", "primary_reasoning_failed"
 
 
 def _is_repeating(history: list[Any], count: int) -> bool:
@@ -380,55 +366,17 @@ def reasoning_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
 ) -> dict[str, Any]:
-    """카드 선택기로 먼저 판단하고 필요할 때만 LLM을 호출한다."""
+    """현재 화면에서 다음 원자 행동 또는 공고 카드 큐를 선택한다."""
 
     raise_if_cancelled()
     started = time.perf_counter()
     logger.info("Executing Reasoning Node")
     loop_warning, error_increment = _loop_warning(state)
-    call_count, spent_usd, budget_reason = _reasoning_budget(state)
+    usage = _reasoning_usage(state)
+    budget_reason = _reasoning_stop_reason(usage)
     if budget_reason:
-        return _reasoning_stop(call_count, spent_usd, budget_reason)
+        return _reasoning_stop(usage, budget_reason)
 
-    selector_request, selector_trace = select_job_cards(state)
-    if selector_trace.get("attempted"):
-        call_count += 1
-    if selector_request is not None:
-        logger.info(
-            "Reasoning Node completed",
-            component="reasoning",
-            duration_sec=round(time.perf_counter() - started, 6),
-            reasoning_mode="card_selection",
-        )
-        result = {
-            "decision": {
-                "pending_action": selector_request,
-                "job_card_selection_trace": selector_trace,
-                "reasoning_call_count": call_count,
-            },
-            "replay": {
-                "reflex_trace": {
-                    "hit": False,
-                    "source": "card_selector",
-                },
-            },
-        }
-        if error_increment > 0:
-            result["transition"] = {
-                "error_count": (
-                    state["transition"].get("error_count", 0) + error_increment
-                )
-            }
-        return result
-
-    if selector_trace.get("attempted"):
-        _, spent_usd, budget_reason = _reasoning_budget(state, call_count)
-        if budget_reason:
-            return _reasoning_stop(call_count, spent_usd, budget_reason)
-
-    reasoning_mode = (
-        "general_after_card_selector" if selector_trace.get("attempted") else "general"
-    )
     transition_status = str(
         state["transition"].get("transition_result", {}).get("status") or ""
     )
@@ -437,19 +385,18 @@ def reasoning_node(
         if transition_status == "unknown" or loop_warning
         else "lightweight"
     )
-    pending_action, call_count, tier, stop_reason, spent_usd = (
+    pending_action, tier, stop_reason = (
         _choose_reasoning_action(
             state,
             runtime,
             loop_warning,
             initial_tier=initial_tier,
-            call_count=call_count,
+            usage=usage,
         )
     )
     if pending_action is None:
-        return _reasoning_stop(call_count, spent_usd, stop_reason)
-    if tier != initial_tier:
-        reasoning_mode += "_recovery"
+        return _reasoning_stop(usage, stop_reason)
+    reasoning_mode = "general_recovery" if tier != initial_tier else "general"
 
     logger.info(
         "Reasoning Node completed",
@@ -460,11 +407,7 @@ def reasoning_node(
     )
 
     result = {
-        "decision": {
-            "pending_action": pending_action,
-            "job_card_selection_trace": selector_trace,
-            "reasoning_call_count": call_count,
-        },
+        "decision": _decision_patch(pending_action, usage),
         "replay": {"reflex_trace": {"hit": False, "source": "reasoning"}},
     }
     if error_increment > 0:

@@ -75,13 +75,15 @@ class ModelSettings(SectionSettings):
         le=65536,
         validation_alias="VISION_LIGHTWEIGHT_MAX_OUTPUT_TOKENS",
     )
+    detail_max_output_tokens: int = Field(
+        4096,
+        ge=0,
+        le=65536,
+        validation_alias="VISION_DETAIL_MAX_OUTPUT_TOKENS",
+    )
     detail_final_extraction_model: str | None = Field(
         None,
         validation_alias="VISION_DETAIL_FINAL_EXTRACTION_MODEL",
-    )
-    job_card_selector_model: str | None = Field(
-        None,
-        validation_alias="VISION_JOB_CARD_SELECTOR_MODEL",
     )
     recipe_critic_model: str | None = Field(None, validation_alias="VISION_RECIPE_CRITIC_MODEL")
     gemini_api_key: SecretStr | None = Field(None, validation_alias="GEMINI_API_KEY")
@@ -219,12 +221,6 @@ class VisionSettings(SectionSettings):
         le=100,
         validation_alias="VISION_REASONING_COST_LIMIT_USD",
     )
-    no_effect_action_limit: int = Field(
-        3,
-        ge=1,
-        le=20,
-        validation_alias="VISION_NO_EFFECT_ACTION_LIMIT",
-    )
     ui_text_marker_limit: int = Field(90, ge=1, le=1000, validation_alias="VISION_UI_TEXT_MARKER_LIMIT")
     ui_icon_marker_limit: int = Field(45, ge=0, le=1000, validation_alias="VISION_UI_ICON_MARKER_LIMIT")
     reasoning_action_history_limit: int = Field(
@@ -284,6 +280,12 @@ class VisionSettings(SectionSettings):
     loading_motion_threshold_percent: float = Field(1.0, ge=0, le=100, validation_alias="VISION_LOADING_MOTION_THRESHOLD_PERCENT")
     loading_sample_width: int = Field(360, ge=32, le=4096, validation_alias="VISION_LOADING_SAMPLE_WIDTH")
     loading_stable_frames: int = Field(2, ge=1, le=10, validation_alias="VISION_LOADING_STABLE_FRAMES")
+    transition_visual_change_min_ratio: float = Field(
+        0.01,
+        ge=0,
+        le=1,
+        validation_alias="VISION_TRANSITION_VISUAL_CHANGE_MIN_RATIO",
+    )
 
 
 class OcrSettings(SectionSettings):
@@ -394,7 +396,6 @@ class ReflexSettings(SectionSettings):
 
 class RecipeSettings(SectionSettings):
     auto_promote: bool = Field(True, validation_alias="VISION_RECIPE_AUTO_PROMOTE")
-    critic_evidence_text_limit: int = Field(12, ge=1, le=100, validation_alias="VISION_RECIPE_CRITIC_EVIDENCE_TEXT_LIMIT")
     critic_evidence_image_limit: int = Field(8, ge=0, le=32, validation_alias="VISION_RECIPE_CRITIC_EVIDENCE_IMAGE_LIMIT")
     critic_timeout_sec: float = Field(30.0, gt=0, le=300, validation_alias="VISION_RECIPE_CRITIC_TIMEOUT_SEC")
     promotion_poll_sec: float = Field(1.0, ge=0.1, le=300, validation_alias="VISION_RECIPE_PROMOTION_POLL_SEC")

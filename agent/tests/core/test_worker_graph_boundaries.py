@@ -1,4 +1,5 @@
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,11 +12,10 @@ from agent.graph import (
 )
 from agent.runtime.worker_contracts import action_event_results, build_action_request
 from agent.graph.workflow import (
+    route_after_decision,
     route_after_execution,
     route_after_review,
     route_after_start,
-    route_after_reflex,
-    route_after_selection,
 )
 from agent.graph.worker_execution_dispatch import StateActionOutcome
 from agent.tests.worker_test_support import (
@@ -144,111 +144,142 @@ def test_action_request_allows_supported_input_commit_group():
         "press_key",
     ]
 
+    targeted_scroll = build_action_request(
+        "llm",
+        "상세 패널 본문 스크롤",
+        [
+            {
+                "name": "scroll",
+                "args": {
+                    "marker_id": 7,
+                    "direction": "down",
+                    "amount": "small",
+                },
+                "id": "scroll",
+            },
+        ],
+    )
+    assert [call.name for call in targeted_scroll.tool_calls] == ["scroll"]
 
-def test_selection_routes_by_action_source_without_hit_flags(monkeypatch):
-    monkeypatch.setenv("REFLEX_ENABLED", "1")
-    observed = _observed_state()
-    assert route_after_selection(observed) == "reflex"
 
-    queue_request = _request(
+def test_decision_router_accepts_only_action_finish_or_new_observation():
+    request = _request(
         "job_card_queue",
         [{"name": "click_marker", "args": {"marker_id": 1}, "id": "queue"}],
     )
-    assert (
-        route_after_selection(
-            worker_state(
-                observation=observed["observation"],
-                decision={"pending_action": queue_request},
-            )
-        )
-        == "execution"
+    assert route_after_decision(worker_state(decision={"pending_action": request})) == (
+        "execution"
     )
+    assert route_after_decision(worker_state(lifecycle={"is_finished": True})) == (
+        "end"
+    )
+    assert route_after_decision(
+        worker_state(observation={"low_information_screen": True})
+    ) == "observation"
 
-    reflex_request = _request(
+
+def test_decision_uses_experience_rule_before_ocr(monkeypatch):
+    from agent.graph import worker_cycle
+
+    calls = []
+    request = _request(
         "reflex",
         [{"name": "press_key", "args": {"key": "enter"}, "id": "reflex"}],
     )
-    assert (
-        route_after_reflex(worker_state(decision={"pending_action": reflex_request}))
-        == "execution"
+    monkeypatch.setattr(
+        worker_cycle,
+        "get_settings",
+        lambda: SimpleNamespace(reflex=SimpleNamespace(enabled=True)),
     )
-    assert route_after_reflex(observed) == "reasoning"
+    monkeypatch.setattr(
+        worker_cycle,
+        "selection_node",
+        lambda _state, _runtime: calls.append("selection") or {},
+    )
+    monkeypatch.setattr(
+        worker_cycle,
+        "attempt_reflex_replay",
+        lambda _state, _runtime: calls.append("reflex")
+        or {"decision": {"pending_action": request}},
+    )
+    monkeypatch.setattr(
+        worker_cycle,
+        "ocr_node",
+        lambda _state, _runtime: pytest.fail("경험 규칙 적중 전에 OCR을 실행했습니다."),
+    )
 
-    from agent.graph import worker_selection
+    result = worker_cycle.decision_node(
+        worker_state(
+            observation={
+                "observation_id": "observation:0001",
+                "current_screenshot": "screen.png",
+                "ocr_complete": False,
+            }
+        ),
+        node_runtime(),
+    )
 
-    active_recipe_state = worker_state(
-        observation=observed["observation"],
-        transition={
-            "transition_result": {"status": "ready", "action": "type_in_marker"}
-        },
-        replay={
-            "replay_session": {
-                "recipe_key": "recipe-search-set",
-                "current_step_index": 1,
-                "step_count": 2,
+    assert calls == ["selection", "reflex"]
+    assert result["decision"]["pending_action"].source == "reflex"
+
+
+def test_decision_runs_ocr_once_after_experience_rule_miss(monkeypatch):
+    from agent.graph import worker_cycle
+
+    calls = []
+    request = _request(
+        "llm",
+        [{"name": "scroll", "args": {"direction": "down"}, "id": "reason"}],
+    )
+    monkeypatch.setattr(
+        worker_cycle,
+        "get_settings",
+        lambda: SimpleNamespace(reflex=SimpleNamespace(enabled=True)),
+    )
+    monkeypatch.setattr(
+        worker_cycle,
+        "selection_node",
+        lambda _state, _runtime: calls.append("selection") or {},
+    )
+    monkeypatch.setattr(
+        worker_cycle,
+        "attempt_reflex_replay",
+        lambda _state, _runtime: calls.append("reflex")
+        or {
+            "replay": {
+                "reflex_trace": {
+                    "hit": False,
+                    "observation_id": "observation:0001",
+                }
             }
         },
     )
-    selected = apply_update(
-        active_recipe_state,
-        worker_selection.selection_node(active_recipe_state, node_runtime()),
+    monkeypatch.setattr(
+        worker_cycle,
+        "ocr_node",
+        lambda _state, _runtime: calls.append("ocr")
+        or {"observation": {"ocr_complete": True}},
     )
-    assert route_after_selection(selected) == "reflex"
+    monkeypatch.setattr(
+        worker_cycle,
+        "reasoning_node",
+        lambda _state, _runtime: calls.append("reasoning")
+        or {"decision": {"pending_action": request}},
+    )
 
-    raw_intermediate_state = worker_state(
-        observation={
-            "observation_id": "observation:0002",
-            "current_screenshot": "typed-query.png",
-            "raw_screen_signature": {
-                "phash": "a" * 16,
-                "size": [1920, 1080],
-            },
-            "ocr_complete": False,
-        },
-        transition={
-            "transition_result": {
-                "status": "ready",
-                "action": "type_in_marker",
-                "needs_ocr": False,
+    result = worker_cycle.decision_node(
+        worker_state(
+            observation={
+                "observation_id": "observation:0001",
+                "current_screenshot": "screen.png",
+                "ocr_complete": False,
             }
-        },
-        replay={
-            "replay_session": {
-                "recipe_key": "recipe-search-set",
-                "current_step_index": 1,
-                "step_count": 2,
-            }
-        },
+        ),
+        node_runtime(),
     )
-    assert route_after_selection(raw_intermediate_state) == "reflex"
 
-    fresh_capture = worker_state(
-        observation={
-            "observation_id": "observation:0003",
-            "current_screenshot": "fresh.png",
-            "raw_screen_signature": {"size": [1920, 1080]},
-            "ocr_complete": False,
-        },
-        transition={
-            "transition_result": {
-                "status": "idle",
-                "needs_ocr": True,
-            }
-        },
-    )
-    assert route_after_selection(fresh_capture) == "reflex"
-    assert route_after_reflex(fresh_capture) == "ocr"
-
-    missed_before_ocr = worker_state(
-        observation=fresh_capture["observation"],
-        replay={
-            "reflex_trace": {
-                "hit": False,
-                "observation_id": "observation:0003",
-            }
-        },
-    )
-    assert route_after_reflex(missed_before_ocr) == "ocr"
+    assert calls == ["selection", "reflex", "ocr", "selection", "reasoning"]
+    assert result["decision"]["pending_action"].source == "llm"
 
 
 def test_duplicate_detail_that_completes_target_ends_after_selection():
@@ -291,7 +322,7 @@ def test_duplicate_detail_that_completes_target_ends_after_selection():
     updated = apply_update(state, worker_selection.selection_node(state, runtime))
 
     assert updated["lifecycle"]["is_finished"] is True
-    assert route_after_selection(updated) == "end"
+    assert route_after_decision(updated) == "end"
 
 
 def test_worker_start_reuses_only_completed_observation():
@@ -305,7 +336,7 @@ def test_worker_start_reuses_only_completed_observation():
         "current_screenshot": "screen.png",
     }
 
-    assert route_after_start(worker_state(observation=observation)) == "capture"
+    assert route_after_start(worker_state(observation=observation)) == "observation"
     assert (
         route_after_start(
             worker_state(
@@ -315,7 +346,7 @@ def test_worker_start_reuses_only_completed_observation():
                 }
             )
         )
-        == "selection"
+        == "decision"
     )
 
 
@@ -375,9 +406,9 @@ def test_worker_routes_execution_and_review_boundaries():
         route_after_execution(
             worker_state(transition={"transition_request": {"action": "click_marker"}})
         )
-        == "capture"
+        == "observation"
     )
-    assert route_after_execution(worker_state()) == "reasoning"
+    assert route_after_execution(worker_state()) == "decision"
     pending_draft = JobDraft(
         url="https://example.com/jobs/1",
         raw_ocr_text="예시회사 AI 엔지니어 자격 요건 Python",
@@ -394,7 +425,7 @@ def test_worker_routes_execution_and_review_boundaries():
     )
     assert (
         route_after_review(worker_state(collection={"last_job_review": needs_more}))
-        == "reasoning"
+        == "decision"
     )
     rejected = JobReview(
         url=pending_draft.url,
@@ -402,7 +433,7 @@ def test_worker_routes_execution_and_review_boundaries():
     )
     assert (
         route_after_review(worker_state(collection={"last_job_review": rejected}))
-        == "selection"
+        == "decision"
     )
 
 
@@ -457,6 +488,51 @@ def test_capture_screen_assigns_run_scoped_incrementing_observation_id(monkeypat
     )
 
 
+def test_scroll_capture_keeps_page_role_on_the_same_url(monkeypatch):
+    monkeypatch.setattr(
+        worker_observation,
+        "compute_screen_phash_signature",
+        lambda _path: {"size": [1920, 1080], "phash": "a" * 16},
+    )
+
+    class FakePerception:
+        last_capture_quality = {}
+
+        def capture_usable_screen(self, *, reference_image_path=None):
+            return "after-scroll.png"
+
+        def get_current_url(self):
+            return "https://example.com/jobs?q=backend"
+
+    state = worker_state(
+        observation={
+            "observation_id": "observation:0001",
+            "ocr_complete": True,
+            "current_screenshot": "before-scroll.png",
+            "current_markers": [{"id": 1, "text": "Backend", "bbox": [0, 0, 1, 1]}],
+            "current_url": "https://example.com/jobs?q=backend",
+            "current_url_stale": False,
+            "current_page_role": "search",
+        },
+        transition={
+            "transition_request": {
+                "action": "scroll",
+                "before_screenshot": "before-scroll.png",
+            }
+        },
+    )
+
+    updated = apply_update(
+        state,
+        worker_observation.capture_node(
+            state,
+            node_runtime(_FakeVisionRuntime(FakePerception())),
+        ),
+    )
+
+    assert updated["observation"]["current_page_role"] == "search"
+
+
 def test_execution_records_one_complete_action_event(monkeypatch):
     calls: list[str] = []
 
@@ -498,34 +574,37 @@ def test_execution_records_one_complete_action_event(monkeypatch):
     assert result["transition"]["error_count"] == 0
 
 
-def test_focus_marker_clicks_component_without_requesting_screen_transition():
-    focused_bboxes: list[list[int]] = []
+def test_targeted_scroll_records_one_screen_transition(monkeypatch):
+    calls: list[tuple[str, int | None]] = []
 
-    class FocusActionTools:
-        def focus_marker(self, bbox):
-            focused_bboxes.append(bbox)
-            return {
-                "action": "focus_marker",
-                "status": "success",
-                "result": "focused",
-            }
+    def fake_dispatch(action_name, args, get_bbox, **_kwargs):
+        marker_id = args.get("marker_id")
+        if marker_id is not None:
+            get_bbox(marker_id)
+        calls.append((action_name, marker_id))
+        return {
+            "action": action_name,
+            "status": "success",
+            "result": "executed",
+        }
 
-    class FocusVisionRuntime(_FakeVisionRuntime):
-        def get_action_tools(self):
-            return FocusActionTools()
-
+    monkeypatch.setattr(
+        worker_execution_dispatch,
+        "dispatch_ui_action",
+        fake_dispatch,
+    )
     request = _request(
         "llm",
         [
             {
-                "name": "focus_marker",
+                "name": "scroll",
                 "args": {
                     "marker_id": 7,
-                    "target_label": "검색 결과 목록",
-                    "target_component": "scroll_panel",
+                    "direction": "down",
+                    "amount": "small",
                 },
-                "id": "focus",
-            }
+                "id": "scroll",
+            },
         ],
     )
     state = _execution_state(
@@ -533,30 +612,24 @@ def test_focus_marker_clicks_component_without_requesting_screen_transition():
         current_markers=[
             {
                 "id": 7,
-                "bbox": [10, 20, 110, 220],
-                "text": "검색 결과 목록",
+                "bbox": [900, 200, 1500, 260],
+                "text": "상세 공고 본문",
+                "type": "text",
             }
         ],
     )
+    result = _run_execution(state)
+    transition = result["transition"]["transition_request"]
+    action_results = action_event_results(result["transition"]["action_events"])
 
-    update = worker_execution.execution_node(
-        state,
-        node_runtime(FocusVisionRuntime()),
-    )
-    result = apply_update(state, update)
-    action_result = action_event_results(
-        result["transition"]["action_events"]
-    )[0]
-
-    assert focused_bboxes == [[10, 20, 110, 220]]
-    assert action_result["action"] == "focus_marker"
-    assert action_result["screen_change_expected"] is False
-    assert action_result["target"]["marker_id"] == 7
-    assert result["transition"].get("transition_request") is None
-    assert route_after_execution(result) == "reasoning"
+    assert calls == [("scroll", 7)]
+    assert transition["action_seqs"] == [0]
+    assert transition["transition_actions"] == ["scroll"]
+    assert [item["screen_change_expected"] for item in action_results] == [True]
+    assert route_after_execution(result) == "observation"
 
 
-def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
+def test_repeated_execution_requests_are_blocked_before_dispatch(monkeypatch):
     monkeypatch.setattr(
         worker_execution_dispatch,
         "dispatch_ui_action",
@@ -621,6 +694,73 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
     assert result["transition"]["transition_result"]["status"] == "unknown"
     assert result["transition"]["transition_result"]["reason"] == "no_screen_change"
 
+    repeated_search = _request(
+        "llm",
+        [
+            {
+                "name": "type_in_marker",
+                "args": {
+                    "marker_id": 2,
+                    "text": "백엔드 개발자",
+                    "slot_name": "search_keyword",
+                },
+                "id": "type-search",
+            },
+            {
+                "name": "press_key",
+                "args": {"key": "enter"},
+                "id": "submit-search",
+            },
+        ],
+    )
+    repeated_search_state = _execution_state(
+        repeated_search,
+        current_markers=[
+            {"id": 2, "bbox": [0, 0, 100, 20], "text": "검색어"},
+        ],
+    )
+    repeated_search_state["observation"]["current_page_role"] = "search"
+    repeated_search_state["transition"]["action_events"] = [
+        {
+            "seq": 0,
+            "result": {
+                "action": "type_in_marker",
+                "status": "success",
+            },
+            "transition": {
+                "seq": 0,
+                "before": {"observation_id": "before-search"},
+                "actions": [
+                    {
+                        "source_seq": 0,
+                        "action": "type_in_marker",
+                        "param": {
+                            "text": "백엔드 개발자",
+                            "slot_name": "search_keyword",
+                        },
+                    },
+                    {
+                        "source_seq": 1,
+                        "action": "press_key",
+                        "param": {"key": "enter"},
+                    },
+                ],
+                "after": {"observation_id": "after-search"},
+                "evidence": {
+                    "result_status": "success",
+                    "status": "ready",
+                },
+            },
+        }
+    ]
+
+    repeated_search_result = _run_execution(repeated_search_state)
+    repeated_search_action = action_event_results(
+        repeated_search_result["transition"]["action_events"]
+    )[-1]
+    assert repeated_search_action["status"] == "skipped"
+    assert repeated_search_action["reason"] == "search_query_already_submitted"
+
     close_request = _request(
         "llm",
         [
@@ -632,9 +772,7 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
         ],
     )
     close_result = _run_execution(_execution_state(close_request))
-    close_action = action_event_results(
-        close_result["transition"]["action_events"]
-    )[-1]
+    close_action = action_event_results(close_result["transition"]["action_events"])[-1]
 
     assert close_action["status"] == "skipped"
     assert close_action["reason"] == "close_tab_requires_failed_go_back"
@@ -660,62 +798,8 @@ def test_repeated_no_effect_marker_click_counts_as_error(monkeypatch):
 
     assert allowed_close_action["status"] == "success"
 
-    stopped = worker_selection.selection_node(
-        worker_state(transition={"no_effect_count": 3}),
-        node_runtime(),
-    )
-    assert stopped["decision"]["pending_action"].source == "transition_policy"
-    assert stopped["decision"]["pending_action"].tool_calls[0].name == "finish_task"
 
-    detail_url = "https://example.com/jobs/current"
-    detail_text = "1. 주요업무"
-    source_end = worker_state(
-        observation={
-            "current_page_role": "job_detail",
-            "current_url": detail_url,
-        },
-        collection={
-            "job_detail_buffer": {
-                "url": detail_url,
-                "lines": [{"text": "주요업무"}],
-            },
-        },
-        transition={
-            "no_effect_count": 3,
-            "transition_result": {
-                "action": "scroll",
-                "status": "unknown",
-                "reason": "no_screen_change",
-            },
-        },
-    )
-    reviewed_draft = JobDraft(
-        url=detail_url,
-        raw_ocr_text=detail_text,
-        required_fields=source_end["request"]["collection_intent"].required_fields,
-    )
-    source_end["collection"]["last_job_review"] = JobReview(
-        url=detail_url,
-        status=JobReviewStatus.NEEDS_MORE,
-        draft_fingerprint=reviewed_draft.fingerprint(),
-        model_tier="lightweight",
-    )
-    primary_review = worker_selection.selection_node(source_end, node_runtime())
-    assert primary_review["decision"]["pending_action"].source == "state_contract"
-    assert (
-        primary_review["decision"]["pending_action"].tool_calls[0].name
-        == "review_job_detail"
-    )
-    source_end["collection"]["last_job_review"] = source_end["collection"][
-        "last_job_review"
-    ].model_copy(update={"model_tier": "primary"})
-    primary_stopped = worker_selection.selection_node(source_end, node_runtime())
-    assert primary_stopped["decision"]["pending_action"].source == (
-        "transition_policy"
-    )
-
-
-def test_selection_preserves_guards_before_detail_review(monkeypatch):
+def test_selection_preserves_screen_replay_and_duplicate_guards(monkeypatch):
     detail_url = "https://example.com/jobs/stale"
     collection = {
         "job_detail_buffer": {
@@ -725,13 +809,6 @@ def test_selection_preserves_guards_before_detail_review(monkeypatch):
     }
 
     with monkeypatch.context() as patch:
-        patch.setattr(
-            worker_selection,
-            "_select_detail_review",
-            lambda _state: (_ for _ in ()).throw(
-                AssertionError("기존 selection 우선 정책 뒤에 상세 검토가 와야 합니다.")
-            ),
-        )
         low_information = worker_selection.selection_node(
             worker_state(
                 observation={
@@ -741,13 +818,10 @@ def test_selection_preserves_guards_before_detail_review(monkeypatch):
                     "low_information_capture_count": 99,
                 },
                 collection=collection,
-                transition={"no_effect_count": 3},
             ),
             node_runtime(),
         )
-        assert low_information["decision"]["pending_action"].source == (
-            "screen_policy"
-        )
+        assert low_information["decision"]["pending_action"].source == ("screen_policy")
 
         replay = worker_selection.selection_node(
             worker_state(
@@ -757,11 +831,22 @@ def test_selection_preserves_guards_before_detail_review(monkeypatch):
                 },
                 collection=collection,
                 replay={"replay_session": {"active": True}},
-                transition={"no_effect_count": 3},
             ),
             node_runtime(),
         )
         assert replay == {}
+
+        detail_reasoning = worker_selection.selection_node(
+            worker_state(
+                observation={
+                    "current_page_role": "job_detail",
+                    "current_url": detail_url,
+                },
+                collection=collection,
+            ),
+            node_runtime(),
+        )
+        assert detail_reasoning == {}
 
         duplicate_update = {"collection": {"job_card_queue": []}}
         patch.setattr(
@@ -776,7 +861,6 @@ def test_selection_preserves_guards_before_detail_review(monkeypatch):
                     "current_url": detail_url,
                 },
                 collection=collection,
-                transition={"no_effect_count": 3},
             ),
             node_runtime(),
         )
@@ -876,38 +960,66 @@ def test_reflex_transition_executes_input_and_enter_without_recapture(
         },
     )
 
-    result = _run_execution(
-        _execution_state(
-            request,
-            current_markers=[
-                {
-                    "id": 1,
-                    "bbox": [0, 0, 100, 30],
-                    "text": "검색어",
-                    "type": "input",
-                }
-            ],
-            reflex_trace={
-                "recipe_key": "experience-rule10#search",
-                "tool_calls": {},
-            },
-        )
+    state = _execution_state(
+        request,
+        current_markers=[
+            {
+                "id": 1,
+                "bbox": [0, 0, 100, 30],
+                "text": "검색어",
+                "type": "input",
+            }
+        ],
+        reflex_trace={
+            "recipe_key": "experience-rule10#search",
+            "tool_calls": {},
+        },
     )
+    state["transition"]["action_events"] = [
+        {
+            "seq": 0,
+            "result": {
+                "action": "press_key",
+                "status": "success",
+                "args": {"key": "enter"},
+            },
+            "transition": {
+                "seq": 0,
+                "before": {"observation_id": "observation:0"},
+                "actions": [
+                    {
+                        "source_seq": 0,
+                        "action": "press_key",
+                        "param": {"key": "enter"},
+                    }
+                ],
+                "after": {"observation_id": "observation:1"},
+                "evidence": {
+                    "status": "unknown",
+                    "reason": "no_screen_change",
+                },
+            },
+        }
+    ]
+
+    result = _run_execution(state)
 
     assert calls == ["type_in_marker", "press_key"]
-    assert len(result["transition"]["action_events"]) == 2
+    assert len(result["transition"]["action_events"]) == 3
     assert result["transition"]["transition_request"]["action"] == "press_key"
     assert result["transition"]["transition_request"]["transition_actions"] == [
         "type_in_marker",
         "press_key",
     ]
-    assert result["transition"]["transition_request"]["action_seqs"] == [0, 1]
+    assert result["transition"]["transition_request"]["action_seqs"] == [1, 2]
     assert (
         result["transition"]["transition_request"]["before_page_role"]
         == "search_overlay"
     )
     assert (
-        result["transition"]["transition_request"]["expected_effect"].expected_url_template
+        result["transition"]["transition_request"][
+            "expected_effect"
+        ].expected_url_template
         == "example.com/jobs"
     )
 
@@ -1064,7 +1176,7 @@ def test_stored_job_card_queue_is_selected_by_selection_node(monkeypatch):
     result = _run_execution(state)
 
     assert result["decision"]["pending_action"] is None
-    assert route_after_execution(result) == "selection"
+    assert route_after_execution(result) == "decision"
     selected = worker_selection.selection_node(result, node_runtime())
     follow_up = selected["decision"]["pending_action"]
     assert follow_up.source == "job_card_queue"

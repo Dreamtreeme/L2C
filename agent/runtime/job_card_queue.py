@@ -54,6 +54,7 @@ def _normalized_job_card(
     markers: list[ScreenMarker],
     queue: list[dict],
     observation_id: str,
+    screenshot_path: str,
 ) -> dict[str, Any] | None:
     marker_id = int(raw["marker_id"])
     marker = marker_by_id(markers, marker_id)
@@ -72,6 +73,7 @@ def _normalized_job_card(
         "source_marker_text": str(marker.get("text") or "").strip(),
         "source_marker_bbox": marker_bbox(marker),
         "source_observation_id": observation_id,
+        "source_screenshot_path": screenshot_path,
     }
 
 
@@ -91,8 +93,15 @@ def normalize_job_card_queue(
         if isinstance(item, dict) and str(item.get("status") or "") != "pending"
     ]
     observation_id = str(observation.get("observation_id") or "")
+    screenshot_path = str(observation.get("current_screenshot") or "")
     for raw in cards:
-        card = _normalized_job_card(raw, markers, queue, observation_id)
+        card = _normalized_job_card(
+            raw,
+            markers,
+            queue,
+            observation_id,
+            screenshot_path,
+        )
         if card is None:
             continue
         if job_card_is_known(card, queue):

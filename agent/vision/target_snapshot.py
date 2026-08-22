@@ -15,7 +15,6 @@ from agent.vision.marker_geometry import (
 TARGET_MARKER_ACTIONS = frozenset(
     {
         "click_marker",
-        "focus_marker",
         "type_in_marker",
         "scroll",
     }
@@ -72,11 +71,7 @@ def build_marker_target_snapshot(
 
     raw_bbox = marker.get("bbox")
     bbox = list(raw_bbox) if isinstance(raw_bbox, (list, tuple)) else []
-    center = (
-        list(bbox_center(bbox))
-        if len(bbox) == 4
-        else None
-    )
+    center = list(bbox_center(bbox)) if len(bbox) == 4 else None
     snapshot = {
         "marker_id": marker.get("id"),
         "text": marker.get("text", ""),
@@ -103,15 +98,10 @@ def build_action_target_snapshot(
 ) -> dict[str, Any] | None:
     """현재 행동이 마커 대상 행동이면 상태에서 타깃 스냅샷을 만든다."""
 
-    if (
-        action_name not in TARGET_MARKER_ACTIONS
-        or args.get("marker_id") is None
-    ):
+    if action_name not in TARGET_MARKER_ACTIONS or args.get("marker_id") is None:
         return None
     raw_observation = state.get("observation")
-    observation = (
-        raw_observation if isinstance(raw_observation, Mapping) else {}
-    )
+    observation = raw_observation if isinstance(raw_observation, Mapping) else {}
     markers = [
         marker
         for marker in observation.get("current_markers", []) or []

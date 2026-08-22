@@ -123,10 +123,14 @@ def verify_replay_after_state(
         return False, "rule_effect_url_mismatch", {"current_url": current_url}
     expected_role = normalize_page_role(effect.expected_page_role)
     if expected_role and current_role and expected_role != current_role:
-        return False, "rule_effect_page_role_mismatch", {
-            "expected_page_role": expected_role,
-            "current_page_role": current_role,
-        }
+        return (
+            False,
+            "rule_effect_page_role_mismatch",
+            {
+                "expected_page_role": expected_role,
+                "current_page_role": current_role,
+            },
+        )
 
     if effect.kind == "url_change":
         before_url = str(request.get("before_url") or "")
@@ -136,16 +140,20 @@ def verify_replay_after_state(
             and current_url != before_url
             and effect.expected_url_template
         )
-        return changed, (
-            "rule_url_change_verified" if changed else "rule_url_did_not_change"
-        ), {"before_url": before_url, "current_url": current_url}
+        return (
+            changed,
+            ("rule_url_change_verified" if changed else "rule_url_did_not_change"),
+            {"before_url": before_url, "current_url": current_url},
+        )
 
     if effect.kind == "page_change":
         before_role = normalize_page_role(request.get("before_page_role"))
         changed = bool(current_role and before_role and current_role != before_role)
-        return changed, (
-            "rule_page_change_verified" if changed else "rule_page_did_not_change"
-        ), {"before_page_role": before_role, "current_page_role": current_role}
+        return (
+            changed,
+            ("rule_page_change_verified" if changed else "rule_page_did_not_change"),
+            {"before_page_role": before_role, "current_page_role": current_role},
+        )
 
     try:
         ratio = _effect_frame_ratio(
@@ -237,11 +245,10 @@ def _build_request(selection: ReflexSelection):
         selection.tool_calls,
         metadata={
             "recipe_key": selection.rule_key,
+            "source_node_id": selection.step.source_node_id,
             "step_index": selection.step_index,
             "step_count": len(selection.rule.steps),
-            "source_reasoning_call_count": len(
-                selection.step.source_transition_seqs
-            ),
+            "source_reasoning_call_count": len(selection.step.source_transition_seqs),
             "before_rule_screen": selection.step.before.model_dump(mode="json"),
             "expected_effect": selection.step.expected_effect.model_dump(mode="json"),
             "resolved_step": selection.resolved_step.model_dump(mode="json"),
@@ -265,13 +272,12 @@ def _hit_result(
     )
     return {
         "observation": {"current_markers": selection.markers},
-        "decision": {
-            "pending_action": _build_request(selection)
-        },
+        "decision": {"pending_action": _build_request(selection)},
         "replay": {
             "reflex_trace": {
                 "hit": True,
                 "recipe_key": selection.rule_key,
+                "source_node_id": selection.step.source_node_id,
                 "candidate_count": context.candidate_count,
                 "task_category": context.task_category,
                 "observation_id": context.observation_id,

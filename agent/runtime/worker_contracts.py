@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, NotRequired, TypeAlias, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypeAlias, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -99,9 +99,7 @@ class ActionRequest(BaseModel):
                 action_names,
                 commit_key=commit_key,
             ):
-                raise ValueError(
-                    "여러 행동은 입력 후 Enter 또는 검색 버튼 클릭 조합만 허용됩니다."
-                )
+                raise ValueError("여러 행동은 입력 후 제출 조합만 허용됩니다.")
         return self
 
 
@@ -218,10 +216,16 @@ def attach_action_transition(
         ),
         None,
     )
-    if not recorded_actions or first_event is None or first_event.before_checkpoint is None:
+    if (
+        not recorded_actions
+        or first_event is None
+        or first_event.before_checkpoint is None
+    ):
         return parsed_events
 
-    result_statuses = [str(event.result.get("status") or "") for event in selected_events]
+    result_statuses = [
+        str(event.result.get("status") or "") for event in selected_events
+    ]
     if result_statuses and all(status == "success" for status in result_statuses):
         result_status = "success"
     elif "error" in result_statuses:
@@ -382,6 +386,7 @@ class ReflexTrace(TypedDict, total=False):
     reject_reasons: dict[str, int]
     candidate_rejections: list[dict[str, Any]]
     recipe_key: str
+    source_node_id: str
     recipe_step_index: int
     recipe_step_count: int
     path_failed: bool
@@ -514,12 +519,22 @@ class ObservationState(TypedDict):
     screen_signature: ScreenSignature
 
 
+WorkerStage: TypeAlias = Literal[
+    "navigation",
+    "results",
+    "opening_detail",
+    "detail",
+    "finished",
+]
+
+
 class DecisionState(TypedDict):
     """현재 캡처에서 선택한 다음 행동과 선택 근거."""
 
     pending_action: ActionRequest | None
-    job_card_selection_trace: dict[str, Any]
     reasoning_call_count: int
+    reasoning_stage: WorkerStage
+    reasoning_stage_call_count: int
 
 
 class TransitionState(TypedDict):
@@ -527,7 +542,6 @@ class TransitionState(TypedDict):
 
     action_events: list[ActionEvent]
     error_count: int
-    no_effect_count: int
     transition_request: TransitionRequest | None
     transition_result: TransitionResult
 
@@ -553,10 +567,28 @@ class JobCollectionState(TypedDict):
     job_reviews: list[JobReview]
 
 
+WorkerCompletionReason: TypeAlias = Literal[
+    "",
+    "target_reached",
+    "visible_scope_completed",
+    "scope_exhausted",
+    "agent_finished",
+    "screen_unavailable",
+    "reasoning_limit",
+]
+
+
+class WorkerProgressState(TypedDict):
+    """화면 역할과 분리해 관리하는 수집 업무의 진행 단계."""
+
+    stage: WorkerStage
+
+
 class WorkerLifecycleState(TypedDict):
     """작업자 반복 실행의 종료 상태."""
 
     is_finished: bool
+    completion_reason: WorkerCompletionReason
 
 
 class WorkerRequestPatch(TypedDict, total=False):
@@ -586,14 +618,14 @@ class ObservationPatch(TypedDict, total=False):
 
 class DecisionPatch(TypedDict, total=False):
     pending_action: ActionRequest | None
-    job_card_selection_trace: dict[str, Any]
     reasoning_call_count: int
+    reasoning_stage: WorkerStage
+    reasoning_stage_call_count: int
 
 
 class TransitionPatch(TypedDict, total=False):
     action_events: list[ActionEvent]
     error_count: int
-    no_effect_count: int
     transition_request: TransitionRequest | None
     transition_result: TransitionResult
 
@@ -615,8 +647,13 @@ class JobCollectionPatch(TypedDict, total=False):
     job_reviews: list[JobReview]
 
 
+class WorkerProgressPatch(TypedDict, total=False):
+    stage: WorkerStage
+
+
 class WorkerLifecyclePatch(TypedDict, total=False):
     is_finished: bool
+    completion_reason: WorkerCompletionReason
 
 
 def merge_worker_section(
@@ -637,6 +674,7 @@ class WorkerState(TypedDict):
     transition: Annotated[TransitionState, merge_worker_section]
     replay: Annotated[RecipeReplayState, merge_worker_section]
     collection: Annotated[JobCollectionState, merge_worker_section]
+    progress: Annotated[WorkerProgressState, merge_worker_section]
     lifecycle: Annotated[WorkerLifecycleState, merge_worker_section]
 
 
@@ -649,6 +687,7 @@ class WorkerStateUpdate(TypedDict, total=False):
     transition: TransitionPatch
     replay: RecipeReplayPatch
     collection: JobCollectionPatch
+    progress: WorkerProgressPatch
     lifecycle: WorkerLifecyclePatch
 
 
@@ -664,6 +703,7 @@ def apply_worker_state_update(
     transition = state["transition"].copy()
     replay = state["replay"].copy()
     collection = state["collection"].copy()
+    progress = state["progress"].copy()
     lifecycle = state["lifecycle"].copy()
 
     if request_update := update.get("request"):
@@ -678,6 +718,8 @@ def apply_worker_state_update(
         replay.update(replay_update)
     if collection_update := update.get("collection"):
         collection.update(collection_update)
+    if progress_update := update.get("progress"):
+        progress.update(progress_update)
     if lifecycle_update := update.get("lifecycle"):
         lifecycle.update(lifecycle_update)
 
@@ -688,6 +730,7 @@ def apply_worker_state_update(
         "transition": transition,
         "replay": replay,
         "collection": collection,
+        "progress": progress,
         "lifecycle": lifecycle,
     }
 
@@ -701,6 +744,7 @@ def create_worker_state(
     transition: TransitionPatch | None = None,
     replay: RecipeReplayPatch | None = None,
     collection: JobCollectionPatch | None = None,
+    progress: WorkerProgressPatch | None = None,
     lifecycle: WorkerLifecyclePatch | None = None,
 ) -> WorkerState:
     """모든 작업자 진입점에서 동일한 섹션 상태를 만든다."""
@@ -733,13 +777,13 @@ def create_worker_state(
         },
         "decision": {
             "pending_action": None,
-            "job_card_selection_trace": {},
             "reasoning_call_count": 0,
+            "reasoning_stage": "navigation",
+            "reasoning_stage_call_count": 0,
         },
         "transition": {
             "action_events": [],
             "error_count": 0,
-            "no_effect_count": 0,
             "transition_request": None,
             "transition_result": {
                 "status": "idle",
@@ -761,7 +805,13 @@ def create_worker_state(
             "last_job_review": None,
             "job_reviews": [],
         },
-        "lifecycle": {"is_finished": False},
+        "progress": {
+            "stage": "navigation",
+        },
+        "lifecycle": {
+            "is_finished": False,
+            "completion_reason": "",
+        },
     }
     update: WorkerStateUpdate = {}
     if request:
@@ -776,6 +826,8 @@ def create_worker_state(
         update["replay"] = replay
     if collection:
         update["collection"] = collection
+    if progress:
+        update["progress"] = progress
     if lifecycle:
         update["lifecycle"] = lifecycle
     return apply_worker_state_update(state, update)
@@ -793,6 +845,10 @@ __all__ = [
     "JobDetailStats",
     "WorkerState",
     "WorkerStateUpdate",
+    "WorkerStage",
+    "WorkerCompletionReason",
+    "WorkerProgressState",
+    "WorkerProgressPatch",
     "WorkerLifecycleState",
     "WorkerLifecyclePatch",
     "WorkerRequestState",

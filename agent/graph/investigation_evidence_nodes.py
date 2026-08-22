@@ -24,9 +24,11 @@ from agent.graph.investigation_evidence_policy import (
     apply_evidence_validation,
     build_database_lookup_evidence_plan,
     build_evidence_validation_payload,
+    build_single_site_collection_step,
     compact_db_report,
     needs_semantic_evidence_validation,
     normalize_evidence_requirements,
+    new_collection_steps,
     select_collection_steps,
 )
 from agent.prompts.investigation import (
@@ -165,8 +167,38 @@ class InvestigationEvidenceNodes:
             "evidence": {"db_report": report},
         }
 
-    @staticmethod
-    def route_after_evidence(state: InvestigationState) -> str:
+    def _unused_capabilities(self, state: InvestigationState) -> list[dict[str, Any]]:
+        investigation = state["request"]["investigation"]
+        available = collection_capabilities_for(
+            self.collection_capabilities,
+            investigation,
+        )
+        used_sites = {
+            step.arguments.site for step in state["execution"].get("plan", [])
+        }
+        return [
+            item
+            for item in available
+            if str(item.get("tool_name") or "").partition(":")[2]
+            not in used_sites
+        ]
+
+    def can_replan(self, state: InvestigationState) -> bool:
+        """실행이 끝난 뒤 아직 시도하지 않은 수집 경로가 있는지 판단한다."""
+
+        execution = state["execution"]
+        if execution.get("replan_attempted") or not execution.get(
+            "executed_step_ids"
+        ):
+            return False
+        if state["evidence"].get("db_report", {}).get("sufficient"):
+            return False
+        executed = set(execution.get("executed_step_ids", []))
+        if any(step.step_id not in executed for step in execution.get("plan", [])):
+            return False
+        return bool(self._unused_capabilities(state))
+
+    def route_after_evidence(self, state: InvestigationState) -> str:
         investigation = state["request"]["investigation"]
         execution = state["execution"]
         if investigation.evidence_policy == EvidencePolicy.DATABASE_ONLY:
@@ -186,7 +218,7 @@ class InvestigationEvidenceNodes:
         if pending:
             return "collect"
         if execution.get("plan"):
-            return "answer"
+            return "replan_actions" if self.can_replan(state) else "answer"
         return "plan_actions"
 
     def plan_actions(self, state: InvestigationState) -> dict[str, Any]:
@@ -197,6 +229,24 @@ class InvestigationEvidenceNodes:
             RunPhase.PLANNING,
             "부족한 자료를 확보할 행동계획을 세우고 있습니다.",
         )
+        requirements = state["evidence"].get("requirements", [])
+        capabilities = collection_capabilities_for(
+            self.collection_capabilities,
+            investigation,
+        )
+        direct_step = build_single_site_collection_step(
+            investigation,
+            requirements,
+            capabilities,
+        )
+        if direct_step is not None:
+            return {
+                "execution": {
+                    "plan": [direct_step],
+                    "cannot_proceed_reason": "",
+                },
+            }
+
         plan = parse_model_payload(
             invoke_with_metrics(
                 self.models.action(),
@@ -209,9 +259,7 @@ class InvestigationEvidenceNodes:
                                 "db_report": compact_db_report(
                                     state["evidence"].get("db_report", {})
                                 ),
-                                "tool_capabilities": collection_capabilities_for(
-                                    self.collection_capabilities, investigation
-                                ),
+                                "tool_capabilities": capabilities,
                             },
                             ensure_ascii=False,
                         )
@@ -223,7 +271,7 @@ class InvestigationEvidenceNodes:
         )
         allowed_steps = select_collection_steps(
             plan,
-            state["evidence"].get("requirements", []),
+            requirements,
             self.collection_capabilities,
         )
         return {
@@ -233,9 +281,86 @@ class InvestigationEvidenceNodes:
             },
         }
 
+    def replan_actions(self, state: InvestigationState) -> dict[str, Any]:
+        """남은 대체 사이트만 사용해 한 번의 보완 계획을 요청한다."""
+
+        raise_if_cancelled()
+        execution = state["execution"]
+        unused_capabilities = self._unused_capabilities(state)
+        if execution.get("replan_attempted") or not unused_capabilities:
+            return {"execution": {"replan_attempted": True}}
+
+        investigation = state["request"]["investigation"]
+        emit_run_event(
+            "action_replanning",
+            RunPhase.PLANNING,
+            "수집하지 못한 근거의 대체 경로를 확인하고 있습니다.",
+        )
+        plan = parse_model_payload(
+            invoke_with_metrics(
+                self.models.action(),
+                [
+                    SystemMessage(
+                        content=(
+                            action_plan_prompt()
+                            + "\n이 요청의 마지막 보완 계획입니다. previous_steps와 같은 "
+                            "사이트 또는 입력을 반복하지 말고, 제공된 대체 도구만 사용하십시오."
+                        )
+                    ),
+                    HumanMessage(
+                        content=json.dumps(
+                            {
+                                "request": build_request_prompt_context(
+                                    investigation
+                                ),
+                                "db_report": compact_db_report(
+                                    state["evidence"].get("db_report", {})
+                                ),
+                                "previous_steps": [
+                                    step.model_dump(mode="json")
+                                    for step in execution.get("plan", [])
+                                ],
+                                "tool_capabilities": unused_capabilities,
+                            },
+                            ensure_ascii=False,
+                        )
+                    ),
+                ],
+                "investigation_action_replan",
+            ),
+            InvestigationActionPlan,
+        )
+        proposed = select_collection_steps(
+            plan,
+            state["evidence"].get("requirements", []),
+            unused_capabilities,
+        )
+        accepted = new_collection_steps(
+            execution.get("plan", []),
+            proposed,
+        )
+        return {
+            "execution": {
+                "plan": [*execution.get("plan", []), *accepted],
+                "cannot_proceed_reason": (
+                    "" if accepted else plan.cannot_proceed_reason
+                ),
+                "replan_attempted": True,
+            },
+        }
+
     @staticmethod
     def route_after_plan(state: InvestigationState) -> str:
-        return "collect" if state["execution"].get("plan") else "answer"
+        execution = state["execution"]
+        executed = set(execution.get("executed_step_ids", []))
+        return (
+            "collect"
+            if any(
+                step.step_id not in executed
+                for step in execution.get("plan", [])
+            )
+            else "answer"
+        )
 
 
 __all__ = ["InvestigationEvidenceNodes"]

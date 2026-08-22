@@ -1,14 +1,14 @@
 """후처리 결과의 SQLite 저장 경계를 검증한다."""
 
-from agent.application.collection_storage import store_postprocessed_collection
+from agent.application.collection_storage import store_collection_batch
 from shared.db.database import Database
-from shared.schema.collection_run import PostprocessedCollection
+from shared.schema.collection_run import CollectionBatch
 from shared.schema.feedback_schema import WorkerSubmission
 from shared.schema.jd_schema import CollectedJob, JobCollectionEvidence, JobPosting
 
 
-def _processed() -> PostprocessedCollection:
-    return PostprocessedCollection(
+def _batch() -> CollectionBatch:
+    return CollectionBatch(
         submission=WorkerSubmission(run_id="worker-1"),
         collected_jobs=[
             CollectedJob(
@@ -36,8 +36,8 @@ def test_storage_upserts_validated_job_and_preserves_evidence(monkeypatch, tmp_p
     )
     db_path = tmp_path / "jobs.db"
 
-    first = store_postprocessed_collection(_processed(), db_path=db_path)
-    second = store_postprocessed_collection(_processed(), db_path=db_path)
+    first = store_collection_batch(_batch(), db_path=db_path)
+    second = store_collection_batch(_batch(), db_path=db_path)
     saved = Database(db_path).get(first.persisted_items[0]["job_id"])
 
     assert first.persisted_items[0]["operation"] == "created"
@@ -57,9 +57,10 @@ def test_taxonomy_failure_excludes_job_from_answer_ready_report(monkeypatch, tmp
     )
 
     db_path = tmp_path / "jobs.db"
-    result = store_postprocessed_collection(_processed(), db_path=db_path)
+    result = store_collection_batch(_batch(), db_path=db_path)
 
     assert result.persisted_count == 0
+    assert result.stored_count == 1
     assert result.rejected_count == 1
     assert result.rejected_items[0]["issues"] == [
         "taxonomy_index_failed:RuntimeError"
@@ -68,7 +69,7 @@ def test_taxonomy_failure_excludes_job_from_answer_ready_report(monkeypatch, tmp
 
 
 def test_storage_failure_isolated_per_job(monkeypatch, tmp_path):
-    collection = _processed()
+    collection = _batch()
     original = collection.collected_jobs[0]
     collection.collected_jobs.append(
         original.model_copy(
@@ -92,7 +93,7 @@ def test_storage_failure_isolated_per_job(monkeypatch, tmp_path):
         lambda self, job_id: None,
     )
 
-    result = store_postprocessed_collection(
+    result = store_collection_batch(
         collection,
         db_path=tmp_path / "jobs.db",
     )

@@ -138,16 +138,11 @@ class VisionWorkerRuntime:
             return self._ui_models[cache_key]
 
     def prepare_reasoning_models(self, tool_schemas: Mapping[str, Any]) -> None:
-        from agent.runtime.tool_schema import NAVIGATION_ACTION_TOOL_NAMES
-
         self.get_ui_model_with_tools(
-            NAVIGATION_ACTION_TOOL_NAMES,
+            tuple(tool_schemas),
             tool_schemas,
             tier="lightweight",
         )
-        from agent.runtime.job_card_selector import prepare_job_card_selector_model
-
-        prepare_job_card_selector_model()
 
     def ensure_ocr_worker_ready(self) -> None:
         self.get_perception().ensure_ocr_worker_ready()

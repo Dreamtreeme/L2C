@@ -29,6 +29,7 @@ from shared.schema.investigation_schema import (
     GroundedAnswerDraft,
     GroundedAnswerDraftLine,
     GroundedAnswerLine,
+    EvidencePolicy,
     InvestigationPurpose,
 )
 from shared.schema.run_schema import RunStatus
@@ -102,6 +103,7 @@ def validate_grounded_answer(
     answer: GroundedAnswerDraft,
     documents: list[dict[str, Any]],
     *,
+    require_evidence: bool = True,
     maximum_document_sections: int | None = None,
 ) -> GroundedAnswer:
     """존재하는 DB 필드와 항목을 가리키는 문장만 답변에 남긴다."""
@@ -111,7 +113,6 @@ def validate_grounded_answer(
         for document in documents
         if int(document.get("id") or 0) > 0
     }
-    require_evidence = bool(documents_by_id)
     allowed_document_sections: list[int] = []
     citation_ids_by_pointer: dict[tuple[int, JobField, int | None], int] = {}
     citations: list[AnswerEvidenceRef] = []
@@ -136,7 +137,7 @@ def validate_grounded_answer(
             citations,
             citation_ids_by_pointer,
         )
-        if require_evidence and not citation_ids:
+        if require_evidence and line.kind != "caveat" and not citation_ids:
             continue
         if line.kind == "detail" and document_id is not None:
             if document_id not in allowed_document_sections:
@@ -248,6 +249,7 @@ def compact_collection_results(
         "target_count",
         "collected_count",
         "resolved_count",
+        "stored_count",
         "persisted_count",
         "created_count",
         "updated_count",
@@ -285,6 +287,59 @@ def build_answer_evidence_documents(
             item.pop("raw_ocr_text", None)
         projected.append(item)
     return projected
+
+
+def investigation_run_status(state: InvestigationState) -> RunStatus:
+    """최종 근거와 수집 결과로 사용자 요청의 완료 상태를 한 번만 판정한다."""
+
+    investigation = state["request"]["investigation"]
+    if investigation.evidence_policy in {
+        EvidencePolicy.MODEL_KNOWLEDGE,
+        EvidencePolicy.DATABASE_ONLY,
+    }:
+        return RunStatus.COMPLETED
+
+    report = state["evidence"].get("db_report", {})
+    if report.get("sufficient"):
+        return RunStatus.COMPLETED
+
+    results = list(state["execution"].get("collection_results", []))
+    if not results:
+        return RunStatus.PARTIAL
+
+    verified_results = [
+        result
+        for result in results
+        if result.resolved_count > 0
+        or (
+            result.scope_exhausted
+            and result.worker_finished
+            and not result.error_code
+        )
+    ]
+    failed_results = [
+        result
+        for result in results
+        if result.status == "failed"
+        and not (
+            result.scope_exhausted
+            and result.worker_finished
+            and not result.error_code
+        )
+    ]
+    if failed_results and not verified_results:
+        return RunStatus.FAILED
+    if len(verified_results) == len(results) and not report.get("missing_evidence"):
+        return RunStatus.COMPLETED
+    return RunStatus.PARTIAL
+
+
+def _terminal_run_event(status: RunStatus) -> tuple[str, RunPhase, str]:
+    if status == RunStatus.COMPLETED:
+        return "run_completed", RunPhase.COMPLETED, "답변을 완료했습니다."
+    if status == RunStatus.PARTIAL:
+        return "run_partial", RunPhase.PARTIAL, "확보한 근거 범위에서 답변했습니다."
+    return "run_failed", RunPhase.FAILED, "검증 가능한 근거를 확보하지 못했습니다."
 
 
 class InvestigationAnswerNodes:
@@ -368,25 +423,36 @@ class InvestigationAnswerNodes:
         grounded_answer = validate_grounded_answer(
             GroundedAnswerDraft.model_validate(response),
             documents,
+            require_evidence=(
+                investigation.evidence_policy != EvidencePolicy.MODEL_KNOWLEDGE
+                and (
+                    bool(documents)
+                    or investigation.evidence_policy != EvidencePolicy.DATABASE_ONLY
+                )
+            ),
             maximum_document_sections=investigation.constraints.result_limit,
         )
         answer = render_grounded_answer(grounded_answer, documents)
+        run_status = investigation_run_status(state)
+        event_name, event_phase, event_message = _terminal_run_event(run_status)
         emit_run_event(
-            "run_completed",
-            RunPhase.COMPLETED,
-            "답변을 완료했습니다.",
-            status=RunStatus.COMPLETED,
+            event_name,
+            event_phase,
+            event_message,
+            status=run_status,
         )
         return {
             "answer": {
                 "final_answer": answer,
                 "grounded_answer": grounded_answer,
+                "run_status": run_status.value,
             }
         }
 
 
 __all__ = [
     "InvestigationAnswerNodes",
+    "investigation_run_status",
     "render_grounded_answer",
     "validate_grounded_answer",
 ]

@@ -52,9 +52,7 @@ class WorkerSubmission(BaseModel):
     @property
     def actions(self) -> List[ObservedAction]:
         return [
-            action
-            for transition in self.transitions
-            for action in transition.actions
+            action for transition in self.transitions for action in transition.actions
         ]
 
 
@@ -122,9 +120,7 @@ class RecipeCandidate(BaseModel):
     @property
     def steps(self) -> List[ObservedAction]:
         return [
-            action
-            for transition in self.transitions
-            for action in transition.actions
+            action for transition in self.transitions for action in transition.actions
         ]
 
     def transition_for_action(self, source_seq: int) -> ObservedTransition | None:
@@ -135,36 +131,79 @@ class RecipeCandidate(BaseModel):
 
 
 ReviewDecision = Literal["accept", "reject"]
+ExecutionGraphRelation = Literal[
+    "next",
+    "depends_on",
+    "feedback",
+    "branch",
+    "recovery",
+]
 
 
-class RecipeTransitionVerdict(BaseModel):
-    """기록된 행동 묶음 전이를 경험 경로에 남길지 결정한 판정."""
+class ExecutionGraphNode(BaseModel):
+    """원본 실행 이벤트를 하나의 하위 목적으로 묶은 노드."""
 
     model_config = ConfigDict(extra="forbid")
 
-    seq: int
+    node_id: str
+    purpose: str
+    source_event_seqs: List[int] = Field(min_length=1)
+    grouping_reason: str = ""
+    intended_result: str = ""
+    observed_result: str = ""
+
+
+class ExecutionGraphEdge(BaseModel):
+    """목적 노드 사이에서 관찰된 실행·복구 관계."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_node: str
+    to_node: str
+    relation: ExecutionGraphRelation
+    reason: str = ""
+
+
+class CandidateExecutionGraph(BaseModel):
+    """가지치기 전 자율탐색 원본 로그의 의미 실행 그래프."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str
+    nodes: List[ExecutionGraphNode] = Field(min_length=1)
+    edges: List[ExecutionGraphEdge] = Field(default_factory=list)
+    unassigned_event_seqs: List[int] = Field(default_factory=list)
+
+
+class RecipeNodeVerdict(BaseModel):
+    """의미 실행 노드를 경험 경로에 남길지 결정한 판정."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
     keep: bool = False
     reason: str = ""
 
 
 class RecipeCandidateReview(BaseModel):
-    """경험 후보의 전이를 유지하거나 제거하는 비평가 판정."""
+    """경험 후보의 의미 노드를 유지하거나 제거하는 비평가 판정."""
 
     model_config = ConfigDict(extra="forbid")
 
     decision: ReviewDecision
     reasons: List[str] = Field(default_factory=list)
     feedback_to_worker: str = ""
-    transition_verdicts: List[RecipeTransitionVerdict] = Field(
-        default_factory=list
-    )
+    node_verdicts: List[RecipeNodeVerdict] = Field(default_factory=list)
 
 
 __all__ = [
+    "CandidateExecutionGraph",
     "ExecutionEvent",
+    "ExecutionGraphEdge",
+    "ExecutionGraphNode",
     "RecipeCandidate",
     "RecipeCandidateReview",
-    "RecipeTransitionVerdict",
+    "RecipeNodeVerdict",
     "StoredWorkerSubmission",
     "WorkerSubmission",
 ]

@@ -22,7 +22,6 @@ from agent.utils.logger import logger
 from agent.utils.job_fields import field_contract_items, required_fields_from_intent
 from agent.vision.marker_geometry import bbox_to_ratio, marker_bbox
 from agent.vision.target_snapshot import is_icon_marker
-from shared.schema.jd_schema import JobOcrLine
 
 
 def marker_prompt_rank(marker: ScreenMarker) -> tuple[int, int, int]:
@@ -159,7 +158,10 @@ def detail_action_marker_candidates(
     """본문 펼치기라고 명확히 선언된 마커만 결정론적 클릭 후보로 고른다."""
 
     labels = [str(label) for label in allowed_labels if str(label).strip()]
-    normalized_labels = {re.sub(r"\s+", "", label).casefold() for label in labels}
+    normalized_labels = {
+        "".join(char for char in label.casefold() if char.isalnum())
+        for label in labels
+    }
     if not normalized_labels:
         return []
     primary: list[ScreenMarker] = []
@@ -169,7 +171,8 @@ def detail_action_marker_candidates(
         if not isinstance(marker_id, int) or marker_id in seen:
             continue
         text = str(marker.get("text") or "").strip()
-        collapsed = re.sub(r"\s+", "", text).casefold()
+        # OCR이 버튼 옆 화살표를 구두점으로 읽어도 실제 라벨 문자는 보존한다.
+        collapsed = "".join(char for char in text.casefold() if char.isalnum())
         if collapsed in normalized_labels:
             primary.append(marker)
             seen.add(marker_id)
@@ -568,40 +571,23 @@ def compact_job_detail_buffer_context(
     return "\n".join(parts) + "\n\n"
 
 
-def detail_buffer_ocr_items(buffer: JobDetailBuffer) -> list[JobOcrLine]:
-    """누적 OCR을 안정 ID와 화면 비율 좌표가 있는 모델 입력으로 만든다."""
+def detail_buffer_text(buffer: JobDetailBuffer) -> str:
+    """누적 OCR 줄을 최종 추출 모델의 입력 크기에 맞춰 렌더링한다."""
 
     max_chars = get_settings().vision.detail_final_ocr_max_chars
     lines = [item for item in (buffer.get("lines") or []) if isinstance(item, dict)]
-    items: list[JobOcrLine] = []
+    rendered: list[str] = []
     total = 0
     for index, line in enumerate(lines, start=1):
         text = str(line.get("text") or "").strip()
         if not text:
             continue
-        line_id = int(line.get("line_id") or index)
-        row = f"{line_id}. {text}"
+        row = f"{index}. {text}"
         if total + len(row) + 1 > max_chars:
             break
-        items.append(
-            JobOcrLine(
-                id=line_id,
-                text=text,
-                bbox_ratio=list(line.get("bbox_ratio") or []),
-                marker_ids=list(line.get("marker_ids") or []),
-                screen=str(line.get("first_screen") or ""),
-            )
-        )
+        rendered.append(row)
         total += len(row) + 1
-    return items
-
-
-def detail_buffer_text(buffer: JobDetailBuffer) -> str:
-    """누적 OCR 줄을 저장용 원문 형식으로 렌더링한다."""
-
-    return "\n".join(
-        f"{item.id}. {item.text}" for item in detail_buffer_ocr_items(buffer)
-    )
+    return "\n".join(rendered)
 
 
 def detail_evidence_screenshot(buffer: JobDetailBuffer) -> str:
@@ -627,7 +613,6 @@ __all__ = [
     "build_detail_lightweight_marked_image",
     "build_detail_section_context",
     "compact_job_detail_buffer_context",
-    "detail_buffer_ocr_items",
     "detail_buffer_text",
     "detail_evidence_screenshot",
     "detail_context_matches",

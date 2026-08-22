@@ -18,6 +18,9 @@ def test_site_registry_loads_supported_navigation_profiles():
             assert loaded.page_guidance[role].instructions, (profile.slug, role)
         assert loaded.page_guidance["job_detail"].reading_targets, profile.slug
 
+    worknet_detail = load_site_profile("worknet").page_guidance["job_detail"]
+    assert worknet_detail.reveal_controls == ("더보기",)
+
 
 def test_official_site_urls_resolve_from_slug_name_and_domain():
     from agent.sites import get_official_site_url
@@ -153,6 +156,11 @@ def test_rocketpunch_list_and_selected_job_use_side_panel_contract():
     guidance = site_runtime_guidance(url, "search")
     assert "페이지 중앙 채용 검색 영역" in guidance
     assert "왼쪽 사이드바" in guidance
+    assert "공고 카드를 큐에 넣기 전에 상단 필터" in guidance
+    assert "'직군'에서 'SW 개발'" in guidance
+    assert "넓은 상위 직군" in guidance
+    assert "다른 직무를 대신 선택하지" in guidance
+    assert "scroll.marker_id" in guidance
     assert (
         infer_site_page_role(
             url,
@@ -165,23 +173,19 @@ def test_rocketpunch_list_and_selected_job_use_side_panel_contract():
     )
     assert looks_like_job_detail_url(selected_url) is True
     assert infer_site_page_role(selected_url, ["주요업무"]) == "job_detail"
+    detail_guidance = site_runtime_guidance(selected_url, "job_detail")
+    assert "공고 카드 큐가 아직 비어 있으면" in detail_guidance
+    assert "상단 '직군' 필터" in detail_guidance
 
 
-def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path):
-    from agent.runtime import job_card_selector
+def test_search_reasoning_receives_current_site_guidance(monkeypatch):
+    from agent.graph import worker_reasoning_prompt
     from agent.tests.worker_test_support import worker_state
     from shared.schema.collection_intent import CollectionIntent
 
-    image_path = tmp_path / "screen.png"
-    image_path.write_bytes(b"not-used")
-    monkeypatch.setattr(
-        job_card_selector,
-        "image_to_base64_jpeg",
-        lambda *_args, **_kwargs: "image",
-    )
     expected_guidance = "SITE_GUIDANCE_SENTINEL"
     monkeypatch.setattr(
-        job_card_selector,
+        worker_reasoning_prompt,
         "site_runtime_guidance",
         lambda url, role: (
             expected_guidance
@@ -190,7 +194,7 @@ def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path)
         ),
     )
 
-    messages = job_card_selector._selection_messages(
+    messages = worker_reasoning_prompt.build_reasoning_messages(
         worker_state(
             request={
                 "collection_intent": CollectionIntent(
@@ -202,13 +206,19 @@ def test_job_card_selector_receives_current_site_guidance(monkeypatch, tmp_path)
                 "current_url": "https://www.rocketpunch.com/jobs",
                 "current_page_role": "search",
                 "current_markers": [{"id": 1, "type": "text", "text": "키워드"}],
-                "marked_image": str(image_path),
             },
         ),
-        1,
+        "",
     )
 
-    assert expected_guidance in messages[0].content
+    assert expected_guidance in str(messages[1].content)
+    assert "apply required query or filters and verify the update" in str(
+        messages[0].content
+    )
+    assert "필터를 적용하고 결과 화면이 갱신됐는지 확인" in str(messages[1].content)
+    assert "그 전에는 set_job_card_queue를 호출하지 마십시오" in str(
+        messages[1].content
+    )
 
 
 def test_runtime_guidance_contains_only_current_site_and_role():
@@ -219,7 +229,8 @@ def test_runtime_guidance_contains_only_current_site_and_role():
         "job_detail",
     )
 
-    assert "잡코리아 / job_detail" in guidance
+    assert "잡코리아 / 추정 화면 역할 job_detail" in guidance
+    assert "실제 캡처와 마커를 우선" in guidance
     assert "급여" in guidance
     assert "미방문 카드 큐" not in guidance
     assert "원티드" not in guidance

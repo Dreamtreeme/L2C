@@ -77,7 +77,6 @@ def test_experience_records_submission_and_reusable_candidate(
         db_path=tmp_path / "jobs.db",
     )
 
-    assert result.run_id == "worker-1"
     assert submission_commit[0][0].persisted_count == 1
     assert result.recipe_learning.status == "queued"
 
@@ -113,7 +112,6 @@ def test_submission_failure_is_returned_without_raising(monkeypatch, tmp_path):
         db_path=tmp_path / "jobs.db",
     )
 
-    assert result.run_id == ""
     assert result.recipe_learning.reason == "submission_registration_failed"
 
 
@@ -133,7 +131,6 @@ def test_candidate_storage_failure_does_not_fail_submission(
         db_path=tmp_path / "jobs.db",
     )
 
-    assert result.run_id == "worker-1"
     assert result.recipe_learning.status == "failed"
     assert result.recipe_learning.reason == "candidate_registration_failed"
     assert "RuntimeError" in result.recipe_learning.error

@@ -95,6 +95,14 @@ class CollectionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["completed", "partial", "failed"]
+    execution_status: Literal["completed", "failed"] = "completed"
+    data_status: Literal["available", "no_match", "rejected", "failed"] = (
+        "no_match"
+    )
+    fulfillment_status: Literal["fulfilled", "partial", "unfulfilled"] = (
+        "unfulfilled"
+    )
+    completion_reason: str = ""
     message: str = ""
     error_code: str = ""
     site: str = ""
@@ -104,6 +112,7 @@ class CollectionResult(BaseModel):
     target_count: int = 0
     collected_count: int = 0
     resolved_count: int = 0
+    stored_count: int = 0
     persisted_count: int = 0
     created_count: int = 0
     updated_count: int = 0

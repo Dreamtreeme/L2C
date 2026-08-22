@@ -3,8 +3,8 @@
 제품 요청 한 건은 다음 순서로 검증한다.
 
 1. `core/test_backend_boundaries.py`: FastAPI가 질문과 식별자를 바꾸지 않고 조사 그래프에 전달하는지 확인한다.
-2. `core/test_investigation_graph.py`: 요청 이해, 확인 질문, DB 근거 검사, 수집 계획, 원문 수집, 후처리, 저장, 재검사, 답변 순서를 검증한다.
-3. `core/test_collection_postprocessing.py`, `core/test_db_persistence.py`: 원문 구조화와 공고·근거 저장을 확인한다.
+2. `core/test_investigation_graph.py`: 요청 이해, 확인 질문, DB 근거 검사, 수집 계획, 원문 수집, 저장, 재검사, 답변 순서를 검증한다.
+3. `core/test_job_review_service.py`, `core/test_db_persistence.py`: 원문 구조화와 공고·근거 저장을 확인한다.
 4. `core/test_worker_graph_boundaries.py` 이하 작업자 테스트: 캡처, OCR, Reflex, 추론, 물리 행동과 화면 전환을 검증한다.
 5. `regression/`: 과거 장애, 환경 호환성, 검색 사전, 레시피 승격의 세부 회귀를 검증한다.
 6. `evaluation/`: 성공률, 실행 모드 비교와 비용 계산을 검증한다.

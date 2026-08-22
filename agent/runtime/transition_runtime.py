@@ -92,7 +92,7 @@ def detect_two_screen_transition_cycle(
 
 
 def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
-    """현재 화면에서 효과가 없다고 확인된 가장 최근 물리 행동을 반환한다."""
+    """현재 화면에서 효과가 없다고 확인된 가장 최근 행동 묶음을 반환한다."""
 
     events = [
         ExecutionEvent.model_validate(event)
@@ -115,22 +115,27 @@ def latest_no_effect_transition(state: WorkerState) -> dict[str, Any]:
     observed_screen = evidence.screenshot
     if latest_screen and observed_screen and latest_screen != observed_screen:
         return {}
-    action = latest.actions[0]
-    result_args = latest_event.result.get("args")
-    return {
-        "action": action.action,
-        "source": str(latest_event.result.get("action_source") or ""),
-        "step": {
-            "args": (
-                dict(result_args)
-                if isinstance(result_args, dict)
-                else action.param.model_dump(
-                    mode="json",
-                    exclude_defaults=True,
-                    exclude_none=True,
-                )
+    events_by_seq = {event.seq: event for event in events}
+    actions: list[dict[str, Any]] = []
+    for action in latest.actions:
+        action_event = events_by_seq.get(action.source_seq)
+        result_args = action_event.result.get("args") if action_event else None
+        args = (
+            dict(result_args)
+            if isinstance(result_args, dict)
+            else action.param.model_dump(
+                mode="json",
+                exclude_defaults=True,
+                exclude_none=True,
             )
-        },
+        )
+        actions.append({"action": action.action, "step": {"args": args}})
+    final_action = actions[-1]
+    return {
+        "action": final_action["action"],
+        "actions": actions,
+        "source": str(latest_event.result.get("action_source") or ""),
+        "step": final_action["step"],
         "status": evidence.status,
         "reason": evidence.reason,
         "screenshot": observed_screen,
@@ -173,7 +178,12 @@ def transition_has_visual_change(
         transition_request,
         current_image_path,
     )
-    minimum_ratio = get_settings().reflex.visual_change_min_ratio
+    settings = get_settings()
+    minimum_ratio = (
+        settings.reflex.visual_change_min_ratio
+        if str(transition_request.get("source") or "") == "reflex"
+        else settings.vision.transition_visual_change_min_ratio
+    )
     return ratio is not None and ratio >= max(0.0, minimum_ratio), ratio
 
 
@@ -373,7 +383,11 @@ def input_text_confirmed_by_ocr(
 ) -> bool:
     """입력 문자열이 이전 화면에는 없고 현재 OCR에 나타났는지 확인한다."""
 
-    if request.get("action") != "type_in_marker":
+    transition_actions = list(request.get("transition_actions") or [])
+    if (
+        request.get("action") != "type_in_marker"
+        and "type_in_marker" not in transition_actions
+    ):
         return False
     input_text = str(request.get("input_text") or "").casefold().replace(" ", "")
     if not input_text:

@@ -149,8 +149,8 @@ tags:
 |---|---|
 | `collection_request_builder.py` | 수집 의도, 사이트 프로필과 작업자 목표 생성 |
 | `worker_execution_service.py` | 수집 요청의 초기 상태 생성, 비전 작업자 실행과 `CollectionBatch` 구성 |
-| `collection_postprocessing.py` | OCR 원문 구조화와 요청 조건 판정 |
-| `collection_storage.py` | 검증된 공고의 SQLite UPSERT |
+| `job_review_service.py` | OCR 원문 구조화와 요청 조건 판정 |
+| `collection_storage.py` | 검토 완료 `CollectionBatch`의 SQLite UPSERT와 검색 사전 연결 |
 | `collection_experience.py` | 작업자 제출물과 레시피 후보 기록 |
 | `conversation_context_service.py` | 저장된 실행에서 구조화된 대화 문맥 조회 |
 
@@ -195,7 +195,7 @@ screen_checkpoint + physical_action
 def test_reflex_node_roi_signature_missing_falls_back():
     ...
 
-def test_candidate_promotion_skips_non_target_action():
+def test_execution_graph_preserves_all_source_events():
     ...
 ```
 
@@ -203,7 +203,7 @@ def test_candidate_promotion_skips_non_target_action():
 
 1. [완료] `target_snapshot` 생성 로직을 `agent/vision/target_snapshot.py`로 공통화한다.
 2. [완료] `nodes.py`를 책임별 `worker_*` 모듈로 분리하고 원본 파일을 삭제한다.
-3. [완료] `application/recipe_candidate_review_service.py`에서 결정론적 promotion 로직을 `recipe/candidate_promotion.py`로 분리한다.
+3. [완료] 원본 로그 구조화는 `application/recipe_execution_graph_service.py`, 그래프 가지치기는 `recipe_candidate_review_service.py`가 담당한다.
 4. [완료] `ExperienceRuleStore` 조회를 목적 기반 `recipe_key + site + task_category`로 좁히고, 실행 시 URL 범위와 단계별 화면 서명을 검증한다.
 5. [완료] `investigation_workflow.py`를 조립부와 요청·근거·수집·답변 노드로 분리한다.
 6. [완료] 모델 변환과 좌표 계산을 `utils/model_conversion.py`, `vision/marker_geometry.py`, `vision/target_snapshot.py`로 통합한다.

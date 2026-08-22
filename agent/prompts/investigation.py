@@ -132,7 +132,7 @@ def action_plan_prompt() -> str:
 - 웹 수집은 realtime_scraping 도구만 사용하십시오.
 - arguments는 그대로 실행됩니다. 코드가 빠진 검색어·사이트·기간·개수를 보충하지 않습니다.
 - expected_evidence에는 제공된 근거 requirement_id만 넣으십시오.
-- 각 단계의 site와 search_keyword를 반드시 채우고, 기간·직군·개수 조건을 arguments에 그대로 보존하십시오.
+- 각 단계의 arguments.site와 arguments.search_keyword를 반드시 채우고, 기간·직군·개수 조건도 arguments에 그대로 보존하십시오.
 - 비교 또는 트렌드는 부족한 집단마다 별도 수집 단계를 만드십시오.
 - 지원 여부가 unknown인 필터를 지원된다고 단정하지 마십시오. 수집 후 근거 필드로 검증하도록 계획하십시오.
 - 동일 사이트와 동일 조건을 반복 호출하지 마십시오.

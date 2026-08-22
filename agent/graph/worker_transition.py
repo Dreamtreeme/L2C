@@ -13,9 +13,7 @@ from agent.recipe.replay_runtime import (
     replay_session_after_transition,
     verify_replay_after_state,
 )
-from agent.runtime.site_context import (
-    is_job_detail_context,
-)
+from agent.runtime.site_context import is_job_detail_context
 from agent.runtime.worker_contracts import (
     ObservationPatch,
     RecipeReplayPatch,
@@ -50,7 +48,6 @@ class TransitionDecision:
     records_outcome: bool = True
     block_recipe: bool = False
     reuse_previous_ocr: bool = False
-    reset_no_effect: bool = False
 
 
 def _decide_before_ocr(
@@ -61,6 +58,7 @@ def _decide_before_ocr(
 ) -> TransitionDecision:
     source = str(request.get("source") or "")
     action = str(request.get("action") or "")
+    transition_actions = list(request.get("transition_actions") or [])
     if source == "reflex":
         matched, _reason, _trace = verify_replay_after_state(request, state)
         if matched:
@@ -70,16 +68,17 @@ def _decide_before_ocr(
                 reason="rule_effect_ocr_required",
                 needs_ocr=True,
                 records_outcome=False,
-                reset_no_effect=True,
             )
-    if visual_changed or action == "type_in_marker":
+    input_occurred = (
+        action == "type_in_marker" or "type_in_marker" in transition_actions
+    )
+    if visual_changed or input_occurred:
         return TransitionDecision(
             request=request,
             status="needs_ocr",
             reason="ocr_required" if visual_changed else "input_ocr_required",
             needs_ocr=True,
             records_outcome=False,
-            reset_no_effect=True,
         )
     return TransitionDecision(
         request=request,
@@ -150,7 +149,6 @@ def _decide_after_ocr(
 
 
 def _pending_transition_update(
-    state: WorkerState,
     decision: TransitionDecision,
     *,
     visual_changed: bool,
@@ -167,8 +165,6 @@ def _pending_transition_update(
             needs_ocr=decision.needs_ocr,
         ),
     }
-    if decision.reset_no_effect:
-        transition["no_effect_count"] = 0
     return WorkerStateUpdate(transition=transition)
 
 
@@ -218,11 +214,6 @@ def _completed_transition_update(
         persist_result=record_replay_result,
     )
     transition: TransitionPatch = {
-        "no_effect_count": (
-            0
-            if decision.status == "ready"
-            else int(state["transition"].get("no_effect_count") or 0) + 1
-        ),
         "transition_request": None,
         "transition_result": transition_result(
             request,
@@ -258,11 +249,11 @@ def _completed_transition_update(
     return update
 
 
-def transition_node(
+def inspect_action_effect(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
 ) -> WorkerStateUpdate:
-    """직전 원자 행동과 현재 캡처를 비교하고 OCR 필요 여부를 결정한다."""
+    """행동 직후 캡처를 CV로 비교해 OCR 필요 여부를 결정한다."""
 
     request = state["transition"].get("transition_request")
     initial_result = transition_result_without_request(state, request)
@@ -274,21 +265,13 @@ def transition_node(
         request,
         str(state["observation"].get("current_screenshot") or ""),
     )
-    if not state["observation"].get("ocr_complete"):
-        decision = _decide_before_ocr(
-            state,
-            request,
-            visual_changed=visual_changed,
-        )
-    else:
-        decision = _decide_after_ocr(
-            state,
-            request,
-            visual_changed=visual_changed,
-        )
+    decision = _decide_before_ocr(
+        state,
+        request,
+        visual_changed=visual_changed,
+    )
     if not decision.records_outcome:
         return _pending_transition_update(
-            state,
             decision,
             visual_changed=visual_changed,
             visual_ratio=visual_ratio,
@@ -303,4 +286,36 @@ def transition_node(
     )
 
 
-__all__ = ["transition_node"]
+def complete_action_effect(
+    state: WorkerState,
+    runtime: Runtime[WorkerDependencies],
+) -> WorkerStateUpdate:
+    """OCR가 준비된 현재 화면으로 직전 행동의 결과를 확정한다."""
+
+    request = state["transition"].get("transition_request")
+    if request is None:
+        return {}
+    if not state["observation"].get("ocr_complete"):
+        raise RuntimeError("행동 결과를 확정하려면 현재 화면 OCR가 필요합니다.")
+
+    pending_result = state["transition"].get("transition_result", {}) or {}
+    if pending_result.get("status") != "needs_ocr":
+        raise RuntimeError("OCR 확정 대상인 전환 요청이 아닙니다.")
+    visual_changed = bool(pending_result.get("visual_change_detected"))
+    visual_ratio = pending_result.get("visual_change_ratio")
+    decision = _decide_after_ocr(
+        state,
+        request,
+        visual_changed=visual_changed,
+    )
+    return _completed_transition_update(
+        state,
+        decision,
+        visual_changed=visual_changed,
+        visual_ratio=visual_ratio,
+        ocr_skipped=False,
+        record_replay_result=runtime.context.data.record_recipe_replay,
+    )
+
+
+__all__ = ["complete_action_effect", "inspect_action_effect"]

@@ -22,50 +22,6 @@ EffectKind = Literal[
 ]
 
 
-class RuleActionDraft(BaseModel):
-    """규칙 생성기가 원본 행동 하나에 덧붙이는 의미 정보."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    source_action_seq: int
-    target_description: str = ""
-    target_role: str = ""
-    target_component: str = ""
-    spatial_relation: str = ""
-    input_slot: str = ""
-
-
-class ExpectedEffectDraft(BaseModel):
-    """규칙 생성기가 분류한 성공 화면 변화."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: EffectKind
-    description: str
-    target_region_ratio: list[float] = Field(default_factory=list)
-
-
-class ExperienceRuleStepDraft(BaseModel):
-    """원본 전이 ID를 유지한 규칙 생성기 출력."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    source_transition_seqs: list[int] = Field(min_length=1)
-    intent: str
-    applicable_when: str
-    decline_when: str
-    actions: list[RuleActionDraft] = Field(min_length=1)
-    expected_effect: ExpectedEffectDraft
-
-
-class ExperienceRuleDraft(BaseModel):
-    """검증 전 경험 규칙 생성 결과."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    steps: list[ExperienceRuleStepDraft] = Field(min_length=1)
-
-
 class RuleScreen(BaseModel):
     """규칙을 적용할 수 있는 화면의 저장된 기준."""
 
@@ -77,14 +33,10 @@ class RuleScreen(BaseModel):
 
 
 class RuleTarget(BaseModel):
-    """현재 화면에서 다시 해석해야 하는 행동 대상의 의미와 시각 근거."""
+    """현재 화면에서 다시 찾을 행동 대상의 원본 좌표와 ROI 근거."""
 
     model_config = ConfigDict(extra="forbid")
 
-    description: str
-    role: str = ""
-    component: str = ""
-    spatial_relation: str = ""
     reference: ActionTarget | None = None
     reference_roi_signature: dict[str, Any] = Field(default_factory=dict)
 
@@ -125,9 +77,19 @@ class ExperienceRuleStep(BaseModel):
     before: RuleScreen
     actions: list[RuleAction] = Field(min_length=1)
     intent: str
-    applicable_when: str
-    decline_when: str
     expected_effect: ExpectedEffect
+    source_node_id: str = ""
+
+
+class ExperienceRuleNode(BaseModel):
+    """하나의 의미 목적과 그 목적을 수행하는 물리 단계 목록."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    purpose: str
+    source_event_seqs: list[int] = Field(min_length=1)
+    step_ids: list[str] = Field(min_length=1)
 
 
 class ExperienceRule(BaseModel):
@@ -139,6 +101,7 @@ class ExperienceRule(BaseModel):
     goal: str = ""
     skill_metadata: RecipeSkillMetadata = Field(default_factory=RecipeSkillMetadata)
     steps: list[ExperienceRuleStep] = Field(min_length=1)
+    nodes: list[ExperienceRuleNode] = Field(default_factory=list)
     support_count: int = 1
     replay_success_count: int = 0
     replay_failure_count: int = 0
@@ -158,7 +121,9 @@ class InteractionRegionHandle(BaseModel):
     @model_validator(mode="after")
     def _require_physical_target(self) -> "InteractionRegionHandle":
         if self.marker_id is None and len(self.center_ratio) != 2:
-            raise ValueError("현재 대상에는 marker_id 또는 2차원 center_ratio가 필요합니다.")
+            raise ValueError(
+                "현재 대상에는 marker_id 또는 2차원 center_ratio가 필요합니다."
+            )
         return self
 
 
@@ -215,17 +180,14 @@ class ReplaySession(BaseModel):
 
 __all__ = [
     "ExpectedEffect",
-    "ExpectedEffectDraft",
     "ExperienceRule",
-    "ExperienceRuleDraft",
+    "ExperienceRuleNode",
     "ExperienceRuleStep",
-    "ExperienceRuleStepDraft",
     "InteractionRegionHandle",
     "ReplaySession",
     "ResolvedRuleAction",
     "ResolvedRuleStep",
     "RuleAction",
-    "RuleActionDraft",
     "RuleScreen",
     "RuleTarget",
 ]

@@ -5,11 +5,66 @@ from __future__ import annotations
 from typing import Any
 
 from agent.runtime.action_permissions import task_permission_reason
-from agent.runtime.worker_contracts import WorkerState
+from agent.runtime.worker_contracts import (
+    ActionRequest,
+    WorkerState,
+    action_event_transitions,
+)
 from agent.runtime.job_card_queue import (
     job_card_label,
     job_card_entries_from_args,
 )
+from agent.runtime.site_context import normalize_page_role
+from agent.runtime.worker_actions import is_supported_recipe_action_group
+
+
+def submitted_input_value(
+    state: WorkerState,
+    slot_name: str,
+) -> str:
+    """입력과 제출 뒤 화면 전환까지 확인된 가장 최근 값을 반환한다."""
+
+    events = state["transition"].get("action_events", []) or []
+    for transition in reversed(action_event_transitions(events)):
+        evidence = transition.evidence
+        if (
+            evidence is None
+            or evidence.result_status != "success"
+            or evidence.status != "ready"
+        ):
+            continue
+        if not is_supported_recipe_action_group(transition.actions):
+            continue
+        input_action = transition.actions[0]
+        if (
+            input_action.action == "type_in_marker"
+            and input_action.parameter_slot() == slot_name
+        ):
+            return input_action.param.text.strip()
+    return ""
+
+
+def repeats_submitted_input_request(
+    state: WorkerState,
+    request: ActionRequest,
+) -> bool:
+    """현재 검색 결과에 이미 제출한 같은 검색어를 다시 입력하는지 판정한다."""
+
+    if (
+        request.source != "llm"
+        or normalize_page_role(state["observation"].get("current_page_role"))
+        != "search"
+    ):
+        return False
+    input_call = next(
+        (call for call in request.tool_calls if call.name == "type_in_marker"),
+        None,
+    )
+    if input_call is None or input_call.args.get("slot_name") != "search_keyword":
+        return False
+    submitted = submitted_input_value(state, "search_keyword")
+    requested = str(input_call.args.get("text") or "").strip()
+    return bool(submitted and submitted.casefold() == requested.casefold())
 
 
 def blocked_action_reason(
@@ -104,9 +159,34 @@ def repeats_no_effect_target(
     return action_name in {"go_back", "close_current_tab"}
 
 
+def repeats_no_effect_request(
+    observation: dict[str, Any],
+    request: ActionRequest,
+) -> bool:
+    """직전 실패와 현재 요청이 같은 행동 묶음인지 판정한다."""
+
+    previous_actions = observation.get("actions")
+    if not isinstance(previous_actions, list):
+        previous_actions = [observation] if observation else []
+    if len(previous_actions) != len(request.tool_calls):
+        return False
+    return all(
+        isinstance(previous, dict)
+        and repeats_no_effect_target(previous, call.name, dict(call.args))
+        for previous, call in zip(
+            previous_actions,
+            request.tool_calls,
+            strict=True,
+        )
+    )
+
+
 __all__ = [
     "compact_action_args",
+    "repeats_no_effect_request",
     "repeats_no_effect_target",
+    "repeats_submitted_input_request",
     "blocked_action_reason",
     "state_snapshot_for_action",
+    "submitted_input_value",
 ]

@@ -36,10 +36,6 @@ def _rule():
                         source_seq=3,
                         action="click_marker",
                         target=RuleTarget(
-                            description="검색 버튼",
-                            role="button",
-                            component="search_panel",
-                            spatial_relation="검색 입력창 오른쪽",
                             reference={
                                 "text": "검색",
                                 "marker_type": "text",
@@ -54,8 +50,6 @@ def _rule():
                     )
                 ],
                 intent="검색을 실행한다",
-                applicable_when="검색 버튼이 하나 보인다",
-                decline_when="검색 버튼이 여러 개다",
                 expected_effect=ExpectedEffect(
                     kind="screen_change",
                     description="검색 결과가 보인다",
@@ -231,9 +225,6 @@ def test_scroll_step_uses_its_saved_roi_and_coordinate(monkeypatch):
     )
     base = _rule()
     scroll_target = RuleTarget(
-        description="오른쪽 상세 패널",
-        role="detail_panel",
-        component="job_detail_panel",
         reference={
             "text": "상세",
             "marker_type": "text",
@@ -258,8 +249,6 @@ def test_scroll_step_uses_its_saved_roi_and_coordinate(monkeypatch):
             )
         ],
         intent="상세 패널을 더 읽는다",
-        applicable_when="오른쪽 상세 패널이 열려 있다",
-        decline_when="상세 패널이 닫혀 있다",
         expected_effect=ExpectedEffect(
             kind="target_region_change",
             description="오른쪽 상세 본문이 이동한다",

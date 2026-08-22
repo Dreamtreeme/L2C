@@ -12,7 +12,11 @@ from agent.runtime.job_card_queue import (
     resolved_job_card_count,
 )
 from agent.runtime.vision_worker_runtime import WorkerDependencies
-from agent.runtime.worker_contracts import WorkerState, WorkerStateUpdate
+from agent.runtime.worker_contracts import (
+    WorkerCompletionReason,
+    WorkerState,
+    WorkerStateUpdate,
+)
 from agent.runtime.worker_state import count_mode_from_state, target_count_from_state
 from agent.utils.logger import logger
 from shared.schema.jd_schema import (
@@ -61,6 +65,23 @@ def _queue_finished(
     )
 
 
+def _finished_update(state: WorkerState) -> WorkerStateUpdate:
+    completion_reason: WorkerCompletionReason = (
+        "visible_scope_completed"
+        if count_mode_from_state(state) == "visible_all"
+        else "target_reached"
+    )
+    return {
+        "progress": {
+            "stage": "finished",
+        },
+        "lifecycle": {
+            "is_finished": True,
+            "completion_reason": completion_reason,
+        },
+    }
+
+
 def _complete_review(
     state: WorkerState,
     review: JobReview,
@@ -71,7 +92,6 @@ def _complete_review(
     evidence = JobCollectionEvidence(
         required_fields=draft.required_fields,
         field_evidence=review.field_evidence,
-        field_evidence_line_ids=review.field_evidence_line_ids,
         screenshot_path=draft.screenshot_path,
         source_card_key=draft.source_card_key,
     )
@@ -104,7 +124,7 @@ def _complete_review(
         }
     }
     if _queue_finished(state, queue, collected_count=len(captures)):
-        update["lifecycle"] = {"is_finished": True}
+        update.update(_finished_update(state))
     return update
 
 
@@ -144,7 +164,7 @@ def _reject_review(
         queue,
         collected_count=len(state["collection"].get("job_captures", [])),
     ):
-        update["lifecycle"] = {"is_finished": True}
+        update.update(_finished_update(state))
     return update
 
 

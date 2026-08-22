@@ -10,7 +10,10 @@ from agent.application.evidence_service import inspect_job_evidence
 from agent.application.job_taxonomy_linker import JobTaxonomyLinker
 from agent.application.search_taxonomy_maintenance import prepare_search_taxonomy
 from agent.tests.job_test_data import insert_job
-from agent.graph.investigation_answer_nodes import InvestigationAnswerNodes
+from agent.graph.investigation_answer_nodes import (
+    InvestigationAnswerNodes,
+    investigation_run_status,
+)
 from agent.graph.investigation_context import (
     InvestigationModels,
     create_investigation_state,
@@ -19,16 +22,16 @@ from agent.graph.investigation_evidence_policy import (
     apply_evidence_validation,
     build_database_lookup_evidence_plan,
     build_evidence_validation_payload,
+    new_collection_steps,
     normalize_evidence_requirements,
     select_collection_steps,
 )
 from shared.db.database import Database
-from shared.schema.collection_intent import CollectionIntent
+from shared.schema.collection_intent import CollectionIntent, CollectionResult
 from shared.schema.collection_run import (
     CollectionBatch,
     CollectionExperienceResult,
     PersistenceReport,
-    PostprocessedCollection,
     RecipeLearningResult,
 )
 from shared.schema.feedback_schema import WorkerSubmission
@@ -409,13 +412,6 @@ def _collection_batch(intent: CollectionIntent) -> CollectionBatch:
     )
 
 
-def _postprocessed_collection(batch: CollectionBatch) -> PostprocessedCollection:
-    return PostprocessedCollection(
-        submission=batch.submission,
-        site_name=batch.site_name,
-    )
-
-
 def _persistence_report(
     document_ids: list[int],
 ) -> PersistenceReport:
@@ -428,7 +424,6 @@ def _persistence_report(
 
 def _experience_result(*_args) -> CollectionExperienceResult:
     return CollectionExperienceResult(
-        run_id="worker-test",
         recipe_learning=RecipeLearningResult(status="not_eligible"),
     )
 
@@ -440,6 +435,44 @@ def _test_capabilities():
             purpose="원티드 수집",
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("policy", "report", "results", "expected"),
+    [
+        (EvidencePolicy.DATABASE_ONLY, {}, [], "completed"),
+        (EvidencePolicy.WEB_REQUIRED, {"sufficient": True}, [], "completed"),
+        (
+            EvidencePolicy.WEB_REQUIRED,
+            {"sufficient": False, "missing_evidence": ["표본 부족"]},
+            [CollectionResult(status="partial", resolved_count=1)],
+            "partial",
+        ),
+        (
+            EvidencePolicy.WEB_REQUIRED,
+            {"sufficient": False, "missing_evidence": ["표본 부족"]},
+            [CollectionResult(status="failed", error_code="worker_failed")],
+            "failed",
+        ),
+    ],
+)
+def test_investigation_run_status_uses_final_evidence_once(
+    policy,
+    report,
+    results,
+    expected,
+):
+    state = create_investigation_state(
+        InvestigationRequest(
+            investigation_id="status-policy",
+            original_query="공고를 확인해줘",
+            evidence_policy=policy,
+        )
+    )
+    state["evidence"]["db_report"] = report
+    state["execution"]["collection_results"] = results
+
+    assert investigation_run_status(state).value == expected
 
 
 def test_database_lookup_evidence_plan_uses_confirmed_request_constraints():
@@ -510,7 +543,6 @@ def test_database_only_lookup_skips_evidence_planning_model(
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        postprocess_collection=_FailingTool(),
         store_collection=_FailingTool(),
         record_experience=_FailingTool(),
     )
@@ -555,7 +587,6 @@ def test_workflow_answers_general_knowledge_without_evidence_or_tools(
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        postprocess_collection=_FailingTool(),
         store_collection=_FailingTool(),
         record_experience=_FailingTool(),
     )
@@ -604,7 +635,6 @@ def test_workflow_loads_structured_conversation_before_request_analysis(
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        postprocess_collection=_FailingTool(),
         store_collection=_FailingTool(),
         record_experience=_FailingTool(),
         conversation_context_loader=load_context,
@@ -681,23 +711,23 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(
             ]
         )
     )
+    resumed_action_model = _FakeModel(
+        InvestigationActionPlan(
+            cannot_proceed_reason="게시일 근거를 확인할 수 없음"
+        )
+    )
     workflow = investigation_workflow_factory(
         db_path=tmp_path / "jobs.db",
         models=InvestigationModels(
             analysis_model=analysis_model,
             evidence_model=evidence_model,
-            action_model=_FakeModel(
-                InvestigationActionPlan(
-                    cannot_proceed_reason="게시일 근거를 확인할 수 없음"
-                )
-            ),
+            action_model=resumed_action_model,
             answer_model=_FakeModel(
                 _answer_result("게시일 근거가 없어 비교할 수 없습니다.")
             ),
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        postprocess_collection=_FailingTool(),
         store_collection=_FailingTool(),
         record_experience=_FailingTool(),
         now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
@@ -710,18 +740,13 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(
         models=InvestigationModels(
             analysis_model=analysis_model,
             evidence_model=evidence_model,
-            action_model=_FakeModel(
-                InvestigationActionPlan(
-                    cannot_proceed_reason="게시일 근거를 확인할 수 없음"
-                )
-            ),
+            action_model=resumed_action_model,
             answer_model=_FakeModel(
                 _answer_result("게시일 근거가 없어 비교할 수 없습니다.")
             ),
         ),
         capabilities=_test_capabilities(),
         run_collection=_FailingTool(),
-        postprocess_collection=_FailingTool(),
         store_collection=_FailingTool(),
         record_experience=_FailingTool(),
         now=lambda: datetime(2026, 7, 14, tzinfo=timezone.utc),
@@ -746,12 +771,13 @@ def test_workflow_resumes_choice_then_builds_evidence_plan(
         ),
     )
 
-    assert resumed.run_status.value == "completed"
+    assert resumed.run_status.value == "partial"
     assert resumed.investigation.constraints.posted_from == "2026-04-14"
     assert resumed.investigation.constraints.comparison_posted_to == "2026-04-13"
     assert resumed.investigation.constraints.analysis_dimensions == ["공고 수"]
     assert analysis_model.calls == 1
     assert evidence_model.calls == 1
+    assert resumed_action_model.calls == 1
     assert resumed.resume_mode == "checkpoint_resume"
     workflow.close()
 
@@ -776,10 +802,6 @@ def test_workflow_executes_only_registered_collection_plan(
             self.calls.append(intent)
             return _collection_batch(intent)
 
-        def postprocess(self, batch):
-            self.events.append("postprocess")
-            return _postprocessed_collection(batch)
-
         def store(self, _processed):
             self.events.append("persist")
             job_id = insert_job(
@@ -801,6 +823,22 @@ def test_workflow_executes_only_registered_collection_plan(
             return _experience_result(batch, persistence)
 
     collection_flow = CollectionFlow()
+    action_model = _FakeModel(
+        InvestigationActionPlan(
+            steps=[
+                InvestigationPlanStep(
+                    step_id="unused_llm_step",
+                    tool_name="realtime_scraping",
+                    arguments={
+                        "original_query": "사용되면 안 되는 계획",
+                        "search_keyword": "잘못된 검색어",
+                        "site": "wanted",
+                    },
+                    expected_evidence=["recent_ai"],
+                )
+            ]
+        )
+    )
     workflow = investigation_workflow_factory(
         db_path=db_path,
         models=InvestigationModels(
@@ -832,34 +870,11 @@ def test_workflow_executes_only_registered_collection_plan(
                     ]
                 )
             ),
-            action_model=_FakeModel(
-                InvestigationActionPlan(
-                    steps=[
-                        InvestigationPlanStep(
-                            step_id="collect_recent_ai",
-                            tool_name="realtime_scraping",
-                            arguments={
-                                "original_query": "최근 AI 개발자 공고 찾아줘",
-                                "search_keyword": "AI 개발자",
-                                "site": "wanted",
-                                "filters": {
-                                    "posted_from": "2026-06-01",
-                                    "posted_to": "2026-07-14",
-                                },
-                                "freshness_required": True,
-                                "required_fields": ["position", "posted_at"],
-                            },
-                            purpose="부족한 최근 공고 확보",
-                            expected_evidence=["recent_ai"],
-                        )
-                    ]
-                )
-            ),
+            action_model=action_model,
             answer_model=_FakeModel(_answer_result("공고를 확인했습니다", 1)),
         ),
         capabilities=_test_capabilities(),
         run_collection=collection_flow.run,
-        postprocess_collection=collection_flow.postprocess,
         store_collection=collection_flow.store,
         record_experience=collection_flow.experience,
         taxonomy_service=taxonomy,
@@ -882,10 +897,10 @@ def test_workflow_executes_only_registered_collection_plan(
     assert intent.filters.posted_to == "2026-07-14"
     assert intent.original_query == "최근 AI 개발자 공고 찾아줘"
     assert intent.freshness_required is True
+    assert action_model.calls == 0
     assert result.final_answer == "공고를 확인했습니다 [job_id:1]"
     assert collection_flow.events == [
         "collect",
-        "postprocess",
         "persist",
         "experience",
     ]
@@ -893,6 +908,113 @@ def test_workflow_executes_only_registered_collection_plan(
         item for item in events if item.event == "collection_completed"
     )
     assert collection_event.data["document_ids"] == [1]
+
+
+def test_workflow_replans_once_with_an_unused_site(
+    tmp_path,
+    investigation_workflow_factory,
+):
+    class SequenceModel:
+        def __init__(self, results):
+            self.results = list(results)
+            self.calls = 0
+
+        def invoke(self, _messages):
+            result = self.results[self.calls]
+            self.calls += 1
+            return result
+
+    action_model = SequenceModel(
+        [
+            InvestigationActionPlan(
+                steps=[
+                    InvestigationPlanStep(
+                        step_id="collect-wanted",
+                        tool_name="realtime_scraping",
+                        arguments={
+                            "site": "wanted",
+                            "search_keyword": "백엔드",
+                        },
+                        expected_evidence=["backend"],
+                    )
+                ]
+            ),
+            InvestigationActionPlan(
+                steps=[
+                    InvestigationPlanStep(
+                        step_id="collect-saramin",
+                        tool_name="realtime_scraping",
+                        arguments={
+                            "site": "saramin",
+                            "search_keyword": "백엔드",
+                        },
+                        expected_evidence=["backend"],
+                    )
+                ]
+            ),
+        ]
+    )
+    collected_sites = []
+
+    def collect(intent):
+        collected_sites.append(intent.site)
+        return _collection_batch(intent)
+
+    workflow = investigation_workflow_factory(
+        db_path=tmp_path / "jobs.db",
+        models=InvestigationModels(
+            analysis_model=_FakeModel(
+                RequestAnalysis(
+                    objective="백엔드 공고 확인",
+                    deliverable="공고 목록",
+                    purpose=InvestigationPurpose.COLLECT,
+                    evidence_policy=EvidencePolicy.WEB_REQUIRED,
+                    constraints=InvestigationConstraints(
+                        occupation_query="백엔드",
+                    ),
+                )
+            ),
+            evidence_model=_FakeModel(
+                EvidencePlan(
+                    requirements=[
+                        EvidenceRequirement(
+                            requirement_id="backend",
+                            description="백엔드 공고",
+                            scope=InvestigationConstraints(
+                                occupation_query="백엔드",
+                            ),
+                            required_fields=["position"],
+                        )
+                    ]
+                )
+            ),
+            action_model=action_model,
+            answer_model=_FakeModel(_answer_result("수집 결과가 없습니다.")),
+        ),
+        capabilities=[
+            ToolCapability(
+                tool_name="realtime_scraping:wanted",
+                purpose="원티드 수집",
+            ),
+            ToolCapability(
+                tool_name="realtime_scraping:saramin",
+                purpose="사람인 수집",
+            ),
+        ],
+        run_collection=collect,
+        store_collection=lambda _batch: _persistence_report([]),
+        record_experience=_experience_result,
+    )
+
+    result = workflow.run("백엔드 공고를 웹에서 확인해줘")
+    snapshot = workflow.workflow.graph.get_state(
+        {"configurable": {"thread_id": result.investigation.investigation_id}}
+    )
+
+    assert collected_sites == ["wanted", "saramin"]
+    assert action_model.calls == 2
+    assert snapshot.values["execution"]["replan_attempted"] is True
+    assert result.run_status.value == "partial"
 
 
 def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(
@@ -906,9 +1028,6 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(
     class CollectionFlow:
         def run(self, intent):
             return _collection_batch(intent)
-
-        def postprocess(self, batch):
-            return _postprocessed_collection(batch)
 
         def store(self, _processed):
             job_id = insert_job(
@@ -993,7 +1112,6 @@ def test_workflow_semantically_rechecks_dictionary_indexed_web_collection(
         ),
         capabilities=_test_capabilities(),
         run_collection=collection_flow.run,
-        postprocess_collection=collection_flow.postprocess,
         store_collection=collection_flow.store,
         record_experience=_experience_result,
         taxonomy_service=taxonomy,
@@ -1030,9 +1148,6 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
         def run(self, intent):
             return _collection_batch(intent)
 
-        def postprocess(self, batch):
-            return _postprocessed_collection(batch)
-
         def store(self, _processed):
             collected_id = insert_job(
                 db,
@@ -1059,7 +1174,14 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
         )
     )
     answer_model = _FakeModel(
-        _answer_result("현재 수집 결과에서 정확히 일치하는 공고를 찾지 못했습니다.")
+        GroundedAnswerDraft(
+            lines=[
+                GroundedAnswerDraftLine(
+                    kind="caveat",
+                    text="현재 수집 결과에서 정확히 일치하는 공고를 찾지 못했습니다.",
+                )
+            ]
+        )
     )
     workflow = investigation_workflow_factory(
         db_path=db_path,
@@ -1109,7 +1231,6 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
         ),
         capabilities=_test_capabilities(),
         run_collection=collection_flow.run,
-        postprocess_collection=collection_flow.postprocess,
         store_collection=collection_flow.store,
         record_experience=_experience_result,
         taxonomy_service=taxonomy,
@@ -1127,7 +1248,7 @@ def test_workflow_does_not_answer_web_request_from_stale_database_evidence(
         for item in collection["persisted_items"]
     }
     assert stale_id not in persisted_ids
-    assert result.final_answer.startswith("현재 수집 결과에서")
+    assert "현재 수집 결과에서" in result.final_answer
 
 
 def test_collection_plan_keeps_llm_arguments_without_code_reconstruction():
@@ -1198,6 +1319,8 @@ def test_collection_plan_keeps_llm_arguments_without_code_reconstruction():
         "task_category": "검색",
         "required_fields": ["posted_at", "requirements"],
     }
+    duplicate = steps[0].model_copy(update={"step_id": "same-input-new-id"})
+    assert new_collection_steps(steps, [duplicate]) == []
 
 
 def test_semantic_evidence_validation_keeps_only_matching_candidate():

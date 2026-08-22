@@ -53,7 +53,7 @@ def execute_ui_action(
         current_url=current_url,
     )
     raise_for_action_failure(result)
-    screen_changed = action_name != "focus_marker"
+    screen_changed = True
     if action_name == "open_browser":
         raw_result_payload = result.get("result")
         result_payload = (
@@ -113,6 +113,7 @@ def activate_clicked_job_card(
         job_card_queue,
         action_context_args,
     )
+    context.state["progress"]["stage"] = "opening_detail"
 
 
 def _apply_job_card_queue_completion(
@@ -127,6 +128,12 @@ def _apply_job_card_queue_completion(
         target_count=target_count_from_state(state),
     ):
         state["lifecycle"]["is_finished"] = True
+        state["lifecycle"]["completion_reason"] = (
+            "visible_scope_completed"
+            if count_mode_from_state(state) == "visible_all"
+            else "target_reached"
+        )
+        state["progress"]["stage"] = "finished"
         resolved_count = resolved_job_card_count(job_card_queue)
         result["auto_finished"] = True
         result["resolved_count"] = resolved_count

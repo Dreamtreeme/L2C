@@ -214,7 +214,9 @@ class ActionTools:
         self._sleep(get_settings().browser.open_wait_sec)
         bound = self._bind_new_or_active_browser_window(before_ids)
         if not bound:
-            raise RuntimeError("새로 연 브라우저 창을 자동화 대상으로 바인딩하지 못했습니다.")
+            raise RuntimeError(
+                "새로 연 브라우저 창을 자동화 대상으로 바인딩하지 못했습니다."
+            )
         return {
             "opened": True,
             "url": url,
@@ -305,15 +307,6 @@ class ActionTools:
         pyautogui.click()
         return x, y
 
-    def focus_marker(self, bbox: List[int]) -> Dict[str, Any]:
-        """마커를 클릭해 해당 입력·스크롤 구성요소에 포커스를 옮깁니다."""
-
-        def _focus():
-            x, y = self._click_bbox_center(bbox)
-            return f"Focused component at ({x}, {y})"
-
-        return self._execute("focus_marker", _focus)
-
     def type_in_marker(self, bbox: List[int], text: str) -> Dict[str, Any]:
         """마커를 클릭한 후, 기존 텍스트를 지우고 pyperclip을 통해 안전하게 한글/영문 텍스트를 붙여넣습니다."""
 
@@ -347,11 +340,14 @@ class ActionTools:
         if amount not in {"small", "page"}:
             raise ValueError(f"Unsupported scroll amount: {amount}")
 
-    def _move_to_scroll_target(self, bbox: List[int] | None) -> None:
-        if bbox:
-            x, y = self._get_absolute_coords(bbox)
-            pyautogui.moveTo(x, y, duration=self.move_duration_sec)
-            return
+    def _move_to_scroll_target(self, bbox: List[int]) -> tuple[int, int]:
+        """대상 마커 위로 포인터만 옮겨 휠 입력 영역을 지정한다."""
+
+        x, y = self._get_absolute_coords(bbox)
+        pyautogui.moveTo(x, y, duration=self.move_duration_sec)
+        return x, y
+
+    def _move_to_page_scroll_target(self) -> None:
         region = self.perception.last_region
         if region:
             pyautogui.moveTo(
@@ -391,17 +387,21 @@ class ActionTools:
         bbox: List[int] | None = None,
         amount: str = "page",
     ) -> Dict[str, Any]:
-        """전체 페이지 또는 지정한 화면 영역을 물리적으로 스크롤합니다."""
+        """대상 영역 위로 포인터를 옮긴 뒤 물리적으로 스크롤합니다."""
 
         def _scroll():
             self._validate_scroll_request(direction, amount)
-            self._move_to_scroll_target(bbox)
+            focused_at: tuple[int, int] | None = None
+            if bbox is not None:
+                focused_at = self._move_to_scroll_target(bbox)
+            else:
+                self._move_to_page_scroll_target()
 
-            # 전체 페이지의 한 화면 이동은 기존 PageUp/PageDown 동작을 유지합니다.
+            # 대상 영역이 없는 페이지 이동은 커서 위치와 무관한 키 입력을 사용한다.
             if bbox is None and amount == "page" and direction in {"down", "up"}:
                 key_to_press = "pagedown" if direction == "down" else "pageup"
                 pyautogui.press(key_to_press)
-                logger.info(f"Pressed {key_to_press} for scrolling {direction}")
+                logger.info("Pressed page key for scrolling", key=key_to_press)
                 return f"Scrolled {direction} via {key_to_press}"
 
             browser_settings = get_settings().browser
@@ -411,6 +411,7 @@ class ActionTools:
                 else browser_settings.scroll_small_steps
             )
             signed_steps = steps if direction in {"up", "left"} else -steps
+            # 휠 단계로 이동해 고정 헤더가 있는 페이지에서도 다음 캡처와 본문이 겹치게 합니다.
             # pyautogui 0.9.54의 Windows 구현은 mouse_event에 값을 그대로 넘긴다.
             # Win32 휠 한 칸은 120 단위이므로 실제 칸 수로 환산해야 한다.
             wheel_delta = (
@@ -425,6 +426,8 @@ class ActionTools:
                 amount=amount,
                 steps=steps,
                 targeted=bool(bbox),
+                pointer_moved=focused_at is not None,
+                pointer_point=(list(focused_at) if focused_at else []),
             )
             return f"Scrolled {direction} via {method} ({amount})"
 

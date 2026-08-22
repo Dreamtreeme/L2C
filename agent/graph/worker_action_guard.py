@@ -9,7 +9,8 @@ from agent.graph.worker_action_recording import record_action_result
 from agent.graph.worker_execution_context import WorkerExecutionContext
 from agent.graph.worker_execution_policy import (
     blocked_action_reason,
-    repeats_no_effect_target,
+    repeats_no_effect_request,
+    repeats_submitted_input_request,
 )
 from agent.runtime.transition_runtime import latest_no_effect_transition
 from agent.utils.logger import logger
@@ -76,6 +77,48 @@ def _record_policy_block(
     )
 
 
+def guard_action_request(context: WorkerExecutionContext) -> bool:
+    """이미 확인된 동일 요청을 도구 묶음 실행 전에 막는다."""
+
+    if repeats_submitted_input_request(context.state, context.action_request):
+        first_call = context.action_request.tool_calls[0]
+        _record_guard_result(
+            context,
+            first_call.name,
+            dict(first_call.args),
+            context.before_snapshot(),
+            status="skipped",
+            reason="search_query_already_submitted",
+            message=(
+                "Skipped the search query because the same value was already "
+                "entered and submitted successfully."
+            ),
+            step_started=time.perf_counter(),
+        )
+        return True
+
+    no_effect_transition = latest_no_effect_transition(context.state)
+    if not repeats_no_effect_request(no_effect_transition, context.action_request):
+        return False
+
+    first_call = context.action_request.tool_calls[0]
+    _record_guard_result(
+        context,
+        first_call.name,
+        dict(first_call.args),
+        context.before_snapshot(),
+        status="skipped",
+        reason="same_screen_no_effect_action_blocked",
+        message=(
+            "Blocked an action request that already had no effect on this screen. "
+            "Choose another navigation method."
+        ),
+        step_started=time.perf_counter(),
+        increments_error=True,
+    )
+    return True
+
+
 def guard_ui_action(
     context: WorkerExecutionContext,
     action_name: str,
@@ -83,7 +126,7 @@ def guard_ui_action(
     before_snapshot: dict[str, Any],
     step_started: float,
 ) -> bool:
-    """작업 권한을 벗어나거나 효과 없는 행동의 반복이면 실행을 막는다."""
+    """작업 권한과 탭 닫기 선행조건을 검사한다."""
 
     state = context.state
     policy_reason = blocked_action_reason(
@@ -124,28 +167,7 @@ def guard_ui_action(
         )
         return True
 
-    if repeats_no_effect_target(
-        no_effect_transition,
-        action_name,
-        args,
-    ):
-        _record_guard_result(
-            context,
-            action_name,
-            args,
-            before_snapshot,
-            status="skipped",
-            reason="same_screen_no_effect_action_blocked",
-            message=(
-                "Blocked an atomic UI action that already had no effect on this "
-                "screen. Choose another navigation method."
-            ),
-            step_started=step_started,
-            increments_error=True,
-        )
-        return True
-
     return False
 
 
-__all__ = ["guard_ui_action"]
+__all__ = ["guard_action_request", "guard_ui_action"]

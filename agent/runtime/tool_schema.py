@@ -10,32 +10,26 @@ from shared.schema.skill_schema import RecipeInputName
 
 
 class click_marker(BaseModel):
-    """화면의 특정 ID 마커를 클릭합니다."""
+    """화면의 일반 조작 마커를 클릭합니다. 검색 결과 공고는 set_job_card_queue를 사용합니다."""
 
     marker_id: int = Field(..., description="클릭할 마커의 ID")
-    target_label: Optional[str] = Field(None, description="선택한 항목의 보이는 제목(target_label)")
-    target_role: Optional[str] = Field(None, description="목표 기준 대상 역할(target_role)")
-    target_component: Optional[str] = Field(None, description="화면 구성요소(target_component)")
+    target_label: Optional[str] = Field(
+        None, description="선택한 항목의 보이는 제목(target_label)"
+    )
+    target_role: Optional[str] = Field(
+        None, description="목표 기준 대상 역할(target_role)"
+    )
+    target_component: Optional[str] = Field(
+        None, description="화면 구성요소(target_component)"
+    )
     reason: Optional[str] = Field(None, description="이 대상을 선택한 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="클릭 후 정상이라면 보여야 할 화면 변화(expected_after)")
-    page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
-
-
-class focus_marker(BaseModel):
-    """마커를 마우스로 클릭해 키보드·스크롤 포커스를 옮깁니다."""
-
-    marker_id: int = Field(..., description="포커스를 옮길 마커의 ID")
-    target_label: Optional[str] = Field(None, description="포커스 대상의 보이는 라벨(target_label)")
-    target_role: Optional[str] = Field(None, description="포커스 대상 역할(target_role)")
-    target_component: Optional[str] = Field(None, description="포커스를 받을 화면 구성요소(target_component)")
-    reason: Optional[str] = Field(None, description="이 구성요소에 포커스를 옮기는 이유(reason)")
     expected_after: Optional[str] = Field(
-        None,
-        description="포커스 후 이어서 수행할 키보드 또는 스크롤 행동(expected_after)",
+        None, description="클릭 후 정상이라면 보여야 할 화면 변화(expected_after)"
     )
     page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        None, description="safe_read, safe_navigation, or sensitive."
+    )
 
 
 class type_in_marker(BaseModel):
@@ -49,17 +43,27 @@ class type_in_marker(BaseModel):
         ),
     )
     text: str = Field(..., description="입력할 텍스트")
-    target_label: Optional[str] = Field(None, description="입력 영역의 보이는 라벨(target_label)")
+    target_label: Optional[str] = Field(
+        None, description="입력 영역의 보이는 라벨(target_label)"
+    )
     slot_name: Optional[RecipeInputName] = Field(
         None,
         description="검색어를 재생할 때 사용하는 search_keyword 입력 이름",
     )
-    target_role: Optional[str] = Field(None, description="목표 기준 대상 역할(target_role)")
-    target_component: Optional[str] = Field(None, description="화면 구성요소(target_component)")
+    target_role: Optional[str] = Field(
+        None, description="목표 기준 대상 역할(target_role)"
+    )
+    target_component: Optional[str] = Field(
+        None, description="화면 구성요소(target_component)"
+    )
     reason: Optional[str] = Field(None, description="이 입력을 수행한 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="입력 후 정상이라면 보여야 할 화면 변화(expected_after)")
+    expected_after: Optional[str] = Field(
+        None, description="입력 후 정상이라면 보여야 할 화면 변화(expected_after)"
+    )
     page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        None, description="safe_read, safe_navigation, or sensitive."
+    )
 
 
 class scroll(BaseModel):
@@ -73,18 +77,30 @@ class scroll(BaseModel):
         None,
         description=(
             "내부 패널·목록처럼 특정 영역을 스크롤할 때 기준으로 삼을 마커 ID. "
+            "도구가 이 마커 위로 포인터를 옮긴 뒤 클릭 없이 스크롤합니다. "
             "생략하면 전체 페이지를 스크롤합니다."
         ),
     )
     amount: Literal["small", "page"] = Field(
         "page",
-        description="스크롤 이동량 ('small' 또는 'page')",
+        description=(
+            "스크롤 이동량. 연속된 본문을 읽을 때는 인접 화면이 겹치는 'small', "
+            "결과 목록을 빠르게 넘길 때는 'page'를 사용합니다."
+        ),
     )
-    target_label: Optional[str] = Field(None, description="스크롤할 영역의 보이는 라벨(target_label)")
-    target_role: Optional[str] = Field(None, description="스크롤 대상 역할(target_role)")
-    target_component: Optional[str] = Field(None, description="스크롤 대상 화면 구성요소(target_component)")
+    target_label: Optional[str] = Field(
+        None, description="스크롤할 영역의 보이는 라벨(target_label)"
+    )
+    target_role: Optional[str] = Field(
+        None, description="스크롤 대상 역할(target_role)"
+    )
+    target_component: Optional[str] = Field(
+        None, description="스크롤 대상 화면 구성요소(target_component)"
+    )
     reason: Optional[str] = Field(None, description="스크롤을 수행한 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="스크롤 후 정상이라면 보여야 할 화면 변화(expected_after)")
+    expected_after: Optional[str] = Field(
+        None, description="스크롤 후 정상이라면 보여야 할 화면 변화(expected_after)"
+    )
     page_role: Optional[str] = Field(None, description="Current page role.")
     risk_level: Optional[str] = Field(
         "safe_read",
@@ -97,9 +113,13 @@ class press_key(BaseModel):
 
     key: str = Field(..., description="누를 특수키 (예: 'enter', 'esc')")
     reason: Optional[str] = Field(None, description="키 입력을 수행한 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="키 입력 후 정상이라면 보여야 할 화면 변화(expected_after)")
+    expected_after: Optional[str] = Field(
+        None, description="키 입력 후 정상이라면 보여야 할 화면 변화(expected_after)"
+    )
     page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        None, description="safe_read, safe_navigation, or sensitive."
+    )
 
 
 class open_browser(BaseModel):
@@ -107,18 +127,27 @@ class open_browser(BaseModel):
 
     url: str = Field(..., description="접속할 URL (예: https://www.wanted.co.kr)")
     reason: Optional[str] = Field(None, description="이 URL을 여는 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="브라우저 이동 후 정상이라면 보여야 할 화면 변화(expected_after)")
+    expected_after: Optional[str] = Field(
+        None,
+        description="브라우저 이동 후 정상이라면 보여야 할 화면 변화(expected_after)",
+    )
     page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        None, description="safe_read, safe_navigation, or sensitive."
+    )
 
 
 class close_current_tab(BaseModel):
     """현재 활성 브라우저 탭 하나를 닫습니다."""
 
     reason: Optional[str] = Field(None, description="현재 탭을 닫는 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="탭을 닫은 뒤 기대 상태(expected_after)")
+    expected_after: Optional[str] = Field(
+        None, description="탭을 닫은 뒤 기대 상태(expected_after)"
+    )
     page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        None, description="safe_read, safe_navigation, or sensitive."
+    )
 
 
 class switch_tab(BaseModel):
@@ -129,27 +158,39 @@ class switch_tab(BaseModel):
         description="전환할 탭 방향 ('next' 또는 'previous')",
     )
     reason: Optional[str] = Field(None, description="탭을 전환하는 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="탭 전환 뒤 기대 상태(expected_after)")
+    expected_after: Optional[str] = Field(
+        None, description="탭 전환 뒤 기대 상태(expected_after)"
+    )
     page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        None, description="safe_read, safe_navigation, or sensitive."
+    )
 
 
 class review_job_detail(BaseModel):
     """누적한 상세 OCR이 저장 가능한지 검토하도록 요청합니다."""
 
     reason: Optional[str] = Field(None, description="현재 근거를 검토할 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="검토 뒤 기대되는 상태(expected_after)")
+    expected_after: Optional[str] = Field(
+        None, description="검토 뒤 기대되는 상태(expected_after)"
+    )
     page_role: Optional[str] = Field("job_detail", description="Current page role.")
-    risk_level: Optional[str] = Field("safe_read", description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        "safe_read", description="safe_read, safe_navigation, or sensitive."
+    )
 
 
 class go_back(BaseModel):
     """브라우저의 뒤로가기 기능을 실행합니다."""
 
     reason: Optional[str] = Field(None, description="뒤로가기를 수행한 이유(reason)")
-    expected_after: Optional[str] = Field(None, description="뒤로가기 후 정상이라면 보여야 할 화면 변화(expected_after)")
+    expected_after: Optional[str] = Field(
+        None, description="뒤로가기 후 정상이라면 보여야 할 화면 변화(expected_after)"
+    )
     page_role: Optional[str] = Field(None, description="Current page role.")
-    risk_level: Optional[str] = Field(None, description="safe_read, safe_navigation, or sensitive.")
+    risk_level: Optional[str] = Field(
+        None, description="safe_read, safe_navigation, or sensitive."
+    )
 
 
 class VisibleJobCard(BaseModel):
@@ -169,7 +210,7 @@ class VisibleJobCard(BaseModel):
 
 
 class set_job_card_queue(BaseModel):
-    """현재 화면의 수집 대상 공고 카드를 런타임 작업 큐에 저장합니다."""
+    """검색 결과의 수집 대상 공고를 선택해 런타임 작업 큐에 저장합니다."""
 
     cards: List[VisibleJobCard] = Field(
         default_factory=list,
@@ -183,7 +224,9 @@ class set_job_card_queue(BaseModel):
         ge=0,
         description="화면에 명시된 전체 검색 결과 개수. 숫자의 의미가 확실할 때만 입력합니다.",
     )
-    count_evidence: Optional[str] = Field(None, description="전체 결과 개수를 판단한 화면 문구")
+    count_evidence: Optional[str] = Field(
+        None, description="전체 결과 개수를 판단한 화면 문구"
+    )
     reason: Optional[str] = Field(None, description="이 카드들을 큐에 넣은 이유")
 
 
@@ -197,7 +240,6 @@ ACTION_TOOL_SCHEMAS = {
     schema.__name__: schema
     for schema in (
         click_marker,
-        focus_marker,
         type_in_marker,
         scroll,
         press_key,
@@ -210,36 +252,6 @@ ACTION_TOOL_SCHEMAS = {
         finish_task,
     )
 }
-
-DETAIL_ACTION_TOOL_NAMES = (
-    "click_marker",
-    "focus_marker",
-    "scroll",
-    "press_key",
-    "review_job_detail",
-    "go_back",
-    "close_current_tab",
-    "switch_tab",
-    "finish_task",
-)
-NAVIGATION_ACTION_TOOL_NAMES = (
-    "click_marker",
-    "focus_marker",
-    "type_in_marker",
-    "scroll",
-    "press_key",
-    "go_back",
-    "close_current_tab",
-    "switch_tab",
-    "finish_task",
-)
-UNKNOWN_ACTION_TOOL_NAMES = (
-    *NAVIGATION_ACTION_TOOL_NAMES[:5],
-    "open_browser",
-    *NAVIGATION_ACTION_TOOL_NAMES[5:],
-    "review_job_detail",
-)
-
 
 def model_action_tool_schema(name: str) -> dict[str, Any]:
     """내부 행동 계약을 모델이 혼동하지 않는 함수 스키마로 변환한다."""
@@ -264,10 +276,24 @@ def normalize_model_action_calls(
     """모델 출력을 실행 가능한 내부 행동 묶음으로 정규화한다."""
 
     calls = deepcopy(raw_calls)
+    default_risk_levels = {
+        "click_marker": "safe_navigation",
+        "type_in_marker": "safe_navigation",
+        "press_key": "safe_navigation",
+        "open_browser": "safe_navigation",
+        "close_current_tab": "safe_navigation",
+        "switch_tab": "safe_navigation",
+        "go_back": "safe_navigation",
+        "scroll": "safe_read",
+        "review_job_detail": "safe_read",
+    }
     for call in calls:
-        if call.get("name") != "scroll":
-            continue
+        name = str(call.get("name") or "")
         args = call.get("args")
+        if isinstance(args, dict) and name in default_risk_levels:
+            args.setdefault("risk_level", default_risk_levels[name])
+        if name != "scroll":
+            continue
         if isinstance(args, dict) and "scroll_distance" in args:
             args["amount"] = args.pop("scroll_distance")
     if len(calls) == 1:
@@ -296,15 +322,11 @@ def normalize_model_action_calls(
 
 __all__ = [
     "ACTION_TOOL_SCHEMAS",
-    "DETAIL_ACTION_TOOL_NAMES",
-    "NAVIGATION_ACTION_TOOL_NAMES",
-    "UNKNOWN_ACTION_TOOL_NAMES",
     "model_action_tool_schema",
     "normalize_model_action_calls",
     "VisibleJobCard",
     "click_marker",
     "close_current_tab",
-    "focus_marker",
     "review_job_detail",
     "finish_task",
     "go_back",

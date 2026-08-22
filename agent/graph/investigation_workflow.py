@@ -53,8 +53,8 @@ class InvestigationWorkflow:
         workflow.add_node("define_evidence", self.evidence_nodes.define_evidence)
         workflow.add_node("inspect_evidence", self.evidence_nodes.inspect_evidence)
         workflow.add_node("plan_actions", self.evidence_nodes.plan_actions)
+        workflow.add_node("replan_actions", self.evidence_nodes.replan_actions)
         workflow.add_node("collect", self.collection_nodes.collect)
-        workflow.add_node("postprocess", self.collection_nodes.postprocess)
         workflow.add_node("persist", self.collection_nodes.persist)
         workflow.add_node("answer", self.answer_nodes.answer)
         workflow.add_edge(START, "understand")
@@ -84,6 +84,7 @@ class InvestigationWorkflow:
                 "answer": "answer",
                 "collect": "collect",
                 "plan_actions": "plan_actions",
+                "replan_actions": "replan_actions",
             },
         )
         workflow.add_conditional_edges(
@@ -92,24 +93,44 @@ class InvestigationWorkflow:
             {"collect": "collect", "answer": "answer"},
         )
         workflow.add_conditional_edges(
+            "replan_actions",
+            self.evidence_nodes.route_after_plan,
+            {"collect": "collect", "answer": "answer"},
+        )
+        workflow.add_conditional_edges(
             "collect",
-            self.collection_nodes.route_after_collect,
+            self._route_after_collect,
             {
-                "postprocess": "postprocess",
-                "inspect_evidence": "inspect_evidence",
+                "persist": "persist",
+                "collect": "collect",
+                "replan_actions": "replan_actions",
+                "answer": "answer",
             },
         )
         workflow.add_conditional_edges(
-            "postprocess",
-            self.collection_nodes.route_after_postprocess,
+            "persist",
+            self._route_after_persist,
             {
-                "persist": "persist",
                 "inspect_evidence": "inspect_evidence",
+                "collect": "collect",
+                "replan_actions": "replan_actions",
+                "answer": "answer",
             },
         )
-        workflow.add_edge("persist", "inspect_evidence")
         workflow.add_edge("answer", END)
         return workflow.compile(checkpointer=checkpointer)
+
+    def _route_after_collect(self, state: InvestigationState) -> str:
+        route = self.collection_nodes.route_after_collect(state)
+        if route == "answer" and self.evidence_nodes.can_replan(state):
+            return "replan_actions"
+        return route
+
+    def _route_after_persist(self, state: InvestigationState) -> str:
+        route = self.collection_nodes.route_after_persist(state)
+        if route == "answer" and self.evidence_nodes.can_replan(state):
+            return "replan_actions"
+        return route
 
     @staticmethod
     def _thread_config(investigation_id: str) -> dict[str, dict[str, str]]:
@@ -139,7 +160,8 @@ class InvestigationWorkflow:
         investigation = request.get("investigation")
         if not isinstance(investigation, InvestigationRequest):
             raise TypeError("조사 그래프 결과에 InvestigationRequest가 없습니다.")
-        run_status = RunStatus.COMPLETED
+        status_value = str(answer.get("run_status") or RunStatus.COMPLETED.value)
+        run_status = RunStatus(status_value)
         final_answer = str(answer.get("final_answer") or "")
         if clarification is not None:
             run_status = RunStatus.WAITING_INPUT

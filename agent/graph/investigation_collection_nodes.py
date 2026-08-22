@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from agent.graph.investigation_context import InvestigationState
 from agent.observability.run_context import (
@@ -20,7 +20,6 @@ from shared.schema.collection_run import (
     CollectionBatch,
     CollectionExperienceResult,
     PersistenceReport,
-    PostprocessedCollection,
     RecipeLearningResult,
 )
 from shared.schema.feedback_schema import WorkerSubmission
@@ -28,6 +27,8 @@ from shared.schema.investigation_schema import InvestigationPlanStep
 
 
 def _scope_exhausted(submission: WorkerSubmission, resolved_count: int) -> bool:
+    if submission.extracted_summary.get("completion_reason") == "scope_exhausted":
+        return True
     availability = submission.extracted_summary.get("job_results_availability") or {}
     available_count = availability.get("available_job_count")
     evidence = str(availability.get("count_evidence") or "").strip()
@@ -39,23 +40,58 @@ def _scope_exhausted(submission: WorkerSubmission, resolved_count: int) -> bool:
     )
 
 
-def _collection_status(
+def _collection_outcomes(
     *,
     resolved_count: int,
     target_count: int,
     rejected_count: int,
     worker_finished: bool,
     scope_exhausted: bool,
-) -> str:
-    if resolved_count <= 0:
-        return "failed"
-    if rejected_count > 0:
-        return "partial"
-    if target_count > 0 and resolved_count < target_count and not scope_exhausted:
-        return "partial"
-    if not worker_finished and not scope_exhausted:
-        return "partial"
-    return "completed"
+    completion_reason: str,
+) -> tuple[
+    Literal["completed", "partial", "failed"],
+    Literal["completed", "failed"],
+    Literal["available", "no_match", "rejected", "failed"],
+    Literal["fulfilled", "partial", "unfulfilled"],
+]:
+    execution_status: Literal["completed", "failed"] = (
+        "completed"
+        if worker_finished
+        and completion_reason not in {"reasoning_limit", "screen_unavailable"}
+        else "failed"
+    )
+    if resolved_count > 0:
+        data_status: Literal["available", "no_match", "rejected", "failed"] = (
+            "available"
+        )
+    elif rejected_count > 0:
+        data_status = "rejected"
+    elif scope_exhausted:
+        data_status = "no_match"
+    else:
+        data_status = "failed"
+
+    if target_count > 0:
+        if resolved_count >= target_count:
+            fulfillment_status: Literal["fulfilled", "partial", "unfulfilled"] = (
+                "fulfilled"
+            )
+        elif resolved_count > 0:
+            fulfillment_status = "partial"
+        else:
+            fulfillment_status = "unfulfilled"
+    else:
+        fulfillment_status = (
+            "fulfilled" if resolved_count > 0 or scope_exhausted else "unfulfilled"
+        )
+
+    if execution_status == "failed":
+        status: Literal["completed", "partial", "failed"] = "failed"
+    elif fulfillment_status == "fulfilled" or data_status == "no_match":
+        status = "completed"
+    else:
+        status = "partial"
+    return status, execution_status, data_status, fulfillment_status
 
 
 def build_collection_result(
@@ -81,19 +117,28 @@ def build_collection_result(
     scope_exhausted = _scope_exhausted(submission, resolved_count)
     worker_finished = submission.run_status == "finished"
     hit_recursion_limit = submission.run_status == "recursion_limit"
-    status = _collection_status(
+    completion_reason = str(
+        submission.extracted_summary.get("completion_reason") or ""
+    )
+    status, execution_status, data_status, fulfillment_status = _collection_outcomes(
         resolved_count=resolved_count,
         target_count=intent.target_count,
         rejected_count=persistence.rejected_count,
         worker_finished=worker_finished,
         scope_exhausted=scope_exhausted,
+        completion_reason=completion_reason,
     )
     return CollectionResult(
         status=status,
+        execution_status=execution_status,
+        data_status=data_status,
+        fulfillment_status=fulfillment_status,
+        completion_reason=completion_reason,
         message=(
             f"collection {status}: keyword={intent.search_keyword!r}, "
             f"site={batch.site_name}, resolved={resolved_count}, "
-            f"persisted={persistence.persisted_count}"
+            f"stored={persistence.stored_count}, "
+            f"answer_ready={persistence.persisted_count}"
         ),
         site=intent.site,
         site_name=batch.site_name,
@@ -102,6 +147,7 @@ def build_collection_result(
         target_count=intent.target_count,
         collected_count=submission.collected_count,
         resolved_count=resolved_count,
+        stored_count=persistence.stored_count,
         persisted_count=persistence.persisted_count,
         created_count=persistence.created_count,
         updated_count=persistence.updated_count,
@@ -112,7 +158,7 @@ def build_collection_result(
         scope_exhausted=scope_exhausted,
         worker_finished=worker_finished,
         hit_recursion_limit=hit_recursion_limit,
-        worker_run_id=experience.run_id,
+        worker_run_id=submission.run_id,
     )
 
 
@@ -124,6 +170,9 @@ def _failed_result(
 ) -> CollectionResult:
     return CollectionResult(
         status="failed",
+        execution_status="failed",
+        data_status="failed",
+        fulfillment_status="unfulfilled",
         message=message,
         error_code=error_code,
         site=intent.site,
@@ -145,9 +194,14 @@ def _complete_step_update(
         "채용공고 수집과 저장을 마쳤습니다.",
         data={
             "collection_status": result.status,
+            "execution_status": result.execution_status,
+            "data_status": result.data_status,
+            "fulfillment_status": result.fulfillment_status,
+            "completion_reason": result.completion_reason,
             "site": result.site,
             "target_count": result.target_count,
             "resolved_count": result.resolved_count,
+            "stored_count": result.stored_count,
             "persisted_count": result.persisted_count,
             "worker_run_id": result.worker_run_id,
             "document_ids": result.document_ids,
@@ -168,7 +222,6 @@ def _complete_step_update(
                 result,
             ],
             "pending_collection": None,
-            "postprocessed_collection": None,
         }
     }
 
@@ -179,16 +232,12 @@ class InvestigationCollectionNodes:
     def __init__(
         self,
         run_collection: Callable[[CollectionIntent], CollectionBatch],
-        postprocess_collection: Callable[
-            [CollectionBatch], PostprocessedCollection
-        ],
-        store_collection: Callable[[PostprocessedCollection], PersistenceReport],
+        store_collection: Callable[[CollectionBatch], PersistenceReport],
         record_experience: Callable[
             [CollectionBatch, PersistenceReport], CollectionExperienceResult
         ],
     ) -> None:
         self.run_collection = run_collection
-        self.postprocess_collection = postprocess_collection
         self.store_collection = store_collection
         self.record_experience = record_experience
 
@@ -228,61 +277,35 @@ class InvestigationCollectionNodes:
         return {
             "execution": {
                 "pending_collection": batch,
-                "postprocessed_collection": None,
             }
         }
 
     @staticmethod
-    def route_after_collect(state: InvestigationState) -> str:
-        return (
-            "postprocess"
-            if state["execution"].get("pending_collection") is not None
-            else "inspect_evidence"
+    def _has_remaining_steps(state: InvestigationState) -> bool:
+        execution = state["execution"]
+        executed = set(execution.get("executed_step_ids", []))
+        return any(
+            step.step_id not in executed for step in execution.get("plan", [])
         )
 
-    def postprocess(self, state: InvestigationState) -> dict[str, Any]:
-        batch = state["execution"].get("pending_collection")
-        if not isinstance(batch, CollectionBatch):
-            raise TypeError("후처리할 CollectionBatch가 없습니다.")
-        step = self._next_step(state)
-        try:
-            with measure_step("collection_postprocessing"):
-                processed = self.postprocess_collection(batch)
-        except (RunCancelled, RunDeadlineExceeded, ModelRequestTimeout):
-            raise
-        except Exception as exc:
-            logger.exception("Collection postprocessing failed", error=str(exc))
-            return _complete_step_update(
-                state,
-                step,
-                _failed_result(
-                    step.arguments,
-                    f"collection postprocessing error: {exc}",
-                    error_code=f"postprocessing_error:{type(exc).__name__}",
-                ),
-            )
-        return {"execution": {"postprocessed_collection": processed}}
-
-    @staticmethod
-    def route_after_postprocess(state: InvestigationState) -> str:
-        return (
-            "persist"
-            if state["execution"].get("postprocessed_collection") is not None
-            else "inspect_evidence"
-        )
+    @classmethod
+    def route_after_collect(
+        cls,
+        state: InvestigationState,
+    ) -> Literal["persist", "collect", "answer"]:
+        if state["execution"].get("pending_collection") is not None:
+            return "persist"
+        return "collect" if cls._has_remaining_steps(state) else "answer"
 
     def persist(self, state: InvestigationState) -> dict[str, Any]:
         execution = state["execution"]
         batch = execution.get("pending_collection")
-        processed = execution.get("postprocessed_collection")
-        if not isinstance(batch, CollectionBatch) or not isinstance(
-            processed, PostprocessedCollection
-        ):
-            raise TypeError("저장할 후처리 결과가 없습니다.")
+        if not isinstance(batch, CollectionBatch):
+            raise TypeError("저장할 CollectionBatch가 없습니다.")
         step = self._next_step(state)
         try:
             with measure_step("job_persistence"):
-                persistence = self.store_collection(processed)
+                persistence = self.store_collection(batch)
         except (RunCancelled, RunDeadlineExceeded, ModelRequestTimeout):
             raise
         except Exception as exc:
@@ -302,7 +325,6 @@ class InvestigationCollectionNodes:
         except Exception as exc:
             logger.warning("Collection experience recording failed: %s", exc)
             experience = CollectionExperienceResult(
-                run_id="",
                 recipe_learning=RecipeLearningResult(
                     status="failed",
                     reason="experience_recording_failed",
@@ -314,6 +336,17 @@ class InvestigationCollectionNodes:
             step,
             build_collection_result(batch, persistence, experience),
         )
+
+    @classmethod
+    def route_after_persist(
+        cls,
+        state: InvestigationState,
+    ) -> Literal["inspect_evidence", "collect", "answer"]:
+        results = state["execution"].get("collection_results", [])
+        latest = results[-1] if results else None
+        if latest is not None and latest.document_ids:
+            return "inspect_evidence"
+        return "collect" if cls._has_remaining_steps(state) else "answer"
 
 
 __all__ = ["InvestigationCollectionNodes", "build_collection_result"]

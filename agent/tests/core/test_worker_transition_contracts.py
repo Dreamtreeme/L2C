@@ -1,10 +1,13 @@
 import time
+from types import SimpleNamespace
 
 from agent.graph import (
+    worker_observation,
     worker_selection,
     worker_transition,
 )
-from agent.graph.workflow import route_after_execution, route_after_selection
+from agent.graph.workflow import route_after_execution
+from agent.runtime import transition_runtime
 from agent.runtime.transition_runtime import detect_two_screen_transition_cycle
 from agent.tests.worker_test_support import (
     apply_update,
@@ -16,6 +19,24 @@ from shared.schema.collection_intent import CollectionIntent
 from shared.schema.jd_schema import JobCapture
 from shared.schema.experience_rule_schema import ExpectedEffect
 from shared.schema.execution_record_schema import ObservedTransition
+
+
+def _evaluate_observed_action(state, runtime):
+    """실제 작업자 순서대로 CV 검사 후 필요한 경우 OCR 결과를 확정한다."""
+
+    inspected = apply_update(
+        state,
+        worker_transition.inspect_action_effect(state, runtime),
+    )
+    if (
+        inspected["transition"]["transition_result"].get("status")
+        == "needs_ocr"
+    ):
+        return apply_update(
+            inspected,
+            worker_transition.complete_action_effect(inspected, runtime),
+        )
+    return inspected
 
 
 def test_transition_cycle_ignores_actions_without_screen_change(monkeypatch):
@@ -84,7 +105,7 @@ def test_completed_detail_uses_deterministic_results_navigation():
         },
     )
 
-    assert route_after_execution(state) == "selection"
+    assert route_after_execution(state) == "decision"
     back = worker_selection.selection_node(state, node_runtime())
     back_request = back["decision"]["pending_action"]
     assert back_request.source == "job_results_navigation"
@@ -138,7 +159,7 @@ def test_completed_detail_without_queue_returns_for_more_results():
         },
     )
 
-    assert route_after_execution(state) == "selection"
+    assert route_after_execution(state) == "decision"
     selected = worker_selection.selection_node(state, node_runtime())
     request = selected["decision"]["pending_action"]
     assert request.source == "job_results_navigation"
@@ -255,30 +276,90 @@ def test_queue_click_without_screen_change_keeps_active_card(monkeypatch):
         },
     )
 
-    updated = apply_update(
-        state,
-        worker_transition.transition_node(state, node_runtime()),
-    )
+    updated = _evaluate_observed_action(state, node_runtime())
 
     assert updated["transition"]["transition_result"]["status"] == "unknown"
     assert (
         updated["transition"]["transition_result"]["reason"]
-        == "job_card_detail_not_reached"
+        == "no_screen_change"
     )
     assert updated["collection"]["job_card_queue"][0]["status"] == "active"
     assert worker_selection.selection_node(updated, node_runtime()) == {}
-    assert route_after_selection(updated) == "reasoning"
 
 
-def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
+def test_observed_page_role_owns_work_stage(monkeypatch):
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (True, 0.4),
+    )
+    state = worker_state(
+        observation={
+            "current_url": "https://www.wanted.co.kr/wd/1",
+            "current_page_role": "job_detail",
+            "current_screenshot": "detail.png",
+            "ocr_complete": True,
+            "current_markers": [{"id": 1, "text": "AI 엔지니어"}],
+        },
+        transition={
+            "transition_request": {
+                "action": "click_marker",
+                "action_seq": 3,
+                "source": "job_card_queue",
+                "before_url": "https://www.wanted.co.kr/search",
+                "before_screenshot": "results.png",
+                "started_at": time.time(),
+            }
+        },
+        progress={"stage": "opening_detail"},
+    )
+
+    update = _evaluate_observed_action(state, node_runtime())
+
+    assert update["transition"]["transition_result"]["status"] == "ready"
+    assert update["progress"]["stage"] == "opening_detail"
+    assert worker_observation._stage_for_page_role(state, "job_detail") == "detail"
+    assert worker_observation._stage_for_page_role(state, "search") == "results"
+
+
+def test_small_overlay_change_refreshes_autonomous_ocr_without_relaxing_reflex(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        transition_runtime,
+        "transition_visual_change_ratio",
+        lambda *_args: 0.0167,
+    )
+    monkeypatch.setattr(
+        transition_runtime,
+        "get_settings",
+        lambda: SimpleNamespace(
+            vision=SimpleNamespace(transition_visual_change_min_ratio=0.01),
+            reflex=SimpleNamespace(visual_change_min_ratio=0.03),
+        ),
+    )
+
+    assert transition_runtime.transition_has_visual_change(
+        {"source": "autonomous"},
+        "dropdown-open.png",
+    ) == (True, 0.0167)
+    assert transition_runtime.transition_has_visual_change(
+        {"source": "reflex"},
+        "dropdown-open.png",
+    ) == (False, 0.0167)
+
+
+def test_grouped_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
     monkeypatch.setattr(
         worker_transition,
         "transition_has_visual_change",
         lambda *_args: (False, 0.025),
     )
     request = {
-        "action": "type_in_marker",
-        "action_seq": 11,
+        "action": "press_key",
+        "action_seq": 12,
+        "action_seqs": [11, 12],
+        "transition_actions": ["type_in_marker", "press_key"],
         "source": "autonomous",
         "before_observation_id": "observation:0010",
         "before_screenshot": "search-overlay.png",
@@ -286,7 +367,7 @@ def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
         "input_text": "iOS 개발자",
         "started_at": time.time(),
     }
-    result = worker_transition.transition_node(
+    result = worker_transition.inspect_action_effect(
         worker_state(
             observation={
                 "current_screenshot": "search-suggestions.png",
@@ -302,7 +383,7 @@ def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
     assert transition["reason"] == "input_ocr_required"
     assert transition["needs_ocr"] is True
 
-    verified = worker_transition.transition_node(
+    verified = _evaluate_observed_action(
         worker_state(
             observation={
                 "observation_id": "observation:0011",
@@ -330,8 +411,13 @@ def test_text_input_refreshes_ocr_after_small_screen_change(monkeypatch):
     assert verified_transition["reason"] == "input_text_ocr_matched"
 
 
-def test_reflex_transition_rejects_change_without_saved_after_state():
+def test_reflex_transition_rejects_change_without_saved_after_state(monkeypatch):
     replay_results = []
+    monkeypatch.setattr(
+        worker_transition,
+        "transition_has_visual_change",
+        lambda *_args: (True, 0.5),
+    )
     request = {
         "action": "press_key",
         "action_seq": 2,
@@ -340,7 +426,7 @@ def test_reflex_transition_rejects_change_without_saved_after_state():
         "before_url": "https://www.wanted.co.kr/search",
         "started_at": time.time(),
     }
-    transition = worker_transition.transition_node(
+    transition = _evaluate_observed_action(
         worker_state(
             transition={"transition_request": request},
             observation={
@@ -387,7 +473,7 @@ def test_reflex_transition_accepts_changed_url_with_dynamic_content(
         "transition_has_visual_change",
         lambda *_args: (True, 0.5),
     )
-    result = worker_transition.transition_node(
+    result = _evaluate_observed_action(
         worker_state(
             transition={
                 "transition_request": {
@@ -428,7 +514,7 @@ def test_reflex_url_effect_requests_ocr_before_completing(monkeypatch):
         "transition_has_visual_change",
         lambda *_args: (True, 0.5),
     )
-    result = worker_transition.transition_node(
+    result = worker_transition.inspect_action_effect(
         worker_state(
             transition={
                 "transition_request": {

@@ -22,7 +22,7 @@ from shared.schema.investigation_schema import (
     RequestAnalysis,
 )
 from shared.schema.collection_intent import CollectionResult
-from shared.schema.collection_run import CollectionBatch, PostprocessedCollection
+from shared.schema.collection_run import CollectionBatch
 
 
 class InvestigationRequestState(TypedDict, total=False):
@@ -40,13 +40,14 @@ class InvestigationExecutionState(TypedDict, total=False):
     collection_document_ids: list[int]
     collection_results: list[CollectionResult]
     pending_collection: CollectionBatch | None
-    postprocessed_collection: PostprocessedCollection | None
     cannot_proceed_reason: str
+    replan_attempted: bool
 
 
 class InvestigationAnswerState(TypedDict, total=False):
     final_answer: str
     grounded_answer: GroundedAnswer | None
+    run_status: str
 
 
 def merge_investigation_section(
@@ -94,10 +95,14 @@ def create_investigation_state(
             "collection_document_ids": [],
             "collection_results": [],
             "pending_collection": None,
-            "postprocessed_collection": None,
             "cannot_proceed_reason": "",
+            "replan_attempted": False,
         },
-        "answer": {"final_answer": "", "grounded_answer": None},
+        "answer": {
+            "final_answer": "",
+            "grounded_answer": None,
+            "run_status": "running",
+        },
     }
 
 

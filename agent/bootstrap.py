@@ -10,8 +10,7 @@ from typing import Callable
 
 from agent.application.chat_service import ChatService
 from agent.application.collection_experience import record_collection_experience
-from agent.application.collection_postprocessing import postprocess_collection_batch
-from agent.application.collection_storage import store_postprocessed_collection
+from agent.application.collection_storage import store_collection_batch
 from agent.application.conversation_context_service import (
     load_conversation_context as load_default_conversation_context,
 )
@@ -45,7 +44,6 @@ from shared.schema.collection_run import (
     CollectionBatch,
     CollectionExperienceResult,
     PersistenceReport,
-    PostprocessedCollection,
 )
 from shared.schema.investigation_schema import ToolCapability
 
@@ -55,8 +53,7 @@ def build_investigation_workflow(
     *,
     checkpoint_runtime: InvestigationCheckpointRuntime,
     run_collection: Callable[[CollectionIntent], CollectionBatch],
-    postprocess_collection: Callable[[CollectionBatch], PostprocessedCollection],
-    store_collection: Callable[[PostprocessedCollection], PersistenceReport],
+    store_collection: Callable[[CollectionBatch], PersistenceReport],
     record_experience: Callable[
         [CollectionBatch, PersistenceReport], CollectionExperienceResult
     ],
@@ -105,7 +102,6 @@ def build_investigation_workflow(
         ),
         collection_nodes=InvestigationCollectionNodes(
             run_collection,
-            postprocess_collection,
             store_collection,
             record_experience,
         ),
@@ -150,9 +146,8 @@ class ApplicationRuntime:
                 self.db_path,
                 checkpoint_runtime=self.checkpoint_runtime,
                 run_collection=self.worker_execution_service.run,
-                postprocess_collection=postprocess_collection_batch,
                 store_collection=partial(
-                    store_postprocessed_collection,
+                    store_collection_batch,
                     db_path=self.db_path,
                 ),
                 record_experience=partial(

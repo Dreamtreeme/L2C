@@ -55,9 +55,7 @@ class ReflexRejectionLog:
         if score > self.reason_score:
             self.reason_score = score
             self.last_reason = resolved
-        self.candidates.append(
-            {"recipe_key": rule_key, "reason": resolved, **trace}
-        )
+        self.candidates.append({"recipe_key": rule_key, "reason": resolved, **trace})
 
     def reject_candidate(self, rule_key: str, reason: str, **trace: Any) -> None:
         self.rejected_count += 1
@@ -155,7 +153,9 @@ def _marker_from_reference(
         return None
     bbox = ratio_rect_to_pixels(reference.bbox_ratio, screen_size)
     if bbox == [0, 0, 0, 0]:
-        center = list(reference.center_ratio or roi_signature.get("target_center_ratio") or [])
+        center = list(
+            reference.center_ratio or roi_signature.get("target_center_ratio") or []
+        )
         if len(center) != 2:
             return None
         width, height = screen_size
@@ -226,9 +226,7 @@ def load_reflex_replay_context(
 
 def _missing_inputs(rule: ExperienceRule, inputs: ReplayInputs) -> list[str]:
     return [
-        item.name
-        for item in rule.skill_metadata.inputs
-        if not inputs.value(item.name)
+        item.name for item in rule.skill_metadata.inputs if not inputs.value(item.name)
     ]
 
 
@@ -468,10 +466,13 @@ def _bind_saved_targets(
     candidate: ReflexCandidate,
 ) -> TargetBindings:
     bindings = TargetBindings(markers=[marker.copy() for marker in context.markers])
-    next_marker_id = max(
-        (int(marker["id"]) for marker in bindings.markers),
-        default=-1,
-    ) + 1
+    next_marker_id = (
+        max(
+            (int(marker["id"]) for marker in bindings.markers),
+            default=-1,
+        )
+        + 1
+    )
     for action in candidate.step.actions:
         if action.target is None:
             continue

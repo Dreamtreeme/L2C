@@ -15,14 +15,16 @@ from agent.runtime.detail_runtime import (
     update_job_detail_buffer,
 )
 from agent.runtime.job_card_queue import job_detail_key_from_state
-from agent.runtime.site_context import is_job_detail_context
+from agent.runtime.site_context import is_job_detail_context, normalize_page_role
 from agent.runtime.vision_worker_runtime import WorkerDependencies
 from agent.runtime.worker_contracts import (
     ObservationPatch,
     PreviousObservation,
     ScreenMarker,
     ScreenSignature,
+    TransitionRequest,
     WorkerState,
+    WorkerStage,
     WorkerStateUpdate,
     apply_worker_state_update,
 )
@@ -35,6 +37,20 @@ from agent.vision.screen_signature import (
     compute_screen_signature,
 )
 from agent.vision.target_snapshot import is_icon_marker
+
+
+def _stage_for_page_role(state: WorkerState, page_role: str) -> WorkerStage:
+    """OCR이 확인한 화면 역할을 수집 진행 단계의 단일 기준으로 사용한다."""
+
+    role = normalize_page_role(page_role)
+    if role == "job_detail":
+        return "detail"
+    if role == "search":
+        return "results"
+    if role in {"home", "form", "error"}:
+        return "navigation"
+    return state["progress"]["stage"]
+
 
 def _build_ui_context(
     markers: list[ScreenMarker],
@@ -131,6 +147,20 @@ def _previous_observation(state: WorkerState) -> PreviousObservation:
     return (observation.get("previous_observation") or {}).copy()
 
 
+def _continued_page_role(
+    current_url: str,
+    previous_observation: PreviousObservation,
+    transition_request: TransitionRequest | None,
+) -> str:
+    """같은 URL을 스크롤한 새 캡처에는 직전 화면 역할을 이어간다."""
+
+    if not transition_request or transition_request.get("action") != "scroll":
+        return ""
+    if current_url != str(previous_observation.get("current_url") or ""):
+        return ""
+    return str(previous_observation.get("page_role") or "")
+
+
 def capture_node(
     state: WorkerState,
     runtime: Runtime[WorkerDependencies],
@@ -174,6 +204,11 @@ def capture_node(
     )
     observation_sequence, observation_id = _next_observation_identity(state)
     previous_observation = _previous_observation(state)
+    continued_page_role = _continued_page_role(
+        current_url,
+        previous_observation,
+        transition_request,
+    )
     logger.info(
         "Worker screen captured",
         observation_id=observation_id,
@@ -192,12 +227,12 @@ def capture_node(
             "current_url_stale": current_url_stale,
             "low_information_screen": low_information,
             "low_information_capture_count": low_information_capture_count,
-            # 새 관찰의 OCR이 끝나기 전에는 직전 화면 인식을 재사용하지 않는다.
+            # OCR 마커는 재사용하지 않고, 같은 URL의 스크롤에서는 화면 역할만 유지한다.
             "ui_context": "",
             "current_markers": [],
             "marked_image": "",
             "screen_signature": {},
-            "current_page_role": "",
+            "current_page_role": continued_page_role,
         }
     }
 
@@ -233,7 +268,9 @@ def ocr_node(
             screen_signature["size"] = raw_size
 
     current_url = str(observation_state.get("current_url") or "")
-    page_role = infer_current_page_role(current_url, markers)
+    page_role = infer_current_page_role(current_url, markers) or str(
+        observation_state.get("current_page_role") or ""
+    )
     ui_context = _build_ui_context(
         markers,
         current_url=current_url,
@@ -261,7 +298,10 @@ def ocr_node(
         "ocr_complete": True,
         "low_information_screen": False,
     }
-    update: WorkerStateUpdate = {"observation": observation}
+    update: WorkerStateUpdate = {
+        "observation": observation,
+        "progress": {"stage": _stage_for_page_role(state, page_role)},
+    }
     updated_state = apply_worker_state_update(state, update)
     update.update(_collect_job_detail_observation(updated_state))
     return update

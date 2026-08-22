@@ -8,7 +8,6 @@ from typing import Any, Callable
 from agent.runtime.worker_contracts import WorkerState, WorkerStateUpdate
 from agent.runtime.worker_data_services import WorkerDataServices
 from agent.runtime.detail_runtime import (
-    detail_buffer_ocr_items,
     detail_buffer_text,
     detail_evidence_screenshot,
 )
@@ -45,8 +44,6 @@ def dispatch_ui_action(
 
     if action_name == "click_marker":
         return action_tools.click_marker(get_bbox(args["marker_id"]))
-    if action_name == "focus_marker":
-        return action_tools.focus_marker(get_bbox(args["marker_id"]))
     if action_name == "type_in_marker":
         return action_tools.type_in_marker(
             get_bbox(args["marker_id"]),
@@ -111,16 +108,10 @@ def _prepare_job_draft(
     buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
     stats = dict(buffer.get("stats") or {})
     transition = dict(state["transition"].get("transition_result") or {})
-    active_card = active_job_card(
-        list(state["collection"].get("job_card_queue", []) or [])
-    )
     return JobDraft(
         url=current_url,
         detail_key=job_detail_key_from_state(state),
         raw_ocr_text=raw_ocr_text,
-        ocr_items=detail_buffer_ocr_items(buffer),
-        target_company_name=str(active_card.get("company") or "").strip(),
-        target_position=str(active_card.get("title") or "").strip(),
         required_fields=state["request"]["collection_intent"].required_fields,
         screenshot_path=detail_evidence_screenshot(buffer),
         source_card_key=_active_source_card_key(state, current_url),
@@ -171,29 +162,54 @@ def _request_primary_job_review(draft: JobDraft) -> StateActionOutcome:
     )
 
 
+def _job_review_request_mode(
+    state: WorkerState,
+    *,
+    current_url: str,
+) -> tuple[JobDraft | None, str]:
+    """현재 상세 근거가 신규 검토, 고성능 재검토, 중복 중 무엇인지 반환한다."""
+
+    buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
+    raw_ocr_text = detail_buffer_text(buffer)
+    if not raw_ocr_text:
+        return None, "empty"
+    draft = _prepare_job_draft(
+        state,
+        current_url=current_url,
+        raw_ocr_text=raw_ocr_text,
+    )
+    last_review = state["collection"].get("last_job_review")
+    if (
+        last_review is not None
+        and last_review.status == JobReviewStatus.NEEDS_MORE
+        and last_review.draft_fingerprint == draft.fingerprint()
+    ):
+        return (
+            draft,
+            "primary" if last_review.model_tier == "lightweight" else "unchanged",
+        )
+    return draft, "lightweight"
+
+
+def can_request_job_detail_review(state: WorkerState, current_url: str) -> bool:
+    """실제 정제 호출로 이어질 상세 근거가 있는지 반환한다."""
+
+    _draft, mode = _job_review_request_mode(state, current_url=current_url)
+    return mode in {"lightweight", "primary"}
+
+
 def _review_job_detail(
     *,
     current_url: str,
     state: WorkerState,
 ) -> StateActionOutcome:
     try:
-        buffer = (state["collection"].get("job_detail_buffer") or {}).copy()
-        raw_ocr_text = detail_buffer_text(buffer)
-        if not raw_ocr_text:
+        draft, mode = _job_review_request_mode(state, current_url=current_url)
+        if draft is None:
             return _empty_detail_outcome()
-        draft = _prepare_job_draft(
-            state,
-            current_url=current_url,
-            raw_ocr_text=raw_ocr_text,
-        )
-        last_review = state["collection"].get("last_job_review")
-        if (
-            last_review is not None
-            and last_review.status == JobReviewStatus.NEEDS_MORE
-            and last_review.draft_fingerprint == draft.fingerprint()
-        ):
-            if last_review.model_tier == "lightweight":
-                return _request_primary_job_review(draft)
+        if mode == "primary":
+            return _request_primary_job_review(draft)
+        if mode == "unchanged":
             return _unchanged_review_outcome()
         return _request_job_review(draft)
     except Exception as exc:
@@ -219,19 +235,15 @@ def _set_job_card_queue(
         queue,
         current_url,
     )
-    selector_trace = dict(state["decision"].get("job_card_selection_trace", {}) or {})
-    availability_source = (
-        args if args.get("available_job_count") is not None else selector_trace
-    )
     availability: dict[str, Any] = {}
-    raw_available_count = availability_source.get("available_job_count")
+    raw_available_count = args.get("available_job_count")
     try:
         available_count = (
-            int(raw_available_count) if raw_available_count is not None else -1
+            int(str(raw_available_count)) if raw_available_count is not None else -1
         )
     except (TypeError, ValueError):
         available_count = -1
-    count_evidence = str(availability_source.get("count_evidence") or "").strip()[:160]
+    count_evidence = str(args.get("count_evidence") or "").strip()[:160]
     if available_count >= len(queue) and count_evidence:
         availability = {
             "available_job_count": available_count,
@@ -256,7 +268,10 @@ def _set_job_card_queue(
             "collection": {
                 "job_card_queue": queue,
                 "job_results_availability": availability,
-            }
+            },
+            "progress": {
+                "stage": "results",
+            },
         },
     )
 
@@ -288,6 +303,7 @@ def dispatch_state_action(
 
 __all__ = [
     "StateActionOutcome",
+    "can_request_job_detail_review",
     "dispatch_state_action",
     "dispatch_ui_action",
 ]

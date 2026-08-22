@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-08-22",
+  "source_run": "logs/metrics_collection_fields_20260822/matrix.summary.json",
+  "commit_sha": "04a2783ce01e394f2df41b4099c0db939a0636c3",
+  "worktree_clean": false,
+  "population": {
+    "attempted_scenarios": 15,
+    "automatically_completed": 14,
+    "manually_audited_jobs": 14
+  },
+  "review_contract": {
+    "search_relevance": "상세 화면의 직무명 또는 본문이 요청 검색어의 업무와 직접 관련됨",
+    "source_url": "자동 수집에 성공한 공고의 URL이 해당 사이트의 상세 공고 주소 규칙을 통과함",
+    "company_name": "상세 화면, 브라우저 탭 또는 OCR 근거의 회사명과 의미 및 표기가 일치함",
+    "job_title": "채용 구분 접두어와 모집 문구 생략은 허용하되 직무 의미와 목표 공고가 일치함",
+    "responsibilities": "저장된 주요 업무가 목표 공고의 업무 섹션에 근거하고 중요한 항목을 누락하거나 다른 섹션과 뒤바꾸지 않음",
+    "requirements": "저장된 자격요건이 목표 공고의 자격 섹션에 근거하고 필수 조건을 누락하거나 우대사항과 뒤바꾸지 않음",
+    "all_fields_pass": "상세 URL, 회사명, 공고명, 주요 업무와 자격요건이 모두 pass"
+  },
+  "summary": {
+    "automatic_collection": {"passed": 14, "total": 15, "rate": 0.933333},
+    "search_relevance": {"passed": 14, "total": 14, "rate": 1.0},
+    "source_url": {"passed": 14, "total": 14, "rate": 1.0},
+    "company_name": {"passed": 13, "total": 14, "rate": 0.928571},
+    "job_title": {"passed": 14, "total": 14, "rate": 1.0},
+    "responsibilities": {"passed": 14, "total": 14, "rate": 1.0},
+    "requirements": {"passed": 13, "total": 14, "rate": 0.928571},
+    "all_fields": {"passed": 12, "total": 14, "rate": 0.857143},
+    "validated_result_per_attempt": {"passed": 12, "total": 15, "rate": 0.8},
+    "validated_result_per_attempt_by_site": {
+      "Wanted": {"passed": 2, "total": 3, "rate": 0.666667},
+      "Saramin": {"passed": 3, "total": 3, "rate": 1.0},
+      "JobKorea": {"passed": 3, "total": 3, "rate": 1.0},
+      "Work24": {"passed": 1, "total": 3, "rate": 0.333333},
+      "RocketPunch": {"passed": 3, "total": 3, "rate": 1.0}
+    }
+  },
+  "runtime": {
+    "total_execution_seconds": 934.29682,
+    "mean_attempt_seconds": 62.286455,
+    "total_tokens": 1285207,
+    "estimated_cost_usd": 0.706876,
+    "tokens_per_validated_result": 107100.583,
+    "estimated_cost_per_validated_result_usd": 0.058906,
+    "failed_scenario": {
+      "scenario_id": "worknet-production",
+      "execution_seconds": 175.374145,
+      "reasoning_calls": 32,
+      "ocr_requests": 21,
+      "tokens": 252393,
+      "estimated_cost_usd": 0.1776095,
+      "reason": "첫 공고와 보충 공고 모두 필수 자격요건을 확보하지 못해 거절된 뒤 같은 후보 재진입을 반복했고 화면 판단 한도에 도달함"
+    }
+  },
+  "human_time_comparison": {
+    "baseline_source": "사용자 추정",
+    "manual_seconds_per_result": 300,
+    "output_contract": "회사명, 공고명, URL, 주요 업무와 자격요건을 직접 검색해 정리한 공고 1건",
+    "validated_results": 12,
+    "manual_total_minutes": 60.0,
+    "l2c_total_minutes_including_failures": 15.572,
+    "l2c_seconds_per_validated_result": 77.858068,
+    "l2c_validated_results_per_hour": 46.237982,
+    "manual_results_per_hour": 12.0,
+    "estimated_speedup": 3.853165,
+    "estimated_time_reduction_percent": 74.047,
+    "estimated_minutes_saved": 44.428,
+    "limitation": "한 사용자의 경험 추정치와 단일 15개 시나리오 실행을 비교한 값이며 통제된 사용자 실험 결과가 아님"
+  },
+  "records": [
+    {"scenario_id": "wanted-sre", "site": "Wanted", "query": "SRE", "company": "(주)엘리스그룹", "title": "Infra SRE Engineer", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "SLI/SLO, 관측성, 장애 대응, 자동화 업무와 자격요건이 OCR 원문에 근거함"},
+    {"scenario_id": "wanted-android", "site": "Wanted", "query": "Android 개발자", "company": "포디(FOD)", "title": "Android 개발자", "search_relevance": "pass", "company_name": "fail", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "상세 화면의 회사명은 포디(FODI)이나 저장값에서 I 한 글자가 누락됨"},
+    {"scenario_id": "wanted-data-scientist", "site": "Wanted", "query": "데이터 사이언티스트", "company": "기어세컨드", "title": "데이터 사이언티스트", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "예측 모델, A/B 테스트, ML 파이프라인 업무와 경력·기술 요건을 보존함"},
+    {"scenario_id": "saramin-cloud", "site": "Saramin", "query": "클라우드 엔지니어", "company": "(주)진인프라", "title": "[중견IT기업] 클라우드 엔지니어 신입 및 경력 채용", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "클라우드 운영·구축 업무와 신입·경력별 조건을 구분해 저장함"},
+    {"scenario_id": "saramin-qa", "site": "Saramin", "query": "QA 엔지니어", "company": "이노아이(주)", "title": "SW QA 테스트엔지니어 경력직 채용", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "QA 업무와 학력·경력·선호 분야 조건이 원문에 근거함"},
+    {"scenario_id": "saramin-security", "site": "Saramin", "query": "정보보안", "company": "주식회사제로시큐어(ZEROSECUREInc.)", "title": "[제로시큐어] 정보보안 컨설팅(취약점 진단·모의해킹) 채용", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "취약점 진단 업무와 신입 지원 가능 조건을 정확히 분리함"},
+    {"scenario_id": "jobkorea-devops", "site": "JobKorea", "query": "DevOps 엔지니어", "company": "(주)비상교육", "title": "DevOps 엔지니어", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "CI/CD, 인프라 자동화, 클라우드 운영 업무와 경력·기술 조건을 보존함"},
+    {"scenario_id": "jobkorea-frontend", "site": "JobKorea", "query": "프론트엔드 개발자", "company": "아토머스(주)", "title": "프론트엔드 개발자", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "원문 제목의 [경력] 접두어는 정규화 과정에서 생략됐으며 직무와 본문 필드는 일치함"},
+    {"scenario_id": "jobkorea-data-analyst", "site": "JobKorea", "query": "데이터 분석가", "company": "뉴셀렉트(주)", "title": "커머스 데이터 분석가", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "성과 체계, 수익성, SQL, 자동화 업무와 이커머스·SQL·행동 로그 경험 요건을 보존함"},
+    {"scenario_id": "worknet-electrical-design", "site": "Work24", "query": "전기 설계", "company": "(주)한국전기설계감리기술단", "title": "전기설계/통신설계/소방설계 경력자 모집", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "직무내용과 최소 10년 필수 경력을 원문대로 저장함"},
+    {"scenario_id": "worknet-production", "site": "Work24", "query": "생산 관리", "automatic_collection": "fail", "note": "필수 자격요건이 없는 공고 두 건을 거절한 뒤 같은 후보 재진입을 반복하고 화면 판단 한도에 도달함"},
+    {"scenario_id": "worknet-social-worker", "site": "Work24", "query": "사회복지사", "company": "의료법인삼포의료재단", "title": "요양병원 사회복지사", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "fail", "note": "사회복지사 2급은 저장했지만 원문의 경력 최소 1년 필수 조건을 누락함"},
+    {"scenario_id": "rocketpunch-product-designer", "site": "RocketPunch", "query": "프로덕트 디자이너", "company": "한패스", "title": "글로벌 핀테크 Product Designer 경력 채용", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "주변 추천 카드가 섞인 OCR에서 한패스 공고의 업무와 자격만 분리함"},
+    {"scenario_id": "rocketpunch-flutter", "site": "RocketPunch", "query": "Flutter 개발자", "company": "푸드와트럭(이츠맵)", "title": "자바 스프링부트 개발자", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "공고명은 자바 스프링부트이나 부제와 필수조건이 Flutter·Java 개발자를 명시해 검색 의도와 관련됨"},
+    {"scenario_id": "rocketpunch-mlops", "site": "RocketPunch", "query": "MLOps", "company": "(주)허드슨에이아이", "title": "MLOps Engineer", "search_relevance": "pass", "company_name": "pass", "job_title": "pass", "responsibilities": "pass", "requirements": "pass", "note": "주변 공고 노이즈에서 목표 MLOps 업무와 자격을 분리해 저장함"}
+  ]
+}

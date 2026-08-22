@@ -30,7 +30,6 @@ def _rule(*, intent="검색 화면을 연다", task_category="검색"):
                         source_seq=1,
                         action="click_marker",
                         target=RuleTarget(
-                            description="검색 버튼",
                             reference={
                                 "text": "검색",
                                 "marker_type": "text",
@@ -45,8 +44,6 @@ def _rule(*, intent="검색 화면을 연다", task_category="검색"):
                     )
                 ],
                 intent=intent,
-                applicable_when="홈 화면에 검색 버튼이 하나 보인다",
-                decline_when="검색 버튼이 여러 개다",
                 expected_effect=ExpectedEffect(
                     kind="page_change",
                     description="검색 화면이 열린다",
