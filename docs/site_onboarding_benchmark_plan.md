@@ -1,16 +1,19 @@
 ---
-title: "Codex 보조 신규 사이트 적용 공수 검증 계획"
-type: plan
+title: "Codex 보조 신규 사이트 적용 공수 검증 회고"
+type: retrospective
 area: evaluation
-status: completed
-updated: 2026-08-16
+status: historical
+updated: 2026-08-24
 tags:
   - l2c
   - docs/evaluation
   - benchmark
 ---
 
-# Codex 보조 신규 사이트 적용 공수 검증 계획
+# Codex 보조 신규 사이트 적용 공수 검증 회고
+
+> [!note] 완료 상태
+> 이 문서는 2026-08-16에 완료한 비교 실험의 고정 계약, 변경 기록과 결과를 함께 보존한다.
 
 ## 검증 질문
 
@@ -221,8 +224,10 @@ docs/evidence/site_onboarding/
 ```
 
 각 session에는 기준 SHA, 시작·종료 시각, Codex 작업 식별자, 모델 설정, 사용자 개입,
-실패 반복과 결과 커밋 SHA를 기록한다. 구조화 실행 summary는 [[e2e_observability]]의
+실패 반복과 결과 커밋 SHA를 기록한다. 구조화 실행 summary는 [E2E 관측 환경](e2e_observability.md)의
 계약을 재사용한다. 집계는 기존 `benchmark/site_adaptation_eval.py`를 확장해 수행한다.
+summary의 `screenshot_path`는 실행한 worktree 루트 기준 상대경로이며, 원본 화면 파일은
+대용량 런타임 산출물이라 저장소에 포함하지 않는다.
 
 ## 사전 판정 규칙
 
@@ -247,7 +252,7 @@ docs/evidence/site_onboarding/
 - [x] 랠릿 Classic 실행
 - [x] 방식 정보를 가린 품질 검토
 - [x] 비교 보고서 생성
-- [x] [[design_decisions]]과 루트 README에 측정된 범위만 반영
+- [x] [기술 및 설계 결정](design_decisions.md)과 루트 README에 측정된 범위만 반영
 
 ## 실행 결과
 

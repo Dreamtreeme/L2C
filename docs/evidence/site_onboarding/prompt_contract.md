@@ -1,3 +1,14 @@
+---
+title: "신규 사이트 적용 공통 지시문"
+type: reference
+area: evaluation
+status: historical
+updated: 2026-08-24
+tags:
+  - l2c
+  - docs/evaluation
+---
+
 # 신규 사이트 적용 공통 지시문
 
 공식 홈페이지에서 시작해 `백엔드 개발자`로 채용공고를 검색하고 관련 공고 2건의

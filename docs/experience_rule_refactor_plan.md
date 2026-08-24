@@ -1,19 +1,19 @@
 ---
-title: "경험 규칙 리팩터링 실행 계획"
-type: plan
+title: "경험 규칙 리팩터링 완료 기록"
+type: retrospective
 area: reflex
 status: historical
-updated: 2026-08-16
+updated: 2026-08-24
 tags:
   - l2c
   - docs/reflex
   - docs/architecture
 ---
 
-# 경험 규칙 리팩터링 실행 계획
+# 경험 규칙 리팩터링 완료 기록
 
-> [!important] 작업 재개 기준
-> 새 작업 세션은 이 문서를 먼저 읽고 `현재 단계`, `검증 기록`, `계획 변경 기록`을 확인한다. 구현 전후에 체크박스와 결과를 갱신한다. 완료하지 않은 항목을 추측으로 체크하지 않는다.
+> [!note] 보관 범위
+> 이 문서는 2026-08-16에 완료한 리팩터링의 계획 변경과 검증 결과를 보존한다. 현재 구현 기준은 [Reflex Recipe 구현 기준](reflex_recipe_plan.md)과 [기술 및 설계 결정](design_decisions.md)을 우선한다.
 
 ## 문서 변경 규칙
 
@@ -21,7 +21,7 @@ tags:
 - 취소된 항목 바로 아래에 `변경 이유:`를 적고 관찰 로그, 테스트 또는 코드 근거를 연결한다.
 - 구현 중 발견한 새 작업은 해당 단계에 체크박스로 추가한다.
 - 단계가 끝나면 변경 파일, 삭제 파일, 테스트 결과를 `검증 기록`에 남긴다.
-- 이 문서는 계획과 결정 이력을 보관한다. 상세 구현 기준은 완료 후 [[reflex_recipe_plan]]과 [[design_decisions]]에 반영한다.
+- 이 문서는 계획과 결정 이력을 보관한다. 상세 구현 기준은 [Reflex Recipe 구현 기준](reflex_recipe_plan.md)과 [기술 및 설계 결정](design_decisions.md)에 반영한다.
 
 ## 문제 정의
 

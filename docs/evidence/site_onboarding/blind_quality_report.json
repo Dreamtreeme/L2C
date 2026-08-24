@@ -68,7 +68,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\rallit_data_engineer.summary.json",
+      "summary_path": "docs/evidence/site_onboarding/rallit_data_engineer.summary.json",
       "execution_time_sec": 45.099162
     },
     {
@@ -113,7 +113,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\classic_incruit_android_summary.json"
+      "summary_path": "docs/evidence/site_onboarding/classic_incruit_android_summary.json"
     },
     {
       "run_id": "B03",
@@ -157,7 +157,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\classic_rallit_frontend_developer_summary.json"
+      "summary_path": "docs/evidence/site_onboarding/classic_rallit_frontend_developer_summary.json"
     },
     {
       "run_id": "B04",
@@ -201,7 +201,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\incruit\\qa.summary.json",
+      "summary_path": "docs/evidence/site_onboarding/incruit/qa.summary.json",
       "execution_time_sec": 67.460134
     },
     {
@@ -246,7 +246,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\rallit_android.summary.json",
+      "summary_path": "docs/evidence/site_onboarding/rallit_android.summary.json",
       "execution_time_sec": 35.777066
     },
     {
@@ -291,7 +291,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\classic_incruit_data_engineer_summary.json"
+      "summary_path": "docs/evidence/site_onboarding/classic_incruit_data_engineer_summary.json"
     },
     {
       "run_id": "B07",
@@ -335,7 +335,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\classic_rallit_android_developer_summary.json"
+      "summary_path": "docs/evidence/site_onboarding/classic_rallit_android_developer_summary.json"
     },
     {
       "run_id": "B08",
@@ -379,7 +379,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\incruit\\devops-r4.summary.json",
+      "summary_path": "docs/evidence/site_onboarding/incruit/devops-r4.summary.json",
       "execution_time_sec": 59.743178
     },
     {
@@ -424,7 +424,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\rallit_frontend.summary.json",
+      "summary_path": "docs/evidence/site_onboarding/rallit_frontend.summary.json",
       "execution_time_sec": 65.561742
     },
     {
@@ -469,7 +469,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\classic_incruit_frontend_summary.json"
+      "summary_path": "docs/evidence/site_onboarding/classic_incruit_frontend_summary.json"
     },
     {
       "run_id": "B11",
@@ -513,7 +513,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\classic_rallit_data_engineer_summary.json"
+      "summary_path": "docs/evidence/site_onboarding/classic_rallit_data_engineer_summary.json"
     },
     {
       "run_id": "B12",
@@ -557,7 +557,7 @@
         "job_count": 2,
         "coverage_passed": true
       },
-      "summary_path": "C:\\Users\\psg\\Desktop\\L2C\\docs\\evidence\\site_onboarding\\incruit\\android-r4.summary.json",
+      "summary_path": "docs/evidence/site_onboarding/incruit/android-r4.summary.json",
       "execution_time_sec": 41.807231
     }
   ]

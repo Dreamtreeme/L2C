@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -36,6 +38,8 @@ ALLOWED_AREAS = {
 }
 ALLOWED_STATUSES = {"active", "planned", "historical", "deprecated"}
 LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+WIKI_LINK_PATTERN = re.compile(r"\[\[[^\]]+\]\]")
+LOCAL_PATH_PATTERN = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\|/)")
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -121,18 +125,27 @@ def _validate_metadata(path: Path, metadata: dict, body: str) -> list[str]:
 
 
 def _markdown_files() -> list[Path]:
-    ignored = {
-        ".git",
-        ".venv",
-        ".venv-app",
-        ".venv-ocr",
-        "venv",
-        "node_modules",
-    }
+    result = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "*.md",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Git 추적 Markdown 목록을 읽지 못했습니다.")
     return sorted(
-        path
-        for path in ROOT.rglob("*.md")
-        if not any(part in ignored for part in path.relative_to(ROOT).parts)
+        ROOT / raw.decode("utf-8")
+        for raw in result.stdout.split(b"\0")
+        if raw
     )
 
 
@@ -140,6 +153,10 @@ def _validate_links(paths: list[Path]) -> list[str]:
     errors: list[str] = []
     for path in paths:
         text = _without_fenced_code(path.read_text(encoding="utf-8"))
+        for wiki_link in WIKI_LINK_PATTERN.findall(text):
+            errors.append(
+                f"{path.relative_to(ROOT)}: 표준 Markdown 링크가 아닙니다: {wiki_link}"
+            )
         for raw_target in LINK_PATTERN.findall(text):
             target = raw_target.strip().strip("<>")
             if re.match(r"^(?:https?://|mailto:|file:|#)", target, flags=re.IGNORECASE):
@@ -153,6 +170,37 @@ def _validate_links(paths: list[Path]) -> list[str]:
                     f"{path.relative_to(ROOT)}: 존재하지 않는 내부 링크: {target}"
                 )
     return errors
+
+
+def _validate_evidence_paths() -> tuple[list[str], int]:
+    errors: list[str] = []
+    paths = sorted((DOCS_DIR / "evidence").rglob("*.json"))
+
+    def visit(value: object, source: Path, location: str = "$") -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                nested_location = f"{location}.{key}"
+                if (
+                    isinstance(nested, str)
+                    and (key.endswith("_path") or key == "pricing_source")
+                    and LOCAL_PATH_PATTERN.match(nested)
+                ):
+                    errors.append(
+                        f"{source.relative_to(ROOT)}: 로컬 절대경로: {nested_location}"
+                    )
+                visit(nested, source, nested_location)
+        elif isinstance(value, list):
+            for index, nested in enumerate(value):
+                visit(nested, source, f"{location}[{index}]")
+
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            errors.append(f"{path.relative_to(ROOT)}: JSON 오류: {exc}")
+            continue
+        visit(payload, path)
+    return errors, len(paths)
 
 
 def _validate_base(path: Path) -> list[str]:
@@ -194,6 +242,8 @@ def main() -> int:
         errors.extend(_validate_metadata(path, metadata, body))
     markdown_files = _markdown_files()
     errors.extend(_validate_links(markdown_files))
+    evidence_path_errors, evidence_json_count = _validate_evidence_paths()
+    errors.extend(evidence_path_errors)
     bases = sorted(DOCS_DIR.rglob("*.base"))
     for path in bases:
         errors.extend(_validate_base(path))
@@ -204,7 +254,8 @@ def main() -> int:
         return 1
     print(
         "문서 검사 통과: "
-        f"관리 문서 {len(docs)}개, 링크 대상 {len(markdown_files)}개, Base {len(bases)}개"
+        f"관리 문서 {len(docs)}개, 링크 대상 {len(markdown_files)}개, "
+        f"증거 JSON {evidence_json_count}개, Base {len(bases)}개"
     )
     return 0
 

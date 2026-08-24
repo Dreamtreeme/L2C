@@ -18,6 +18,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from agent.observability.reflex_paths import summarize_reflex_paths
+from agent.utils.artifact_paths import portable_repo_path
 from benchmark.quality_eval import evaluate_expected_source_urls
 
 
@@ -628,7 +629,7 @@ def _run_scenario_process(
     return {
         "scenario": scenario,
         "process_exit_code": completed.returncode,
-        "summary_path": str(summary_path),
+        "summary_path": portable_repo_path(summary_path),
         "metrics": metrics,
         "promotion": promotion,
         "target_contract": target_contract,
@@ -649,7 +650,7 @@ def _skipped_experience_guided_result(
     return {
         "scenario": scenario,
         "process_exit_code": None,
-        "summary_path": str(Path(command[-1])),
+        "summary_path": portable_repo_path(Path(command[-1])),
         "metrics": _attach_promotion_metrics(
             _metric_summary({"status": "skipped"}),
             {},

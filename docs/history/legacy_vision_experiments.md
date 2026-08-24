@@ -1,12 +1,12 @@
 ---
 title: "초기 비전 자동화 실험 기록"
-type: history
-area: vision
-status: archived
-updated: 2026-08-16
+type: retrospective
+area: runtime
+status: historical
+updated: 2026-08-24
 tags:
   - l2c
-  - docs/history
+  - docs/runtime
 ---
 
 # 초기 비전 자동화 실험 기록

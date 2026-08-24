@@ -3,7 +3,7 @@ title: "작업자 상태 계약"
 type: reference
 area: architecture
 status: active
-updated: 2026-08-16
+updated: 2026-08-24
 tags:
   - l2c
   - docs/architecture
@@ -11,7 +11,7 @@ tags:
 
 # 작업자 상태 계약
 
-Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`를 공유한다. `WorkerState`와 그 일곱 구역은 실행 중 항상 모든 필드를 갖는 완성 상태다. 노드는 `WorkerStateUpdate` 안의 `WorkerRequestPatch`, `ObservationPatch` 같은 부분 갱신 타입을 반환한다. 각 구역의 LangGraph reducer가 기존 값과 패치를 병합한다. 이름 규칙은 [[naming_conventions]]을 따른다.
+Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`를 공유한다. `WorkerState`와 그 일곱 구역은 실행 중 항상 모든 필드를 갖는 완성 상태다. 노드는 `WorkerStateUpdate` 안의 `WorkerRequestPatch`, `ObservationPatch` 같은 부분 갱신 타입을 반환한다. 각 구역의 LangGraph reducer가 기존 값과 패치를 병합한다. 이름 규칙은 [L2C 네이밍 규칙](naming_conventions.md)을 따른다.
 
 ## 상태 구역
 

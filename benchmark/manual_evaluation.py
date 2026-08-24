@@ -10,6 +10,7 @@ from statistics import median
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
+from agent.utils.artifact_paths import portable_repo_path
 from benchmark.quality_eval import evaluate_collection_summary, normalize_job_url
 
 
@@ -159,7 +160,7 @@ def evaluate_manifest(
             summary_path = base_dir / summary_path
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         evaluated = evaluate_manual_run(summary, judgement)
-        evaluated["summary_path"] = str(summary_path)
+        evaluated["summary_path"] = portable_repo_path(summary_path)
         execution_time = summary.get("execution_time_sec")
         if execution_time is not None:
             execution_times.append(float(execution_time))

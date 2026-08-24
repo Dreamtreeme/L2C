@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import get_settings
+from agent.utils.artifact_paths import portable_repo_path
 
 
 DEFAULT_PRICING_PATH = Path(__file__).resolve().parents[2] / "config" / "model_pricing.json"
@@ -32,7 +33,10 @@ def load_model_pricing(path: str | Path | None = None) -> tuple[dict[str, Any], 
     except (OSError, json.JSONDecodeError):
         return {}, ""
     models = payload.get("models") if isinstance(payload, dict) else None
-    return (models if isinstance(models, dict) else {}), str(pricing_path.resolve())
+    return (
+        models if isinstance(models, dict) else {},
+        portable_repo_path(pricing_path),
+    )
 
 
 def estimate_llm_cost(

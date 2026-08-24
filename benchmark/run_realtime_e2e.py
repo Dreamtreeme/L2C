@@ -18,6 +18,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from agent.utils.artifact_paths import portable_repo_path
+
 
 class _Tee:
     def __init__(self, *streams: TextIO):
@@ -347,12 +349,40 @@ def _stored_job_snapshots(
                 "requirements": row.get("requirements") or [],
                 "tech_stack": row.get("tech_stack") or [],
                 "raw_ocr_text": row.get("raw_ocr_text") or "",
-                "screenshot_path": row.get("screenshot_path") or "",
-                "ocr_text_path": row.get("ocr_text_path") or "",
+                "screenshot_path": portable_repo_path(
+                    row.get("screenshot_path") or ""
+                ),
+                "ocr_text_path": portable_repo_path(
+                    row.get("ocr_text_path") or ""
+                ),
                 "evidence_hash": row.get("evidence_hash") or "",
             }
         )
     return snapshots
+
+
+def _portable_collection_result(
+    result: dict[str, object],
+) -> dict[str, object]:
+    """요약에 포함되는 저장 결과의 로컬 증거 경로를 정규화한다."""
+
+    normalized = dict(result)
+    for collection_key in ("stored_items", "persisted_items"):
+        raw_items = result.get(collection_key)
+        if not isinstance(raw_items, list):
+            continue
+        items = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                items.append(raw_item)
+                continue
+            item = dict(raw_item)
+            for path_key in ("screenshot_path", "ocr_text_path"):
+                if path_key in item:
+                    item[path_key] = portable_repo_path(item.get(path_key) or "")
+            items.append(item)
+        normalized[collection_key] = items
+    return normalized
 
 
 def _recipe_promotion(
@@ -396,6 +426,7 @@ def _build_summary(
     preconditions: dict[str, object],
     promotion: dict[str, object],
 ) -> dict[str, object]:
+    collection_result = cast(dict[str, object], execution["result"])
     return {
         "schema_version": 3,
         "run_id": run_id,
@@ -426,7 +457,7 @@ def _build_summary(
         "target_contract": dict(execution["quality"]).get("target_contract", {}),
         "experience_guided_preconditions": preconditions,
         "recipe_promotion": promotion,
-        "result": execution["result"],
+        "result": _portable_collection_result(collection_result),
         "stored_jobs": execution["stored_jobs"],
     }
 

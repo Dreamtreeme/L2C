@@ -1,10 +1,12 @@
 import sqlite3
+from pathlib import Path
 
 import pytest
 
 from benchmark.run_realtime_e2e import (
     _apply_execution_mode_environment,
     _experience_guided_preconditions,
+    _portable_collection_result,
     _stored_job_snapshots,
 )
 from benchmark.quality_eval import evaluate_expected_source_urls
@@ -31,6 +33,7 @@ from shared.schema.jd_schema import JobCollectionEvidence, JobPosting
 def test_e2e_summary_preserves_stored_job_fields_before_database_reset(
     tmp_path,
 ) -> None:
+    root = Path(__file__).resolve().parents[3]
     db_path = tmp_path / "jobs.db"
     job_id = Database(db_path).upsert(
         JobPosting(
@@ -42,7 +45,9 @@ def test_e2e_summary_preserves_stored_job_fields_before_database_reset(
             tech_stack=["Python"],
             raw_ocr_text="주요 업무 AI 에이전트 개발 자격요건 Python 경험",
         ),
-        evidence=JobCollectionEvidence(screenshot_path="screen.png"),
+        evidence=JobCollectionEvidence(
+            screenshot_path=str(root / "data" / "screenshots" / "screen.png")
+        ),
     )
 
     snapshots = _stored_job_snapshots(
@@ -59,8 +64,32 @@ def test_e2e_summary_preserves_stored_job_fields_before_database_reset(
     assert snapshot["raw_ocr_text"] == (
         "주요 업무 AI 에이전트 개발 자격요건 Python 경험"
     )
-    assert snapshot["screenshot_path"] == "screen.png"
+    assert snapshot["screenshot_path"] == "data/screenshots/screen.png"
     assert snapshot["evidence_hash"]
+
+
+def test_e2e_summary_normalizes_repository_screenshot_paths() -> None:
+    root = Path(__file__).resolve().parents[3]
+    absolute_path = str(root / "data" / "screenshots" / "detail.png")
+    ocr_text_path = str(root / "data" / "json" / "detail.txt")
+    source = {
+        "persisted_items": [
+            {
+                "job_id": 1,
+                "screenshot_path": absolute_path,
+                "ocr_text_path": ocr_text_path,
+            }
+        ]
+    }
+
+    result = _portable_collection_result(source)
+
+    assert result["persisted_items"][0]["screenshot_path"] == (
+        "data/screenshots/detail.png"
+    )
+    assert result["persisted_items"][0]["ocr_text_path"] == "data/json/detail.txt"
+    assert source["persisted_items"][0]["screenshot_path"] == absolute_path
+    assert source["persisted_items"][0]["ocr_text_path"] == ocr_text_path
 
 
 def test_expected_target_contract_requires_each_fixed_url_once() -> None:

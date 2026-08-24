@@ -36,7 +36,7 @@
       "cost": {
         "currency": "USD",
         "estimated_total": 0.005001,
-        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C-worktrees\\classic-incruit\\config\\model_pricing.json",
+        "pricing_source": "config/model_pricing.json",
         "priced_model_count": 1,
         "unpriced_models": [],
         "items": [

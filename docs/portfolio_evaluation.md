@@ -3,7 +3,7 @@ title: "포트폴리오 평가 실행 규격"
 type: reference
 area: evaluation
 status: active
-updated: 2026-08-15
+updated: 2026-08-24
 tags:
   - l2c
   - docs/evaluation
@@ -91,7 +91,7 @@ matrix summary의 `experience_reuse_effectiveness`에는 다음 값이 들어간
 
 ## 신규 사이트 적용 공수
 
-[[site_onboarding_benchmark_plan]]의 고정 계약으로 미지원 사이트 2개의 Classic과
+[신규 사이트 적용 공수 검증 회고](site_onboarding_benchmark_plan.md)의 고정 계약으로 미지원 사이트 2개의 Classic과
 Vision 세션을 각각 기록한다. `benchmark.site_onboarding_session`이 시작·최초 성공·
 수정·사용자 개입·최종 승인 시각을 같은 JSON 계약으로 남긴다.
 
@@ -115,4 +115,4 @@ powershell -File scripts\measure_runtime_resources.ps1 `
 
 명령 없이 실행하면 설치 용량과 기준 RAM·VRAM을 기록한다. E2E 명령을
 `-Command`, `-CommandArguments`로 전달하면 실행 중 peak 증가량을 함께
-측정한다. 런타임 기준은 [[runtime_compatibility]]에 기록한다.
+측정한다. 런타임 기준은 [런타임 호환 기준](runtime_compatibility.md)에 기록한다.

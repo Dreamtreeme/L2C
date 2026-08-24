@@ -1,16 +1,18 @@
 ---
-title: "다음 해야 할 일"
-type: plan
-area: investigation
-status: active
-updated: 2026-08-22
+title: "조사 및 경험 탐색 리팩터링 완료 기록"
+type: retrospective
+area: architecture
+status: historical
+updated: 2026-08-24
 tags:
   - l2c
   - docs/architecture
-  - docs/investigation
 ---
 
-# 다음 해야 할 일
+# 조사 및 경험 탐색 리팩터링 완료 기록
+
+> [!note] 완료 상태
+> 아래 0~7단계는 2026-08-22에 모두 완료했다. 현재 구조는 [`ARCHITECTURE.md`](../ARCHITECTURE.md), 이후 작업은 저장소의 열린 이슈와 최신 계획 문서를 기준으로 한다.
 
 ## 전체 실행 계획표
 

@@ -736,7 +736,7 @@
       "cost": {
         "currency": "USD",
         "estimated_total": 0.0194427,
-        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\data\\worktrees\\rallit-vision-f711-rerun\\config\\model_pricing.json",
+        "pricing_source": "config/model_pricing.json",
         "priced_model_count": 1,
         "unpriced_models": [],
         "items": [

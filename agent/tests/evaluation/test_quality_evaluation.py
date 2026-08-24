@@ -1,7 +1,15 @@
+from pathlib import Path
+
 import pytest
 
+from agent.llm.cost import load_model_pricing
 from benchmark.e2e_observability import build_e2e_observability
-from benchmark.manual_evaluation import RunManualJudgement, evaluate_manual_run
+from benchmark.manual_evaluation import (
+    EvaluationManifest,
+    RunManualJudgement,
+    evaluate_manifest,
+    evaluate_manual_run,
+)
 from benchmark.quality_eval import (
     evaluate_collection_summary,
     evaluate_job_records,
@@ -54,6 +62,45 @@ def _manual(jobs):
             "jobs": jobs,
         }
     )
+
+
+def test_evidence_generators_use_repository_relative_paths() -> None:
+    root = Path(__file__).resolve().parents[3]
+    manifest = EvaluationManifest.model_validate(
+        {
+            "commit_sha": "abc123",
+            "model_contract": {},
+            "environment_contract": {},
+            "runs": [
+                {
+                    "run_id": "portable-path",
+                    "summary_path": "collection_success_matrix.json",
+                    "site": "example",
+                    "query": "테스트",
+                    "search_conditions_correct": False,
+                    "count_handling_correct": False,
+                    "no_out_of_scope_actions": True,
+                }
+            ],
+        }
+    )
+
+    report = evaluate_manifest(manifest, base_dir=root / "benchmark")
+    _, pricing_source = load_model_pricing()
+
+    assert report["runs"][0]["summary_path"] == (
+        "benchmark/collection_success_matrix.json"
+    )
+    assert pricing_source == "config/model_pricing.json"
+
+
+def test_external_pricing_source_hides_machine_path(tmp_path) -> None:
+    pricing_path = tmp_path / "custom_pricing.json"
+    pricing_path.write_text('{"models": {}}', encoding="utf-8")
+
+    _, pricing_source = load_model_pricing(pricing_path)
+
+    assert pricing_source == "external/custom_pricing.json"
 
 
 def test_job_quality_uses_canonical_fields_and_detects_duplicate_urls():

@@ -1552,7 +1552,7 @@
       "cost": {
         "currency": "USD",
         "estimated_total": 0.0444749,
-        "pricing_source": "C:\\Users\\psg\\Desktop\\L2C\\data\\worktrees\\incruit-vision-f711-rerun\\config\\model_pricing.json",
+        "pricing_source": "config/model_pricing.json",
         "priced_model_count": 2,
         "unpriced_models": [],
         "items": [
@@ -6147,7 +6147,7 @@
           "main_tasks",
           "requirements"
         ],
-        "screenshot_path": "C:\\Users\\psg\\Desktop\\L2C\\data\\worktrees\\incruit-vision-f711-rerun\\data\\screenshots\\screen_20260816_092031_681820.png"
+        "screenshot_path": "data/screenshots/screen_20260816_092031_681820.png"
       }
     ],
     "observed_job_ids": [],
