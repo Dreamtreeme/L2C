@@ -3,7 +3,7 @@ title: "문서 작성 규칙"
 type: reference
 area: documentation
 status: active
-updated: 2026-08-15
+updated: 2026-08-27
 tags:
   - l2c
   - docs/documentation
@@ -36,12 +36,17 @@ tags:
 |---|---|---|
 | `title` | 자유 텍스트 | 문서에서 사용하는 공식 제목 |
 | `type` | `hub`, `architecture`, `decision`, `guide`, `plan`, `reference`, `retrospective` | 문서 역할 |
-| `area` | `project`, `architecture`, `documentation`, `runtime`, `observability`, `reflex`, `search`, `sites` | 주된 소유 영역 |
+| `area` | `project`, `architecture`, `documentation`, `evaluation`, `runtime`, `observability`, `reflex`, `search`, `sites` | 주된 소유 영역 |
 | `status` | `active`, `planned`, `historical`, `deprecated` | 현재 유효성 |
 | `updated` | `YYYY-MM-DD` | 의미 있는 내용을 마지막으로 검토한 날짜 |
 | `tags` | 목록 | `l2c`와 `docs/<area>`만 기본 사용 |
 
 속성값을 테스트를 통과하기 위한 세부 상태로 늘리지 않는다. 문서 하나가 여러 영역을 다루더라도 `area`는 주된 소유 영역 하나만 선택한다.
+
+`status: active` 문서에는 현재 절차와 계약만 둔다. 특정 날짜·커밋의 실행 결과는
+`docs/evidence/`에 고정 측정 증거로 남기거나, 시간순 회귀·변경 기록이면
+`docs/history/`의 `status: historical` 문서로 옮긴다. 역사 문서의 도입부에는
+현재 기준 문서 링크와 현재 성능 기준으로 사용하지 않는다는 범위를 명시한다.
 
 ## 링크
 

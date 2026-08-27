@@ -50,30 +50,24 @@ FastAPI `lifespan`이 `ApplicationRuntime`을 한 번 만들고 종료 시 닫�
 
 Realtime/Vision 경로는 DOM과 Playwright selector를 사용하지 않습니다. 화면 캡처, PaddleOCR, OmniParser, pHash, Gemini 판단, PyAutoGUI 물리 입력만 사용합니다.
 
+Vision Worker LangGraph 자체는 다음 네 책임 노드로 구성됩니다. Selection, Reflex,
+OCR과 Reasoning은 별도 그래프 노드가 아니라 `decision_node` 안에서 다음 행동을
+정하는 정책 단계이며, 직전 행동의 화면 전환 판정은 `observation_node`가 수행합니다.
+
 ```mermaid
 flowchart TD
-    S[WorkerState 생성] --> START{시작 화면 관찰 여부}
-    START -->|없음| CAPTURE[화면 캡처]
-    START -->|현재 캡처와 OCR 일치| SELECT[행동 선택]
-    CAPTURE[화면 캡처] --> TRANSITION[전환 판정]
-    TRANSITION --> SELECT
-    OCR[SoM 및 OCR] --> TRANSITION
-    SELECT -->|OCR 필요| OCR
-    SELECT -->|기존 카드 큐 또는 상세 정책| EXECUTION[행동 또는 입력·제출 묶음 실행]
-    SELECT -->|재생 후보| REFLEX[Reflex ROI 검증]
-    SELECT -->|의미 판단 필요| REASON[Reasoning]
-    REFLEX -->|ROI pHash 일치와 저장 좌표 복원| EXECUTION
-    REFLEX -->|불일치| REASON
-    REASON -->|검색 화면: 카드 큐 생성| EXECUTION
-    REASON -->|그 밖의 화면: 다음 행동 선택| EXECUTION
-    EXECUTION -->|화면 변경| CAPTURE
-    EXECUTION -->|같은 화면에서 재판단| REASON
-    EXECUTION -->|후속 결정론적 행동| EXECUTION
-    EXECUTION -->|공고 검토 요청| REVIEW[JobReview]
-    REVIEW -->|계속 읽기| REASON
-    REVIEW -->|완료| SELECT
-    REVIEW -->|자료 부족 또는 잘못된 대상| SELECT
-    EXECUTION -->|작업 종료| END[종료]
+    S[WorkerState 생성] --> O[Observation: 캡처·직전 행동 효과 판정]
+    S -->|현재 관찰 사용 가능| D[Decision: 확정 정책→Reflex→OCR·선택→LLM]
+    O --> D
+    D -->|행동 확정| E[Execution: 검증된 물리·상태 행동 실행]
+    D -->|저정보 화면| O
+    D -->|작업 완료| END[종료]
+    E -->|새 화면 확인 필요| O
+    E -->|같은 화면의 다음 판단| D
+    E -->|공고 초안 생성| R[Review: 상세 근거·필수 필드 판정]
+    E -->|완료·오류 한도| END
+    R -->|계속 수집| D
+    R -->|목표 완료| END
 ```
 
 - `Loading Wait`: 저해상도 OpenCV 프레임을 메모리에서 비교해 화면 변화 시작, 렌더링 안정화와 회색 저정보 화면 해소를 기다립니다. 변화 뒤 일정 시간 추가 움직임이 없는 화면만 준비 완료로 판정하고 최종 화면만 파일로 저장합니다.
@@ -103,15 +97,15 @@ flowchart TD
 | 비동기 승격 | `agent/application/recipe_promotion_worker.py`, `recipe_execution_graph_service.py`, `recipe_candidate_review_service.py` | 원본 로그 그래프 구성, Critic 가지치기와 승격 작업자 수명주기 |
 | 지휘자 그래프 | `agent/graph/investigation_workflow.py`, `investigation_context.py` | 주입된 노드 연결, 조사 상태 계약, 체크포인트 중단·재개 |
 | 지휘자 업무 노드 | `agent/graph/investigation_*_nodes.py`, `investigation_evidence_policy.py` | 문맥을 반영한 요청 해석, 근거 판정, 수집·저장, 재검사와 답변 |
-| 직무 확인 | `agent/application/occupation_clarification_service.py` | 직무 사전 후보 질문 생성과 사용자 승인 별칭 기록 |
+| 직무 확인 | `agent/application/clarification_service.py`, `search_constraint_service.py`, `search_taxonomy_service.py` | 직무 후보 질문, 사용자 응답 반영과 직무 사전 조회 |
 | 작업자 그래프 | `agent/graph/workflow.py`, `agent/runtime/worker_contracts.py` | Vision LangGraph 연결, 런타임 문맥과 WorkerState 계약 |
-| 작업자 노드 | `agent/graph/worker_*.py` | 관찰, 전환, 선택, 추론과 원자 실행 |
+| 작업자 노드 | `agent/graph/worker_*.py` | 네 책임 노드와 그 내부의 전환·선택·추론·원자 실행 정책 |
 | 행동 실행 세부 | `agent/graph/worker_action_guard.py`, `worker_execution_dispatch.py`, `worker_action_effects.py` | 실행 전 안전 검증, 물리·상태 도구 전달, 실행 후 상태 반영 |
 | 추론 문맥 | `agent/graph/worker_reasoning_prompt.py` | 화면·수집·전환 정보를 모델 메시지로 압축 |
 | 런타임 정책 | `agent/runtime/` | 전환 검증, 상세 버퍼, 카드 큐, Reflex 재생 |
 | 로딩 대기 | `agent/vision/loading_wait.py` | CV 프레임 변화·안정화·저정보 화면 판정 |
 | OCR | `agent/tools/ocr_engine.py`, `paddle_ocr.py`, `omni_parser.py` | 문자·아이콘 검출과 마커 합성 |
-| pHash | `agent/vision/screen_signature.py` | 저장 화면·ROI 서명 생성과 유사도 비교 |
+| pHash | `agent/vision/screen_signature.py`, `agent/runtime/target_matching.py` | 저장 화면·ROI 서명 생성과 현재 화면 일치 판정 |
 | 화면·입력 | `agent/tools/perception.py`, `actions.py` | 화면 캡처 진입점과 물리 입력 |
 | 경험 메모리 | `agent/recipe/` | 원본 전이 저장, 의미 노드와 물리 단계 저장·매칭·재생 |
 
@@ -119,12 +113,12 @@ flowchart TD
 
 - 모든 작업자 진입점은 `create_worker_state()`로 독립된 초기 상태를 만듭니다.
 - `WorkerState`는 `request`, `observation`, `decision`, `transition`, `replay`, `collection`, `progress`, `lifecycle` 구역으로 구성됩니다. 각 구역의 reducer는 노드가 반환한 부분 갱신을 기존 구역에 병합합니다.
-- 상태 구역은 책임 경계입니다. 요청 계약은 실행 중 바뀌지 않고, 화면 관찰과 현재 진행 단계는 관찰 노드, 행동 선택은 Selection·Reflex·Reasoning, 행동 결과와 전환 요청은 Execution이 갱신합니다.
+- 상태 구역은 책임 경계입니다. 요청 계약은 실행 중 바뀌지 않습니다. `observation_node`는 캡처와 직전 행동의 효과를, `decision_node`는 Selection·Reflex·OCR·Reasoning 정책을, `execution_node`는 행동 결과와 전환 요청을, `review_node`는 상세 공고 판정을 조율합니다.
 - 검색 결과의 의미 판단과 카드 큐 생성은 Reasoning이 소유합니다. Selection은 이미 생성된 큐의 실행 순서, 상세 완료 후 목록 복귀와 중복 건너뛰기만 소유합니다.
 - LLM 응답은 추론 노드 경계에서 한 번만 `ActionRequest`로 변환됩니다. Reflex, 공고 카드 큐와 결정론적 화면 정책도 같은 계약을 직접 만듭니다.
 - 실행 전 명령은 `decision.pending_action: ActionRequest`, 실행 결과는 `transition.action_events`에 순서대로 기록합니다.
 - `execution_node`는 행동 출처와 무관하게 검증된 `ToolCallRequest`만 실행합니다. 도구 이름과 인자는 실제 Pydantic 도구 스키마로 물리 입력 전에 검증됩니다.
-- `WorkerState`의 일곱 구역은 완성 상태이고, 노드 반환은 구역별 `*Patch`로 분리합니다. `WorkerExecutionContext`는 검증된 연속 행동을 같은 상태 사본에 반영한 뒤 완성된 `WorkerState`를 반환합니다.
+- `WorkerState`의 여덟 구역은 완성 상태이고, 노드 반환은 구역별 `*Patch`로 분리합니다. `WorkerExecutionContext`는 검증된 연속 행동을 같은 상태 사본에 반영한 뒤 완성된 `WorkerState`를 반환합니다.
 - 실행기는 안전 검증, 도구 전달, 상태 효과를 순서대로 조립하며 행동 종류는 `agent/runtime/worker_actions.py`에서 한 번만 정의합니다.
 - 큐 식별자와 전환 출처 같은 실행 추적값은 도구 인자에 섞지 않고 `ToolCallRequest.metadata`에 둡니다.
 - `type_in_marker`는 선택 마커가 OCR 텍스트, 텍스트를 포함한 컨테이너, 가로로 긴 입력형 영역 중 하나인지 검사합니다. 작은 아이콘이면 물리 입력을 실행하지 않고 같은 화면 reasoning으로 돌려보냅니다.

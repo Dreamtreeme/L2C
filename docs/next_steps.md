@@ -3,7 +3,7 @@ title: "조사 및 경험 탐색 리팩터링 완료 기록"
 type: retrospective
 area: architecture
 status: historical
-updated: 2026-08-24
+updated: 2026-08-27
 tags:
   - l2c
   - docs/architecture
@@ -49,7 +49,7 @@ tags:
 
 ## 상위 조사 그래프의 수집 실패 경로 단순화
 
-### 현재 문제
+### 리팩터링 전 문제
 
 `collect` 노드가 예외로 종료되어 DB가 바뀌지 않았는데도 `inspect_evidence`로
 돌아간다. 같은 DB 근거를 다시 조회하고 경우에 따라 의미 검증 모델도 다시
@@ -202,7 +202,7 @@ flowchart TD
 - 이미 확정된 구조를 복사, 검증, 변환 또는 실행하는 단계는 코드가 담당한다.
 - LLM 출력은 후보와 허용 범위를 코드가 제한할 수 있는 계약으로 받는다.
 
-### 현재 호출 평가
+### 계획 당시 호출 평가
 
 | 호출 | 결정 | 적용 기준 |
 |---|---|---|

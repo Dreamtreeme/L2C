@@ -3,7 +3,7 @@ title: "작업자 상태 계약"
 type: reference
 area: architecture
 status: active
-updated: 2026-08-24
+updated: 2026-08-27
 tags:
   - l2c
   - docs/architecture
@@ -11,7 +11,7 @@ tags:
 
 # 작업자 상태 계약
 
-Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`를 공유한다. `WorkerState`와 그 일곱 구역은 실행 중 항상 모든 필드를 갖는 완성 상태다. 노드는 `WorkerStateUpdate` 안의 `WorkerRequestPatch`, `ObservationPatch` 같은 부분 갱신 타입을 반환한다. 각 구역의 LangGraph reducer가 기존 값과 패치를 병합한다. 이름 규칙은 [L2C 네이밍 규칙](naming_conventions.md)을 따른다.
+Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`를 공유한다. `WorkerState`와 그 여덟 구역은 실행 중 항상 모든 필드를 갖는 완성 상태다. 노드는 `WorkerStateUpdate` 안의 `WorkerRequestPatch`, `ObservationPatch` 같은 부분 갱신 타입을 반환한다. 각 구역의 LangGraph reducer가 기존 값과 패치를 병합한다. 이름 규칙은 [L2C 네이밍 규칙](naming_conventions.md)을 따른다.
 
 ## 상태 구역
 
@@ -19,10 +19,11 @@ Vision Worker LangGraph는 `agent/runtime/worker_contracts.py`의 `WorkerState`�
 |---|---|---|
 | `request` | `goal`, `worker_run_id`, `collection_intent`, 행동 권한 계약 | 작업자 실행 진입점 |
 | `observation` | 캡처 ID, 화면 파일, URL, OCR 마커, 화면 서명, 페이지 역할 | `capture_node()`, `ocr_node()` |
-| `decision` | `pending_action`, 카드 선택 trace | 선택·Reflex·추론 노드 |
-| `transition` | 행동 이벤트, 오류 수, 전환 요청과 판정 결과 | 실행·전환 노드 |
-| `replay` | Reflex trace, 활성 경로, 차단 경로 | Reflex·전환 노드 |
-| `collection` | 검토 완료 공고·화면 근거, 카드 큐, 상세 OCR 버퍼, 검토 대기 초안과 최근 검토 결과 | OCR·실행·공고 검토 노드 |
+| `decision` | `pending_action`, 추론 호출 상태 | `decision_node` 내부 선택·Reflex·추론 정책 |
+| `transition` | 행동 이벤트, 오류 수, 전환 요청과 판정 결과 | `execution_node`, `observation_node` |
+| `replay` | Reflex trace, 활성 경로, 차단 경로 | `decision_node`, `observation_node` |
+| `collection` | 검토 완료 공고·화면 근거, 카드 큐, 상세 OCR 버퍼, 검토 대기 초안과 최근 검토 결과 | `decision_node`, `execution_node`, `review_node` |
+| `progress` | `stage` | 선택·실행·검토 정책 |
 | `lifecycle` | `is_finished` | 실행 효과와 종료 정책 |
 
 `request`는 한 작업자 실행의 입력 계약이다. Reflex의 가변 검색어도 별도 상태로
@@ -45,7 +46,7 @@ return {
 }
 ```
 
-위 반환값은 전체 상태가 아니다. `ObservationPatch`이며 LangGraph가 기존 `observation`에 세 필드를 병합하고 다른 여섯 구역은 유지한다. 노드 내부에서 여러 부분 갱신을 연속 계산할 때는 `apply_worker_state_update()`를 사용한다. 완성 상태 타입과 패치 타입을 분리하므로 필수 상태 누락은 정적 검사에서 잡고, 노드가 일부 필드만 반환하는 것은 허용한다.
+위 반환값은 전체 상태가 아니다. `ObservationPatch`이며 LangGraph가 기존 `observation`에 세 필드를 병합하고 다른 일곱 구역은 유지한다. 노드 내부에서 여러 부분 갱신을 연속 계산할 때는 `apply_worker_state_update()`를 사용한다. 완성 상태 타입과 패치 타입을 분리하므로 필수 상태 누락은 정적 검사에서 잡고, 노드가 일부 필드만 반환하는 것은 허용한다.
 
 `WorkerExecutionContext`는 행동 요청 하나를 실행하는 동안 검증된 행동 요청, 런타임 의존성, 작업 상태 사본과 후속 행동을 직접 보관한다. 여러 원자 행동이 같은 문맥에서 순서대로 상태를 바꾸므로 실행 단위가 끝나면 완성된 `WorkerState`를 반환한다. 다른 그래프 노드는 필요한 구역만 `WorkerStateUpdate`로 반환한다. 실행 필드를 별도 상태 객체와 동기화하는 변환 표는 없다.
 

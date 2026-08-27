@@ -27,3 +27,14 @@ views:
       - area
       - status
       - updated
+  - type: table
+    name: "보관 문서"
+    filters:
+      and:
+        - 'status == "historical"'
+    order:
+      - file.name
+      - type
+      - area
+      - status
+      - updated

@@ -3,7 +3,7 @@ title: "기술 및 설계 결정"
 type: decision
 area: architecture
 status: active
-updated: 2026-08-16
+updated: 2026-08-27
 tags:
   - l2c
   - docs/architecture
@@ -69,7 +69,7 @@ Perception, ActionTools, PaddleOCR subprocess, 컴파일된 작업자 그래프�
 
 `agent/bootstrap.py`의 `ApplicationRuntime`이 조사 체크포인터, 애플리케이션 서비스, 컴파일된 그래프, `VisionWorkerRuntime`과 Reflex 승격 작업자를 조립하고 종료합니다. FastAPI `lifespan`, CLI와 E2E 실행기는 이 런타임의 수명주기만 관리합니다.
 
-Investigation LangGraph는 대화 문맥 조회, 요청 해석, DB 근거 검사, 수집, 검토 결과 전달, 저장, DB 재검사, 답변과 체크포인트 중단·재개를 담당합니다. Vision Worker LangGraph는 관찰·전환·선택·추론·실행에 이어 상세 공고 검토까지 수행합니다. 검토 노드가 `complete`로 확정한 `CollectedJob`만 조사 그래프로 전달되고 `persist`가 DB 저장을 확정합니다. 단계별 실패는 서로 다른 오류 코드와 계측 구간으로 남습니다. 조사 노드와 작업자 노드는 `agent/bootstrap.py`에서 주입한 서비스만 호출하며 OCR과 물리 도구를 전역에서 찾지 않습니다.
+Investigation LangGraph는 대화 문맥 조회, 요청 해석, DB 근거 검사, 수집, 검토 결과 전달, 저장, DB 재검사, 답변과 체크포인트 중단·재개를 담당합니다. Vision Worker LangGraph는 `observation`, `decision`, `execution`, `review` 네 책임 노드로 구성됩니다. 전환·선택·Reflex·OCR·추론은 앞의 두 노드가 조율하고, 검토 노드가 `complete`로 확정한 `CollectedJob`만 조사 그래프로 전달되며 `persist`가 DB 저장을 확정합니다. 단계별 실패는 서로 다른 오류 코드와 계측 구간으로 남습니다. 조사 노드와 작업자 노드는 `agent/bootstrap.py`에서 주입한 서비스만 호출하며 OCR과 물리 도구를 전역에서 찾지 않습니다.
 
 전환 검증, 상세 OCR 버퍼, 결과 카드 큐, Reflex 재생은 `agent/runtime/`의 독립 모듈로 분리했습니다. 이 정책들은 DOM selector가 아니라 화면 서명, OCR 마커, 좌표비율만 입력으로 받습니다.
 

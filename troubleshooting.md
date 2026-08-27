@@ -307,7 +307,7 @@ URL만으로 화면 상태를 판별하거나 특정 사이트의 버튼 이름�
 - [DB 영속성 테스트](agent/tests/core/test_db_persistence.py)
 - [공고 검토 테스트](agent/tests/core/test_job_review_service.py)
 - [답변 경계 테스트](agent/tests/core/test_backend_boundaries.py)
-- [제품 데모 및 검증](docs/product_demo.md)
+- [제품 데모 가이드](docs/product_demo.md)
 
 ## 9. 비결정론적 GUI 실행의 평가
 
@@ -339,4 +339,4 @@ URL만으로 화면 상태를 판별하거나 특정 사이트의 버튼 이름�
 
 새 정책은 한 계층에만 소유권을 둔다. 이전 정책은 같은 변경에서 삭제하고, 실패를 재현하는 최소 계약 테스트와 실제 E2E 한 건으로 확인한다. 실행 결과는 텍스트 로그가 아니라 `.summary.json`을 집계 원본으로 사용한다.
 
-측정 필드와 해석 기준은 [E2E 관측 환경](docs/e2e_observability.md), 재현 명령은 [제품 데모 및 검증](docs/product_demo.md)에 있다.
+측정 필드와 해석 기준은 [E2E 관측 환경](docs/e2e_observability.md), 재현 명령은 [제품 데모 가이드](docs/product_demo.md)에 있다.
